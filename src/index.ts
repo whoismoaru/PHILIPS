@@ -1,0 +1,1114 @@
+import { Telegraf, Markup } from 'telegraf';
+import { message } from 'telegraf/filters';
+import { ethers } from 'ethers';
+import { config } from './config.js';
+import { provider, wallet, positionManager, weth, ERC20_ABI } from './chain.js';
+import {
+  planAddSingleSided,
+  executeAdd,
+  executeRemove,
+  getPositionDetail,
+  discoverPools,
+  type AddPlan,
+  type PoolOption,
+} from './uniswap.js';
+import { screenToken, formatScreen, getEthUsd } from './screening.js';
+import { swapTokenToEthRobust } from './relay.js';
+import { startMonitor } from './monitor.js';
+import * as store from './store.js';
+import * as journal from './journal.js';
+import * as msg from './messages.js';
+import { CHAINS, getChain, detectChains, type ChainCtx } from './chains.js';
+
+const WETH_ADDRESS = config.uniswap.weth;
+
+// Posisi sudah di-burn/tak ada di chain (NFT hilang).
+const isGoneErr = (e: unknown) => /invalid token id/i.test(String((e as Error)?.message ?? e));
+
+/**
+ * PHILIPS LP Bot — otak utama.
+ * Command aktif: /start /help /status /positions /history /add /stop /setsize
+ * Screening token berjalan otomatis di dalam /add.
+ */
+
+const bot = new Telegraf(config.telegram.botToken);
+// Batas ETH/tx: nilai <= 0 atau kosong berarti TANPA batas.
+const rawMax = Number(config.safety.maxEthPerTx);
+const maxEth = rawMax > 0 ? rawMax : Infinity;
+
+// Estimasi unit gas buka LP (wrap + approve + mint) — untuk hitung biaya di preview.
+const EST_ADD_GAS = 700_000n;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// Berapa kali maksimum ulangi swap saat cash-out sampai token benar-benar habis.
+const MAX_CLOSE_SWEEP = 4;
+
+export type Holding = { symbol: string; amount: string; usd: number | null };
+
+/**
+ * Token yang benar-benar tersimpan (hold) di wallet + nilai USD-nya.
+ * Kandidat token diambil dari jurnal + posisi aktif; hanya yang saldonya > 0
+ * ditampilkan. Harga: priceTokenInWeth (pool ter-likuid) × ETH/USD.
+ */
+async function walletHoldings(cc: ChainCtx = getChain()): Promise<Holding[]> {
+  const cand = new Map<string, string>(); // ca(lower) -> symbol
+  for (const t of journal.recentTokens(40)) if (t.ca) cand.set(t.ca.toLowerCase(), t.symbol);
+  for (const p of store.active()) if (p.ca) cand.set(p.ca.toLowerCase(), p.symbol);
+  if (cand.size === 0) return [];
+
+  const ethUsd = await getEthUsd(cc.wethAddress, cc);
+  const results = await Promise.all(
+    [...cand.entries()].map(async ([ca, sym]): Promise<Holding | null> => {
+      try {
+        const erc = new ethers.Contract(ca, ERC20_ABI, cc.provider);
+        const bal: bigint = await erc.balanceOf(cc.wallet.address);
+        if (bal === 0n) return null;
+        let dec = 18;
+        let symbol = sym;
+        try { dec = Number(await erc.decimals()); } catch { /* pakai 18 */ }
+        try { symbol = await erc.symbol(); } catch { /* pakai simbol jurnal */ }
+        const amount = Number(ethers.formatUnits(bal, dec));
+        let usd: number | null = null;
+        try {
+          const pools = (await discoverPools(ca, cc)).filter((p) => p.priceTokenInWeth);
+          if (pools[0]?.priceTokenInWeth && ethUsd !== null) {
+            usd = amount * Number(pools[0].priceTokenInWeth) * ethUsd;
+          }
+        } catch { /* harga tak terbaca → usd null */ }
+        return { symbol, amount: amount.toLocaleString('en-US', { maximumFractionDigits: 4 }), usd };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return (results.filter(Boolean) as Holding[]).sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
+}
+
+/**
+ * Swap SELURUH saldo token (bukan delta) ke ETH, ulang sampai saldo = 0.
+ * Mengatasi: token sisa dari close sebelumnya, RPC telat update, Relay no-op,
+ * dan swap parsial. Setiap iterasi menukar saldo penuh yang tersisa.
+ */
+async function sweepTokenToEth(
+  otherAddr: string,
+  otherC: ethers.Contract,
+  cc: ChainCtx,
+  notes: string[],
+): Promise<{ ethOut: bigint; txHashes: string[]; leftover: boolean }> {
+  let ethOut = 0n;
+  const txHashes: string[] = [];
+  let prev = -1n;
+  for (let attempt = 1; attempt <= MAX_CLOSE_SWEEP; attempt++) {
+    const bal: bigint = await otherC.balanceOf(cc.wallet.address);
+    if (bal === 0n) break;
+    if (bal === prev) {
+      notes.push(`Sisa ${bal} unit token tak berkurang — swap dihentikan (butuh sweep manual).`);
+      break;
+    }
+    prev = bal;
+    try {
+      const r = await swapTokenToEthRobust(otherAddr, bal, cc);
+      ethOut += r.outEthWei;
+      txHashes.push(...r.txHashes);
+      notes.push(`Swap ${attempt}: token → ETH via ${r.route}`);
+    } catch (e) {
+      notes.push(`Swap percobaan ${attempt} gagal: ${(e as Error).message.slice(0, 140)}`);
+      break;
+    }
+    await sleep(1500); // beri waktu saldo settle di RPC sebelum verifikasi ulang
+  }
+  const finalBal: bigint = await otherC.balanceOf(cc.wallet.address);
+  return { ethOut, txHashes, leftover: finalBal > 0n };
+}
+
+/** Hitung biaya jaringan (est) + kebutuhan ETH untuk buka LP dari saldo wallet. */
+async function estimateAddCost(cc: ChainCtx, depositEth: string) {
+  const depositWei = ethers.parseEther(depositEth);
+  const [fee, nativeBal, wethBal] = await Promise.all([
+    cc.provider.getFeeData(),
+    cc.provider.getBalance(cc.wallet.address),
+    cc.weth.balanceOf(cc.wallet.address) as Promise<bigint>,
+  ]);
+  const gasPrice = fee.maxFeePerGas ?? fee.gasPrice ?? 0n;
+  const gasWei = gasPrice * EST_ADD_GAS;
+  // WETH yang sudah dimiliki mengurangi ETH yang perlu di-wrap.
+  const nativeForDeposit = depositWei > wethBal ? depositWei - wethBal : 0n;
+  const totalWei = nativeForDeposit + gasWei;
+  const shortWei = totalWei > nativeBal ? totalWei - nativeBal : 0n;
+  return {
+    gasEth: msg.fmtEth(gasWei),
+    totalEth: msg.fmtEth(totalWei),
+    balanceEth: msg.fmtEth(nativeBal),
+    shortEth: shortWei > 0n ? msg.fmtEth(shortWei) : null,
+  };
+}
+const maxEthLabel = maxEth === Infinity ? 'tanpa batas' : `${maxEth} ETH`;
+
+// Alur wizard /add (bisa maju–mundur antar langkah).
+type AddFlow = {
+  token: string;
+  chain: string; // kunci chain tempat token berada
+  screenBahaya: boolean;
+  pools: PoolOption[];
+  fee?: number;
+  rangePct?: number;
+  ethAmount?: string;
+  awaitingAmount?: boolean; // menunggu user mengetik nominal
+  plan?: AddPlan;
+};
+const flows = new Map<number, AddFlow>();
+// Preset nominal ETH: tersimpan di data/settings.json, dikelola via /setsize.
+
+// Pilihan lebar rentang (%) + label risiko.
+const RANGE_OPTIONS = [
+  { pct: 10, label: 'Konservatif' },
+  { pct: 30, label: 'Moderat' },
+  { pct: 50, label: 'Agresif' },
+  { pct: 70, label: 'Sangat Agresif' },
+];
+
+const html = { parse_mode: 'HTML' as const };
+
+/** Edit pesan progress existing, atau kirim baru bila gagal/tidak ada. */
+async function editProgress(
+  ctx: any,
+  prog: { message_id: number } | null | undefined,
+  text: string,
+  extra: Record<string, unknown> = html,
+): Promise<{ message_id: number }> {
+  if (prog?.message_id && ctx.chat?.id) {
+    try {
+      await ctx.telegram.editMessageText(ctx.chat.id, prog.message_id, undefined, text, extra);
+      return prog;
+    } catch {
+      /* fallback: kirim bubble baru */
+    }
+  }
+  return ctx.reply(text, extra);
+}
+
+// --- Penjaga: hanya pemilik yang boleh memakai bot ---
+bot.use((ctx, next) => {
+  if (ctx.from?.id !== config.telegram.allowedUserId) {
+    if (ctx.callbackQuery) return ctx.answerCbQuery('Tidak berhak.');
+    return ctx.reply(msg.msgDenied(), html);
+  }
+  return next();
+});
+
+// ---------- Fase 1 ----------
+bot.start((ctx) => ctx.reply(msg.msgStart(config.safety.dryRun), html));
+bot.command(['help', 'menu'], (ctx) =>
+  ctx.reply(msg.msgHelp(config.safety.dryRun), html),
+);
+
+async function renderStatus(ctx: any, edit: boolean) {
+  try {
+    const network = await provider.getNetwork();
+    // Saldo gas di SEMUA chain (paralel; chain yang gagal ditampilkan '?').
+    const balances = await Promise.all(
+      Object.values(CHAINS).map(async (c) => {
+        try {
+          const b = await c.provider.getBalance(c.wallet.address);
+          return `${c.label} ${Number(ethers.formatEther(b)).toFixed(4)} ${c.nativeSymbol}`;
+        } catch {
+          return `${c.label} ?`;
+        }
+      }),
+    );
+    // Token yang tersimpan di wallet + nilai USD (best-effort; gagal → kosong).
+    let holdings: Holding[] = [];
+    try {
+      holdings = await walletHoldings();
+    } catch {
+      /* abaikan — status tetap tampil tanpa holdings */
+    }
+    const text = msg.msgStatus({
+      dryRun: config.safety.dryRun,
+      chainId: network.chainId,
+      gasEth: balances.join(' · '),
+      positions: store.active().length,
+      maxEthLabel,
+      wallet: wallet.address,
+      holdings,
+    });
+    const extra = {
+      ...html,
+      ...Markup.inlineKeyboard([[Markup.button.callback('🔄 Refresh', 'refresh:status')]]),
+    };
+    await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+  } catch (err) {
+    await ctx.reply(msg.msgError('network', (err as Error).message), html);
+  }
+}
+
+bot.command('status', (ctx) => renderStatus(ctx, false));
+
+bot.action('refresh:status', async (ctx) => {
+  await ctx.answerCbQuery('Memuat ulang…');
+  try {
+    await renderStatus(ctx, true);
+  } catch (e) {
+    // "message is not modified" = data tak berubah — bukan error nyata.
+    if (!/not modified/i.test((e as Error).message)) throw e;
+  }
+});
+
+/** Kartu ringkas satu posisi + tombol Tutup/Detail. */
+async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean) {
+  let d;
+  try {
+    d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+  } catch (e) {
+    if (isGoneErr(e)) {
+      finalizeClose(rec.tokenId, { reason: 'gone' });
+      const t = msg.msgPositionGone(rec.tokenId, rec.symbol);
+      return edit ? ctx.editMessageText(t, html) : ctx.reply(t, html);
+    }
+    const t = msg.msgPositionReadFail(rec.tokenId, (e as Error).message);
+    return edit ? ctx.editMessageText(t, html) : ctx.reply(t, html);
+  }
+  const cc = getChain(rec.chain);
+  const ethUsd = await getEthUsd(cc.wethAddress, cc);
+  const initF = Number(ethers.formatEther(BigInt(rec.initialWethWei)));
+  const curF = Number(ethers.formatEther(d.valueWethWei + d.feesWethWei));
+  const pnlF = curF - initF;
+  const pnlPct = initF > 0 ? (pnlF / initF) * 100 : 0;
+  const pnlText =
+    ethUsd !== null
+      ? `${msg.usdSigned(pnlF * ethUsd)} (${msg.pctSigned(pnlPct)})`
+      : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(5)} ETH (${msg.pctSigned(pnlPct)})`;
+  // Jarak batas range dari HARGA SEKARANG (live) — bukan konfigurasi saat buka.
+  // Harga token dlm WETH: 1.0001^tick bila WETH=token1, kebalikannya bila token0.
+  const sgn = d.wethIsToken0 ? -1 : 1;
+  const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
+  const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
+  const range = `${msg.fmtPct(pcts[0])} / ${msg.fmtPct(pcts[1])}`;
+  const invest = rec.nominalEth ?? msg.cleanEth(BigInt(rec.initialWethWei));
+  const chainLabel = getChain(rec.chain).label;
+  const text = msg.msgPositionCard({
+    tokenId: rec.tokenId,
+    symbol: rec.symbol,
+    fee: rec.fee,
+    invest,
+    pnlText,
+    range,
+    inRange: d.inRange,
+    age: msg.fmtAge(Date.now() - rec.openedAt),
+    dryRun: config.safety.dryRun,
+    chain: chainLabel,
+  });
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [
+        Markup.button.callback('Tutup', `stop:${rec.tokenId}`),
+        Markup.button.callback('Detail', `detail:${rec.tokenId}`),
+        Markup.button.callback('Refresh', `back:card:${rec.tokenId}`),
+      ],
+    ]),
+  };
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
+/** Tampilan detail (komposisi, nilai, fee). */
+async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolean) {
+  const cc = getChain(rec.chain);
+  const d = await getPositionDetail(rec.tokenId, cc);
+  const ethUsd = await getEthUsd(cc.wethAddress, cc);
+  const valUsd = ethUsd !== null ? Number(ethers.formatEther(d.valueWethWei)) * ethUsd : null;
+  const feeUsd = ethUsd !== null ? Number(ethers.formatEther(d.feesWethWei)) * ethUsd : null;
+  const value =
+    `${msg.cleanEth(d.valueWethWei)} WETH` +
+    (valUsd !== null ? ` (${msg.usdPlain(valUsd)})` : '');
+  const fees =
+    `${msg.cleanEth(d.feesWethWei)} WETH` +
+    (feeUsd !== null ? ` (${msg.usdPlain(feeUsd)})` : '');
+  const composition =
+    `${msg.cleanEth(d.wethAmountWei)} WETH + ${msg.cleanUnits(d.otherAmountWei, d.otherDecimals)} ${d.otherSymbol}`;
+  const text = msg.msgPositionDetail({
+    tokenId: rec.tokenId,
+    symbol: rec.symbol,
+    fee: rec.fee,
+    composition,
+    value,
+    fees,
+    inRange: d.inRange,
+    chain: cc.label,
+  });
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [
+        Markup.button.callback('Kembali', `back:card:${rec.tokenId}`),
+        Markup.button.callback('Refresh', `detail:${rec.tokenId}`),
+      ],
+    ]),
+  };
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
+/**
+ * Tutup posisi: tulis history ke JURNAL (file khusus), lalu keluarkan dari
+ * store live. Pengecualian: bila masih ada token sisa yang gagal ter-swap
+ * (`keep`), record ditahan sebagai STOPPED agar sweep di monitor bisa
+ * memulihkannya. Dengan begitu /positions bersih (hanya live) & history ada di
+ * /history.
+ */
+function finalizeClose(
+  tokenId: string,
+  opts: { resultEthWei?: bigint; reason: journal.JournalEntry['reason']; keep?: boolean },
+) {
+  const rec = store.get(tokenId);
+  // Jurnalkan sekali saja (saat transisi dari ACTIVE) — hindari duplikat bila
+  // tombol tutup ditekan ulang pada posisi yang sudah tertutup.
+  if (rec && rec.status === 'ACTIVE') journal.recordClose(rec, opts);
+  if (opts.keep) {
+    store.update(tokenId, {
+      status: 'STOPPED',
+      stoppedAt: Date.now(),
+      ...(opts.resultEthWei !== undefined ? { resultEthWei: opts.resultEthWei.toString() } : {}),
+    });
+  } else {
+    store.remove(tokenId);
+  }
+}
+
+// /positions HANYA menampilkan posisi live (history ada di /history).
+bot.command('positions', async (ctx) => {
+  const active = store.active();
+  if (active.length === 0) {
+    return ctx.reply(msg.msgNoPositions(), html);
+  }
+  // Header hanya jika >1 posisi (1 kartu sudah self-explanatory).
+  if (active.length > 1) {
+    await ctx.reply(msg.msgPositionsHeader(active.length), html);
+  }
+  for (const rec of active) {
+    try {
+      await renderPositionCard(ctx, rec, false);
+    } catch (e) {
+      await ctx.reply(msg.msgPositionReadFail(rec.tokenId, (e as Error).message), html);
+    }
+  }
+});
+
+// /history — riwayat trade tertutup, dari file jurnal khusus (tak muncul di /positions).
+bot.command('history', (ctx) => {
+  const items = journal.read(20).map((e) => ({
+    tokenId: e.tokenId,
+    symbol: e.symbol,
+    pnlPct: e.pnlPct,
+    pnlEth: e.pnlEth,
+    reason: e.reason,
+    ca: e.ca,
+    chain: e.chain,
+    closedAt: e.closedAt,
+  }));
+  return ctx.reply(msg.msgJournal(items), html);
+});
+
+bot.action(/^detail:(\d+)$/, async (ctx) => {
+  const rec = store.get(ctx.match[1]);
+  if (!rec) return ctx.answerCbQuery('Posisi tak ditemukan.');
+  await ctx.answerCbQuery('Memuat…');
+  try {
+    await renderPositionDetail(ctx, rec, true);
+  } catch (e) {
+    if (/not modified/i.test((e as Error).message)) return; // data sama — bukan error
+    await ctx.reply(msg.msgError('detail', (e as Error).message), html);
+  }
+});
+
+bot.action(/^back:card:(\d+)$/, async (ctx) => {
+  const rec = store.get(ctx.match[1]);
+  if (!rec) return ctx.answerCbQuery('Posisi tak ditemukan.');
+  await ctx.answerCbQuery('Memuat…');
+  try {
+    await renderPositionCard(ctx, rec, true);
+  } catch (e) {
+    if (/not modified/i.test((e as Error).message)) return; // data sama — bukan error
+    await ctx.reply(msg.msgError('card', (e as Error).message), html);
+  }
+});
+
+// ---------- Fase 3: tulis (wizard /add bertahap) ----------
+
+/** Langkah 1/3 — pilih pool (fee tier). */
+async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
+  const kb = Markup.inlineKeyboard([
+    ...flow.pools.map((p) => [
+      Markup.button.callback(
+        `${msg.feeLabel(p.fee)}  ·  ${Number(ethers.formatEther(p.wethReserve)).toFixed(2)} WETH`,
+        `fee:${p.fee}`,
+      ),
+    ]),
+    [Markup.button.callback('Batal', 'cancel')],
+  ]);
+  const text = msg.msgPoolStep();
+  const extra = { ...html, ...kb };
+  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+}
+
+/** Step 2/4 — pilih lebar rentang (%). */
+async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
+  const rows = RANGE_OPTIONS.map((o) => [
+    Markup.button.callback(`${o.pct}%  ·  ${o.label}`, `rng:${o.pct}`),
+  ]);
+  rows.push([
+    Markup.button.callback('Kembali', 'back:pool'),
+    Markup.button.callback('Batal', 'cancel'),
+  ]);
+  const text = msg.msgRangeStep(flow.fee!);
+  const extra = { ...html, ...Markup.inlineKeyboard(rows) };
+  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+}
+
+/** Langkah 3/4 — pilih nominal ETH. */
+async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
+  flow.awaitingAmount = false;
+  const presets = store.getSizes().filter((a) => a <= maxEth);
+  const rows: any[] = [];
+  for (let i = 0; i < presets.length; i += 2) {
+    rows.push(presets.slice(i, i + 2).map((a) => Markup.button.callback(`${a} ETH`, `amt:${a}`)));
+  }
+  rows.push([Markup.button.callback('Ketik nominal', 'amt:custom')]);
+  rows.push([
+    Markup.button.callback('Kembali', 'back:range'),
+    Markup.button.callback('Batal', 'cancel'),
+  ]);
+  const text = msg.msgAmountStep(maxEthLabel);
+  const extra = { ...html, ...Markup.inlineKeyboard(rows) };
+  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+}
+
+/** Langkah 4/4 — hitung & tampilkan rencana + konfirmasi. */
+async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
+  const cc = getChain(flow.chain);
+  const plan = await planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, cc);
+  flow.plan = plan;
+  // Biaya jaringan (est) + kebutuhan ETH vs saldo. Non-fatal: gagal → '?'.
+  let cost: Awaited<ReturnType<typeof estimateAddCost>> | null = null;
+  try {
+    cost = await estimateAddCost(cc, flow.ethAmount!);
+  } catch (e) {
+    console.log('[estimateAddCost] gagal:', (e as Error).message.slice(0, 120));
+  }
+  const text = msg.msgPlanStep({
+    screenDanger: flow.screenBahaya,
+    symbol: plan.otherSymbol,
+    fee: flow.fee!,
+    ethAmount: flow.ethAmount!,
+    pctHigh: plan.pctHigh,
+    pctLow: plan.pctLow,
+    currentPrice: String(plan.currentPrice),
+    otherAmount: ethers.formatEther(plan.otherAmountWei),
+    gasEth: cost?.gasEth ?? '?',
+    totalEth: cost?.totalEth ?? '?',
+    balanceEth: cost?.balanceEth ?? '?',
+    shortEth: cost?.shortEth ?? null,
+    dryRun: config.safety.dryRun,
+  });
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('Konfirmasi', 'addok')],
+      [
+        Markup.button.callback('Ubah Nominal', 'back:amount'),
+        Markup.button.callback('Batal', 'cancel'),
+      ],
+    ]),
+  };
+  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+}
+
+/**
+ * Lanjutan /add setelah chain diketahui: screening → pool → wizard.
+ * `prog` = bubble progress yang di-edit (kurangi spam chat).
+ */
+async function continueAddlp(
+  ctx: any,
+  token: string,
+  chainKey: string,
+  prog?: { message_id: number } | null,
+) {
+  const cc = getChain(chainKey);
+
+  // 1) Screening token (di chain terpilih).
+  let screenBahaya = false;
+  prog = await editProgress(ctx, prog, msg.msgProgress(`menyaring token di ${cc.label}…`));
+  try {
+    const s = await screenToken(token, cc);
+    screenBahaya = s.verdict === 'BAHAYA';
+    // Kartu screen = pesan terpisah (isi panjang, perlu dibaca).
+    await ctx.reply(formatScreen(s), html);
+  } catch {
+    await ctx.reply(msg.msgScreeningFailed(), html);
+  }
+
+  // 2) Cari pool berisi likuiditas.
+  prog = await editProgress(ctx, prog, msg.msgProgress('mencari pool…'));
+  let pools: PoolOption[];
+  try {
+    pools = (await discoverPools(token, cc)).filter((p) => p.wethReserve > 0n);
+  } catch (err) {
+    await editProgress(ctx, prog, msg.msgError('discover', (err as Error).message));
+    return;
+  }
+  if (pools.length === 0) {
+    await editProgress(ctx, prog, msg.msgNoPools());
+    return;
+  }
+
+  // 3) Mulai wizard — reuse bubble progress jadi step pilih pool.
+  const flow: AddFlow = { token, chain: chainKey, screenBahaya, pools };
+  flows.set(ctx.from.id, flow);
+  const kb = Markup.inlineKeyboard([
+    ...flow.pools.map((p) => [
+      Markup.button.callback(
+        `${msg.feeLabel(p.fee)}  ·  ${Number(ethers.formatEther(p.wethReserve)).toFixed(2)} WETH`,
+        `fee:${p.fee}`,
+      ),
+    ]),
+    [Markup.button.callback('Batal', 'cancel')],
+  ]);
+  await editProgress(ctx, prog, msg.msgPoolStep(), { ...html, ...kb });
+}
+
+// Simpan token yang menunggu pilihan chain.
+const pendingChain = new Map<number, string>();
+
+bot.command(['add', 'addlp'], async (ctx) => {
+  const [, token] = ctx.message.text.trim().split(/\s+/);
+  if (!token) return ctx.reply(msg.msgAddlpUsage(), html);
+  if (!ethers.isAddress(token)) return ctx.reply(msg.msgInvalidAddress(), html);
+
+  // 0) Deteksi chain — 1 bubble progress (di-edit di langkah berikutnya).
+  const prog = await ctx.reply(msg.msgProgress('mendeteksi chain…'), html);
+  const found = await detectChains(token);
+  if (found.length === 0) {
+    return editProgress(
+      ctx,
+      prog,
+      msg.msgError(
+        'chain',
+        'Token tidak ditemukan di chain mana pun (Robinhood/Ethereum/Base/BSC).',
+      ),
+    );
+  }
+  if (found.length === 1) return continueAddlp(ctx, token, found[0].key, prog);
+
+  // Token ada di beberapa chain → ganti progress jadi pemilih chain.
+  pendingChain.set(ctx.from.id, token);
+  await editProgress(ctx, prog, msg.msgChainPick(), {
+    ...html,
+    ...Markup.inlineKeyboard([
+      ...found.map((c) => [Markup.button.callback(c.label, `chn:${c.key}`)]),
+      [Markup.button.callback('Batal', 'cancel')],
+    ]),
+  });
+});
+
+bot.action(/^chn:(\w+)$/, async (ctx) => {
+  const token = pendingChain.get(ctx.from!.id);
+  pendingChain.delete(ctx.from!.id);
+  if (!token) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  await ctx.answerCbQuery();
+  // Lanjut screening; reuse pesan chain-pick sebagai progress.
+  const prog = ctx.callbackQuery?.message
+    ? { message_id: (ctx.callbackQuery.message as { message_id: number }).message_id }
+    : null;
+  await continueAddlp(ctx, token, ctx.match[1], prog);
+});
+
+// --- Navigasi wizard (maju & mundur) ---
+const getFlow = (ctx: any): AddFlow | undefined => flows.get(ctx.from!.id);
+
+bot.action(/^fee:(\d+)$/, async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  flow.fee = Number(ctx.match[1]);
+  flow.rangePct = undefined;
+  flow.plan = undefined;
+  await ctx.answerCbQuery();
+  await renderRangeStep(ctx, flow, true);
+});
+
+bot.action(/^rng:(\d+)$/, async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  flow.rangePct = Number(ctx.match[1]);
+  flow.ethAmount = undefined;
+  flow.plan = undefined;
+  await ctx.answerCbQuery();
+  await renderAmountStep(ctx, flow, true);
+});
+
+bot.action(/^amt:(.+)$/, async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.fee === undefined || flow.rangePct === undefined)
+    return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  const v = ctx.match[1];
+  if (v === 'custom') {
+    flow.awaitingAmount = true;
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(msg.msgAmountCustom(maxEthLabel), html);
+    return;
+  }
+  const num = Number(v);
+  if (!(num > 0) || num > maxEth) return ctx.answerCbQuery('Nominal tidak valid.');
+  flow.ethAmount = v;
+  await ctx.answerCbQuery('Menghitung preview…');
+  try {
+    await renderPlanStep(ctx, flow, true);
+  } catch (err) {
+    await ctx.reply(msg.msgError('plan', (err as Error).message), html);
+  }
+});
+
+bot.action('back:pool', async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  flow.fee = undefined;
+  flow.rangePct = undefined;
+  flow.plan = undefined;
+  await ctx.answerCbQuery();
+  await renderPoolStep(ctx, flow, true);
+});
+
+bot.action('back:range', async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  flow.rangePct = undefined;
+  flow.ethAmount = undefined;
+  flow.plan = undefined;
+  await ctx.answerCbQuery();
+  await renderRangeStep(ctx, flow, true);
+});
+
+bot.action('back:amount', async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  flow.ethAmount = undefined;
+  flow.plan = undefined;
+  await ctx.answerCbQuery();
+  await renderAmountStep(ctx, flow, true);
+});
+
+bot.action('addok', async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow?.plan || flow.fee === undefined || !flow.ethAmount)
+    return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  await ctx.answerCbQuery('Diproses…');
+  if (config.safety.dryRun) {
+    flows.delete(ctx.from!.id);
+    await ctx.editMessageText(msg.msgDryRunAddDone(), html);
+    return;
+  }
+  try {
+    await ctx.editMessageText(msg.msgOpeningLp(), html);
+    const { tokenId, notes } = await executeAdd(flow.plan, flow.token, flow.fee, getChain(flow.chain));
+    store.add({
+      tokenId,
+      chain: flow.chain,
+      ca: flow.token,
+      fee: flow.fee,
+      symbol: flow.plan.otherSymbol,
+      initialWethWei: flow.plan.wethAmountWei.toString(),
+      nominalEth: flow.ethAmount,
+      rangeLowPct: flow.plan.pctLow,
+      rangeHighPct: flow.plan.pctHigh,
+      openedAt: Date.now(),
+      status: 'ACTIVE',
+      lastInRange: false,
+    });
+    flows.delete(ctx.from!.id);
+    // Ringkas OPENED di bubble yang sama, lalu kartu posisi live.
+    await ctx.editMessageText(msg.msgLpOpened(tokenId, notes), html);
+    const rec = store.get(tokenId);
+    if (rec) {
+      try {
+        await renderPositionCard(ctx, rec, false);
+      } catch (e) {
+        await ctx.reply(msg.msgPositionReadFail(tokenId, (e as Error).message), html);
+      }
+    }
+  } catch (err) {
+    await ctx.reply(msg.msgError('addlp', (err as Error).message), html);
+  }
+});
+
+/** Konfirmasi tutup posisi (kartu). Eksekusi: remove + collect + cash-out ETH via Relay. */
+async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
+  const rec = store.get(tokenId);
+  const cc = getChain(rec?.chain);
+  const d = await getPositionDetail(tokenId, cc);
+  const ethUsd = await getEthUsd(cc.wethAddress, cc);
+  const initF = rec ? Number(ethers.formatEther(BigInt(rec.initialWethWei))) : 0;
+  const curF = Number(ethers.formatEther(d.valueWethWei + d.feesWethWei));
+  const pnlF = curF - initF;
+  const pnlPct = initF > 0 ? (pnlF / initF) * 100 : 0;
+  const pnlText =
+    ethUsd !== null ? `${msg.usdSigned(pnlF * ethUsd)} (${msg.pctSigned(pnlPct)})` : msg.pctSigned(pnlPct);
+  const feeText =
+    ethUsd !== null
+      ? msg.usdPlain(Number(ethers.formatEther(d.feesWethWei)) * ethUsd)
+      : `${msg.cleanEth(d.feesWethWei)} WETH`;
+  const age = rec ? msg.fmtAge(Date.now() - rec.openedAt) : '—';
+  const text = msg.msgStopConfirm({
+    tokenId,
+    symbol: d.otherSymbol,
+    fee: d.fee,
+    age,
+    pnlText,
+    feeText,
+    wethAmt: msg.cleanEth(d.wethAmountWei),
+    otherAmt: msg.cleanUnits(d.otherAmountWei, d.otherDecimals),
+  });
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('Tutup Posisi', `close:${tokenId}`)],
+      [
+        Markup.button.callback('Kembali', `back:card:${tokenId}`),
+        Markup.button.callback('Batal', 'cancel'),
+      ],
+    ]),
+  };
+  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+}
+
+bot.command(['stop', 'stoplp'], async (ctx) => {
+  const active = store.active();
+  if (active.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
+  await ctx.reply(msg.msgStopPick(), html);
+  for (const rec of active) {
+    try {
+      await renderPositionCard(ctx, rec, false);
+    } catch (e) {
+      await ctx.reply(msg.msgPositionReadFail(rec.tokenId, (e as Error).message), html);
+    }
+  }
+});
+
+bot.action(/^stop:(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  try {
+    await renderStopConfirm(ctx, ctx.match[1], true);
+  } catch (e) {
+    if (isGoneErr(e)) {
+      finalizeClose(ctx.match[1], { reason: 'gone' });
+      await ctx.editMessageText(msg.msgAlreadyClosed(ctx.match[1]), html);
+    } else {
+      await ctx.reply(msg.msgError('stop', (e as Error).message), html);
+    }
+  }
+});
+
+bot.action(/^close:(\d+)$/, async (ctx) => {
+  const tokenId = ctx.match[1];
+  await ctx.answerCbQuery('Diproses…');
+  if (config.safety.dryRun) {
+    await ctx.editMessageText(msg.msgDryRunClose(tokenId), html);
+    return;
+  }
+  try {
+    await ctx.editMessageText(msg.msgClosing(), html);
+    const summary = await stopAndCashOut(tokenId, getChain(store.get(tokenId)?.chain));
+    finalizeClose(tokenId, { resultEthWei: summary.ethOutWei, reason: 'cashed', keep: summary.leftover });
+    await ctx.reply(summary.text, html);
+  } catch (err) {
+    if (isGoneErr(err)) {
+      finalizeClose(tokenId, { reason: 'gone' });
+      await ctx.reply(msg.msgAlreadyClosed(tokenId), html);
+    } else {
+      await ctx.reply(msg.msgError('close', (err as Error).message), html);
+    }
+  }
+});
+
+/** Remove + collect, lalu swap seluruh aset hasil LP ke ETH (token via Relay, WETH di-unwrap). */
+async function stopAndCashOut(
+  tokenId: string,
+  cc: ChainCtx = getChain(),
+): Promise<{ text: string; ethOutWei: bigint; leftover: boolean }> {
+  const { positionManager: pm, weth: wethC, wallet: w } = cc;
+  const p = await pm.positions(tokenId);
+  const wethIsToken0 = p.token0.toLowerCase() === cc.wethAddress.toLowerCase();
+  const otherAddr = wethIsToken0 ? p.token1 : p.token0;
+  const otherC = new ethers.Contract(otherAddr, ERC20_ABI, w);
+
+  const notes: string[] = [];
+  notes.push(...(await executeRemove(tokenId, cc)).notes);
+  await sleep(1500); // beri waktu collect settle sebelum baca saldo
+
+  const txHashes: string[] = [];
+  // ① Swap SELURUH saldo token → ETH, ulang sampai habis (bukan sekali/delta).
+  //    Ini menutup celah: token sisa dari close lama, RPC telat, Relay no-op.
+  const sw = await sweepTokenToEth(otherAddr, otherC, cc, notes);
+  txHashes.push(...sw.txHashes);
+
+  // ② Unwrap SELURUH WETH di wallet → ETH (bukan delta) agar tak ada sisa WETH.
+  let unwrappedWeth = 0n;
+  const wethBal: bigint = await wethC.balanceOf(w.address);
+  if (wethBal > 0n) {
+    try {
+      const tx = await wethC.withdraw(wethBal);
+      const rc = await tx.wait();
+      if (rc) txHashes.push(rc.hash);
+      unwrappedWeth = wethBal;
+      notes.push(`Unwrap ${msg.fmtEth(wethBal)} WETH → ETH`);
+    } catch {
+      notes.push('Unwrap WETH gagal — WETH tetap di wallet.');
+    }
+  }
+
+  if (sw.leftover) {
+    notes.push('⚠️ Masih ada sisa token — akan di-retry otomatis oleh monitor.');
+  }
+
+  const ethOutWei = unwrappedWeth + sw.ethOut;
+  console.log(`[cashout] #${tokenId}:`, notes.join(' | ')); // rekam ke journal
+  const text = msg.msgCashOut({
+    tokenId,
+    notes,
+    ethOut: msg.fmtEth(ethOutWei),
+    txHashes,
+  });
+  // leftover = token benar-benar masih tersisa di wallet setelah semua percobaan.
+  return { text, ethOutWei, leftover: sw.leftover };
+}
+
+// Batal berlaku untuk semua alur (wizard /add maupun konfirmasi tutup).
+bot.action('cancel', async (ctx) => {
+  flows.delete(ctx.from!.id);
+  await ctx.answerCbQuery('Dibatalkan');
+  await ctx.editMessageText(msg.msgCancelled(), html);
+});
+
+// Penangkap ketikan nominal (didaftarkan TERAKHIR agar tak menelan command).
+// ---------- /setsize : kelola preset nominal ETH (tersimpan permanen) ----------
+const sizeEdit = new Map<number, 'add' | number>(); // userId -> slot yang sedang diubah
+
+function sizeKeyboard() {
+  const rows = store.getSizes().map((s, i) => [
+    Markup.button.callback(`✏️ ${s} ETH`, `size:edit:${i}`),
+    Markup.button.callback('🗑 Hapus', `size:del:${i}`),
+  ]);
+  rows.push([Markup.button.callback('➕ Tambah preset', 'size:add')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+const sizeText = () => msg.msgSetSize();
+
+bot.command('setsize', (ctx) => ctx.reply(sizeText(), { ...html, ...sizeKeyboard() }));
+
+bot.action(/^size:edit:(\d+)$/, async (ctx) => {
+  sizeEdit.set(ctx.from!.id, Number(ctx.match[1]));
+  await ctx.answerCbQuery();
+  await ctx.reply(msg.msgSetSizePrompt('edit'), html);
+});
+
+bot.action('size:add', async (ctx) => {
+  sizeEdit.set(ctx.from!.id, 'add');
+  await ctx.answerCbQuery();
+  await ctx.reply(msg.msgSetSizePrompt('add'), html);
+});
+
+bot.action(/^size:del:(\d+)$/, async (ctx) => {
+  const sizes = store.getSizes();
+  const removed = sizes.splice(Number(ctx.match[1]), 1);
+  store.setSizes(sizes);
+  await ctx.answerCbQuery(removed.length ? `${removed[0]} ETH dihapus` : 'Sudah terhapus');
+  try {
+    await ctx.editMessageText(sizeText(), { ...html, ...sizeKeyboard() });
+  } catch (e) {
+    if (!/not modified/i.test((e as Error).message)) throw e;
+  }
+});
+
+bot.on(message('text'), async (ctx) => {
+  const raw = (ctx.message.text || '').trim();
+
+  // Sedang mengubah/menambah preset nominal? Tangkap di sini.
+  const pend = sizeEdit.get(ctx.from.id);
+  if (pend !== undefined) {
+    const num = Number(raw);
+    if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
+    const sizes = store.getSizes();
+    if (pend === 'add') sizes.push(num);
+    else sizes[pend] = num;
+    store.setSizes(sizes);
+    sizeEdit.delete(ctx.from.id);
+    return ctx.reply(sizeText(), { ...html, ...sizeKeyboard() });
+  }
+
+  // Wizard /add menunggu ketikan nominal.
+  const flow = getFlow(ctx);
+  if (flow?.awaitingAmount && flow.rangePct !== undefined) {
+    const num = Number(raw);
+    if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
+    if (num > maxEth) return ctx.reply(msg.msgOverLimit(maxEthLabel), html);
+    flow.awaitingAmount = false;
+    flow.ethAmount = raw;
+    try {
+      await renderPlanStep(ctx, flow, false);
+    } catch (err) {
+      await ctx.reply(msg.msgError('plan', (err as Error).message), html);
+    }
+    return;
+  }
+
+  // Bukan command (command sudah ditangani handler lain) → unknown.
+  // Abaikan string kosong / pure number di luar konteks.
+  if (!raw || raw.startsWith('/')) {
+    // Command tak dikenal (telegraf tidak match): /foo
+    if (raw.startsWith('/')) {
+      const cmd = raw.split(/\s+/)[0];
+      return ctx.reply(msg.msgUnknown(cmd), html);
+    }
+    return;
+  }
+  return ctx.reply(msg.msgUnknown(raw), html);
+});
+
+bot.catch((err, ctx) => {
+  console.error('Bot error:', err);
+  ctx.reply?.(msg.msgError('bot', (err as Error).message), html).catch(() => {});
+});
+
+/** Daftar command menu Telegram (tombol "/" / Menu). */
+const BOT_COMMANDS = [
+  { command: 'start', description: 'Menu & status singkat' },
+  { command: 'help', description: 'Daftar perintah' },
+  { command: 'status', description: 'Koneksi jaringan & saldo dompet' },
+  { command: 'positions', description: 'Posisi LP yang aktif (live)' },
+  { command: 'history', description: 'Riwayat trade tertutup (jurnal)' },
+  { command: 'add', description: 'Tambah LP: /add <CA>' },
+  { command: 'stop', description: 'Tutup posisi LP' },
+  { command: 'setsize', description: 'Kelola preset nominal ETH' },
+] as const;
+
+/**
+ * Pasang menu command di scope yang dipakai chat private.
+ * - default + all_private_chats + chat owner
+ * - language_code id/en (klien ID/EN kadang tidak fallback ke default)
+ * - setChatMenuButton → commands (bukan web-app kosong)
+ */
+async function registerBotCommands() {
+  const scopes: Array<Record<string, unknown>> = [
+    { type: 'default' },
+    { type: 'all_private_chats' },
+    { type: 'chat', chat_id: config.telegram.allowedUserId },
+  ];
+  const cmds = [...BOT_COMMANDS];
+
+  for (const lang of ['id', 'en', 'in']) {
+    for (const scope of scopes) {
+      try {
+        await bot.telegram.deleteMyCommands({
+          scope: scope as any,
+          language_code: lang,
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  for (const scope of scopes) {
+    try {
+      await bot.telegram.setMyCommands(cmds, { scope: scope as any });
+    } catch (e) {
+      console.error('[setMyCommands]', scope.type, (e as Error).message);
+    }
+    for (const lang of ['id', 'en']) {
+      try {
+        await bot.telegram.setMyCommands(cmds, {
+          scope: scope as any,
+          language_code: lang,
+        });
+      } catch (e) {
+        console.error('[setMyCommands]', scope.type, lang, (e as Error).message);
+      }
+    }
+  }
+
+  try {
+    await bot.telegram.setChatMenuButton({ menu_button: { type: 'commands' } });
+  } catch (e) {
+    console.error('[setChatMenuButton] default', (e as Error).message);
+  }
+  try {
+    await bot.telegram.setChatMenuButton({
+      chat_id: config.telegram.allowedUserId,
+      menu_button: { type: 'commands' },
+    });
+  } catch (e) {
+    console.error('[setChatMenuButton] chat', (e as Error).message);
+  }
+
+  try {
+    const list = await bot.telegram.getMyCommands();
+    console.log(
+      'Menu commands:',
+      list.map((c) => c.command).join(', ') || '(kosong!)',
+    );
+  } catch (e) {
+    console.error('[getMyCommands]', (e as Error).message);
+  }
+}
+
+// --- Nyalakan ---
+// launch() menolak (mis. 409 conflict / jaringan) → exit(1), systemd auto-restart.
+bot.launch().then(
+  async () => {
+    console.log(
+      'PHILIPS online | wallet:',
+      wallet.address,
+      '| mode:',
+      msg.modeLabel(config.safety.dryRun),
+    );
+    // Setelah launch — pastikan menu "/" terisi (bukan fire-and-forget buta).
+    await registerBotCommands();
+  },
+  (err) => {
+    console.error('Launch gagal:', err);
+    process.exit(1);
+  },
+);
+startMonitor(bot); // auto-monitor posisi aktif
+
+// --- Auto-recovery: error tak tertangani → log + notif + restart via systemd ---
+async function notifyCrash(kind: string, err: unknown) {
+  try {
+    await bot.telegram.sendMessage(
+      config.telegram.allowedUserId,
+      msg.msgCrash(kind, String((err as Error)?.message ?? err)),
+      html,
+    );
+  } catch {
+    /* abaikan */
+  }
+}
+process.on('uncaughtException', async (err) => {
+  console.error('uncaughtException:', err);
+  await notifyCrash('uncaughtException', err);
+  process.exit(1); // systemd Restart=always menghidupkan lagi
+});
+process.on('unhandledRejection', (err) => {
+  // Jangan matikan proses untuk rejection lepas — cukup log (aman utk polling).
+  console.error('unhandledRejection:', err);
+});
+
+// Shutdown bersih: stop polling lalu KELUAR (sebelumnya menggantung sampai SIGKILL).
+const shutdown = (sig: string) => {
+  try {
+    bot.stop(sig);
+  } catch {
+    /* abaikan */
+  }
+  setTimeout(() => process.exit(0), 1500).unref();
+};
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
