@@ -7,6 +7,8 @@ import { ethers } from 'ethers';
 import * as store from './store.js';
 import * as journal from './journal.js';
 import { msgRangeEnter, msgRangeExit } from './messages.js';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
  * Auto-monitor pasif: tiap interval, cek posisi ACTIVE.
@@ -16,9 +18,30 @@ import { msgRangeEnter, msgRangeExit } from './messages.js';
 const INTERVAL_MS = 60_000;
 const SWEEP_EVERY_MS = 30 * 60_000; // sapu sisa token tiap 30 menit
 const SWEEP_COOLDOWN_MS = 6 * 3_600_000; // per token max 1 percobaan / 6 jam
+const DUST_COOLDOWN_MS = 7 * 24 * 3_600_000; // token "terlalu kecil" → mundur 7 hari
+const SWEEP_FILE = join(process.cwd(), 'data', 'sweep.json');
 const html = { parse_mode: 'HTML' as const };
-const lastSweep = new Map<string, number>();
+// nextSweep[key] = epoch ms paling awal token boleh disapu lagi. PERSIST ke disk
+// agar cooldown tak reset tiap restart (dulu in-memory → dust diulang tiap boot).
+const nextSweep = loadSweep();
 let lastSweepRun = 0;
+
+function loadSweep(): Map<string, number> {
+  try {
+    return new Map(Object.entries(JSON.parse(readFileSync(SWEEP_FILE, 'utf8')) as Record<string, number>));
+  } catch {
+    return new Map();
+  }
+}
+
+function saveSweep() {
+  try {
+    mkdirSync(join(process.cwd(), 'data'), { recursive: true });
+    writeFileSync(SWEEP_FILE, JSON.stringify(Object.fromEntries(nextSweep)));
+  } catch {
+    /* non-fatal */
+  }
+}
 
 /** Sapu token sisa (cash-out gagal) di wallet → swap ke ETH. Non-fatal. */
 async function sweepLeftovers(bot: Telegraf) {
@@ -36,13 +59,14 @@ async function sweepLeftovers(bot: Telegraf) {
     const key = `${r.chain ?? 'robinhood'}:${r.ca.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (Date.now() - (lastSweep.get(key) ?? 0) < SWEEP_COOLDOWN_MS) continue;
+    if (Date.now() < (nextSweep.get(key) ?? 0)) continue;
     const cc = getChain(r.chain);
     try {
       const t = new ethers.Contract(r.ca, ERC20_ABI, cc.wallet);
       const bal: bigint = await t.balanceOf(cc.wallet.address);
       if (bal === 0n) continue;
-      lastSweep.set(key, Date.now());
+      nextSweep.set(key, Date.now() + SWEEP_COOLDOWN_MS);
+      saveSweep();
       if (config.safety.dryRun) continue;
       const res = await swapTokenToEthRobust(r.ca, bal, cc);
       console.log(`[sweep] ${r.symbol} (${cc.key}) → +${ethers.formatEther(res.outEthWei)} ETH via ${res.route}`);
@@ -51,7 +75,13 @@ async function sweepLeftovers(bot: Telegraf) {
         `♻️ Sisa ${r.symbol} tersapu → +${Number(ethers.formatEther(res.outEthWei)).toFixed(6)} ETH (${res.route})`,
       );
     } catch (e) {
-      console.log(`[sweep] ${r.symbol} gagal: ${(e as Error).message.slice(0, 120)}`);
+      const emsg = (e as Error).message ?? '';
+      // Token debu (nilai terlalu kecil utk di-swap) → mundur lama, jangan ulang tiap 6j.
+      if (/too small|below minimum|\bminimum\b|dust/i.test(emsg)) {
+        nextSweep.set(key, Date.now() + DUST_COOLDOWN_MS);
+        saveSweep();
+      }
+      console.log(`[sweep] ${r.symbol} gagal: ${emsg.slice(0, 120)}`);
     }
   }
 }
