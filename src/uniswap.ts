@@ -438,6 +438,25 @@ export async function discoverPools(
   return out;
 }
 
+// Cache TTL pendek — HANYA untuk tampilan (mis. /status walletHoldings) agar
+// tak spam RPC saat refresh berulang. JALUR UANG (swap fallback, /add) TETAP
+// pakai discoverPools fresh: data lawas hanya memengaruhi nilai tampilan, bukan
+// keamanan swap (minOut tetap dari quoter live).
+const _poolsCache = new Map<string, { t: number; v: PoolOption[] }>();
+
+export async function discoverPoolsCached(
+  tokenAddress: string,
+  ctx: ChainCtx = getChain(),
+  ttlMs = 30_000,
+): Promise<PoolOption[]> {
+  const key = `${ctx.key}:${tokenAddress.toLowerCase()}`;
+  const hit = _poolsCache.get(key);
+  if (hit && Date.now() - hit.t < ttlMs) return hit.v;
+  const v = await discoverPools(tokenAddress, ctx);
+  _poolsCache.set(key, { t: Date.now(), v });
+  return v;
+}
+
 /** Info harga & sisi WETH untuk sebuah pool. */
 export async function priceInfo(tokenAddress: string, fee: number, ctx: ChainCtx = getChain()) {
   const st = await loadPool(tokenAddress, fee, ctx);

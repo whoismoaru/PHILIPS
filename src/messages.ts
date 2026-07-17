@@ -543,6 +543,7 @@ export function msgAmountCustom(maxLabel: string): string {
 
 export function msgPlanStep(opts: {
   screenDanger: boolean;
+  screenFailed?: boolean;
   symbol: string;
   fee: number;
   ethAmount: string;
@@ -560,6 +561,11 @@ export function msgPlanStep(opts: {
   if (opts.screenDanger) {
     body.push(
       quoteHtml(`${bold('SCREEN · BAHAYA')} — token berisiko. Lanjut hanya jika yakin.`),
+      '',
+    );
+  } else if (opts.screenFailed) {
+    body.push(
+      quoteHtml(`${bold('SCREEN · GAGAL')} — token TIDAK terverifikasi keamanannya. Lanjut dgn risiko sendiri.`),
       '',
     );
   }

@@ -9,6 +9,7 @@ import {
   executeRemove,
   getPositionDetail,
   discoverPools,
+  discoverPoolsCached,
   type AddPlan,
   type PoolOption,
 } from './uniswap.js';
@@ -70,7 +71,7 @@ async function walletHoldings(cc: ChainCtx = getChain()): Promise<Holding[]> {
         const amount = Number(ethers.formatUnits(bal, dec));
         let usd: number | null = null;
         try {
-          const pools = (await discoverPools(ca, cc)).filter((p) => p.priceTokenInWeth);
+          const pools = (await discoverPoolsCached(ca, cc)).filter((p) => p.priceTokenInWeth);
           if (pools[0]?.priceTokenInWeth && ethUsd !== null) {
             usd = amount * Number(pools[0].priceTokenInWeth) * ethUsd;
           }
@@ -149,6 +150,7 @@ type AddFlow = {
   token: string;
   chain: string; // kunci chain tempat token berada
   screenBahaya: boolean;
+  screenFailed?: boolean; // screening ERROR (bukan BAHAYA) → token tak terverifikasi
   pools: PoolOption[];
   fee?: number;
   rangePct?: number;
@@ -496,6 +498,7 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   }
   const text = msg.msgPlanStep({
     screenDanger: flow.screenBahaya,
+    screenFailed: flow.screenFailed,
     symbol: plan.otherSymbol,
     fee: flow.fee!,
     ethAmount: flow.ethAmount!,
@@ -536,6 +539,7 @@ async function continueAddlp(
 
   // 1) Screening token (di chain terpilih).
   let screenBahaya = false;
+  let screenFailed = false;
   prog = await editProgress(ctx, prog, msg.msgProgress(`menyaring token di ${cc.label}…`));
   try {
     const s = await screenToken(token, cc);
@@ -543,6 +547,7 @@ async function continueAddlp(
     // Kartu screen = pesan terpisah (isi panjang, perlu dibaca).
     await ctx.reply(formatScreen(s), html);
   } catch {
+    screenFailed = true; // gagal verifikasi → peringatan dibawa ke preview rencana
     await ctx.reply(msg.msgScreeningFailed(), html);
   }
 
@@ -561,7 +566,7 @@ async function continueAddlp(
   }
 
   // 3) Mulai wizard — reuse bubble progress jadi step pilih pool.
-  const flow: AddFlow = { token, chain: chainKey, screenBahaya, pools };
+  const flow: AddFlow = { token, chain: chainKey, screenBahaya, screenFailed, pools };
   flows.set(ctx.from.id, flow);
   const kb = Markup.inlineKeyboard([
     ...flow.pools.map((p) => [
@@ -699,9 +704,12 @@ bot.action('addok', async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow?.plan || flow.fee === undefined || !flow.ethAmount)
     return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  // Idempotency: hapus flow SEBELUM eksekusi (sinkron, sebelum await pertama) →
+  // double-tap tombol Konfirmasi tak bisa membuka posisi dobel (dobel ETH).
+  // Gagal open → flow sudah hilang, user ulangi /add (aman).
+  flows.delete(ctx.from!.id);
   await ctx.answerCbQuery('Diproses…');
   if (config.safety.dryRun) {
-    flows.delete(ctx.from!.id);
     await ctx.editMessageText(msg.msgDryRunAddDone(), html);
     return;
   }
@@ -722,7 +730,6 @@ bot.action('addok', async (ctx) => {
       status: 'ACTIVE',
       lastInRange: false,
     });
-    flows.delete(ctx.from!.id);
     // Ringkas OPENED di bubble yang sama, lalu kartu posisi live.
     await ctx.editMessageText(msg.msgLpOpened(tokenId, notes), html);
     const rec = store.get(tokenId);
@@ -805,14 +812,20 @@ bot.action(/^stop:(\d+)$/, async (ctx) => {
   }
 });
 
+// tokenId yang sedang ditutup — cegah double-tap "Tutup Posisi" (tx kedua revert
+// di burn & buang gas). Sinkron: has→add sebelum await pertama = atomik thd loop.
+const closingInFlight = new Set<string>();
+
 bot.action(/^close:(\d+)$/, async (ctx) => {
   const tokenId = ctx.match[1];
-  await ctx.answerCbQuery('Diproses…');
-  if (config.safety.dryRun) {
-    await ctx.editMessageText(msg.msgDryRunClose(tokenId), html);
-    return;
-  }
+  if (closingInFlight.has(tokenId)) return ctx.answerCbQuery('Sedang diproses…');
+  closingInFlight.add(tokenId);
   try {
+    await ctx.answerCbQuery('Diproses…');
+    if (config.safety.dryRun) {
+      await ctx.editMessageText(msg.msgDryRunClose(tokenId), html);
+      return;
+    }
     await ctx.editMessageText(msg.msgClosing(), html);
     const summary = await stopAndCashOut(tokenId, getChain(store.get(tokenId)?.chain));
     finalizeClose(tokenId, { resultEthWei: summary.ethOutWei, reason: 'cashed', keep: summary.leftover });
@@ -824,6 +837,8 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
     } else {
       await ctx.reply(msg.msgError('close', (err as Error).message), html);
     }
+  } finally {
+    closingInFlight.delete(tokenId);
   }
 });
 
