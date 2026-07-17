@@ -99,8 +99,11 @@ async function swapViaUniswap(
     txHashes.push(atx.hash);
   }
 
-  // minOut dari quoter, dikurangi slippage. Kalau quoter gagal → minOut 0 (last resort).
-  let minOut = 0n;
+  // minOut dari quoter, dikurangi slippage. Quoter gagal / kembali 0 → BATALKAN
+  // route ini (JANGAN swap dgn minOut=0 — itu umpan sandwich). swapTokenToEthRobust
+  // akan coba jalur lain; bila semua gagal, token ditahan (leftover/STOPPED) & sweep
+  // mencoba lagi nanti — jauh lebih baik daripada dijual di harga berapa pun.
+  let minOut: bigint;
   try {
     const quoter = new e.Contract(ctx.quoterAddress, QUOTER_ABI, wallet);
     const q = await quoter.quoteExactInputSingle.staticCall({
@@ -111,8 +114,11 @@ async function swapViaUniswap(
       sqrtPriceLimitX96: 0n,
     });
     minOut = (BigInt(q[0]) * BigInt(Math.floor((100 - slippagePct) * 100))) / 10000n;
-  } catch {
-    /* biarkan 0 */
+  } catch (err) {
+    throw new Error(`quoter gagal (${(err as Error).message.slice(0, 60)}) — swap dibatalkan, hindari minOut=0`);
+  }
+  if (minOut <= 0n) {
+    throw new Error('quoter mengembalikan 0 — swap dibatalkan (hindari sandwich)');
   }
 
   const router = new e.Contract(routerAddr, ROUTER_ABI, wallet);

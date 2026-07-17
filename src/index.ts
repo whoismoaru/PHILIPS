@@ -1035,14 +1035,14 @@ async function registerBotCommands() {
   }
 
   try {
-    await bot.telegram.setChatMenuButton({ menu_button: { type: 'commands' } });
+    await bot.telegram.setChatMenuButton({ menuButton: { type: 'commands' } });
   } catch (e) {
     console.error('[setChatMenuButton] default', (e as Error).message);
   }
   try {
     await bot.telegram.setChatMenuButton({
-      chat_id: config.telegram.allowedUserId,
-      menu_button: { type: 'commands' },
+      chatId: config.telegram.allowedUserId,
+      menuButton: { type: 'commands' },
     });
   } catch (e) {
     console.error('[setChatMenuButton] chat', (e as Error).message);
@@ -1060,23 +1060,38 @@ async function registerBotCommands() {
 }
 
 // --- Nyalakan ---
-// launch() menolak (mis. 409 conflict / jaringan) → exit(1), systemd auto-restart.
-bot.launch().then(
-  async () => {
-    console.log(
-      'PHILIPS online | wallet:',
-      wallet.address,
-      '| mode:',
-      msg.modeLabel(config.safety.dryRun),
-    );
-    // Setelah launch — pastikan menu "/" terisi (bukan fire-and-forget buta).
-    await registerBotCommands();
-  },
-  (err) => {
-    console.error('Launch gagal:', err);
-    process.exit(1);
-  },
-);
+// launch() gagal (mis. 409 conflict saat deploy overlap / jaringan) → RETRY dgn
+// backoff, bukan langsung exit. 409 = instance lama masih polling; tunggu ia lepas.
+// Menyerah setelah maxTries → exit(1), systemd auto-restart.
+function launchWithRetry(attempt = 1, maxTries = 6) {
+  bot.launch().then(
+    async () => {
+      console.log(
+        'PHILIPS online | wallet:',
+        wallet.address,
+        '| mode:',
+        msg.modeLabel(config.safety.dryRun),
+      );
+      // Setelah launch — pastikan menu "/" terisi (bukan fire-and-forget buta).
+      await registerBotCommands();
+    },
+    (err) => {
+      const is409 =
+        (err as any)?.response?.error_code === 409 ||
+        /409|conflict|terminated by other getUpdates/i.test(String((err as Error)?.message ?? err));
+      console.error(
+        `Launch gagal (percobaan ${attempt}/${maxTries})${is409 ? ' [409 — instance lain masih polling]' : ''}:`,
+        err,
+      );
+      if (attempt >= maxTries) {
+        process.exit(1);
+        return;
+      }
+      setTimeout(() => launchWithRetry(attempt + 1, maxTries), is409 ? 5000 : 2000);
+    },
+  );
+}
+launchWithRetry();
 startMonitor(bot); // auto-monitor posisi aktif
 
 // --- Auto-recovery: error tak tertangani → log + notif + restart via systemd ---
