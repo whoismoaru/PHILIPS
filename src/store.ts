@@ -9,10 +9,11 @@ import { join } from 'node:path';
 export type PosRecord = {
   tokenId: string;
   chain?: string; // kunci chain ('robinhood' dst); kosong = robinhood (posisi lama)
-  ca: string; // alamat token (non-WETH)
+  ca: string; // alamat token (non-base)
   fee: number;
   symbol: string;
-  initialWethWei: string; // modal awal (WETH disetor) dalam wei
+  baseKind?: 'weth' | 'usdg'; // aset pasangan; kosong = weth (posisi lama)
+  initialWethWei: string; // modal awal (base disetor) dalam unit base (WETH 18-dec / USDG 6-dec)
   nominalEth?: string; // nominal yang dipilih user (tampilan bersih)
   rangeLowPct?: number; // % ujung terjauh dari harga saat buka
   rangeHighPct?: number; // % ujung terdekat

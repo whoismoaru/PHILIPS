@@ -544,17 +544,17 @@ export function msgAmountCustom(maxLabel: string): string {
 export function msgPlanStep(opts: {
   screenDanger: boolean;
   screenFailed?: boolean;
+  baseSymbol: string;
   symbol: string;
   fee: number;
-  ethAmount: string;
+  depositAmount: string;
   pctHigh: number;
   pctLow: number;
   currentPrice: string;
-  otherAmount: string;
   gasEth: string;
-  totalEth: string;
-  balanceEth: string;
-  shortEth: string | null;
+  needLabel: string;
+  balanceLabel: string;
+  shortLabel: string | null;
   dryRun: boolean;
 }): string {
   const body: string[] = [];
@@ -571,24 +571,23 @@ export function msgPlanStep(opts: {
   }
   body.push(
     fieldBlock([
-      ['pair', `WETH / ${opts.symbol} · ${feeLabel(opts.fee)}`],
-      ['deposit', `${opts.ethAmount} WETH`],
+      ['pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
+      ['deposit', `${opts.depositAmount} ${opts.baseSymbol}`],
       ['range', `${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`],
-      ['price', `1 ${opts.symbol} = ${opts.currentPrice} WETH`],
-      ['estimate', `~${opts.otherAmount} ${opts.symbol}`],
+      ['price', `1 ${opts.symbol} = ${opts.currentPrice} ${opts.baseSymbol}`],
     ]),
     '',
     section('biaya'),
     fieldBlock([
       ['gas', `~${opts.gasEth} ETH`],
-      ['total', `${opts.totalEth} ETH`],
-      ['saldo', `${opts.balanceEth} ETH`],
+      ['perlu', opts.needLabel],
+      ['saldo', opts.balanceLabel],
     ]),
   );
-  if (opts.shortEth) {
+  if (opts.shortLabel) {
     body.push(
       '',
-      quoteHtml(`${bold('KURANG')} ${esc(opts.shortEth)} ETH — top up dulu.`),
+      quoteHtml(`${bold('KURANG')} ${esc(opts.shortLabel)} — top up dulu.`),
     );
   } else {
     body.push('', note('saldo cukup'));
@@ -678,16 +677,17 @@ export function msgStopConfirm(opts: {
   age: string;
   pnlText: string;
   feeText: string;
-  wethAmt: string;
+  baseAmt: string;
+  baseSymbol: string;
   otherAmt: string;
 }): string {
   const body = [
     fieldBlock([
-      ['pair', `WETH / ${opts.symbol} · ${feeLabel(opts.fee)}`],
+      ['pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
       ['age', opts.age],
       ['pnl', opts.pnlText],
       ['fees', opts.feeText],
-      ['out', `${opts.wethAmt} WETH + ${opts.otherAmt} ${opts.symbol}`],
+      ['out', `${opts.baseAmt} ${opts.baseSymbol} + ${opts.otherAmt} ${opts.symbol}`],
     ]),
     '',
     note('likuiditas dikembalikan ke wallet.'),
@@ -736,7 +736,7 @@ export function msgCashOut(opts: {
 }): string {
   const rows: Array<[string, string]> = [
     ['position', `#${opts.tokenId}`],
-    ['received', `${opts.ethOut} ETH`],
+    ['received', opts.ethOut],
   ];
   for (let i = 0; i < opts.txHashes.length; i++) {
     rows.push([i === 0 ? 'tx' : '', shortAddr(opts.txHashes[i])]);

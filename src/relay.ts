@@ -85,7 +85,7 @@ async function swapViaUniswap(
   const { ERC20_ABI } = await import('./chain.js');
   const { wallet, weth } = ctx;
 
-  const pools = (await discoverPools(tokenAddress, ctx)).filter((p) => p.wethReserve > 0n);
+  const pools = (await discoverPools(tokenAddress, ctx)).filter((p) => p.baseReserve > 0n);
   if (pools.length === 0) throw new Error('tidak ada pool WETH untuk fallback swap');
   const fee = pools[0].fee;
 
@@ -210,4 +210,89 @@ export async function swapTokenToEthRobust(
     errors.push(`relay-retry: ${(e as Error).message.slice(0, 80)}`);
   }
   throw new Error('Semua jalur swap gagal:\n' + errors.join('\n'));
+}
+
+/**
+ * Swap token → USDG (untuk close posisi pasangan USDG). Pilih pool USDG/token
+ * terlikuid, exactInputSingle via Uniswap router dgn minOut dari quoter (floor,
+ * sama seperti jalur WETH — quoter gagal/0 → BATALKAN, hindari sandwich).
+ * Slippage 5% lalu 15% bila revert. USDG TIDAK di-unwrap (tetap stablecoin).
+ */
+export async function swapTokenToUsdgRobust(
+  tokenAddress: string,
+  amountWei: bigint,
+  usdgAddress: string,
+  ctx: ChainCtx = getChain(),
+): Promise<{ txHashes: string[]; outWei: bigint; route: string }> {
+  const { wallet } = ctx;
+  const usdg = new ethers.Contract(
+    usdgAddress,
+    ['function balanceOf(address) view returns (uint256)'],
+    ctx.provider,
+  );
+  const token = new ethers.Contract(
+    tokenAddress,
+    [
+      'function approve(address,uint256) returns (bool)',
+      'function allowance(address,address) view returns (uint256)',
+    ],
+    wallet,
+  );
+
+  // Pool USDG/token terlikuid (USDG reserve terbesar).
+  let bestFee = 0;
+  let bestReserve = -1n;
+  for (const fee of [100, 500, 3000, 10000]) {
+    const pool: string = await ctx.factory.getPool(usdgAddress, tokenAddress, fee);
+    if (!pool || pool === ethers.ZeroAddress) continue;
+    const r: bigint = await usdg.balanceOf(pool);
+    if (r > bestReserve) {
+      bestReserve = r;
+      bestFee = fee;
+    }
+  }
+  if (bestReserve < 0n) throw new Error('tidak ada pool USDG untuk swap token→USDG');
+
+  const routerAddr = ctx.routerAddress;
+  const txHashes: string[] = [];
+  const allowance: bigint = await token.allowance(wallet.address, routerAddr);
+  if (allowance < amountWei) {
+    const atx = await token.approve(routerAddr, ethers.MaxUint256);
+    await atx.wait();
+    txHashes.push(atx.hash);
+  }
+
+  const quoter = new ethers.Contract(ctx.quoterAddress, QUOTER_ABI, wallet);
+  const router = new ethers.Contract(routerAddr, ROUTER_ABI, wallet);
+  let lastErr = '';
+  for (const slip of [5, 15]) {
+    try {
+      const q = await quoter.quoteExactInputSingle.staticCall({
+        tokenIn: tokenAddress,
+        tokenOut: usdgAddress,
+        amountIn: amountWei,
+        fee: bestFee,
+        sqrtPriceLimitX96: 0n,
+      });
+      const minOut = (BigInt(q[0]) * BigInt(Math.floor((100 - slip) * 100))) / 10000n;
+      if (minOut <= 0n) throw new Error('quoter mengembalikan 0 (hindari sandwich)');
+      const before: bigint = await usdg.balanceOf(wallet.address);
+      const tx = await router.exactInputSingle({
+        tokenIn: tokenAddress,
+        tokenOut: usdgAddress,
+        fee: bestFee,
+        recipient: wallet.address,
+        amountIn: amountWei,
+        amountOutMinimum: minOut,
+        sqrtPriceLimitX96: 0n,
+      });
+      await tx.wait();
+      txHashes.push(tx.hash);
+      const outWei = (await usdg.balanceOf(wallet.address)) - before;
+      return { txHashes, outWei, route: `uniswap-usdg(slip ${slip}%)` };
+    } catch (e) {
+      lastErr = (e as Error).message.slice(0, 80);
+    }
+  }
+  throw new Error(`swap token→USDG gagal: ${lastErr}`);
 }

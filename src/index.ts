@@ -10,16 +10,27 @@ import {
   getPositionDetail,
   discoverPools,
   discoverPoolsCached,
+  discoverAllPools,
   type AddPlan,
   type PoolOption,
+  type PositionDetail,
 } from './uniswap.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
-import { swapTokenToEthRobust } from './relay.js';
+import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { startMonitor } from './monitor.js';
 import * as store from './store.js';
 import * as journal from './journal.js';
 import * as msg from './messages.js';
-import { CHAINS, getChain, detectChains, type ChainCtx } from './chains.js';
+import {
+  CHAINS,
+  getChain,
+  detectChains,
+  baseOf,
+  detectBase,
+  type ChainCtx,
+  type BaseKind,
+  type BaseAsset,
+} from './chains.js';
 
 const WETH_ADDRESS = config.uniswap.weth;
 
@@ -71,9 +82,9 @@ async function walletHoldings(cc: ChainCtx = getChain()): Promise<Holding[]> {
         const amount = Number(ethers.formatUnits(bal, dec));
         let usd: number | null = null;
         try {
-          const pools = (await discoverPoolsCached(ca, cc)).filter((p) => p.priceTokenInWeth);
-          if (pools[0]?.priceTokenInWeth && ethUsd !== null) {
-            usd = amount * Number(pools[0].priceTokenInWeth) * ethUsd;
+          const pools = (await discoverPoolsCached(ca, cc)).filter((p) => p.priceTokenInBase);
+          if (pools[0]?.priceTokenInBase && ethUsd !== null) {
+            usd = amount * Number(pools[0].priceTokenInBase) * ethUsd;
           }
         } catch { /* harga tak terbaca → usd null */ }
         return { symbol, amount: amount.toLocaleString('en-US', { maximumFractionDigits: 4 }), usd };
@@ -90,13 +101,14 @@ async function walletHoldings(cc: ChainCtx = getChain()): Promise<Holding[]> {
  * Mengatasi: token sisa dari close sebelumnya, RPC telat update, Relay no-op,
  * dan swap parsial. Setiap iterasi menukar saldo penuh yang tersisa.
  */
-async function sweepTokenToEth(
+async function sweepTokenToBase(
   otherAddr: string,
   otherC: ethers.Contract,
+  base: BaseAsset,
   cc: ChainCtx,
   notes: string[],
-): Promise<{ ethOut: bigint; txHashes: string[]; leftover: boolean }> {
-  let ethOut = 0n;
+): Promise<{ baseOut: bigint; txHashes: string[]; leftover: boolean }> {
+  let baseOut = 0n;
   const txHashes: string[] = [];
   let prev = -1n;
   for (let attempt = 1; attempt <= MAX_CLOSE_SWEEP; attempt++) {
@@ -108,10 +120,17 @@ async function sweepTokenToEth(
     }
     prev = bal;
     try {
-      const r = await swapTokenToEthRobust(otherAddr, bal, cc);
-      ethOut += r.outEthWei;
-      txHashes.push(...r.txHashes);
-      notes.push(`Swap ${attempt}: token → ETH via ${r.route}`);
+      if (base.kind === 'usdg') {
+        const r = await swapTokenToUsdgRobust(otherAddr, bal, base.address, cc);
+        baseOut += r.outWei;
+        txHashes.push(...r.txHashes);
+        notes.push(`Swap ${attempt}: token → USDG via ${r.route}`);
+      } else {
+        const r = await swapTokenToEthRobust(otherAddr, bal, cc);
+        baseOut += r.outEthWei;
+        txHashes.push(...r.txHashes);
+        notes.push(`Swap ${attempt}: token → ETH via ${r.route}`);
+      }
     } catch (e) {
       notes.push(`Swap percobaan ${attempt} gagal: ${(e as Error).message.slice(0, 140)}`);
       break;
@@ -119,28 +138,45 @@ async function sweepTokenToEth(
     await sleep(1500); // beri waktu saldo settle di RPC sebelum verifikasi ulang
   }
   const finalBal: bigint = await otherC.balanceOf(cc.wallet.address);
-  return { ethOut, txHashes, leftover: finalBal > 0n };
+  return { baseOut, txHashes, leftover: finalBal > 0n };
 }
 
-/** Hitung biaya jaringan (est) + kebutuhan ETH untuk buka LP dari saldo wallet. */
-async function estimateAddCost(cc: ChainCtx, depositEth: string) {
-  const depositWei = ethers.parseEther(depositEth);
-  const [fee, nativeBal, wethBal] = await Promise.all([
+/** Hitung biaya jaringan (est) + kebutuhan untuk buka LP, base-aware.
+ *  WETH: deposit (wrap) + gas keduanya dari ETH native. USDG: deposit dari saldo
+ *  USDG (harus dipegang, tak bisa wrap) + gas dari ETH native terpisah. */
+async function estimateAddCost(cc: ChainCtx, base: import('./chains.js').BaseAsset, depositAmount: string) {
+  const depositWei = ethers.parseUnits(depositAmount, base.decimals);
+  const [feeData, nativeBal] = await Promise.all([
     cc.provider.getFeeData(),
     cc.provider.getBalance(cc.wallet.address),
-    cc.weth.balanceOf(cc.wallet.address) as Promise<bigint>,
   ]);
-  const gasPrice = fee.maxFeePerGas ?? fee.gasPrice ?? 0n;
+  const gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
   const gasWei = gasPrice * EST_ADD_GAS;
-  // WETH yang sudah dimiliki mengurangi ETH yang perlu di-wrap.
-  const nativeForDeposit = depositWei > wethBal ? depositWei - wethBal : 0n;
-  const totalWei = nativeForDeposit + gasWei;
-  const shortWei = totalWei > nativeBal ? totalWei - nativeBal : 0n;
+
+  if (base.wrappable) {
+    const wethBal: bigint = await cc.weth.balanceOf(cc.wallet.address);
+    const nativeForDeposit = depositWei > wethBal ? depositWei - wethBal : 0n;
+    const totalWei = nativeForDeposit + gasWei;
+    const shortWei = totalWei > nativeBal ? totalWei - nativeBal : 0n;
+    return {
+      gasEth: msg.fmtEth(gasWei),
+      needLabel: `${msg.fmtEth(totalWei)} ETH`,
+      balanceLabel: `${msg.fmtEth(nativeBal)} ETH`,
+      shortLabel: shortWei > 0n ? `${msg.fmtEth(shortWei)} ETH` : null,
+    };
+  }
+  const erc = new ethers.Contract(base.address, ERC20_ABI, cc.provider);
+  const bal: bigint = await erc.balanceOf(cc.wallet.address);
+  const shortBase = depositWei > bal ? depositWei - bal : 0n;
+  const shortGas = gasWei > nativeBal ? gasWei - nativeBal : 0n;
+  const shorts: string[] = [];
+  if (shortBase > 0n) shorts.push(`${ethers.formatUnits(shortBase, base.decimals)} ${base.symbol}`);
+  if (shortGas > 0n) shorts.push(`${msg.fmtEth(shortGas)} ETH (gas)`);
   return {
     gasEth: msg.fmtEth(gasWei),
-    totalEth: msg.fmtEth(totalWei),
-    balanceEth: msg.fmtEth(nativeBal),
-    shortEth: shortWei > 0n ? msg.fmtEth(shortWei) : null,
+    needLabel: `${depositAmount} ${base.symbol} + gas`,
+    balanceLabel: `${ethers.formatUnits(bal, base.decimals)} ${base.symbol} · ${msg.fmtEth(nativeBal)} ETH`,
+    shortLabel: shorts.length ? shorts.join(' + ') : null,
   };
 }
 const maxEthLabel = maxEth === Infinity ? 'tanpa batas' : `${maxEth} ETH`;
@@ -152,6 +188,7 @@ type AddFlow = {
   screenBahaya: boolean;
   screenFailed?: boolean; // screening ERROR (bukan BAHAYA) → token tak terverifikasi
   pools: PoolOption[];
+  base?: BaseKind; // pasangan pool terpilih (weth | usdg)
   fee?: number;
   rangePct?: number;
   ethAmount?: string;
@@ -256,6 +293,30 @@ bot.action('refresh:status', async (ctx) => {
   }
 });
 
+/** Nilai base (float) → USD. WETH: ×ethUsd (bisa null). USDG: 1:1 dollar. */
+async function baseToUsd(baseKind: BaseKind, amountFloat: number, cc: ChainCtx): Promise<number | null> {
+  if (baseKind === 'usdg') return amountFloat; // USDG ≈ $1
+  const eu = await getEthUsd(cc.wethAddress, cc);
+  return eu !== null ? amountFloat * eu : null;
+}
+
+/** Teks PnL posisi, base-aware (WETH → USD via ethUsd; USDG → USD 1:1). */
+async function positionPnlText(
+  rec: store.PosRecord | undefined,
+  d: PositionDetail,
+  cc: ChainCtx,
+): Promise<string> {
+  const dec = d.baseDecimals;
+  const initF = rec ? Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec)) : 0;
+  const curF = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec));
+  const pnlF = curF - initF;
+  const pct = initF > 0 ? (pnlF / initF) * 100 : 0;
+  const usd = await baseToUsd(d.baseKind, pnlF, cc);
+  return usd !== null
+    ? `${msg.usdSigned(usd)} (${msg.pctSigned(pct)})`
+    : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol} (${msg.pctSigned(pct)})`;
+}
+
 /** Kartu ringkas satu posisi + tombol Tutup/Detail. */
 async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean) {
   let d;
@@ -271,18 +332,10 @@ async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean)
     return edit ? ctx.editMessageText(t, html) : ctx.reply(t, html);
   }
   const cc = getChain(rec.chain);
-  const ethUsd = await getEthUsd(cc.wethAddress, cc);
-  const initF = Number(ethers.formatEther(BigInt(rec.initialWethWei)));
-  const curF = Number(ethers.formatEther(d.valueWethWei + d.feesWethWei));
-  const pnlF = curF - initF;
-  const pnlPct = initF > 0 ? (pnlF / initF) * 100 : 0;
-  const pnlText =
-    ethUsd !== null
-      ? `${msg.usdSigned(pnlF * ethUsd)} (${msg.pctSigned(pnlPct)})`
-      : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(5)} ETH (${msg.pctSigned(pnlPct)})`;
+  const pnlText = await positionPnlText(rec, d, cc);
   // Jarak batas range dari HARGA SEKARANG (live) — bukan konfigurasi saat buka.
-  // Harga token dlm WETH: 1.0001^tick bila WETH=token1, kebalikannya bila token0.
-  const sgn = d.wethIsToken0 ? -1 : 1;
+  // Harga token dlm base: 1.0001^tick bila base=token1, kebalikannya bila token0.
+  const sgn = d.baseIsToken0 ? -1 : 1;
   const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
   const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
   const range = `${msg.fmtPct(pcts[0])} / ${msg.fmtPct(pcts[1])}`;
@@ -317,17 +370,18 @@ async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean)
 async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolean) {
   const cc = getChain(rec.chain);
   const d = await getPositionDetail(rec.tokenId, cc);
-  const ethUsd = await getEthUsd(cc.wethAddress, cc);
-  const valUsd = ethUsd !== null ? Number(ethers.formatEther(d.valueWethWei)) * ethUsd : null;
-  const feeUsd = ethUsd !== null ? Number(ethers.formatEther(d.feesWethWei)) * ethUsd : null;
+  const valF = Number(ethers.formatUnits(d.valueBaseWei, d.baseDecimals));
+  const feeF = Number(ethers.formatUnits(d.feesBaseWei, d.baseDecimals));
+  const valUsd = await baseToUsd(d.baseKind, valF, cc);
+  const feeUsd = await baseToUsd(d.baseKind, feeF, cc);
   const value =
-    `${msg.cleanEth(d.valueWethWei)} WETH` +
+    `${msg.cleanUnits(d.valueBaseWei, d.baseDecimals)} ${d.baseSymbol}` +
     (valUsd !== null ? ` (${msg.usdPlain(valUsd)})` : '');
   const fees =
-    `${msg.cleanEth(d.feesWethWei)} WETH` +
+    `${msg.cleanUnits(d.feesBaseWei, d.baseDecimals)} ${d.baseSymbol}` +
     (feeUsd !== null ? ` (${msg.usdPlain(feeUsd)})` : '');
   const composition =
-    `${msg.cleanEth(d.wethAmountWei)} WETH + ${msg.cleanUnits(d.otherAmountWei, d.otherDecimals)} ${d.otherSymbol}`;
+    `${msg.cleanUnits(d.baseAmountWei, d.baseDecimals)} ${d.baseSymbol} + ${msg.cleanUnits(d.otherAmountWei, d.otherDecimals)} ${d.otherSymbol}`;
   const text = msg.msgPositionDetail({
     tokenId: rec.tokenId,
     symbol: rec.symbol,
@@ -436,19 +490,23 @@ bot.action(/^back:card:(\d+)$/, async (ctx) => {
 
 // ---------- Fase 3: tulis (wizard /add bertahap) ----------
 
-/** Langkah 1/3 — pilih pool (fee tier). */
-async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
-  const kb = Markup.inlineKeyboard([
-    ...flow.pools.map((p) => [
+/** Keyboard pilih pool: pasangan (WETH/USDG) · fee · kedalaman. Callback bawa base. */
+function poolKeyboard(pools: PoolOption[]) {
+  return Markup.inlineKeyboard([
+    ...pools.map((p) => [
       Markup.button.callback(
-        `${msg.feeLabel(p.fee)}  ·  ${Number(ethers.formatEther(p.wethReserve)).toFixed(2)} WETH`,
-        `fee:${p.fee}`,
+        `${p.baseSymbol} · ${msg.feeLabel(p.fee)} · ${Number(ethers.formatUnits(p.baseReserve, p.baseDecimals)).toFixed(2)} ${p.baseSymbol}`,
+        `pick:${p.base}:${p.fee}`,
       ),
     ]),
     [Markup.button.callback('Batal', 'cancel')],
   ]);
+}
+
+/** Langkah 1/3 — pilih pool (pasangan + fee tier). */
+async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
   const text = msg.msgPoolStep();
-  const extra = { ...html, ...kb };
+  const extra = { ...html, ...poolKeyboard(flow.pools) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
@@ -487,29 +545,30 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
 /** Langkah 4/4 — hitung & tampilkan rencana + konfirmasi. */
 async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   const cc = getChain(flow.chain);
-  const plan = await planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, cc);
+  const base = baseOf(cc, flow.base ?? 'weth');
+  const plan = await planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc);
   flow.plan = plan;
-  // Biaya jaringan (est) + kebutuhan ETH vs saldo. Non-fatal: gagal → '?'.
+  // Biaya jaringan (est) + kebutuhan vs saldo. Non-fatal: gagal → '?'.
   let cost: Awaited<ReturnType<typeof estimateAddCost>> | null = null;
   try {
-    cost = await estimateAddCost(cc, flow.ethAmount!);
+    cost = await estimateAddCost(cc, base, flow.ethAmount!);
   } catch (e) {
     console.log('[estimateAddCost] gagal:', (e as Error).message.slice(0, 120));
   }
   const text = msg.msgPlanStep({
     screenDanger: flow.screenBahaya,
     screenFailed: flow.screenFailed,
+    baseSymbol: plan.baseSymbol,
     symbol: plan.otherSymbol,
     fee: flow.fee!,
-    ethAmount: flow.ethAmount!,
+    depositAmount: flow.ethAmount!,
     pctHigh: plan.pctHigh,
     pctLow: plan.pctLow,
     currentPrice: String(plan.currentPrice),
-    otherAmount: ethers.formatEther(plan.otherAmountWei),
     gasEth: cost?.gasEth ?? '?',
-    totalEth: cost?.totalEth ?? '?',
-    balanceEth: cost?.balanceEth ?? '?',
-    shortEth: cost?.shortEth ?? null,
+    needLabel: cost?.needLabel ?? '?',
+    balanceLabel: cost?.balanceLabel ?? '?',
+    shortLabel: cost?.shortLabel ?? null,
     dryRun: config.safety.dryRun,
   });
   const extra = {
@@ -551,11 +610,11 @@ async function continueAddlp(
     await ctx.reply(msg.msgScreeningFailed(), html);
   }
 
-  // 2) Cari pool berisi likuiditas.
-  prog = await editProgress(ctx, prog, msg.msgProgress('mencari pool…'));
+  // 2) Cari pool berlikuiditas di SEMUA base (WETH + USDG bila ada).
+  prog = await editProgress(ctx, prog, msg.msgProgress('mencari pool (WETH & USDG)…'));
   let pools: PoolOption[];
   try {
-    pools = (await discoverPools(token, cc)).filter((p) => p.wethReserve > 0n);
+    pools = (await discoverAllPools(token, cc)).filter((p) => p.baseReserve > 0n);
   } catch (err) {
     await editProgress(ctx, prog, msg.msgError('discover', (err as Error).message));
     return;
@@ -564,20 +623,18 @@ async function continueAddlp(
     await editProgress(ctx, prog, msg.msgNoPools());
     return;
   }
+  // "Pool terbaik": urut kedalaman dalam USD (WETH×ethUsd, USDG≈$1) menurun.
+  const eu = await getEthUsd(cc.wethAddress, cc);
+  const usdDepth = (p: PoolOption) => {
+    const amt = Number(ethers.formatUnits(p.baseReserve, p.baseDecimals));
+    return p.base === 'usdg' ? amt : eu !== null ? amt * eu : amt;
+  };
+  pools.sort((a, b) => usdDepth(b) - usdDepth(a));
 
   // 3) Mulai wizard — reuse bubble progress jadi step pilih pool.
   const flow: AddFlow = { token, chain: chainKey, screenBahaya, screenFailed, pools };
   flows.set(ctx.from.id, flow);
-  const kb = Markup.inlineKeyboard([
-    ...flow.pools.map((p) => [
-      Markup.button.callback(
-        `${msg.feeLabel(p.fee)}  ·  ${Number(ethers.formatEther(p.wethReserve)).toFixed(2)} WETH`,
-        `fee:${p.fee}`,
-      ),
-    ]),
-    [Markup.button.callback('Batal', 'cancel')],
-  ]);
-  await editProgress(ctx, prog, msg.msgPoolStep(), { ...html, ...kb });
+  await editProgress(ctx, prog, msg.msgPoolStep(), { ...html, ...poolKeyboard(pools) });
 }
 
 // Simpan token yang menunggu pilihan chain.
@@ -629,10 +686,11 @@ bot.action(/^chn:(\w+)$/, async (ctx) => {
 // --- Navigasi wizard (maju & mundur) ---
 const getFlow = (ctx: any): AddFlow | undefined => flows.get(ctx.from!.id);
 
-bot.action(/^fee:(\d+)$/, async (ctx) => {
+bot.action(/^pick:(weth|usdg):(\d+)$/, async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
-  flow.fee = Number(ctx.match[1]);
+  flow.base = ctx.match[1] as BaseKind;
+  flow.fee = Number(ctx.match[2]);
   flow.rangePct = undefined;
   flow.plan = undefined;
   await ctx.answerCbQuery();
@@ -674,6 +732,7 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
 bot.action('back:pool', async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  flow.base = undefined;
   flow.fee = undefined;
   flow.rangePct = undefined;
   flow.plan = undefined;
@@ -722,7 +781,8 @@ bot.action('addok', async (ctx) => {
       ca: flow.token,
       fee: flow.fee,
       symbol: flow.plan.otherSymbol,
-      initialWethWei: flow.plan.wethAmountWei.toString(),
+      baseKind: flow.plan.baseKind,
+      initialWethWei: flow.plan.baseAmountWei.toString(), // jumlah base (unit base) saat buka
       nominalEth: flow.ethAmount,
       rangeLowPct: flow.plan.pctLow,
       rangeHighPct: flow.plan.pctHigh,
@@ -750,17 +810,11 @@ async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
   const rec = store.get(tokenId);
   const cc = getChain(rec?.chain);
   const d = await getPositionDetail(tokenId, cc);
-  const ethUsd = await getEthUsd(cc.wethAddress, cc);
-  const initF = rec ? Number(ethers.formatEther(BigInt(rec.initialWethWei))) : 0;
-  const curF = Number(ethers.formatEther(d.valueWethWei + d.feesWethWei));
-  const pnlF = curF - initF;
-  const pnlPct = initF > 0 ? (pnlF / initF) * 100 : 0;
-  const pnlText =
-    ethUsd !== null ? `${msg.usdSigned(pnlF * ethUsd)} (${msg.pctSigned(pnlPct)})` : msg.pctSigned(pnlPct);
+  const pnlText = await positionPnlText(rec, d, cc);
+  const feeF = Number(ethers.formatUnits(d.feesBaseWei, d.baseDecimals));
+  const feeUsd = await baseToUsd(d.baseKind, feeF, cc);
   const feeText =
-    ethUsd !== null
-      ? msg.usdPlain(Number(ethers.formatEther(d.feesWethWei)) * ethUsd)
-      : `${msg.cleanEth(d.feesWethWei)} WETH`;
+    feeUsd !== null ? msg.usdPlain(feeUsd) : `${msg.cleanUnits(d.feesBaseWei, d.baseDecimals)} ${d.baseSymbol}`;
   const age = rec ? msg.fmtAge(Date.now() - rec.openedAt) : '—';
   const text = msg.msgStopConfirm({
     tokenId,
@@ -769,7 +823,8 @@ async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
     age,
     pnlText,
     feeText,
-    wethAmt: msg.cleanEth(d.wethAmountWei),
+    baseAmt: msg.cleanUnits(d.baseAmountWei, d.baseDecimals),
+    baseSymbol: d.baseSymbol,
     otherAmt: msg.cleanUnits(d.otherAmountWei, d.otherDecimals),
   });
   const extra = {
@@ -828,7 +883,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
     }
     await ctx.editMessageText(msg.msgClosing(), html);
     const summary = await stopAndCashOut(tokenId, getChain(store.get(tokenId)?.chain));
-    finalizeClose(tokenId, { resultEthWei: summary.ethOutWei, reason: 'cashed', keep: summary.leftover });
+    finalizeClose(tokenId, { resultEthWei: summary.baseOutWei, reason: 'cashed', keep: summary.leftover });
     await ctx.reply(summary.text, html);
   } catch (err) {
     if (isGoneErr(err)) {
@@ -846,52 +901,60 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
 async function stopAndCashOut(
   tokenId: string,
   cc: ChainCtx = getChain(),
-): Promise<{ text: string; ethOutWei: bigint; leftover: boolean }> {
+): Promise<{ text: string; baseOutWei: bigint; leftover: boolean }> {
   const { positionManager: pm, weth: wethC, wallet: w } = cc;
   const p = await pm.positions(tokenId);
-  const wethIsToken0 = p.token0.toLowerCase() === cc.wethAddress.toLowerCase();
-  const otherAddr = wethIsToken0 ? p.token1 : p.token0;
+  const base = detectBase(cc, p.token0, p.token1) ?? baseOf(cc, 'weth');
+  const otherAddr = base.address.toLowerCase() === p.token0.toLowerCase() ? p.token1 : p.token0;
   const otherC = new ethers.Contract(otherAddr, ERC20_ABI, w);
+  const baseC = base.wrappable ? wethC : new ethers.Contract(base.address, ERC20_ABI, w);
+  const baseBefore: bigint = await baseC.balanceOf(w.address);
 
   const notes: string[] = [];
   notes.push(...(await executeRemove(tokenId, cc)).notes);
   await sleep(1500); // beri waktu collect settle sebelum baca saldo
 
   const txHashes: string[] = [];
-  // ① Swap SELURUH saldo token → ETH, ulang sampai habis (bukan sekali/delta).
-  //    Ini menutup celah: token sisa dari close lama, RPC telat, Relay no-op.
-  const sw = await sweepTokenToEth(otherAddr, otherC, cc, notes);
+  // ① Swap SELURUH saldo token sisi non-base → base, ulang sampai habis (bukan
+  //    sekali/delta). Menutup celah: token sisa dari close lama, RPC telat, no-op.
+  const sw = await sweepTokenToBase(otherAddr, otherC, base, cc, notes);
   txHashes.push(...sw.txHashes);
 
-  // ② Unwrap SELURUH WETH di wallet → ETH (bukan delta) agar tak ada sisa WETH.
-  let unwrappedWeth = 0n;
-  const wethBal: bigint = await wethC.balanceOf(w.address);
-  if (wethBal > 0n) {
-    try {
-      const tx = await wethC.withdraw(wethBal);
-      const rc = await tx.wait();
-      if (rc) txHashes.push(rc.hash);
-      unwrappedWeth = wethBal;
-      notes.push(`Unwrap ${msg.fmtEth(wethBal)} WETH → ETH`);
-    } catch {
-      notes.push('Unwrap WETH gagal — WETH tetap di wallet.');
+  let baseOutWei: bigint;
+  if (base.wrappable) {
+    // ② WETH: unwrap SELURUH WETH (pokok + hasil swap) → ETH native.
+    let unwrappedWeth = 0n;
+    const wethBal: bigint = await wethC.balanceOf(w.address);
+    if (wethBal > 0n) {
+      try {
+        const tx = await wethC.withdraw(wethBal);
+        const rc = await tx.wait();
+        if (rc) txHashes.push(rc.hash);
+        unwrappedWeth = wethBal;
+        notes.push(`Unwrap ${msg.fmtEth(wethBal)} WETH → ETH`);
+      } catch {
+        notes.push('Unwrap WETH gagal — WETH tetap di wallet.');
+      }
     }
+    baseOutWei = unwrappedWeth + sw.baseOut;
+  } else {
+    // ② USDG: tetap sbg stablecoin (tak di-unwrap). Total bersih = kenaikan saldo.
+    const baseAfter: bigint = await baseC.balanceOf(w.address);
+    baseOutWei = baseAfter > baseBefore ? baseAfter - baseBefore : sw.baseOut;
+    notes.push(`Terima ${ethers.formatUnits(baseOutWei, base.decimals)} ${base.symbol} (tetap sbg stablecoin)`);
   }
 
   if (sw.leftover) {
     notes.push('⚠️ Masih ada sisa token — akan di-retry otomatis oleh monitor.');
   }
 
-  const ethOutWei = unwrappedWeth + sw.ethOut;
+  const ethOut = base.wrappable
+    ? `${msg.fmtEth(baseOutWei)} ETH`
+    : `${ethers.formatUnits(baseOutWei, base.decimals)} ${base.symbol}`;
   console.log(`[cashout] #${tokenId}:`, notes.join(' | ')); // rekam ke journal
-  const text = msg.msgCashOut({
-    tokenId,
-    notes,
-    ethOut: msg.fmtEth(ethOutWei),
-    txHashes,
-  });
+  const text = msg.msgCashOut({ tokenId, notes, ethOut, txHashes });
   // leftover = token benar-benar masih tersisa di wallet setelah semua percobaan.
-  return { text, ethOutWei, leftover: sw.leftover };
+  return { text, baseOutWei, leftover: sw.leftover };
 }
 
 // Batal berlaku untuk semua alur (wizard /add maupun konfirmasi tutup).

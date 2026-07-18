@@ -7,7 +7,7 @@ import type { Pool as TPool, Position as TPosition } from '@uniswap/v3-sdk';
 const { Token, Percent, CurrencyAmount } = sdkCore;
 const { Pool, Position, TICK_SPACINGS, nearestUsableTick, tickToPrice } = v3sdk;
 import { ERC20_ABI } from './chain.js';
-import { getChain, type ChainCtx } from './chains.js';
+import { getChain, baseOf, basesFor, detectBase, type ChainCtx, type BaseAsset, type BaseKind } from './chains.js';
 
 const MAX_UINT128 = (1n << 128n) - 1n;
 const SLIPPAGE = new Percent(50, 10_000); // 0.5%
@@ -43,24 +43,25 @@ type PoolState = {
   sdkPool: TPool;
   token0: string;
   token1: string;
-  wethIsToken0: boolean;
-  tokenOther: TToken; // token selain WETH
-  sdkWeth: TToken;
+  baseIsToken0: boolean;
+  tokenOther: TToken; // token selain base (WETH/USDG)
+  sdkBase: TToken;
   currentTick: number;
 };
 
-/** Baca kondisi pool dari on-chain lalu bangun objek Pool milik SDK. */
+/** Baca kondisi pool base/token dari on-chain lalu bangun objek Pool milik SDK. */
 export async function loadPool(
   tokenAddress: string,
   fee: number,
+  base: BaseAsset,
   ctx: ChainCtx = getChain(),
 ): Promise<PoolState> {
   if (!VALID_FEES.includes(fee)) {
     throw new Error(`Fee tier ${fee} tidak valid. Pilihan: ${VALID_FEES.join(', ')}`);
   }
-  const poolAddress: string = await ctx.factory.getPool(ctx.wethAddress, tokenAddress, fee);
+  const poolAddress: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
   if (!poolAddress || poolAddress === ethers.ZeroAddress) {
-    throw new Error('Pool untuk pasangan & fee ini belum ada di Uniswap.');
+    throw new Error(`Pool ${base.symbol}/token fee ini belum ada di Uniswap.`);
   }
 
   const poolAbi = [
@@ -79,7 +80,7 @@ export async function loadPool(
 
   const sqrtPriceX96: bigint = slot0[0];
   const currentTick = Number(slot0[1]);
-  const wethIsToken0 = token0.toLowerCase() === ctx.wethAddress.toLowerCase();
+  const baseIsToken0 = token0.toLowerCase() === base.address.toLowerCase();
 
   const sdkToken0 = await toSdkToken(token0, ctx);
   const sdkToken1 = await toSdkToken(token1, ctx);
@@ -92,17 +93,17 @@ export async function loadPool(
     currentTick,
   );
 
-  const sdkWeth = wethIsToken0 ? sdkToken0 : sdkToken1;
-  const tokenOther = wethIsToken0 ? sdkToken1 : sdkToken0;
+  const sdkBase = baseIsToken0 ? sdkToken0 : sdkToken1;
+  const tokenOther = baseIsToken0 ? sdkToken1 : sdkToken0;
 
   return {
     poolAddress,
     sdkPool,
     token0,
     token1,
-    wethIsToken0,
+    baseIsToken0,
     tokenOther,
-    sdkWeth,
+    sdkBase,
     currentTick,
   };
 }
@@ -118,44 +119,49 @@ function widthInTicks(rangePercent: number, spacing: number): number {
 }
 
 export type AddPlan = {
-  wethIsToken0: boolean;
+  baseKind: BaseKind;
+  baseSymbol: string;
+  baseDecimals: number;
+  baseIsToken0: boolean;
   tickLower: number;
   tickUpper: number;
   priceLower: string;
   priceUpper: string;
-  wethAmountWei: bigint;
+  baseAmountWei: bigint; // pokok base (WETH 18-dec / USDG 6-dec)
   otherAmountWei: bigint; // idealnya ~0 (single-sided)
   otherSymbol: string;
-  currentPrice: string; // harga token sekarang dalam WETH
+  currentPrice: string; // harga token sekarang dalam base
   pctLow: number; // % ujung terjauh dari harga sekarang (paling negatif)
   pctHigh: number; // % ujung terdekat dari harga sekarang
   position: TPosition;
 };
 
 /**
- * Hitung rencana posisi SINGLE-SIDED (hanya WETH):
- *  - Kalau WETH = token0 → rentang harus DI ATAS harga sekarang.
- *  - Kalau WETH = token1 → rentang harus DI BAWAH harga sekarang.
- * Dengan begitu token yang lain dibutuhkan ~0.
+ * Hitung rencana posisi SINGLE-SIDED (hanya base = WETH atau USDG):
+ *  - Kalau base = token0 → rentang harus DI ATAS harga sekarang.
+ *  - Kalau base = token1 → rentang harus DI BAWAH harga sekarang.
+ * Dengan begitu token yang lain dibutuhkan ~0. Jumlah base memakai
+ * parseUnits(base.decimals) — WAJIB (USDG 6-dec ≠ WETH 18-dec).
  */
 export async function planAddSingleSided(
   tokenAddress: string,
   fee: number,
-  ethAmount: string,
+  amount: string,
   rangePercent: number,
+  base: BaseAsset,
   ctx: ChainCtx = getChain(),
 ): Promise<AddPlan> {
-  const st = await loadPool(tokenAddress, fee, ctx);
+  const st = await loadPool(tokenAddress, fee, base, ctx);
   const spacing = TICK_SPACINGS[fee as FeeAmount];
   const width = widthInTicks(rangePercent, spacing);
-  const ethWei = ethers.parseEther(ethAmount);
+  const baseWei = ethers.parseUnits(amount, base.decimals);
 
   let tickLower: number;
   let tickUpper: number;
   let position: TPosition;
 
-  if (st.wethIsToken0) {
-    // Rentang di ATAS tick sekarang → butuh hanya token0 (WETH).
+  if (st.baseIsToken0) {
+    // Rentang di ATAS tick sekarang → butuh hanya token0 (base).
     // Ambil kelipatan spacing TERDEKAT di atas current (ceil) biar mepet harga.
     let lower = Math.ceil(st.currentTick / spacing) * spacing;
     if (lower <= st.currentTick) lower += spacing;
@@ -165,11 +171,11 @@ export async function planAddSingleSided(
       pool: st.sdkPool,
       tickLower,
       tickUpper,
-      amount0: ethWei.toString(),
+      amount0: baseWei.toString(),
       useFullPrecision: true,
     });
   } else {
-    // Rentang di BAWAH tick sekarang → butuh hanya token1 (WETH).
+    // Rentang di BAWAH tick sekarang → butuh hanya token1 (base).
     let upper = Math.floor(st.currentTick / spacing) * spacing;
     if (upper >= st.currentTick) upper -= spacing;
     tickUpper = upper;
@@ -178,19 +184,19 @@ export async function planAddSingleSided(
       pool: st.sdkPool,
       tickLower,
       tickUpper,
-      amount1: ethWei.toString(),
+      amount1: baseWei.toString(),
     });
   }
 
   const mint = position.mintAmounts;
   const amount0 = BigInt(mint.amount0.toString());
   const amount1 = BigInt(mint.amount1.toString());
-  const wethAmountWei = st.wethIsToken0 ? amount0 : amount1;
-  const otherAmountWei = st.wethIsToken0 ? amount1 : amount0;
+  const baseAmountWei = st.baseIsToken0 ? amount0 : amount1;
+  const otherAmountWei = st.baseIsToken0 ? amount1 : amount0;
 
-  // Harga token (dalam WETH) di kedua ujung rentang, untuk ditampilkan.
-  const pLower = tickToPrice(st.tokenOther, st.sdkWeth, tickLower).toSignificant(6);
-  const pUpper = tickToPrice(st.tokenOther, st.sdkWeth, tickUpper).toSignificant(6);
+  // Harga token (dalam base) di kedua ujung rentang, untuk ditampilkan.
+  const pLower = tickToPrice(st.tokenOther, st.sdkBase, tickLower).toSignificant(6);
+  const pUpper = tickToPrice(st.tokenOther, st.sdkBase, tickUpper).toSignificant(6);
   const [priceLower, priceUpper] =
     Number(pLower) <= Number(pUpper) ? [pLower, pUpper] : [pUpper, pLower];
 
@@ -201,12 +207,15 @@ export async function planAddSingleSided(
   const pctHigh = cur > 0 ? (Number(priceUpper) / cur - 1) * 100 : 0;
 
   return {
-    wethIsToken0: st.wethIsToken0,
+    baseKind: base.kind,
+    baseSymbol: base.symbol,
+    baseDecimals: base.decimals,
+    baseIsToken0: st.baseIsToken0,
     tickLower,
     tickUpper,
     priceLower,
     priceUpper,
-    wethAmountWei,
+    baseAmountWei,
     otherAmountWei,
     otherSymbol: st.tokenOther.symbol!,
     currentPrice,
@@ -216,17 +225,28 @@ export async function planAddSingleSided(
   };
 }
 
-/** Pastikan saldo WETH cukup (bungkus ETH bila perlu) & izin (approve) ke Position Manager. */
+/** Pastikan saldo BASE cukup & izin (approve) ke Position Manager.
+ *  WETH (wrappable): bungkus ETH native seperlunya. USDG (non-wrappable):
+ *  wajib sudah dipegang — tak bisa di-wrap. Semua format pakai base.decimals. */
 const GAS_BUFFER = ethers.parseEther('0.0005'); // cadangan gas L2
 
-async function ensureWethReady(amountWei: bigint, ctx: ChainCtx): Promise<string[]> {
-  const { weth, wallet, provider } = ctx;
-  const native = ctx.nativeSymbol;
+async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx): Promise<string[]> {
+  const { wallet, provider } = ctx;
   const notes: string[] = [];
-  let bal: bigint = await weth.balanceOf(wallet.address);
+  const baseC = base.wrappable ? ctx.weth : new ethers.Contract(base.address, ERC20_ABI, wallet);
+  let bal: bigint = await baseC.balanceOf(wallet.address);
 
-  // Pre-flight: pastikan saldo native cukup untuk wrap + gas, dengan pesan jelas.
   if (bal < amountWei) {
+    if (!base.wrappable) {
+      // USDG dsb: ERC20 biasa, harus SUDAH ada di wallet.
+      throw new Error(
+        `Saldo ${base.symbol} di ${ctx.label} kurang: butuh ${ethers.formatUnits(amountWei, base.decimals)}, ` +
+          `tersedia ${ethers.formatUnits(bal, base.decimals)}. ${base.symbol} tak bisa di-wrap dari ETH — ` +
+          `isi wallet dgn ${base.symbol} dulu atau kecilkan nominal.`,
+      );
+    }
+    // WETH: wrap ETH native seperlunya, jaga cadangan gas.
+    const native = ctx.nativeSymbol;
     const need = amountWei - bal;
     const ethBal = await provider.getBalance(wallet.address);
     if (ethBal < need + GAS_BUFFER) {
@@ -235,24 +255,23 @@ async function ensureWethReady(amountWei: bigint, ctx: ChainCtx): Promise<string
           `(wrap + gas), tersedia ${ethers.formatEther(ethBal)}. Isi wallet dulu atau kecilkan nominal.`,
       );
     }
-    const tx = await weth.deposit({ value: need });
+    const tx = await ctx.weth.deposit({ value: need });
     await tx.wait();
     notes.push(`Bungkus ${ethers.formatEther(need)} ${native} (tx ${tx.hash})`);
-    // Verifikasi hasil wrap; kalau masih kurang (kondisi balapan), wrap ulang sekali.
-    bal = await weth.balanceOf(wallet.address);
+    bal = await baseC.balanceOf(wallet.address);
     if (bal < amountWei) {
-      const tx2 = await weth.deposit({ value: amountWei - bal });
+      const tx2 = await ctx.weth.deposit({ value: amountWei - bal });
       await tx2.wait();
       notes.push(`Wrap tambahan ${ethers.formatEther(amountWei - bal)} ${native} (tx ${tx2.hash})`);
-      bal = await weth.balanceOf(wallet.address);
+      bal = await baseC.balanceOf(wallet.address);
       if (bal < amountWei) throw new Error('Wrap tetap kurang setelah retry — coba lagi.');
     }
   }
-  const allowance: bigint = await weth.allowance(wallet.address, ctx.pmAddress);
+  const allowance: bigint = await baseC.allowance(wallet.address, ctx.pmAddress);
   if (allowance < amountWei) {
-    const tx = await weth.approve(ctx.pmAddress, ethers.MaxUint256);
+    const tx = await baseC.approve(ctx.pmAddress, ethers.MaxUint256);
     await tx.wait();
-    notes.push(`Setujui WETH untuk Position Manager (tx ${tx.hash})`);
+    notes.push(`Setujui ${base.symbol} untuk Position Manager (tx ${tx.hash})`);
   }
   return notes;
 }
@@ -265,12 +284,13 @@ export async function executeAdd(
   ctx: ChainCtx = getChain(),
 ): Promise<{ tokenId: string; notes: string[] }> {
   const { positionManager, wallet } = ctx;
-  const notes = await ensureWethReady(plan.wethAmountWei, ctx);
+  const base = baseOf(ctx, plan.baseKind);
+  const notes = await ensureBaseReady(base, plan.baseAmountWei, ctx);
 
   const withSlip = plan.position.mintAmountsWithSlippage(SLIPPAGE);
   const params = {
-    token0: plan.wethIsToken0 ? ctx.wethAddress : tokenAddress,
-    token1: plan.wethIsToken0 ? tokenAddress : ctx.wethAddress,
+    token0: plan.baseIsToken0 ? base.address : tokenAddress,
+    token1: plan.baseIsToken0 ? tokenAddress : base.address,
     fee,
     tickLower: plan.tickLower,
     tickUpper: plan.tickUpper,
@@ -287,10 +307,10 @@ export async function executeAdd(
     const tx = await positionManager.mint(params);
     receipt = await tx.wait();
   } catch (e) {
-    // STF = transfer WETH gagal (saldo/allowance). Pulihkan sekali lalu retry.
+    // STF = transfer base gagal (saldo/allowance). Pulihkan sekali lalu retry.
     if (/STF/i.test((e as Error).message)) {
-      notes.push('Mint kena STF — verifikasi ulang WETH & retry...');
-      notes.push(...(await ensureWethReady(plan.wethAmountWei, ctx)));
+      notes.push(`Mint kena STF — verifikasi ulang ${base.symbol} & retry...`);
+      notes.push(...(await ensureBaseReady(base, plan.baseAmountWei, ctx)));
       const tx = await positionManager.mint({ ...params, deadline: Math.floor(Date.now() / 1000) + 600 });
       receipt = await tx.wait();
     } else {
@@ -412,30 +432,60 @@ export async function executeRemove(
 export type PoolOption = {
   fee: number;
   poolAddress: string;
-  wethReserve: bigint; // WETH tersimpan di pool (proksi kedalaman likuiditas)
-  priceTokenInWeth: string | null;
+  base: BaseKind; // 'weth' | 'usdg'
+  baseSymbol: string;
+  baseDecimals: number;
+  baseReserve: bigint; // base tersimpan di pool (proksi kedalaman likuiditas)
+  priceTokenInBase: string | null;
 };
 
-/** Cari SEMUA pool WETH/token di seluruh fee tier, urut dari likuiditas terbesar. */
+/** Pool base/token di seluruh fee tier, urut kedalaman (base reserve) terbesar. */
+async function poolsForBase(
+  tokenAddress: string,
+  base: BaseAsset,
+  ctx: ChainCtx,
+): Promise<PoolOption[]> {
+  const out: PoolOption[] = [];
+  const baseC = base.wrappable ? ctx.weth : new ethers.Contract(base.address, ERC20_ABI, ctx.provider);
+  for (const fee of VALID_FEES) {
+    const poolAddress: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
+    if (!poolAddress || poolAddress === ethers.ZeroAddress) continue;
+    const baseReserve: bigint = await baseC.balanceOf(poolAddress);
+    let priceTokenInBase: string | null = null;
+    try {
+      priceTokenInBase = (await priceInfo(tokenAddress, fee, base, ctx)).priceTokenInBase;
+    } catch {
+      /* abaikan bila harga tak terbaca */
+    }
+    out.push({
+      fee,
+      poolAddress,
+      base: base.kind,
+      baseSymbol: base.symbol,
+      baseDecimals: base.decimals,
+      baseReserve,
+      priceTokenInBase,
+    });
+  }
+  out.sort((a, b) => (b.baseReserve > a.baseReserve ? 1 : b.baseReserve < a.baseReserve ? -1 : 0));
+  return out;
+}
+
+/** Pool WETH/token — dipakai jalur uang (swap fallback & valuasi USD holdings). */
 export async function discoverPools(
   tokenAddress: string,
   ctx: ChainCtx = getChain(),
 ): Promise<PoolOption[]> {
-  const out: PoolOption[] = [];
-  for (const fee of VALID_FEES) {
-    const poolAddress: string = await ctx.factory.getPool(ctx.wethAddress, tokenAddress, fee);
-    if (!poolAddress || poolAddress === ethers.ZeroAddress) continue;
-    const wethReserve: bigint = await ctx.weth.balanceOf(poolAddress);
-    let priceTokenInWeth: string | null = null;
-    try {
-      priceTokenInWeth = (await priceInfo(tokenAddress, fee, ctx)).priceTokenInWeth;
-    } catch {
-      /* abaikan bila harga tak terbaca */
-    }
-    out.push({ fee, poolAddress, wethReserve, priceTokenInWeth });
-  }
-  out.sort((a, b) => (b.wethReserve > a.wethReserve ? 1 : b.wethReserve < a.wethReserve ? -1 : 0));
-  return out;
+  return poolsForBase(tokenAddress, baseOf(ctx, 'weth'), ctx);
+}
+
+/** Pool untuk SEMUA base (WETH + USDG bila tersedia) — dipakai wizard /add. */
+export async function discoverAllPools(
+  tokenAddress: string,
+  ctx: ChainCtx = getChain(),
+): Promise<PoolOption[]> {
+  const perBase = await Promise.all(basesFor(ctx).map((b) => poolsForBase(tokenAddress, b, ctx)));
+  return perBase.flat();
 }
 
 // Cache TTL pendek — HANYA untuk tampilan (mis. /status walletHoldings) agar
@@ -457,15 +507,15 @@ export async function discoverPoolsCached(
   return v;
 }
 
-/** Info harga & sisi WETH untuk sebuah pool. */
-export async function priceInfo(tokenAddress: string, fee: number, ctx: ChainCtx = getChain()) {
-  const st = await loadPool(tokenAddress, fee, ctx);
-  const priceTokenInWeth = st.sdkPool.priceOf(st.tokenOther).toSignificant(6);
+/** Info harga & sisi base untuk sebuah pool. */
+export async function priceInfo(tokenAddress: string, fee: number, base: BaseAsset, ctx: ChainCtx = getChain()) {
+  const st = await loadPool(tokenAddress, fee, base, ctx);
+  const priceTokenInBase = st.sdkPool.priceOf(st.tokenOther).toSignificant(6);
   return {
     otherSymbol: st.tokenOther.symbol!,
-    wethIsToken0: st.wethIsToken0,
+    baseIsToken0: st.baseIsToken0,
     currentTick: st.currentTick,
-    priceTokenInWeth,
+    priceTokenInBase,
     poolAddress: st.poolAddress,
   };
 }
@@ -476,20 +526,24 @@ export type PositionDetail = {
   otherSymbol: string;
   inRange: boolean;
   liquidity: bigint;
-  valueWethWei: bigint; // nilai pokok posisi (dalam WETH)
-  feesWethWei: bigint; // fee belum diklaim (dalam WETH)
+  baseKind: BaseKind;
+  baseSymbol: string;
+  baseDecimals: number;
+  valueBaseWei: bigint; // nilai pokok posisi (dalam base: WETH/USDG)
+  feesBaseWei: bigint; // fee belum diklaim (dalam base)
   side: 'above' | 'in' | 'below'; // harga token vs rentang (above=belum mulai, below=terkonversi penuh)
-  wethAmountWei: bigint; // komposisi pokok: sisi WETH
+  baseAmountWei: bigint; // komposisi pokok: sisi base
   otherAmountWei: bigint; // komposisi pokok: sisi token (raw, desimal token)
   otherDecimals: number;
-  otherAddress: string; // alamat token non-WETH
-  wethIsToken0: boolean;
+  otherAddress: string; // alamat token non-base
+  baseIsToken0: boolean;
   currentTick: number; // tick pool saat ini (utk hitung jarak range live)
   tickLower: number;
   tickUpper: number;
 };
 
-/** Hitung nilai pokok + fee belum diklaim sebuah posisi, semuanya dalam WETH. */
+/** Hitung nilai pokok + fee belum diklaim sebuah posisi, dalam base-nya (auto-deteksi
+ *  WETH/USDG dari token pool). Posisi lama (token pasangan = WETH) → base = WETH. */
 export async function getPositionDetail(
   tokenId: string,
   ctx: ChainCtx = getChain(),
@@ -497,7 +551,8 @@ export async function getPositionDetail(
   const { positionManager, wallet } = ctx;
   const p = await positionManager.positions(tokenId);
   const fee = Number(p.fee);
-  const wethIsToken0 = p.token0.toLowerCase() === ctx.wethAddress.toLowerCase();
+  const base = detectBase(ctx, p.token0, p.token1) ?? baseOf(ctx, 'weth');
+  const baseIsToken0 = p.token0.toLowerCase() === base.address.toLowerCase();
   const liquidity = BigInt(p.liquidity);
   const tickLower = Number(p.tickLower);
   const tickUpper = Number(p.tickUpper);
@@ -521,20 +576,20 @@ export async function getPositionDetail(
   const sdkPool = new Pool(sdkToken0, sdkToken1, fee as FeeAmount, sqrtPriceX96.toString(), poolLiq.toString(), currentTick);
   const position = new Position({ pool: sdkPool, liquidity: liquidity.toString(), tickLower, tickUpper });
 
-  const tokenOther = wethIsToken0 ? sdkToken1 : sdkToken0;
+  const tokenOther = baseIsToken0 ? sdkToken1 : sdkToken0;
   const priceOther = sdkPool.priceOf(tokenOther);
 
-  // Nilai pokok dalam WETH.
+  // Nilai pokok dalam base.
   const amt0 = position.amount0;
   const amt1 = position.amount1;
-  const wethAmt = wethIsToken0 ? amt0 : amt1;
-  const otherAmt = wethIsToken0 ? amt1 : amt0;
-  const wethAmountWei = BigInt(wethAmt.quotient.toString());
+  const baseAmt = baseIsToken0 ? amt0 : amt1;
+  const otherAmt = baseIsToken0 ? amt1 : amt0;
+  const baseAmountWei = BigInt(baseAmt.quotient.toString());
   const otherAmountWei = BigInt(otherAmt.quotient.toString());
-  const valueWethWei = wethAmountWei + BigInt(priceOther.quote(otherAmt).quotient.toString());
+  const valueBaseWei = baseAmountWei + BigInt(priceOther.quote(otherAmt).quotient.toString());
 
   // Fee belum diklaim: collect.staticCall memicu update fee lalu mengembalikan jumlahnya.
-  let feesWethWei = 0n;
+  let feesBaseWei = 0n;
   try {
     const owed = await positionManager.collect.staticCall({
       tokenId,
@@ -542,22 +597,22 @@ export async function getPositionDetail(
       amount0Max: MAX_UINT128,
       amount1Max: MAX_UINT128,
     });
-    const owedWeth = wethIsToken0 ? BigInt(owed[0]) : BigInt(owed[1]);
-    const owedOther = wethIsToken0 ? BigInt(owed[1]) : BigInt(owed[0]);
-    feesWethWei = owedWeth;
+    const owedBase = baseIsToken0 ? BigInt(owed[0]) : BigInt(owed[1]);
+    const owedOther = baseIsToken0 ? BigInt(owed[1]) : BigInt(owed[0]);
+    feesBaseWei = owedBase;
     if (owedOther > 0n) {
       const oa = CurrencyAmount.fromRawAmount(tokenOther, owedOther.toString());
-      feesWethWei += BigInt(priceOther.quote(oa).quotient.toString());
+      feesBaseWei += BigInt(priceOther.quote(oa).quotient.toString());
     }
   } catch {
     /* biarkan fee 0 kalau simulasi gagal */
   }
 
-  // Arah dalam istilah HARGA TOKEN: tergantung sisi WETH di pool.
+  // Arah dalam istilah HARGA TOKEN: tergantung sisi base di pool.
   const inR = currentTick >= tickLower && currentTick < tickUpper;
   let side: 'above' | 'in' | 'below' = 'in';
   if (!inR) {
-    if (wethIsToken0) side = currentTick < tickLower ? 'above' : 'below';
+    if (baseIsToken0) side = currentTick < tickLower ? 'above' : 'below';
     else side = currentTick >= tickUpper ? 'above' : 'below';
   }
 
@@ -568,13 +623,16 @@ export async function getPositionDetail(
     inRange: inR,
     side,
     liquidity,
-    valueWethWei,
-    feesWethWei,
-    wethAmountWei,
+    baseKind: base.kind,
+    baseSymbol: base.symbol,
+    baseDecimals: base.decimals,
+    valueBaseWei,
+    feesBaseWei,
+    baseAmountWei,
     otherAmountWei,
     otherDecimals: tokenOther.decimals,
-    otherAddress: wethIsToken0 ? p.token1 : p.token0,
-    wethIsToken0,
+    otherAddress: baseIsToken0 ? p.token1 : p.token0,
+    baseIsToken0,
     currentTick,
     tickLower,
     tickUpper,

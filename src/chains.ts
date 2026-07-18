@@ -26,10 +26,47 @@ export type ChainCtx = {
   positionManager: ethers.Contract;
   weth: ethers.Contract;
   wethAddress: string;
+  usdgAddress?: string; // hanya chain yg punya USDG (Global Dollar). undefined = tak ada.
   pmAddress: string;
   routerAddress: string;
   quoterAddress: string;
 };
+
+// --- Base asset (aset pasangan LP): WETH selalu ada; USDG opsional per chain. ---
+export type BaseKind = 'weth' | 'usdg';
+export type BaseAsset = {
+  kind: BaseKind;
+  address: string;
+  decimals: number; // WETH 18, USDG 6 — KRITIS untuk parseUnits, JANGAN parseEther utk USDG
+  symbol: string; // 'WETH' | 'USDG'
+  wrappable: boolean; // WETH: bisa wrap dari ETH native. USDG: ERC20 biasa, harus sudah dipegang.
+};
+
+/** Daftar base asset yang tersedia di chain ini (WETH + USDG bila ada). */
+export function basesFor(ctx: ChainCtx): BaseAsset[] {
+  const out: BaseAsset[] = [
+    { kind: 'weth', address: ctx.wethAddress, decimals: 18, symbol: 'WETH', wrappable: true },
+  ];
+  if (ctx.usdgAddress)
+    out.push({ kind: 'usdg', address: ctx.usdgAddress, decimals: 6, symbol: 'USDG', wrappable: false });
+  return out;
+}
+
+/** Base asset berdasarkan kind (fallback ke WETH bila kind tak tersedia di chain). */
+export function baseOf(ctx: ChainCtx, kind: BaseKind): BaseAsset {
+  return basesFor(ctx).find((b) => b.kind === kind) ?? basesFor(ctx)[0];
+}
+
+/** Deteksi base dari pasangan (token0, token1) sebuah pool. null bila bukan pool base. */
+export function detectBase(ctx: ChainCtx, token0: string, token1: string): BaseAsset | null {
+  const t0 = token0.toLowerCase();
+  const t1 = token1.toLowerCase();
+  for (const b of basesFor(ctx)) {
+    const a = b.address.toLowerCase();
+    if (a === t0 || a === t1) return b;
+  }
+  return null;
+}
 
 // Ambil API key Alchemy dari RPC robinhood yang sudah dikonfigurasi.
 const alchemyKey = /alchemy\.com\/v2\/([A-Za-z0-9_-]+)/.exec(config.chain.rpcUrl)?.[1] ?? '';
@@ -46,6 +83,7 @@ type Def = {
   router: string;
   quoter: string;
   weth: string;
+  usdg?: string;
 };
 
 const DEFS: Record<string, Def> = {
@@ -61,6 +99,7 @@ const DEFS: Record<string, Def> = {
     router: config.uniswap.swapRouter,
     quoter: config.uniswap.quoter,
     weth: config.uniswap.weth,
+    usdg: '0x5fc5360d0400a0fd4f2af552add042d716f1d168', // Global Dollar (USDG), 6 desimal — terverifikasi on-chain
   },
   ethereum: {
     label: 'Ethereum',
@@ -125,6 +164,7 @@ function build(key: string, d: Def): ChainCtx {
     positionManager: new ethers.Contract(d.pm, POSITION_MANAGER_ABI, wallet),
     weth: new ethers.Contract(d.weth, WETH_ABI, wallet),
     wethAddress: d.weth,
+    usdgAddress: d.usdg,
     pmAddress: d.pm,
     routerAddress: d.router,
     quoterAddress: d.quoter,
