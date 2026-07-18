@@ -325,7 +325,7 @@ async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean)
   } catch (e) {
     if (isGoneErr(e)) {
       finalizeClose(rec.tokenId, { reason: 'gone' });
-      const t = msg.msgPositionGone(rec.tokenId, rec.symbol);
+      const t = msg.msgPositionGone(rec.tokenId, rec.symbol, rec.baseKind === 'usdg' ? 'USDG' : 'WETH');
       return edit ? ctx.editMessageText(t, html) : ctx.reply(t, html);
     }
     const t = msg.msgPositionReadFail(rec.tokenId, (e as Error).message);
@@ -352,6 +352,7 @@ async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean)
     age: msg.fmtAge(Date.now() - rec.openedAt),
     dryRun: config.safety.dryRun,
     chain: chainLabel,
+    baseSymbol: d.baseSymbol,
   });
   const extra = {
     ...html,
@@ -391,6 +392,7 @@ async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolea
     fees,
     inRange: d.inRange,
     chain: cc.label,
+    baseSymbol: d.baseSymbol,
   });
   const extra = {
     ...html,
@@ -574,7 +576,7 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('Konfirmasi', 'addok')],
+      [Markup.button.callback('🟢 Konfirmasi', 'addok')],
       [
         Markup.button.callback('Ubah Nominal', 'back:amount'),
         Markup.button.callback('Batal', 'cancel'),
@@ -830,7 +832,7 @@ async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('Tutup Posisi', `close:${tokenId}`)],
+      [Markup.button.callback('⛔ Tutup Posisi', `close:${tokenId}`)],
       [
         Markup.button.callback('Kembali', `back:card:${tokenId}`),
         Markup.button.callback('Batal', 'cancel'),

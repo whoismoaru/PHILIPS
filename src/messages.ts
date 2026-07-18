@@ -167,6 +167,11 @@ export function modeMark(dryRun: boolean): string {
   return dryRun ? '◇' : '◆';
 }
 
+/** Badge mode dgn emoji semantik (tg-ui): 🟢 LIVE · ⚪ DRY RUN. */
+export function modeBadge(dryRun: boolean): string {
+  return dryRun ? '⚪ DRY RUN' : '🟢 LIVE';
+}
+
 export function rangeStatus(inRange: boolean): string {
   return inRange ? 'IN RANGE' : 'OUT OF RANGE';
 }
@@ -208,12 +213,9 @@ function balanceFields(gasEth: string): Array<[string, string]> {
 
 export function msgStart(dryRun: boolean): string {
   const body = [
-    'Single-sided ETH LP di Uniswap v3',
-    'Robinhood Chain — full via Telegram.',
+    'LP single-sided (WETH / USDG) di Uniswap v3 — full via Telegram.',
     '',
-    fieldBlock([
-      ['mode', `${modeMark(dryRun)} ${modeLabel(dryRun)}`],
-    ]),
+    bold(modeBadge(dryRun)),
     '',
     section('commands'),
     `${code('/status')} · wallet & saldo`,
@@ -222,11 +224,10 @@ export function msgStart(dryRun: boolean): string {
     `${code('/add <CA>')} · buka LP`,
     `${code('/stop')} · tutup & cash-out`,
     `${code('/setsize')} · preset nominal`,
-    `${code('/help')} · menu ini`,
     '',
-    note('/add & /stop memakai dana on-chain di wallet bot.'),
+    note('⚠️ /add & /stop menggerakkan dana on-chain.'),
   ];
-  return card(title('PHILIPS', 'LP bot'), body);
+  return card(title('PHILIPS', 'LP cockpit'), body);
 }
 
 /** Alias menu — sama dengan /start. */
@@ -275,7 +276,7 @@ export function msgStatus(opts: {
   const h = opts.holdings ?? [];
   body.push('', section('token hold'));
   if (h.length === 0) {
-    body.push(note('tak ada token nyangkut'));
+    body.push(note('✅ bersih — tak ada token nyangkut'));
   } else {
     const holdRows: Array<[string, string]> = [];
     let total = 0;
@@ -299,7 +300,7 @@ export function msgStatus(opts: {
     fieldBlock([['addr', shortAddr(opts.wallet)]]),
   );
 
-  return card(title('STATUS'), body, footerMode(opts.dryRun));
+  return card(`${opts.dryRun ? '⚪' : '🟢'} ${title('STATUS')}`, body, footerMode(opts.dryRun));
 }
 
 export function msgDenied(): string {
@@ -308,8 +309,8 @@ export function msgDenied(): string {
 
 export function msgError(where: string, err: string): string {
   return card(
-    title('ERROR', where),
-    [pre(err.slice(0, 900))],
+    `❌ ${title('ERROR', where)}`,
+    [pre(err.slice(0, 400)), '', note('coba ulangi — bila berulang, cek log service.')],
     nowUtc(),
   );
 }
@@ -379,30 +380,34 @@ export function msgPositionCard(opts: {
   age: string;
   dryRun: boolean;
   chain?: string;
+  baseSymbol?: string; // WETH (default, posisi lama) | USDG
 }): string {
+  const base = opts.baseSymbol ?? 'WETH';
   const rows: Array<[string, string]> = [
-    ['pair', `WETH / ${opts.symbol} · ${feeLabel(opts.fee)}`],
+    ['pair', `${base} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
   ];
   if (opts.chain) rows.push(['chain', opts.chain]);
   rows.push(
-    ['invest', `${opts.invest} WETH`],
-    ['pnl', opts.pnlText],
+    ['invest', `${opts.invest} ${base}`],
     ['range', opts.range],
-    ['status', opts.inRange ? 'IN RANGE' : 'OUT OF RANGE'],
     ['age', opts.age],
   );
+  const statusEmoji = opts.inRange ? '🟢' : '🔴';
+  const statusLine = opts.inRange
+    ? `${statusEmoji} ${bold('IN RANGE')} — fee mengalir`
+    : `${statusEmoji} ${bold('OUT OF RANGE')}`;
   return card(
-    title('POSITION', `#${opts.tokenId}`),
-    [fieldBlock(rows)],
+    `${statusEmoji} ${title('POSITION', `#${opts.tokenId}`)}`,
+    [fieldBlock(rows), '', `${bold(`PnL  ${opts.pnlText}`)}`, statusLine],
     footerMode(opts.dryRun),
   );
 }
 
-export function msgPositionGone(tokenId: string, symbol: string): string {
+export function msgPositionGone(tokenId: string, symbol: string, baseSymbol = 'WETH'): string {
   return card(
-    title('CLOSED', `#${tokenId}`),
+    `✅ ${title('CLOSED', `#${tokenId}`)}`,
     [
-      fieldBlock([['pair', `WETH / ${symbol}`]]),
+      fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
       note('sudah tertutup on-chain — dibersihkan dari daftar aktif.'),
     ],
     nowUtc(),
@@ -426,18 +431,24 @@ export function msgPositionDetail(opts: {
   fees: string;
   inRange: boolean;
   chain?: string;
+  baseSymbol?: string;
 }): string {
+  const base = opts.baseSymbol ?? 'WETH';
   const rows: Array<[string, string]> = [
-    ['pair', `WETH / ${opts.symbol} · ${feeLabel(opts.fee)}`],
+    ['pair', `${base} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
   ];
   if (opts.chain) rows.push(['chain', opts.chain]);
   rows.push(
     ['assets', opts.composition],
     ['value', opts.value],
     ['fees', opts.fees],
-    ['status', opts.inRange ? 'IN RANGE' : 'OUT OF RANGE'],
   );
-  return card(title('DETAIL', `#${opts.tokenId}`), [fieldBlock(rows)], nowUtc());
+  const e = opts.inRange ? '🟢' : '🔴';
+  return card(
+    `${e} ${title('DETAIL', `#${opts.tokenId}`)}`,
+    [fieldBlock(rows), '', `${e} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`],
+    nowUtc(),
+  );
 }
 
 export function msgPositionsHeader(activeCount: number): string {
@@ -491,7 +502,7 @@ export function msgJournal(
   });
 
   return card(
-    title('JOURNAL', `${items.length} trade`),
+    `🧾 ${title('JOURNAL', `${items.length} trade`)}`,
     [fieldBlock(rows, 8)],
     nowUtc(),
   );
@@ -504,7 +515,7 @@ export function msgPoolStep(): string {
     title('ADD LP', '1/4'),
     [
       section('pilih pool'),
-      note('angka = likuiditas WETH — makin besar makin baik'),
+      note('pasangan · fee · kedalaman — terdalam di atas'),
     ],
   );
 }
@@ -587,19 +598,15 @@ export function msgPlanStep(opts: {
   if (opts.shortLabel) {
     body.push(
       '',
-      quoteHtml(`${bold('KURANG')} ${esc(opts.shortLabel)} — top up dulu.`),
+      quoteHtml(`🔴 ${bold('KURANG')} ${esc(opts.shortLabel)} — top up dulu.`),
     );
   } else {
-    body.push('', note('saldo cukup'));
+    body.push('', `🟢 ${bold('saldo cukup')} — siap eksekusi`);
   }
-  body.push(
-    '',
-    fieldBlock([['mode', modeLabel(opts.dryRun)]]),
-  );
   if (opts.dryRun) {
-    body.push(note('simulasi — tidak mengirim tx on-chain'));
+    body.push('', note('⚪ simulasi — tidak mengirim tx on-chain'));
   } else {
-    body.push(note('live — konfirmasi mengirim tx + aktifkan monitor'));
+    body.push('', note('konfirmasi = kirim tx + monitor aktif'));
   }
   return card(title('PREVIEW', '4/4'), body, footerMode(opts.dryRun));
 }
@@ -628,8 +635,8 @@ export function msgInvalidAddress(): string {
 
 export function msgNoPools(): string {
   return card(
-    title('NO POOLS'),
-    [note('tidak ada pool WETH berlikuiditas untuk token ini.')],
+    `⚪ ${title('NO POOLS')}`,
+    [note('tidak ada pool WETH/USDG berlikuiditas untuk token ini.')],
   );
 }
 
@@ -656,16 +663,15 @@ export function msgOpeningLp(): string {
 
 export function msgLpOpened(tokenId: string, notes: string[]): string {
   const body = [
-    fieldBlock([
-      ['position', `#${tokenId}`],
-      ['monitor', 'ON'],
-    ]),
+    fieldBlock([['position', `#${tokenId}`]]),
+    '',
+    `🟢 ${bold('monitor aktif')} — notifikasi in/out range otomatis`,
   ];
   if (notes.length) {
     body.push('', section('notes'));
     for (const n of notes) body.push(`  ${esc(n)}`);
   }
-  return card(title('OPENED', `#${tokenId}`), body, nowUtc());
+  return card(`✅ ${title('OPENED', `#${tokenId}`)}`, body, nowUtc());
 }
 
 // ─── stop / close ──────────────────────────────────────────────────
@@ -685,12 +691,13 @@ export function msgStopConfirm(opts: {
     fieldBlock([
       ['pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
       ['age', opts.age],
-      ['pnl', opts.pnlText],
       ['fees', opts.feeText],
       ['out', `${opts.baseAmt} ${opts.baseSymbol} + ${opts.otherAmt} ${opts.symbol}`],
     ]),
     '',
-    note('likuiditas dikembalikan ke wallet.'),
+    bold(`PnL  ${opts.pnlText}`),
+    '',
+    quoteHtml(`⚠️ Menutup = remove + swap semua ke ${esc(opts.baseSymbol)}. Tak bisa dibatalkan.`),
   ];
   return card(title('CLOSE', `#${opts.tokenId}`), body, nowUtc());
 }
@@ -734,57 +741,57 @@ export function msgCashOut(opts: {
   ethOut: string;
   txHashes: string[];
 }): string {
-  const rows: Array<[string, string]> = [
-    ['position', `#${opts.tokenId}`],
-    ['received', opts.ethOut],
-  ];
+  const rows: Array<[string, string]> = [['position', `#${opts.tokenId}`]];
   for (let i = 0; i < opts.txHashes.length; i++) {
     rows.push([i === 0 ? 'tx' : '', shortAddr(opts.txHashes[i])]);
   }
-  const body: string[] = [fieldBlock(rows.filter(([l, v]) => l || v))];
+  const body: string[] = [
+    fieldBlock(rows.filter(([l, v]) => l || v)),
+    '',
+    `💰 ${bold(`diterima  ${opts.ethOut}`)}`,
+  ];
   if (opts.notes.length) {
     body.push('', section('notes'));
     for (const n of opts.notes) body.push(`  ${esc(n)}`);
   }
-  return card(title('CASHED OUT', `#${opts.tokenId}`), body, nowUtc());
+  return card(`✅ ${title('CASHED OUT', `#${opts.tokenId}`)}`, body, nowUtc());
 }
 
 // ─── monitor ───────────────────────────────────────────────────────
 
-export function msgRangeEnter(tokenId: string, symbol: string): string {
+export function msgRangeEnter(tokenId: string, symbol: string, baseSymbol = 'WETH'): string {
   return card(
-    title('IN RANGE', `#${tokenId}`),
+    `🟢 ${title('IN RANGE', `#${tokenId}`)}`,
     [
-      fieldBlock([['pair', `WETH / ${symbol}`]]),
-      note(`ETH mulai konversi ke ${symbol} & panen fee.`),
+      fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
+      `🟢 ${bold('fee mulai mengalir')} — ${esc(baseSymbol)} konversi ke ${esc(symbol)}.`,
     ],
     nowUtc(),
   );
 }
 
-export function msgRangeExit(tokenId: string, symbol: string, side: 'above' | 'below'): string {
+export function msgRangeExit(
+  tokenId: string,
+  symbol: string,
+  side: 'above' | 'below',
+  baseSymbol = 'WETH',
+): string {
   if (side === 'above') {
     return card(
-      title('OUT ↑', `#${tokenId}`),
+      `🟢 ${title('OUT ↑', `#${tokenId}`)}`,
       [
-        fieldBlock([
-          ['pair', `WETH / ${symbol}`],
-          ['status', 'SAFE'],
-        ]),
-        note('harga naik keluar rentang — posisi kembali 100% ETH + fee.'),
+        fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
+        `🟢 ${bold('AMAN')} — harga naik keluar rentang; posisi kembali 100% ${esc(baseSymbol)} + fee.`,
       ],
       nowUtc(),
     );
   }
   return card(
-    title('OUT ↓', `#${tokenId}`),
+    `🔴 ${title('OUT ↓', `#${tokenId}`)}`,
     [
-      fieldBlock([
-        ['pair', `WETH / ${symbol}`],
-        ['status', 'RISK'],
-      ]),
-      note(`harga jatuh menembus rentang — ETH sudah 100% jadi ${symbol}.`),
-      note('pulih hanya jika harga naik lagi. Pertimbangkan /stop.'),
+      fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
+      `🔴 ${bold('RISIKO')} — ${esc(baseSymbol)} sudah 100% jadi ${esc(symbol)}.`,
+      note(`pulih hanya bila harga naik lagi. Pertimbangkan /stop.`),
     ],
     nowUtc(),
   );
@@ -792,7 +799,7 @@ export function msgRangeExit(tokenId: string, symbol: string, side: 'above' | 'b
 
 export function msgCrash(kind: string, err: string): string {
   return card(
-    title('CRASH'),
+    `⚠️ ${title('CRASH')}`,
     [
       fieldBlock([['kind', kind]]),
       '',

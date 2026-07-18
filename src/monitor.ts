@@ -94,8 +94,8 @@ export function startMonitor(bot: Telegraf) {
         const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
         if (rec.lastInRange !== undefined && rec.lastInRange !== d.inRange) {
           const text = d.inRange
-            ? msgRangeEnter(rec.tokenId, rec.symbol)
-            : msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below');
+            ? msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol)
+            : msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below', d.baseSymbol);
           await bot.telegram.sendMessage(config.telegram.allowedUserId, text, html);
         }
         store.update(rec.tokenId, { lastInRange: d.inRange });
