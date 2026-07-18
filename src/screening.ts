@@ -1,6 +1,82 @@
 import { ethers } from 'ethers';
 import { bold, card, code, esc, fieldBlock, nowUtc } from './messages.js';
-import { getChain, type ChainCtx } from './chains.js';
+import { getChain, basesFor, type ChainCtx } from './chains.js';
+
+const QUOTER_ABI = [
+  'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
+];
+const BAL_ABI = ['function balanceOf(address) view returns (uint256)'];
+const FEE_TIERS = [100, 500, 3000, 10000];
+type SellStatus = 'ok' | 'blocked' | 'costly' | 'unknown';
+
+/**
+ * Simulasi JALUR JUAL (exit-liquidity) sebelum ber-LP: round-trip via Quoter
+ * (base → token → base) di pool base terdalam. Menangkap: tak ada jalur jual
+ * (sell revert = token tak bisa dijual) & jual sangat boros (likuiditas tipis).
+ * Parity dgn pola bot lain ("buy→sell via Quoter, revert = blocked").
+ * CATATAN: Quoter menghitung math pool, TIDAK mengeksekusi transfer token —
+ * pajak-jual/transfer-block murni tak selalu tertangkap (itu enhancement
+ * stateOverride mendatang). Read-only, fail-open (error → 'unknown', tak blokir).
+ */
+async function simulateSellPath(
+  tokenAddress: string,
+  ctx: ChainCtx,
+): Promise<{ status: SellStatus; flag: Flag | null }> {
+  try {
+    // Pool base terdalam untuk token ini.
+    let best: { baseAddr: string; decimals: number; fee: number; reserve: bigint } | null = null;
+    for (const base of basesFor(ctx)) {
+      const baseC = new ethers.Contract(base.address, BAL_ABI, ctx.provider);
+      for (const fee of FEE_TIERS) {
+        const pool: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
+        if (!pool || pool === ethers.ZeroAddress) continue;
+        const reserve: bigint = await baseC.balanceOf(pool);
+        if (!best || reserve > best.reserve)
+          best = { baseAddr: base.address, decimals: base.decimals, fee, reserve };
+      }
+    }
+    if (!best || best.reserve === 0n) return { status: 'unknown', flag: null };
+
+    const quoter = new ethers.Contract(ctx.quoterAddress, QUOTER_ABI, ctx.provider);
+    // Probe kecil relatif pool (kurangi price-impact palsu).
+    const probe = best.decimals >= 18 ? '0.01' : '10';
+    const baseIn = ethers.parseUnits(probe, best.decimals);
+
+    let tokenOut: bigint;
+    try {
+      const q = await quoter.quoteExactInputSingle.staticCall({
+        tokenIn: best.baseAddr, tokenOut: tokenAddress, amountIn: baseIn, fee: best.fee, sqrtPriceLimitX96: 0n,
+      });
+      tokenOut = BigInt(q[0]);
+    } catch {
+      return { status: 'unknown', flag: null }; // gagal quote BELI → jangan blokir
+    }
+    if (tokenOut === 0n) return { status: 'unknown', flag: null };
+
+    let baseBack: bigint;
+    try {
+      const q = await quoter.quoteExactInputSingle.staticCall({
+        tokenIn: tokenAddress, tokenOut: best.baseAddr, amountIn: tokenOut, fee: best.fee, sqrtPriceLimitX96: 0n,
+      });
+      baseBack = BigInt(q[0]);
+    } catch {
+      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Simulasi JUAL gagal (revert) — token mungkin tak bisa dijual' } };
+    }
+    if (baseBack === 0n)
+      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Simulasi jual hasil 0 — tak ada jalur keluar' } };
+
+    const loss = 1 - Number(baseBack) / Number(baseIn);
+    const feeRoundtrip = (2 * best.fee) / 1_000_000; // 3000 → 0.006
+    if (loss > Math.max(0.2, feeRoundtrip * 4))
+      return {
+        status: 'costly',
+        flag: { level: 'HATI-HATI', msg: `Jual boros ~${(loss * 100).toFixed(0)}% (round-trip) — likuiditas tipis` },
+      };
+    return { status: 'ok', flag: null };
+  } catch {
+    return { status: 'unknown', flag: null }; // fail-open
+  }
+}
 
 /**
  * Screening token anti-anomali sebelum ber-LP.
@@ -29,6 +105,7 @@ export type ScreenResult = {
   sells24h: number | null;
   priceUsd: string | null;
   pairAgeHours: number | null;
+  sellPath: SellStatus; // simulasi jalur jual (exit-liquidity)
   flags: Flag[];
   verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA';
 };
@@ -61,13 +138,15 @@ export async function screenToken(
   const flags: Flag[] = [];
   const bs = ctx.blockscout; // null = explorer tak tersedia (mis. BSC)
 
-  // Jalankan semua permintaan sekaligus.
-  const [tokenInfo, holders, contract, dex] = await Promise.all([
+  // Jalankan semua permintaan sekaligus (termasuk simulasi jalur jual on-chain).
+  const [tokenInfo, holders, contract, dex, sell] = await Promise.all([
     bs ? fetchJson(`${bs}/tokens/${addr}`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/tokens/${addr}/holders`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/smart-contracts/${addr}`) : Promise.resolve(null),
     fetchJson(`${DEXSCREENER}/${addr}`),
+    simulateSellPath(addr, ctx),
   ]);
+  if (sell.flag) flags.push(sell.flag);
 
   const dexBase = (dex?.pairs ?? []).find(
     (p: any) => p.chainId === ctx.dexKey && (p.baseToken?.address || '').toLowerCase() === addr.toLowerCase(),
@@ -173,6 +252,7 @@ export async function screenToken(
     sells24h,
     priceUsd,
     pairAgeHours,
+    sellPath: sell.status,
     flags,
     verdict: worst(flags),
   };
@@ -233,6 +313,12 @@ export function formatScreen(s: ScreenResult): string {
     (s.isProxy ? ' · proxy' : '');
 
   const top1 = pct(s.top1Pct) + (s.top1IsContract ? ' (contract)' : '');
+  // Teks polos di dalam <pre> (emoji dilarang di pre — rusak alignment; tg-ui).
+  const sellLabel =
+    s.sellPath === 'ok' ? 'ok'
+    : s.sellPath === 'blocked' ? 'BLOCKED'
+    : s.sellPath === 'costly' ? 'boros'
+    : '?';
 
   const body = [
     fieldBlock([
@@ -245,6 +331,7 @@ export function formatScreen(s: ScreenResult): string {
       ['top1', top1],
       ['top10', pct(s.top10Pct)],
       ['flow', `${num(s.buys24h)} / ${num(s.sells24h)}`],
+      ['sell', sellLabel],
       ['verdict', verdictLabel],
     ]),
   ];
