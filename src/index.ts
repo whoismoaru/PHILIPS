@@ -1,4 +1,5 @@
-import { Telegraf, Markup } from 'telegraf';
+import { Telegraf, Markup, Input } from 'telegraf';
+import { renderProfitCard } from './card.js';
 import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
 import { config } from './config.js';
@@ -873,10 +874,50 @@ bot.action(/^stop:(\d+)$/, async (ctx) => {
 // di burn & buang gas). Sinkron: has→add sebelum await pertama = atomik thd loop.
 const closingInFlight = new Set<string>();
 
+/** Kirim profit card PNG (momen kunci). Presentasi murni — dibungkus penuh,
+ *  kegagalan render/kirim TAK boleh mengganggu close yang sudah sukses. */
+async function sendProfitCard(
+  ctx: any,
+  tokenId: string,
+  rec: store.PosRecord | undefined,
+  baseOutWei: bigint,
+): Promise<void> {
+  if (!rec) return;
+  const dec = rec.baseKind === 'usdg' ? 6 : 18;
+  const baseSym = rec.baseKind === 'usdg' ? 'USDG' : 'WETH';
+  const baseIn = Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
+  const baseOut = Number(ethers.formatUnits(baseOutWei, dec));
+  const pnl = baseOut - baseIn;
+  const pnlPct = baseIn > 0 ? (pnl / baseIn) * 100 : 0;
+  const positive = pnl >= 0;
+  let usd: number | null = null;
+  if (rec.baseKind === 'usdg') usd = pnl;
+  else {
+    const cc = getChain(rec.chain);
+    const eu = await getEthUsd(cc.wethAddress, cc);
+    usd = eu !== null ? pnl * eu : null;
+  }
+  const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
+  const buf = renderProfitCard({
+    pair: `${baseSym} / ${rec.symbol}`,
+    positive,
+    pnlBig: usd !== null ? msg.usdSigned(usd) : `${positive ? '+' : ''}${pnl.toFixed(dec >= 18 ? 5 : 2)} ${baseSym}`,
+    pnlPct: msg.pctSigned(pnlPct),
+    stats: [
+      { label: 'deposit', value: `${fmt(baseIn)} ${baseSym}` },
+      { label: 'received', value: `${fmt(baseOut)} ${baseSym}` },
+      { label: 'held', value: msg.fmtAge(Date.now() - rec.openedAt) },
+    ],
+    footerLeft: `#${tokenId} · ${new Date().toISOString().slice(0, 10)}`,
+  });
+  await ctx.replyWithPhoto(Input.fromBuffer(buf, 'philips.png'));
+}
+
 bot.action(/^close:(\d+)$/, async (ctx) => {
   const tokenId = ctx.match[1];
   if (closingInFlight.has(tokenId)) return ctx.answerCbQuery('Sedang diproses…');
   closingInFlight.add(tokenId);
+  const closingRec = store.get(tokenId); // tangkap SEBELUM finalizeClose menghapus
   try {
     await ctx.answerCbQuery('Diproses…');
     if (config.safety.dryRun) {
@@ -887,6 +928,9 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
     const summary = await stopAndCashOut(tokenId, getChain(store.get(tokenId)?.chain));
     finalizeClose(tokenId, { resultEthWei: summary.baseOutWei, reason: 'cashed', keep: summary.leftover });
     await ctx.reply(summary.text, html);
+    await sendProfitCard(ctx, tokenId, closingRec, summary.baseOutWei).catch((e) =>
+      console.log('[profit-card] gagal:', (e as Error).message.slice(0, 120)),
+    );
   } catch (err) {
     if (isGoneErr(err)) {
       finalizeClose(tokenId, { reason: 'gone' });
