@@ -529,6 +529,7 @@ export type PositionDetail = {
   baseKind: BaseKind;
   baseSymbol: string;
   baseDecimals: number;
+  currentPrice: string; // harga token sekarang dalam base (formula sama dgn AddPlan.currentPrice → basis alert anjlok)
   valueBaseWei: bigint; // nilai pokok posisi (dalam base: WETH/USDG)
   feesBaseWei: bigint; // fee belum diklaim (dalam base)
   side: 'above' | 'in' | 'below'; // harga token vs rentang (above=belum mulai, below=terkonversi penuh)
@@ -626,6 +627,7 @@ export async function getPositionDetail(
     baseKind: base.kind,
     baseSymbol: base.symbol,
     baseDecimals: base.decimals,
+    currentPrice: priceOther.toSignificant(8),
     valueBaseWei,
     feesBaseWei,
     baseAmountWei,

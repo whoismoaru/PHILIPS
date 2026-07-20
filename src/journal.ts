@@ -72,6 +72,41 @@ export function recentTokens(limit = 80): Array<{ ca: string; chain?: string; sy
   return out;
 }
 
+export type LifetimeStats = {
+  count: number; // total entri jurnal
+  known: number; // entri dengan hasil diketahui (bukan gone/burned tanpa result)
+  wins: number;
+  losses: number;
+  netEth: number;
+  grossWin: number;
+  grossLoss: number; // negatif
+  best?: { symbol: string; pnlEth: number };
+  worst?: { symbol: string; pnlEth: number };
+};
+
+/**
+ * Rekap PnL seumur hidup dari seluruh jurnal.
+ * ponytail: pnlEth dijumlah sebagai ETH. Entri USDG (baseKind usdg) ber-denominasi dollar —
+ * jurnal belum menyimpan baseKind, dan sampai kini semua close = WETH (USDG belum live), jadi
+ * penjumlahan benar utk data sekarang. Bila USDG mulai dipakai: tambah baseKind ke JournalEntry
+ * dan pisahkan agregat per-denominasi.
+ */
+export function lifetimeStats(): LifetimeStats {
+  const all = read(Number.MAX_SAFE_INTEGER);
+  let wins = 0, losses = 0, netEth = 0, grossWin = 0, grossLoss = 0, known = 0;
+  let best: { symbol: string; pnlEth: number } | undefined;
+  let worst: { symbol: string; pnlEth: number } | undefined;
+  for (const e of all) {
+    if (e.resultEthWei === undefined) continue; // hasil tak diketahui → tak dihitung PnL
+    known++;
+    netEth += e.pnlEth;
+    if (e.pnlEth >= 0) { wins++; grossWin += e.pnlEth; } else { losses++; grossLoss += e.pnlEth; }
+    if (!best || e.pnlEth > best.pnlEth) best = { symbol: e.symbol, pnlEth: e.pnlEth };
+    if (!worst || e.pnlEth < worst.pnlEth) worst = { symbol: e.symbol, pnlEth: e.pnlEth };
+  }
+  return { count: all.length, known, wins, losses, netEth, grossWin, grossLoss, best, worst };
+}
+
 /** Baca N entri terbaru (terbaru dulu). */
 export function read(limit = 20): JournalEntry[] {
   try {

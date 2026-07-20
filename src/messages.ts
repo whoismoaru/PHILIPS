@@ -307,6 +307,74 @@ export function msgDenied(): string {
   return card(title('DENIED'), [note('kamu tidak berhak memakai bot ini.')]);
 }
 
+/** ETH bertanda ringkas: '+0.01820 ETH' / '-0.00284 ETH'. */
+function sgEth(n: number): string {
+  return `${n >= 0 ? '+' : ''}${n.toFixed(5)} ETH`;
+}
+
+/** Kartu rekap PnL seumur hidup (dari jurnal). Satu highlight (net) di luar pre. */
+export function msgPnl(opts: {
+  dryRun: boolean;
+  known: number;
+  wins: number;
+  losses: number;
+  netEth: number;
+  grossWin: number;
+  grossLoss: number;
+  best?: { symbol: string; pnlEth: number };
+  worst?: { symbol: string; pnlEth: number };
+}): string {
+  if (opts.known === 0) {
+    return card(`🧾 ${title('PnL', 'seumur hidup')}`, [note('belum ada trade tertutup.')], footerMode(opts.dryRun));
+  }
+  const winrate = (opts.wins / opts.known) * 100;
+  const rows: Array<[string, string]> = [
+    ['trade', `${opts.known} (${opts.wins}W · ${opts.losses}L)`],
+    ['winrate', `${winrate.toFixed(1)}%`],
+    ['menang', sgEth(opts.grossWin)],
+    ['kalah', sgEth(opts.grossLoss)],
+  ];
+  if (opts.best) rows.push(['terbaik', `${opts.best.symbol} ${sgEth(opts.best.pnlEth)}`]);
+  if (opts.worst) rows.push(['terburuk', `${opts.worst.symbol} ${sgEth(opts.worst.pnlEth)}`]);
+
+  const body = [
+    `${opts.netEth >= 0 ? '🟢' : '🔴'} net ${bold(sgEth(opts.netEth))}`,
+    '',
+    fieldBlock(rows),
+  ];
+  return card(`🧾 ${title('PnL', 'seumur hidup')}`, body, footerMode(opts.dryRun));
+}
+
+/** Alert harga token anjlok ≥ambang dari harga entry (auto-monitor). */
+export function msgPriceDrop(tokenId: string, symbol: string, dropPct: number, baseSymbol = 'WETH'): string {
+  return card(`⚠️ ${title('ANJLOK', esc(symbol))}`, [
+    `🔴 turun ${bold(pctSigned(-dropPct))} dari entry`,
+    '',
+    fieldBlock([
+      ['token', symbol],
+      ['pair', `${baseSymbol} / ${symbol}`],
+      ['posisi', `#${tokenId}`],
+    ]),
+    quote('harga token jatuh sejak buka — cek apakah perlu /stop.'),
+  ]);
+}
+
+/** Header /closeall — bingkai darurat, tetap konfirmasi per posisi (mekanisme = /stop). */
+export function msgCloseAllPick(count: number): string {
+  return card(`⛔ ${title('TUTUP SEMUA')}`, [
+    `${bold(String(count))} posisi aktif — tap ${bold('Tutup')} di tiap kartu.`,
+    note('tiap penutupan tetap lewat konfirmasi masing-masing.'),
+  ]);
+}
+
+/** Prompt saat tombol menu "Tambah LP" ditekan (butuh argumen CA). */
+export function msgAddPrompt(): string {
+  return card(`➕ ${title('TAMBAH LP')}`, [
+    `Tempel alamat token: ${code('/add <CA>')}`,
+    note('contoh: /add 0xabc…'),
+  ]);
+}
+
 export function msgError(where: string, err: string): string {
   return card(
     `❌ ${title('ERROR', where)}`,

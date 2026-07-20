@@ -22,6 +22,7 @@ import { startMonitor } from './monitor.js';
 import * as store from './store.js';
 import * as journal from './journal.js';
 import * as msg from './messages.js';
+import { MENU_KEYBOARD, resolveMenu } from './menu.js';
 import {
   CHAINS,
   getChain,
@@ -237,9 +238,11 @@ bot.use((ctx, next) => {
 });
 
 // ---------- Fase 1 ----------
-bot.start((ctx) => ctx.reply(msg.msgStart(config.safety.dryRun), html));
+bot.start((ctx) =>
+  ctx.reply(msg.msgStart(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD }),
+);
 bot.command(['help', 'menu'], (ctx) =>
-  ctx.reply(msg.msgHelp(config.safety.dryRun), html),
+  ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD }),
 );
 
 async function renderStatus(ctx: any, edit: boolean) {
@@ -434,7 +437,7 @@ function finalizeClose(
 }
 
 // /positions HANYA menampilkan posisi live (history ada di /history).
-bot.command('positions', async (ctx) => {
+async function cmdPositions(ctx: any) {
   const active = store.active();
   if (active.length === 0) {
     return ctx.reply(msg.msgNoPositions(), html);
@@ -450,10 +453,11 @@ bot.command('positions', async (ctx) => {
       await ctx.reply(msg.msgPositionReadFail(rec.tokenId, (e as Error).message), html);
     }
   }
-});
+}
+bot.command('positions', cmdPositions);
 
 // /history — riwayat trade tertutup, dari file jurnal khusus (tak muncul di /positions).
-bot.command('history', (ctx) => {
+function cmdHistory(ctx: any) {
   const items = journal.read(20).map((e) => ({
     tokenId: e.tokenId,
     symbol: e.symbol,
@@ -465,7 +469,28 @@ bot.command('history', (ctx) => {
     closedAt: e.closedAt,
   }));
   return ctx.reply(msg.msgJournal(items), html);
-});
+}
+bot.command('history', cmdHistory);
+
+// /pnl — rekap PnL seumur hidup (agregasi jurnal).
+function cmdPnl(ctx: any) {
+  const s = journal.lifetimeStats();
+  return ctx.reply(
+    msg.msgPnl({
+      dryRun: config.safety.dryRun,
+      known: s.known,
+      wins: s.wins,
+      losses: s.losses,
+      netEth: s.netEth,
+      grossWin: s.grossWin,
+      grossLoss: s.grossLoss,
+      best: s.best,
+      worst: s.worst,
+    }),
+    html,
+  );
+}
+bot.command('pnl', cmdPnl);
 
 bot.action(/^detail:(\d+)$/, async (ctx) => {
   const rec = store.get(ctx.match[1]);
@@ -789,6 +814,7 @@ bot.action('addok', async (ctx) => {
       nominalEth: flow.ethAmount,
       rangeLowPct: flow.plan.pctLow,
       rangeHighPct: flow.plan.pctHigh,
+      entryPrice: flow.plan.currentPrice, // harga token saat buka → basis alert anjlok
       openedAt: Date.now(),
       status: 'ACTIVE',
       lastInRange: false,
@@ -843,7 +869,7 @@ async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-bot.command(['stop', 'stoplp'], async (ctx) => {
+async function cmdStop(ctx: any) {
   const active = store.active();
   if (active.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
   await ctx.reply(msg.msgStopPick(), html);
@@ -854,7 +880,24 @@ bot.command(['stop', 'stoplp'], async (ctx) => {
       await ctx.reply(msg.msgPositionReadFail(rec.tokenId, (e as Error).message), html);
     }
   }
-});
+}
+bot.command(['stop', 'stoplp'], cmdStop);
+
+// /closeall — darurat: tutup semua posisi. Konfirmasi per posisi (mekanisme = /stop,
+// reuse penuh renderPositionCard → tombol Tutup → stop:/close: yang sudah teruji).
+async function cmdCloseAll(ctx: any) {
+  const active = store.active();
+  if (active.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
+  await ctx.reply(msg.msgCloseAllPick(active.length), html);
+  for (const rec of active) {
+    try {
+      await renderPositionCard(ctx, rec, false);
+    } catch (e) {
+      await ctx.reply(msg.msgPositionReadFail(rec.tokenId, (e as Error).message), html);
+    }
+  }
+}
+bot.command('closeall', cmdCloseAll);
 
 bot.action(/^stop:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
@@ -1054,6 +1097,22 @@ bot.action(/^size:del:(\d+)$/, async (ctx) => {
 bot.on(message('text'), async (ctx) => {
   const raw = (ctx.message.text || '').trim();
 
+  // Tombol menu (reply keyboard) mengirim label sebagai teks biasa — petakan ke aksinya.
+  // Label emoji tak pernah bentrok dgn input nominal (angka), aman dicek paling awal.
+  const menuCmd = resolveMenu(raw);
+  if (menuCmd) {
+    switch (menuCmd) {
+      case '/status': return renderStatus(ctx, false);
+      case '/positions': return cmdPositions(ctx);
+      case '/pnl': return cmdPnl(ctx);
+      case '/history': return cmdHistory(ctx);
+      case '/stop': return cmdStop(ctx);
+      case '/setsize': return ctx.reply(sizeText(), { ...html, ...sizeKeyboard() });
+      case '/help': return ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD });
+      case '/add': return ctx.reply(msg.msgAddPrompt(), html);
+    }
+  }
+
   // Sedang mengubah/menambah preset nominal? Tangkap di sini.
   const pend = sizeEdit.get(ctx.from.id);
   if (pend !== undefined) {
@@ -1108,8 +1167,10 @@ const BOT_COMMANDS = [
   { command: 'status', description: 'Koneksi jaringan & saldo dompet' },
   { command: 'positions', description: 'Posisi LP yang aktif (live)' },
   { command: 'history', description: 'Riwayat trade tertutup (jurnal)' },
+  { command: 'pnl', description: 'Rekap PnL seumur hidup' },
   { command: 'add', description: 'Tambah LP: /add <CA>' },
   { command: 'stop', description: 'Tutup posisi LP' },
+  { command: 'closeall', description: 'Darurat: tutup semua posisi (konfirmasi per posisi)' },
   { command: 'setsize', description: 'Kelola preset nominal ETH' },
 ] as const;
 

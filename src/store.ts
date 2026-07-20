@@ -20,6 +20,8 @@ export type PosRecord = {
   openedAt: number; // epoch ms
   status: 'ACTIVE' | 'STOPPED';
   lastInRange?: boolean; // untuk notifikasi auto-monitor
+  entryPrice?: string; // harga token dalam base saat buka (untuk alert anjlok); kosong = posisi lama
+  dropAlerted?: boolean; // sudah kirim alert anjlok? (reset saat harga pulih — anti-spam)
   stoppedAt?: number;
   resultEthWei?: string; // ETH diterima saat stop (untuk PnL final)
 };

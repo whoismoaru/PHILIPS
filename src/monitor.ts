@@ -6,7 +6,7 @@ import { swapTokenToEthRobust } from './relay.js';
 import { ethers } from 'ethers';
 import * as store from './store.js';
 import * as journal from './journal.js';
-import { msgRangeEnter, msgRangeExit } from './messages.js';
+import { msgRangeEnter, msgRangeExit, msgPriceDrop } from './messages.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -16,6 +16,8 @@ import { join } from 'node:path';
  */
 
 const INTERVAL_MS = 60_000;
+const DROP_ALERT_PCT = 25; // alert bila harga token turun ≥25% dari entry
+const DROP_REARM_PCT = 20; // pulih di atas -20% → boleh alert lagi (histeresis anti-spam)
 const SWEEP_EVERY_MS = 30 * 60_000; // sapu sisa token tiap 30 menit
 const SWEEP_COOLDOWN_MS = 6 * 3_600_000; // per token max 1 percobaan / 6 jam
 const DUST_COOLDOWN_MS = 7 * 24 * 3_600_000; // token "terlalu kecil" → mundur 7 hari
@@ -97,6 +99,22 @@ export function startMonitor(bot: Telegraf) {
             ? msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol)
             : msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below', d.baseSymbol);
           await bot.telegram.sendMessage(config.telegram.allowedUserId, text, html);
+        }
+        // Alert anjlok: harga token vs entry. Sekali per crossing; re-arm saat pulih.
+        const entry = rec.entryPrice ? Number(rec.entryPrice) : 0;
+        const cur = Number(d.currentPrice);
+        if (entry > 0 && cur > 0) {
+          const dropPct = (1 - cur / entry) * 100;
+          if (dropPct >= DROP_ALERT_PCT && !rec.dropAlerted) {
+            await bot.telegram.sendMessage(
+              config.telegram.allowedUserId,
+              msgPriceDrop(rec.tokenId, rec.symbol, dropPct, d.baseSymbol),
+              html,
+            );
+            store.update(rec.tokenId, { dropAlerted: true });
+          } else if (rec.dropAlerted && dropPct < DROP_REARM_PCT) {
+            store.update(rec.tokenId, { dropAlerted: false });
+          }
         }
         store.update(rec.tokenId, { lastInRange: d.inRange });
       } catch (e) {
