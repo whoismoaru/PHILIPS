@@ -371,6 +371,72 @@ export function msgCloseAllPick(count: number): string {
   ]);
 }
 
+// ─── Swap ETH ↔ USDG ───────────────────────────────────────────────
+function swapDirLabel(dir: 'e2u' | 'u2e'): string {
+  return dir === 'e2u' ? 'ETH → USDG' : 'USDG → ETH';
+}
+
+/** Kartu pilih arah swap (tombol ditambah di index). */
+export function msgSwapPick(dryRun: boolean): string {
+  return card(`🔄 ${title('SWAP', 'ETH ↔ USDG')}`, [note('pilih arah tukar di bawah.')], footerMode(dryRun));
+}
+
+/** Prompt ketik jumlah untuk swap. */
+export function msgSwapAmountPrompt(dir: 'e2u' | 'u2e', balanceLine: string): string {
+  const inSym = dir === 'e2u' ? 'ETH' : 'USDG';
+  const example = dir === 'e2u' ? '0.01' : '10';
+  return card(`🔄 ${title('SWAP', swapDirLabel(dir))}`, [
+    balanceLine,
+    `💬 Ketik jumlah ${bold(inSym)} (contoh: ${code(example)})`,
+  ]);
+}
+
+/** Kartu konfirmasi swap — estimasi di luar pre; jumlah pasti dijaga quoter. */
+export function msgSwapConfirm(o: {
+  dir: 'e2u' | 'u2e';
+  amountInLabel: string;
+  estOutLabel: string;
+  dryRun: boolean;
+}): string {
+  const body = [
+    `🟢 ≈ dapat ${bold(o.estOutLabel)}`,
+    '',
+    fieldBlock([
+      ['tukar', o.amountInLabel],
+      ['floor', 'slippage 5% → 15%'],
+    ]),
+    note('estimasi; jumlah pasti dilindungi quoter saat eksekusi.'),
+  ];
+  return card(`🔄 ${title('KONFIRMASI SWAP', swapDirLabel(o.dir))}`, body, footerMode(o.dryRun));
+}
+
+/** Kartu hasil swap (atau dry-run). */
+export function msgSwapDone(o: {
+  dir: 'e2u' | 'u2e';
+  amountInLabel: string;
+  outLabel: string;
+  route?: string;
+  dryRun: boolean;
+}): string {
+  if (o.dryRun) {
+    return card(`⚪ ${title('SWAP (DRY)', swapDirLabel(o.dir))}`, [
+      note('mode DRY RUN — tidak dieksekusi.'),
+      '',
+      fieldBlock([['tukar', o.amountInLabel], ['≈ dapat', o.outLabel]]),
+    ], footerMode(o.dryRun));
+  }
+  const body = [
+    `🟢 +${o.outLabel}`,
+    '',
+    fieldBlock([
+      ['tukar', o.amountInLabel],
+      ['diterima', o.outLabel],
+      ['rute', o.route ?? '—'],
+    ]),
+  ];
+  return card(`✅ ${title('SWAP SELESAI', swapDirLabel(o.dir))}`, body, footerMode(o.dryRun));
+}
+
 /** Prompt saat tombol menu "Tambah LP" ditekan (butuh argumen CA). */
 export function msgAddPrompt(): string {
   return card(`➕ ${title('TAMBAH LP')}`, [

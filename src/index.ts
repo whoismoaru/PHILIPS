@@ -18,6 +18,7 @@ import {
 } from './uniswap.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
+import { swapEthToUsdg, swapUsdgToEth, type SwapDir } from './swap.js';
 import { startMonitor } from './monitor.js';
 import * as store from './store.js';
 import * as journal from './journal.js';
@@ -900,6 +901,85 @@ async function cmdCloseAll(ctx: any) {
 }
 bot.command('closeall', cmdCloseAll);
 
+// ---------- Swap ETH ↔ USDG ----------
+type SwapFlow = { dir: SwapDir; awaitingAmount: boolean; amountWei?: bigint };
+const swapFlows = new Map<number, SwapFlow>();
+const swapInFlight = new Set<number>(); // cegah double-tap Konfirmasi swap
+
+/** Chain untuk swap (default = robinhood, satu-satunya yg punya USDG). */
+const swapChain = (): ChainCtx => getChain();
+
+async function cmdSwap(ctx: any) {
+  const cc = swapChain();
+  if (!cc.usdgAddress) return ctx.reply(msg.msgError('swap', `USDG tak tersedia di ${cc.label}.`), html);
+  await ctx.reply(msg.msgSwapPick(config.safety.dryRun), {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('ETH → USDG', 'swapdir:e2u'), Markup.button.callback('USDG → ETH', 'swapdir:u2e')],
+      [Markup.button.callback('Batal', 'cancel')],
+    ]),
+  });
+}
+bot.command('swap', cmdSwap);
+
+bot.action(/^swapdir:(e2u|u2e)$/, async (ctx) => {
+  const dir = ctx.match[1] as SwapDir;
+  await ctx.answerCbQuery();
+  const cc = swapChain();
+  let balanceLine = '';
+  try {
+    if (dir === 'e2u') {
+      const b = await cc.provider.getBalance(cc.wallet.address);
+      balanceLine = msg.note(`saldo: ${Number(ethers.formatEther(b)).toFixed(5)} ETH`);
+    } else {
+      const usdg = new ethers.Contract(cc.usdgAddress!, ERC20_ABI, cc.provider);
+      const b: bigint = await usdg.balanceOf(cc.wallet.address);
+      balanceLine = msg.note(`saldo: ${Number(ethers.formatUnits(b, 6)).toFixed(2)} USDG`);
+    }
+  } catch {
+    /* saldo opsional — lanjut tanpa baris saldo */
+  }
+  swapFlows.set(ctx.from!.id, { dir, awaitingAmount: true });
+  await ctx.reply(msg.msgSwapAmountPrompt(dir, balanceLine), html);
+});
+
+bot.action('swapok', async (ctx) => {
+  const uid = ctx.from!.id;
+  const sflow = swapFlows.get(uid);
+  if (!sflow || sflow.amountWei === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /swap.');
+  if (swapInFlight.has(uid)) return ctx.answerCbQuery('Sedang diproses…');
+  const { dir, amountWei } = sflow;
+  swapFlows.delete(uid); // idempotency: hapus SEBELUM eksekusi (double-tap tak swap dobel)
+  swapInFlight.add(uid);
+  await ctx.answerCbQuery('Diproses…');
+  const inLabel =
+    dir === 'e2u' ? `${ethers.formatEther(amountWei)} ETH` : `${ethers.formatUnits(amountWei, 6)} USDG`;
+  try {
+    if (config.safety.dryRun) {
+      await ctx.editMessageText(
+        msg.msgSwapDone({ dir, amountInLabel: inLabel, outLabel: '(estimasi)', dryRun: true }),
+        html,
+      );
+      return;
+    }
+    await ctx.editMessageText(msg.msgProgress('menukar…'), html);
+    const cc = swapChain();
+    const r = dir === 'e2u' ? await swapEthToUsdg(amountWei, cc) : await swapUsdgToEth(amountWei, cc);
+    const outLabel =
+      dir === 'e2u'
+        ? `${Number(ethers.formatUnits(r.outWei, 6)).toFixed(2)} USDG`
+        : `${Number(ethers.formatEther(r.outWei)).toFixed(6)} ETH`;
+    await ctx.editMessageText(
+      msg.msgSwapDone({ dir, amountInLabel: inLabel, outLabel, route: r.route, dryRun: false }),
+      html,
+    );
+  } catch (e) {
+    await ctx.reply(msg.msgError('swap', (e as Error).message), html);
+  } finally {
+    swapInFlight.delete(uid);
+  }
+});
+
 bot.action(/^stop:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   try {
@@ -1050,6 +1130,7 @@ async function stopAndCashOut(
 // Batal berlaku untuk semua alur (wizard /add maupun konfirmasi tutup).
 bot.action('cancel', async (ctx) => {
   flows.delete(ctx.from!.id);
+  swapFlows.delete(ctx.from!.id);
   await ctx.answerCbQuery('Dibatalkan');
   await ctx.editMessageText(msg.msgCancelled(), html);
 });
@@ -1108,6 +1189,7 @@ bot.on(message('text'), async (ctx) => {
       case '/pnl': return cmdPnl(ctx);
       case '/history': return cmdHistory(ctx);
       case '/stop': return cmdStop(ctx);
+      case '/swap': return cmdSwap(ctx);
       case '/setsize': return ctx.reply(sizeText(), { ...html, ...sizeKeyboard() });
       case '/help': return ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD });
       case '/add': return ctx.reply(msg.msgAddPrompt(), html);
@@ -1125,6 +1207,45 @@ bot.on(message('text'), async (ctx) => {
     store.setSizes(sizes);
     sizeEdit.delete(ctx.from.id);
     return ctx.reply(sizeText(), { ...html, ...sizeKeyboard() });
+  }
+
+  // Swap menunggu ketikan jumlah.
+  const sflow = swapFlows.get(ctx.from.id);
+  if (sflow?.awaitingAmount) {
+    const num = Number(raw);
+    if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
+    const cc = swapChain();
+    try {
+      const ethUsd = await getEthUsd(cc.wethAddress, cc);
+      let amountWei: bigint;
+      let amountInLabel: string;
+      let estOutLabel: string;
+      if (sflow.dir === 'e2u') {
+        if (num > maxEth) return ctx.reply(msg.msgOverLimit(maxEthLabel), html);
+        amountWei = ethers.parseEther(raw);
+        amountInLabel = `${raw} ETH`;
+        estOutLabel = ethUsd !== null ? `${(num * ethUsd).toFixed(2)} USDG` : '? USDG (harga ETH tak terbaca)';
+      } else {
+        amountWei = ethers.parseUnits(raw, 6);
+        amountInLabel = `${raw} USDG`;
+        estOutLabel =
+          ethUsd !== null && ethUsd > 0 ? `${(num / ethUsd).toFixed(6)} ETH` : '? ETH (harga ETH tak terbaca)';
+      }
+      sflow.amountWei = amountWei;
+      sflow.awaitingAmount = false;
+      return ctx.reply(
+        msg.msgSwapConfirm({ dir: sflow.dir, amountInLabel, estOutLabel, dryRun: config.safety.dryRun }),
+        {
+          ...html,
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('🟢 Konfirmasi', 'swapok'), Markup.button.callback('Batal', 'cancel')],
+          ]),
+        },
+      );
+    } catch (e) {
+      swapFlows.delete(ctx.from.id);
+      return ctx.reply(msg.msgError('swap', (e as Error).message), html);
+    }
   }
 
   // Wizard /add menunggu ketikan nominal.
@@ -1172,6 +1293,7 @@ const BOT_COMMANDS = [
   { command: 'add', description: 'Tambah LP: /add <CA>' },
   { command: 'stop', description: 'Tutup posisi LP' },
   { command: 'closeall', description: 'Darurat: tutup semua posisi (konfirmasi per posisi)' },
+  { command: 'swap', description: 'Tukar ETH ↔ USDG' },
   { command: 'setsize', description: 'Kelola preset nominal ETH' },
 ] as const;
 

@@ -10,7 +10,8 @@ export const MENU_KEYBOARD = {
     ['📊 Status', '📋 Posisi'],
     ['💰 PnL', '🧾 Riwayat'],
     ['➕ Tambah LP', '⛔ Tutup'],
-    ['⚙️ Ukuran', '❔ Bantuan'],
+    ['🔄 Swap', '⚙️ Ukuran'],
+    ['❔ Bantuan'],
   ] as string[][],
   resize_keyboard: true,
   is_persistent: true,
@@ -23,6 +24,7 @@ const MENU_MAP: Record<string, string> = {
   '🧾 Riwayat': '/history',
   '➕ Tambah LP': '/add',
   '⛔ Tutup': '/stop',
+  '🔄 Swap': '/swap',
   '⚙️ Ukuran': '/setsize',
   '❔ Bantuan': '/help',
 };
