@@ -479,6 +479,7 @@ function cmdPnl(ctx: any) {
     msg.msgPnl({
       dryRun: config.safety.dryRun,
       known: s.known,
+      excluded: s.excluded,
       wins: s.wins,
       losses: s.losses,
       netEth: s.netEth,

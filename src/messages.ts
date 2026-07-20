@@ -316,6 +316,7 @@ function sgEth(n: number): string {
 export function msgPnl(opts: {
   dryRun: boolean;
   known: number;
+  excluded?: number;
   wins: number;
   losses: number;
   netEth: number;
@@ -342,7 +343,10 @@ export function msgPnl(opts: {
     '',
     fieldBlock(rows),
   ];
-  return card(`🧾 ${title('PnL', 'seumur hidup')}`, body, footerMode(opts.dryRun));
+  if (opts.excluded && opts.excluded > 0) {
+    body.push(note(`${opts.excluded} trade lama tanpa data hasil diabaikan.`));
+  }
+  return card(`🧾 ${title('PnL', 'cashout nyata')}`, body, footerMode(opts.dryRun));
 }
 
 /** Alert harga token anjlok ≥ambang dari harga entry (auto-monitor). */

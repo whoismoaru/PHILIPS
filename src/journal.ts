@@ -74,7 +74,8 @@ export function recentTokens(limit = 80): Array<{ ca: string; chain?: string; sy
 
 export type LifetimeStats = {
   count: number; // total entri jurnal
-  known: number; // entri dengan hasil diketahui (bukan gone/burned tanpa result)
+  known: number; // cashout nyata (hasil terukur) yang dihitung PnL
+  excluded: number; // entri lama tanpa hasil terukur (res=0 backfill) → diabaikan
   wins: number;
   losses: number;
   netEth: number;
@@ -85,26 +86,30 @@ export type LifetimeStats = {
 };
 
 /**
- * Rekap PnL seumur hidup dari seluruh jurnal.
- * ponytail: pnlEth dijumlah sebagai ETH. Entri USDG (baseKind usdg) ber-denominasi dollar —
- * jurnal belum menyimpan baseKind, dan sampai kini semua close = WETH (USDG belum live), jadi
- * penjumlahan benar utk data sekarang. Bila USDG mulai dipakai: tambah baseKind ke JournalEntry
- * dan pisahkan agregat per-denominasi.
+ * Rekap PnL seumur hidup dari cashout NYATA.
+ * Kecualikan entri tanpa hasil terukur:
+ *   - resultEthWei undefined  → posisi gone/burned (NFT hilang)
+ *   - resultEthWei == 0        → placeholder backfill trade lama (posisi dimigrasi TANPA data
+ *     hasil → default 0). Ini BUKAN rugi total: cashout nyata selalu kembalikan >0. Dulu 12
+ *     entri semacam ini memalsukan net jadi -0.83 ETH padahal cashout riil ≈ +0.016 ETH.
+ * ponytail: pnlEth dijumlah sebagai ETH. Semua close sejauh ini = WETH (USDG belum live). Bila
+ * USDG dipakai: tambah baseKind ke JournalEntry & pisahkan agregat per-denominasi.
  */
 export function lifetimeStats(): LifetimeStats {
   const all = read(Number.MAX_SAFE_INTEGER);
-  let wins = 0, losses = 0, netEth = 0, grossWin = 0, grossLoss = 0, known = 0;
+  let wins = 0, losses = 0, netEth = 0, grossWin = 0, grossLoss = 0, known = 0, excluded = 0;
   let best: { symbol: string; pnlEth: number } | undefined;
   let worst: { symbol: string; pnlEth: number } | undefined;
   for (const e of all) {
-    if (e.resultEthWei === undefined) continue; // hasil tak diketahui → tak dihitung PnL
+    if (e.resultEthWei === undefined) continue; // gone/burned → tak terukur
+    if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; } // placeholder backfill lama
     known++;
     netEth += e.pnlEth;
     if (e.pnlEth >= 0) { wins++; grossWin += e.pnlEth; } else { losses++; grossLoss += e.pnlEth; }
     if (!best || e.pnlEth > best.pnlEth) best = { symbol: e.symbol, pnlEth: e.pnlEth };
     if (!worst || e.pnlEth < worst.pnlEth) worst = { symbol: e.symbol, pnlEth: e.pnlEth };
   }
-  return { count: all.length, known, wins, losses, netEth, grossWin, grossLoss, best, worst };
+  return { count: all.length, known, excluded, wins, losses, netEth, grossWin, grossLoss, best, worst };
 }
 
 /** Baca N entri terbaru (terbaru dulu). */
