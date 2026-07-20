@@ -254,6 +254,7 @@ export function msgStatus(opts: {
   positions: number;
   maxEthLabel: string;
   wallet: string;
+  usdg?: string; // saldo USDG (base asset) di chain utama, mis. '18.82' — tampil bila > 0
   holdings?: Array<{ symbol: string; amount: string; usd: number | null }>;
 }): string {
   const limit =
@@ -266,11 +267,13 @@ export function msgStatus(opts: {
     ['limit', limit],
   ];
 
+  const saldoRows = balanceFields(opts.gasEth);
+  if (opts.usdg) saldoRows.push(['usdg', `${opts.usdg} USDG`]);
   const body: string[] = [
     fieldBlock(head),
     '',
     section('saldo'),
-    fieldBlock(balanceFields(opts.gasEth)),
+    fieldBlock(saldoRows),
   ];
 
   const h = opts.holdings ?? [];

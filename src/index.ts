@@ -267,6 +267,19 @@ async function renderStatus(ctx: any, edit: boolean) {
     } catch {
       /* abaikan — status tetap tampil tanpa holdings */
     }
+    // Saldo USDG (base asset) di chain utama — best-effort; hanya tampil bila > 0.
+    let usdg: string | undefined;
+    try {
+      const cc = getChain();
+      if (cc.usdgAddress) {
+        const uc = new ethers.Contract(cc.usdgAddress, ERC20_ABI, cc.provider);
+        const b: bigint = await uc.balanceOf(cc.wallet.address);
+        const amt = Number(ethers.formatUnits(b, 6));
+        if (amt > 0) usdg = amt.toFixed(2);
+      }
+    } catch {
+      /* abaikan — status tetap tampil tanpa USDG */
+    }
     const text = msg.msgStatus({
       dryRun: config.safety.dryRun,
       chainId: network.chainId,
@@ -274,6 +287,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       positions: store.active().length,
       maxEthLabel,
       wallet: wallet.address,
+      usdg,
       holdings,
     });
     const extra = {
