@@ -282,6 +282,15 @@ export function msgV4Position(p: {
   return card(`🔷 ${title('V4', `#${p.tokenId}`)}`, body);
 }
 
+/** Konfirmasi tutup posisi Uniswap v4. */
+export function msgV4CloseConfirm(tokenId: string): string {
+  return card(`🔴 ${title('TUTUP v4', `#${tokenId}`)}`, [
+    note('posisi Uniswap v4 di-burn; SELURUH likuiditas + fee (kedua token) kembali ke wallet — tanpa auto-swap.'),
+    '',
+    bold('Yakin tutup posisi ini?'),
+  ]);
+}
+
 /** Alias menu — sama dengan /start. */
 export function msgHelp(dryRun: boolean): string {
   return msgStart(dryRun);

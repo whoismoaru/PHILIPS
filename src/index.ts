@@ -17,7 +17,7 @@ import {
   type PoolOption,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, v4Supported } from './uniswapV4.js';
+import { listPositionsV4, v4Supported, closePositionV4 } from './uniswapV4.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { swapEthToUsdg, swapUsdgToEth, type SwapDir } from './swap.js';
@@ -577,7 +577,7 @@ async function cmdPositions(ctx: any) {
   for (const c of cards) {
     await ctx.reply(c.text, c.extra);
   }
-  // v4: kartu baca-saja.
+  // v4: kartu + tombol tutup (close v4 sudah didukung; add belum).
   for (const p of v4) {
     const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
     await ctx
@@ -590,7 +590,10 @@ async function cmdPositions(ctx: any) {
           liqLabel: p.liquidity.toString(),
           hasHooks: p.hasHooks,
         }),
-        html,
+        {
+          ...html,
+          ...Markup.inlineKeyboard([[Markup.button.callback('🔴 Tutup posisi v4', `closev4:${p.tokenId}`)]]),
+        },
       )
       .catch(() => {});
   }
@@ -1270,6 +1273,42 @@ async function stopAndCashOut(
   // leftover = token benar-benar masih tersisa di wallet setelah semua percobaan.
   return { text, baseOutWei, leftover: sw.leftover };
 }
+
+// ── Tutup posisi Uniswap v4 (baca-saja untuk lihat; close didukung) ──
+bot.action(/^closev4:(\d+)$/, async (ctx) => {
+  const tokenId = ctx.match[1];
+  await ctx.answerCbQuery();
+  await ctx.reply(msg.msgV4CloseConfirm(tokenId), {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [
+        Markup.button.callback('⛔ Ya, tutup v4', `closev4go:${tokenId}`),
+        Markup.button.callback('Batal', 'cancel'),
+      ],
+    ]),
+  });
+});
+
+bot.action(/^closev4go:(\d+)$/, async (ctx) => {
+  const tokenId = ctx.match[1];
+  const key = `v4:${tokenId}`;
+  if (closingInFlight.has(key)) return ctx.answerCbQuery('Sedang diproses…');
+  closingInFlight.add(key);
+  try {
+    await ctx.answerCbQuery('Diproses…');
+    await ctx.editMessageText(msg.msgProgress('menutup posisi v4…'), html).catch(() => {});
+    const r = await closePositionV4(tokenId, getChain(), { dryRun: config.safety.dryRun });
+    if (r.dryRun) {
+      await ctx.reply(`⚪ DRY-RUN — simulasi close v4 #${tokenId} VALID. Saat live, ${r.sym0} + ${r.sym1} kembali ke wallet.`, html);
+    } else {
+      await ctx.reply(`✅ Close v4 #${tokenId} berhasil — diterima ${r.sym0} + ${r.sym1}.\ntx: ${r.txHash}`, html);
+    }
+  } catch (e) {
+    await ctx.reply(msg.msgError('close v4', (e as Error).message), html);
+  } finally {
+    closingInFlight.delete(key);
+  }
+});
 
 // Batal berlaku untuk semua alur (wizard /add maupun konfirmasi tutup).
 bot.action('cancel', async (ctx) => {

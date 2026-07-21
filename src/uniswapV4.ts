@@ -70,6 +70,50 @@ async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
 
 const signExt24 = (v: bigint): number => Number(v >= 1n << 23n ? v - (1n << 24n) : v);
 
+// v4 Actions (v4-periphery libraries/Actions.sol)
+const BURN_POSITION = 0x03;
+const TAKE_PAIR = 0x11;
+const V4_WRITE_ABI = [
+  'function getPoolAndPositionInfo(uint256) view returns (tuple(address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) poolKey, uint256 info)',
+  'function ownerOf(uint256) view returns (address)',
+  'function modifyLiquidities(bytes unlockData, uint256 deadline) payable',
+];
+
+/**
+ * Tutup (burn) posisi v4: tarik SELURUH likuiditas + fee, terima kedua token ke
+ * wallet, burn NFT — dalam satu modifyLiquidities (BURN_POSITION + TAKE_PAIR).
+ * WAJIB simulasi (staticCall) dulu; revert → batal (tak kirim). Tidak meng-swap
+ * (v4 close mengembalikan kedua token apa adanya). dryRun → hanya simulasi.
+ */
+export async function closePositionV4(
+  tokenId: string,
+  cc: ChainCtx,
+  opts: { dryRun: boolean },
+): Promise<{ dryRun?: boolean; txHash?: string; sym0: string; sym1: string }> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr) throw new Error(`Uniswap v4 tak didukung di ${cc.label}.`);
+  const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
+  const owner: string = await pm.ownerOf(tokenId);
+  if (owner.toLowerCase() !== cc.wallet.address.toLowerCase()) {
+    throw new Error(`Posisi v4 #${tokenId} bukan milik wallet ini.`);
+  }
+  const [pk] = await pm.getPoolAndPositionInfo(tokenId);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const actions = ethers.concat([Uint8Array.of(BURN_POSITION), Uint8Array.of(TAKE_PAIR)]);
+  // amount0Min/amount1Min = 0: burn = tarik dana sendiri (bukan swap) → risiko MEV rendah.
+  const pBurn = coder.encode(['uint256', 'uint128', 'uint128', 'bytes'], [tokenId, 0, 0, '0x']);
+  const pTake = coder.encode(['address', 'address', 'address'], [pk.currency0, pk.currency1, cc.wallet.address]);
+  const unlockData = coder.encode(['bytes', 'bytes[]'], [actions, [pBurn, pTake]]);
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const [sym0, sym1] = await Promise.all([tokenSymbol(pk.currency0, cc), tokenSymbol(pk.currency1, cc)]);
+  // Simulasi WAJIB — revert di sini = batalkan sebelum menghabiskan gas / risiko.
+  await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
+  if (opts.dryRun) return { dryRun: true, sym0, sym1 };
+  const tx = await pm.modifyLiquidities(unlockData, deadline);
+  const rc = await tx.wait();
+  return { txHash: rc?.hash ?? tx.hash, sym0, sym1 };
+}
+
 /** Daftar posisi v4 wallet. onlyLive=true → hanya yang liquidity > 0. */
 export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyLive?: boolean } = {}): Promise<V4Position[]> {
   const pmAddr = V4_PM[cc.key];
