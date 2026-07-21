@@ -46,7 +46,19 @@ export type V4Position = {
   tickLower: number;
   tickUpper: number;
   liquidity: bigint;
+  base: 'ETH' | 'USDG' | null; // aset dasar pasangan (utk add/cash-out)
 };
+
+/** Tentukan aset dasar pasangan + apakah base = currency0. */
+function pairBase(cc: ChainCtx, cur0: string, cur1: string): { base: 'ETH' | 'USDG' | null; baseIsCurrency0: boolean } {
+  const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
+  const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
+  if (isEth(cur0)) return { base: 'ETH', baseIsCurrency0: true };
+  if (isEth(cur1)) return { base: 'ETH', baseIsCurrency0: false };
+  if (isUsdg(cur0)) return { base: 'USDG', baseIsCurrency0: true };
+  if (isUsdg(cur1)) return { base: 'USDG', baseIsCurrency0: false };
+  return { base: null, baseIsCurrency0: true };
+}
 
 export function v4Supported(cc: ChainCtx): boolean {
   return !!V4_PM[cc.key] && !!cc.blockscout;
@@ -190,6 +202,7 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
           tickLower: signExt24((info >> 8n) & 0xffffffn),
           tickUpper: signExt24((info >> 32n) & 0xffffffn),
           liquidity,
+          base: pairBase(cc, pk.currency0, pk.currency1).base,
         };
       } catch {
         return null;
@@ -304,4 +317,15 @@ export async function openPositionV4(
   const tx = await pm.modifyLiquidities(unlockData, deadline, { value });
   const rc = await tx.wait();
   return { txHash: rc?.hash ?? tx.hash, tickLower, tickUpper, liquidity };
+}
+
+/** PoolKey + info base sebuah posisi v4 (untuk add ke pool yg sama). */
+export async function getPoolKeyV4(cc: ChainCtx, tokenId: string): Promise<{ poolKey: PoolKeyV4; baseIsCurrency0: boolean; base: 'ETH' | 'USDG' | null }> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr) throw new Error(`Uniswap v4 tak didukung di ${cc.label}.`);
+  const pm = new ethers.Contract(pmAddr, V4_ABI, cc.provider);
+  const [pk] = await pm.getPoolAndPositionInfo(tokenId);
+  const poolKey: PoolKeyV4 = { currency0: pk.currency0, currency1: pk.currency1, fee: Number(pk.fee), tickSpacing: Number(pk.tickSpacing), hooks: pk.hooks };
+  const { base, baseIsCurrency0 } = pairBase(cc, pk.currency0, pk.currency1);
+  return { poolKey, baseIsCurrency0, base };
 }

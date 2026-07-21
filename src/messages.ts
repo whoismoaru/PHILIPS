@@ -291,6 +291,20 @@ export function msgV4CloseConfirm(tokenId: string): string {
   ]);
 }
 
+/** Konfirmasi tambah likuiditas ke posisi/pool v4 (single-sided ETH). */
+export function msgV4AddConfirm(tokenId: string, sizeEth: string): string {
+  return card(`➕ ${title('TAMBAH v4', `#${tokenId}`)}`, [
+    ...hrows([
+      ['Deposit', `${sizeEth} ETH`],
+      ['Mode', 'single-sided (ETH saja)'],
+    ]),
+    '',
+    note('mint posisi BARU di pool yang sama; range otomatis di sisi ETH.'),
+    '',
+    bold('Lanjut tambah?'),
+  ]);
+}
+
 /** Alias menu — sama dengan /start. */
 export function msgHelp(dryRun: boolean): string {
   return msgStart(dryRun);

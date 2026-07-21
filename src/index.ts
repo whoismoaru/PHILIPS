@@ -17,7 +17,7 @@ import {
   type PoolOption,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, v4Supported, closePositionV4 } from './uniswapV4.js';
+import { listPositionsV4, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4 } from './uniswapV4.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { swapEthToUsdg, swapUsdgToEth, type SwapDir } from './swap.js';
@@ -592,7 +592,13 @@ async function cmdPositions(ctx: any) {
         }),
         {
           ...html,
-          ...Markup.inlineKeyboard([[Markup.button.callback('🔴 Tutup posisi v4', `closev4:${p.tokenId}`)]]),
+          ...Markup.inlineKeyboard([
+            // Add single-sided ETH (pool base ETH saja) pakai preset nominal.
+            ...(p.base === 'ETH'
+              ? [store.getSizes().map((s) => Markup.button.callback(`➕ ${s} ETH`, `addv4:${p.tokenId}:${s}`))]
+              : []),
+            [Markup.button.callback('🔴 Tutup posisi v4', `closev4:${p.tokenId}`)],
+          ]),
         },
       )
       .catch(() => {});
@@ -1309,6 +1315,47 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     }
   } catch (e) {
     await ctx.reply(msg.msgError('close v4', (e as Error).message), html);
+  } finally {
+    closingInFlight.delete(key);
+  }
+});
+
+// ── Tambah (add) likuiditas v4 single-sided ETH ke pool existing ──
+bot.action(/^addv4:(\d+):([\d.]+)$/, async (ctx) => {
+  const tokenId = ctx.match[1];
+  const size = ctx.match[2];
+  await ctx.answerCbQuery();
+  await ctx.reply(msg.msgV4AddConfirm(tokenId, size), {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [
+        Markup.button.callback('⛔ Ya, tambah', `addv4go:${tokenId}:${size}`),
+        Markup.button.callback('Batal', 'cancel'),
+      ],
+    ]),
+  });
+});
+
+bot.action(/^addv4go:(\d+):([\d.]+)$/, async (ctx) => {
+  const tokenId = ctx.match[1];
+  const size = ctx.match[2];
+  const key = `addv4:${tokenId}:${size}`;
+  if (closingInFlight.has(key)) return ctx.answerCbQuery('Sedang diproses…');
+  closingInFlight.add(key);
+  try {
+    await ctx.answerCbQuery('Diproses…');
+    await ctx.editMessageText(msg.msgProgress('menambah likuiditas v4…'), html).catch(() => {});
+    const cc = getChain();
+    const { poolKey, baseIsCurrency0, base } = await getPoolKeyV4(cc, tokenId);
+    if (base !== 'ETH') throw new Error('Add v4 saat ini hanya untuk pool base ETH.');
+    const r = await openPositionV4(cc, poolKey, baseIsCurrency0, ethers.parseEther(size), { dryRun: config.safety.dryRun });
+    if (r.dryRun) {
+      await ctx.reply(`⚪ DRY-RUN — simulasi add ${size} ETH v4 VALID (range tick [${r.tickLower}, ${r.tickUpper}]).`, html);
+    } else {
+      await ctx.reply(`✅ Add ${size} ETH v4 berhasil — posisi baru di pool #${tokenId} (range [${r.tickLower}, ${r.tickUpper}]).\ntx: ${r.txHash}`, html);
+    }
+  } catch (e) {
+    await ctx.reply(msg.msgError('add v4', (e as Error).message), html);
   } finally {
     closingInFlight.delete(key);
   }
