@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import type { ChainCtx } from './chains.js';
+import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 
 /**
  * Baca-saja posisi Uniswap **v4** (arsitektur beda dari v3: PoolManager singleton
@@ -89,7 +90,7 @@ export async function closePositionV4(
   tokenId: string,
   cc: ChainCtx,
   opts: { dryRun: boolean },
-): Promise<{ dryRun?: boolean; txHash?: string; sym0: string; sym1: string }> {
+): Promise<{ dryRun?: boolean; txHash?: string; sym0: string; sym1: string; base: 'ETH' | 'USDG' | null; cashedOut?: string; leftover?: string }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 tak didukung di ${cc.label}.`);
   const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
@@ -106,12 +107,49 @@ export async function closePositionV4(
   const unlockData = coder.encode(['bytes', 'bytes[]'], [actions, [pBurn, pTake]]);
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const [sym0, sym1] = await Promise.all([tokenSymbol(pk.currency0, cc), tokenSymbol(pk.currency1, cc)]);
-  // Simulasi WAJIB — revert di sini = batalkan sebelum menghabiskan gas / risiko.
+
+  // Tentukan aset dasar (cash-out): pair ber-ETH → ETH; ber-USDG → USDG; lainnya → tak ada.
+  const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
+  const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
+  let base: 'ETH' | 'USDG' | null = null;
+  let other: string | null = null;
+  if (isEth(pk.currency0) || isEth(pk.currency1)) {
+    base = 'ETH';
+    other = isEth(pk.currency0) ? pk.currency1 : pk.currency0;
+  } else if (isUsdg(pk.currency0) || isUsdg(pk.currency1)) {
+    base = 'USDG';
+    other = isUsdg(pk.currency0) ? pk.currency1 : pk.currency0;
+  }
+
+  // Simulasi WAJIB (burn+take) — revert di sini = batalkan sebelum kirim tx.
   await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
-  if (opts.dryRun) return { dryRun: true, sym0, sym1 };
+  if (opts.dryRun) return { dryRun: true, sym0, sym1, base };
+
   const tx = await pm.modifyLiquidities(unlockData, deadline);
   const rc = await tx.wait();
-  return { txHash: rc?.hash ?? tx.hash, sym0, sym1 };
+  const out: { txHash: string; sym0: string; sym1: string; base: 'ETH' | 'USDG' | null; cashedOut?: string; leftover?: string } = {
+    txHash: rc?.hash ?? tx.hash,
+    sym0,
+    sym1,
+    base,
+  };
+
+  // Cash-out: swap token "receh" → base (best-effort; gagal → biarkan sbg leftover, tak hilang).
+  if (base && other && other !== ethers.ZeroAddress) {
+    try {
+      const erc = new ethers.Contract(other, ['function balanceOf(address) view returns (uint256)'], cc.provider);
+      const bal: bigint = await erc.balanceOf(cc.wallet.address);
+      if (bal > 0n) {
+        const r = base === 'ETH'
+          ? await swapTokenToEthRobust(other, bal, cc)
+          : await swapTokenToUsdgRobust(other, bal, cc.usdgAddress!, cc);
+        out.cashedOut = `${base} via ${r.route}`;
+      }
+    } catch (e) {
+      out.leftover = (e as Error).message.slice(0, 100); // token receh tetap di wallet (aman)
+    }
+  }
+  return out;
 }
 
 /** Daftar posisi v4 wallet. onlyLive=true → hanya yang liquidity > 0. */

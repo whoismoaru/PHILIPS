@@ -1299,9 +1299,13 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     await ctx.editMessageText(msg.msgProgress('menutup posisi v4…'), html).catch(() => {});
     const r = await closePositionV4(tokenId, getChain(), { dryRun: config.safety.dryRun });
     if (r.dryRun) {
-      await ctx.reply(`⚪ DRY-RUN — simulasi close v4 #${tokenId} VALID. Saat live, ${r.sym0} + ${r.sym1} kembali ke wallet.`, html);
+      await ctx.reply(`⚪ DRY-RUN — simulasi close v4 #${tokenId} VALID${r.base ? ` lalu cash-out semua ke ${r.base}` : ''}.`, html);
     } else {
-      await ctx.reply(`✅ Close v4 #${tokenId} berhasil — diterima ${r.sym0} + ${r.sym1}.\ntx: ${r.txHash}`, html);
+      let line = `✅ Close v4 #${tokenId} berhasil.`;
+      if (r.cashedOut) line += ` Cash-out → semua ${r.cashedOut}.`;
+      else if (r.base && r.leftover) line += ` ⚠️ Cash-out ke ${r.base} tak dapat rute — ${r.sym0}/${r.sym1} tetap di wallet (bisa /swap manual).`;
+      else line += ` Diterima ${r.sym0} + ${r.sym1}.`;
+      await ctx.reply(`${line}\ntx: ${r.txHash}`, html);
     }
   } catch (e) {
     await ctx.reply(msg.msgError('close v4', (e as Error).message), html);
