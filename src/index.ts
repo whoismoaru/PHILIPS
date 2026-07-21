@@ -12,10 +12,12 @@ import {
   discoverPools,
   discoverPoolsCached,
   discoverAllPools,
+  listPositions,
   type AddPlan,
   type PoolOption,
   type PositionDetail,
 } from './uniswap.js';
+import { listPositionsV4, v4Supported } from './uniswapV4.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { swapEthToUsdg, swapUsdgToEth, type SwapDir } from './swap.js';
@@ -57,13 +59,35 @@ const EST_ADD_GAS = 700_000n;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Berapa kali maksimum ulangi swap saat cash-out sampai token benar-benar habis.
 const MAX_CLOSE_SWEEP = 4;
+/** Max token hold ditampilkan di /status (setelah filter saldo > 0). */
+const HOLDINGS_CAP = 5;
+/** Max kandidat CA dicek balance (jurnal + posisi). */
+const HOLDINGS_CAND_MAX = 20;
+/** Concurrency saat membangun kartu posisi. */
+const POS_CARD_CONCURRENCY = 3;
+
+/** Jalankan fn pada items dengan batas concurrency (jaga rate RPC). */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+  if (items.length === 0) return [];
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 export type Holding = { symbol: string; amount: string; usd: number | null };
 
 /**
- * Token yang benar-benar tersimpan (hold) di wallet + nilai USD-nya.
- * Kandidat token diambil dari jurnal + posisi aktif; hanya yang saldonya > 0
- * ditampilkan. Harga: priceTokenInWeth (pool ter-likuid) × ETH/USD.
+ * Token tersimpan di wallet untuk /status.
+ * Cepat: balance-only (tanpa discover pool / harga USD) → cap top HOLDINGS_CAP.
+ * usd diisi null (tampilan /status tak butuh valuasi live; hemat RPC).
  */
 async function walletHoldings(cc: ChainCtx = getChain()): Promise<Holding[]> {
   const cand = new Map<string, string>(); // ca(lower) -> symbol
@@ -71,32 +95,44 @@ async function walletHoldings(cc: ChainCtx = getChain()): Promise<Holding[]> {
   for (const p of store.active()) if (p.ca) cand.set(p.ca.toLowerCase(), p.symbol);
   if (cand.size === 0) return [];
 
-  const ethUsd = await getEthUsd(cc.wethAddress, cc);
-  const results = await Promise.all(
-    [...cand.entries()].map(async ([ca, sym]): Promise<Holding | null> => {
-      try {
-        const erc = new ethers.Contract(ca, ERC20_ABI, cc.provider);
-        const bal: bigint = await erc.balanceOf(cc.wallet.address);
-        if (bal === 0n) return null;
-        let dec = 18;
-        let symbol = sym;
-        try { dec = Number(await erc.decimals()); } catch { /* pakai 18 */ }
-        try { symbol = await erc.symbol(); } catch { /* pakai simbol jurnal */ }
-        const amount = Number(ethers.formatUnits(bal, dec));
-        let usd: number | null = null;
+  // Batasi kandidat: posisi aktif dulu, lalu sisa dari jurnal.
+  const entries = [...cand.entries()];
+  const activeCas = new Set(store.active().map((p) => p.ca?.toLowerCase()).filter(Boolean) as string[]);
+  entries.sort((a, b) => Number(activeCas.has(b[0])) - Number(activeCas.has(a[0])));
+  const limited = entries.slice(0, HOLDINGS_CAND_MAX);
+
+  type Row = { symbol: string; amountNum: number; amount: string };
+  const rows = (
+    await Promise.all(
+      limited.map(async ([ca, sym]): Promise<Row | null> => {
         try {
-          const pools = (await discoverPoolsCached(ca, cc)).filter((p) => p.priceTokenInBase);
-          if (pools[0]?.priceTokenInBase && ethUsd !== null) {
-            usd = amount * Number(pools[0].priceTokenInBase) * ethUsd;
-          }
-        } catch { /* harga tak terbaca → usd null */ }
-        return { symbol, amount: amount.toLocaleString('en-US', { maximumFractionDigits: 4 }), usd };
-      } catch {
-        return null;
-      }
-    }),
-  );
-  return (results.filter(Boolean) as Holding[]).sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
+          const erc = new ethers.Contract(ca, ERC20_ABI, cc.provider);
+          // balance dulu; decimals/symbol hanya jika saldo > 0
+          const bal: bigint = await erc.balanceOf(cc.wallet.address);
+          if (bal === 0n) return null;
+          const [decR, symR] = await Promise.allSettled([erc.decimals(), erc.symbol()]);
+          const dec = decR.status === 'fulfilled' ? Number(decR.value) : 18;
+          const symbol = symR.status === 'fulfilled' ? String(symR.value) : sym;
+          const amountNum = Number(ethers.formatUnits(bal, dec));
+          return {
+            symbol,
+            amountNum,
+            amount: amountNum.toLocaleString('en-US', { maximumFractionDigits: 4 }),
+          };
+        } catch {
+          return null;
+        }
+      }),
+    )
+  ).filter(Boolean) as Row[];
+
+  // Tanpa USD: urut jumlah mentah (approx); cap.
+  rows.sort((a, b) => b.amountNum - a.amountNum);
+  return rows.slice(0, HOLDINGS_CAP).map((r) => ({
+    symbol: r.symbol,
+    amount: r.amount,
+    usd: null,
+  }));
 }
 
 /**
@@ -239,9 +275,55 @@ bot.use((ctx, next) => {
 });
 
 // ---------- Fase 1 ----------
-bot.start((ctx) =>
-  ctx.reply(msg.msgStart(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD }),
-);
+/**
+ * Sinkron store dengan realita on-chain (chain aktif): impor posisi LP yang ada
+ * di wallet tapi belum tercatat (mis. dibuka manual di Uniswap/CLI), dan tandai
+ * posisi ter-track yang sudah tak ada on-chain sebagai 'gone'. Fail-safe: bila
+ * pembacaan on-chain gagal → TIDAK menyentuh store (hindari salah tandai gone).
+ */
+async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ imported: number; gone: number }> {
+  let onchain: Awaited<ReturnType<typeof listPositions>>;
+  try {
+    onchain = await listPositions(cc);
+  } catch (e) {
+    console.log('[sync] listPositions gagal:', (e as Error).message.slice(0, 120));
+    return { imported: 0, gone: 0 };
+  }
+  const onchainIds = new Set(onchain.map((p) => p.tokenId));
+  let imported = 0;
+  let gone = 0;
+  // ① Impor posisi on-chain (liquidity > 0) yang belum ada di store.
+  for (const p of onchain) {
+    if (p.liquidity === 0n || store.get(p.tokenId)) continue;
+    const base = detectBase(cc, p.token0, p.token1) ?? baseOf(cc, 'weth');
+    const isBase0 = base.address.toLowerCase() === p.token0.toLowerCase();
+    store.addImported({
+      tokenId: p.tokenId,
+      chain: cc.key,
+      ca: isBase0 ? p.token1 : p.token0,
+      fee: p.fee,
+      symbol: isBase0 ? p.token1Symbol : p.token0Symbol,
+      baseKind: base.kind,
+    });
+    imported++;
+  }
+  // ② Posisi ter-track (chain ini) yang sudah tak ada on-chain → gone.
+  for (const rec of store.active()) {
+    if ((rec.chain ?? cc.key) !== cc.key) continue;
+    if (!onchainIds.has(rec.tokenId)) {
+      finalizeClose(rec.tokenId, { reason: 'gone' });
+      gone++;
+    }
+  }
+  if (imported || gone) console.log(`[sync] impor=${imported} gone=${gone} (chain ${cc.key})`);
+  return { imported, gone };
+}
+
+bot.start(async (ctx) => {
+  const { imported, gone } = await syncOnChainPositions().catch(() => ({ imported: 0, gone: 0 }));
+  await ctx.reply(msg.msgStart(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD });
+  if (imported || gone) await ctx.reply(msg.msgSyncResult(imported, gone), html).catch(() => {});
+});
 bot.command(['help', 'menu'], (ctx) =>
   ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD }),
 );
@@ -326,6 +408,13 @@ async function positionPnlText(
   cc: ChainCtx,
 ): Promise<string> {
   const dec = d.baseDecimals;
+  if (rec?.imported) {
+    // Posisi impor: modal awal tak diketahui → tampilkan nilai sekarang, bukan PnL palsu.
+    const curVal = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec));
+    const usdV = await baseToUsd(d.baseKind, curVal, cc);
+    const valLabel = usdV !== null ? msg.usdPlain(usdV) : `${curVal.toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`;
+    return `nilai ${valLabel} · entry tak diketahui`;
+  }
   const initF = rec ? Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec)) : 0;
   const curF = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec));
   const pnlF = curF - initF;
@@ -336,30 +425,33 @@ async function positionPnlText(
     : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol} (${msg.pctSigned(pct)})`;
 }
 
-/** Kartu ringkas satu posisi + tombol Tutup/Detail. */
-async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean) {
-  let d;
+/** Bangun teks+keyboard kartu posisi (RPC). Side-effect: finalizeClose bila NFT gone. */
+async function buildPositionCard(
+  rec: store.PosRecord,
+): Promise<{ text: string; extra: Record<string, unknown> }> {
+  let d: PositionDetail;
   try {
     d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
   } catch (e) {
     if (isGoneErr(e)) {
       finalizeClose(rec.tokenId, { reason: 'gone' });
-      const t = msg.msgPositionGone(rec.tokenId, rec.symbol, rec.baseKind === 'usdg' ? 'USDG' : 'WETH');
-      return edit ? ctx.editMessageText(t, html) : ctx.reply(t, html);
+      return {
+        text: msg.msgPositionGone(rec.tokenId, rec.symbol, rec.baseKind === 'usdg' ? 'USDG' : 'WETH'),
+        extra: html,
+      };
     }
-    const t = msg.msgPositionReadFail(rec.tokenId, (e as Error).message);
-    return edit ? ctx.editMessageText(t, html) : ctx.reply(t, html);
+    return { text: msg.msgPositionReadFail(rec.tokenId, (e as Error).message), extra: html };
   }
   const cc = getChain(rec.chain);
+  // Warm ethUsd cache sekali per chain (getEthUsd sudah TTL 60s).
+  if (d.baseKind === 'weth') await getEthUsd(cc.wethAddress, cc);
   const pnlText = await positionPnlText(rec, d, cc);
   // Jarak batas range dari HARGA SEKARANG (live) — bukan konfigurasi saat buka.
-  // Harga token dlm base: 1.0001^tick bila base=token1, kebalikannya bila token0.
   const sgn = d.baseIsToken0 ? -1 : 1;
   const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
   const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
   const range = `${msg.fmtPct(pcts[0])} / ${msg.fmtPct(pcts[1])}`;
-  const invest = rec.nominalEth ?? msg.cleanEth(BigInt(rec.initialWethWei));
-  const chainLabel = getChain(rec.chain).label;
+  const invest = rec.imported ? '—' : (rec.nominalEth ?? msg.cleanEth(BigInt(rec.initialWethWei)));
   const text = msg.msgPositionCard({
     tokenId: rec.tokenId,
     symbol: rec.symbol,
@@ -370,7 +462,7 @@ async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean)
     inRange: d.inRange,
     age: msg.fmtAge(Date.now() - rec.openedAt),
     dryRun: config.safety.dryRun,
-    chain: chainLabel,
+    chain: cc.label,
     baseSymbol: d.baseSymbol,
   });
   const extra = {
@@ -383,6 +475,12 @@ async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean)
       ],
     ]),
   };
+  return { text, extra };
+}
+
+/** Kartu ringkas satu posisi + tombol Tutup/Detail. */
+async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean) {
+  const { text, extra } = await buildPositionCard(rec);
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
@@ -454,19 +552,47 @@ function finalizeClose(
 // /positions HANYA menampilkan posisi live (history ada di /history).
 async function cmdPositions(ctx: any) {
   const active = store.active();
-  if (active.length === 0) {
+  const cc = getChain();
+  // Posisi Uniswap v4 (baca-saja) — jangan gagalkan /positions bila error.
+  const v4 = v4Supported(cc) ? await listPositionsV4(cc).catch(() => []) : [];
+
+  if (active.length === 0 && v4.length === 0) {
     return ctx.reply(msg.msgNoPositions(), html);
   }
-  // Header hanya jika >1 posisi (1 kartu sudah self-explanatory).
+  // Header hanya jika >1 posisi v3 (1 kartu sudah self-explanatory).
   if (active.length > 1) {
     await ctx.reply(msg.msgPositionsHeader(active.length), html);
   }
-  for (const rec of active) {
+  // v3: build RPC parallel (bounded), kirim ke TG sequential (urutan stabil).
+  const cards = await mapLimit(active, POS_CARD_CONCURRENCY, async (rec) => {
     try {
-      await renderPositionCard(ctx, rec, false);
+      return await buildPositionCard(rec);
     } catch (e) {
-      await ctx.reply(msg.msgPositionReadFail(rec.tokenId, (e as Error).message), html);
+      return {
+        text: msg.msgPositionReadFail(rec.tokenId, (e as Error).message),
+        extra: html as Record<string, unknown>,
+      };
     }
+  });
+  for (const c of cards) {
+    await ctx.reply(c.text, c.extra);
+  }
+  // v4: kartu baca-saja.
+  for (const p of v4) {
+    const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
+    await ctx
+      .reply(
+        msg.msgV4Position({
+          tokenId: p.tokenId,
+          pair: `${p.sym0} / ${p.sym1}`,
+          feeLabel,
+          rangeLabel: `tick ${p.tickLower} … ${p.tickUpper}`,
+          liqLabel: p.liquidity.toString(),
+          hasHooks: p.hasHooks,
+        }),
+        html,
+      )
+      .catch(() => {});
   }
 }
 bot.command('positions', cmdPositions);
@@ -590,15 +716,17 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
 async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   const cc = getChain(flow.chain);
   const base = baseOf(cc, flow.base ?? 'weth');
-  const plan = await planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc);
+  // plan + estimasi biaya paralel (saling independen).
+  const [planSettled, costSettled] = await Promise.allSettled([
+    planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc),
+    estimateAddCost(cc, base, flow.ethAmount!),
+  ]);
+  if (planSettled.status === 'rejected') throw planSettled.reason;
+  const plan = planSettled.value;
   flow.plan = plan;
-  // Biaya jaringan (est) + kebutuhan vs saldo. Non-fatal: gagal → '?'.
   let cost: Awaited<ReturnType<typeof estimateAddCost>> | null = null;
-  try {
-    cost = await estimateAddCost(cc, base, flow.ethAmount!);
-  } catch (e) {
-    console.log('[estimateAddCost] gagal:', (e as Error).message.slice(0, 120));
-  }
+  if (costSettled.status === 'fulfilled') cost = costSettled.value;
+  else console.log('[estimateAddCost] gagal:', String(costSettled.reason).slice(0, 120));
   const text = msg.msgPlanStep({
     screenDanger: flow.screenBahaya,
     screenFailed: flow.screenFailed,
@@ -885,33 +1013,34 @@ async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-async function cmdStop(ctx: any) {
+/** Kirim kartu posisi aktif (build parallel, send sequential) + header opsional. */
+async function replyActiveCards(ctx: any, header: string | null) {
   const active = store.active();
   if (active.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
-  await ctx.reply(msg.msgStopPick(), html);
-  for (const rec of active) {
+  if (header) await ctx.reply(header, html);
+  const cards = await mapLimit(active, POS_CARD_CONCURRENCY, async (rec) => {
     try {
-      await renderPositionCard(ctx, rec, false);
+      return await buildPositionCard(rec);
     } catch (e) {
-      await ctx.reply(msg.msgPositionReadFail(rec.tokenId, (e as Error).message), html);
+      return {
+        text: msg.msgPositionReadFail(rec.tokenId, (e as Error).message),
+        extra: html as Record<string, unknown>,
+      };
     }
-  }
+  });
+  for (const c of cards) await ctx.reply(c.text, c.extra);
+}
+
+async function cmdStop(ctx: any) {
+  await replyActiveCards(ctx, msg.msgStopPick());
 }
 bot.command(['stop', 'stoplp'], cmdStop);
 
-// /closeall — darurat: tutup semua posisi. Konfirmasi per posisi (mekanisme = /stop,
-// reuse penuh renderPositionCard → tombol Tutup → stop:/close: yang sudah teruji).
+// /closeall — darurat: tutup semua posisi. Konfirmasi per posisi (mekanisme = /stop).
 async function cmdCloseAll(ctx: any) {
-  const active = store.active();
-  if (active.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
-  await ctx.reply(msg.msgCloseAllPick(active.length), html);
-  for (const rec of active) {
-    try {
-      await renderPositionCard(ctx, rec, false);
-    } catch (e) {
-      await ctx.reply(msg.msgPositionReadFail(rec.tokenId, (e as Error).message), html);
-    }
-  }
+  const n = store.active().length;
+  if (n === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
+  await replyActiveCards(ctx, msg.msgCloseAllPick(n));
 }
 bot.command('closeall', cmdCloseAll);
 
@@ -1062,8 +1191,9 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       await ctx.editMessageText(msg.msgDryRunClose(tokenId), html);
       return;
     }
-    await ctx.editMessageText(msg.msgClosing(), html);
-    const summary = await stopAndCashOut(tokenId, getChain(store.get(tokenId)?.chain));
+    const baseSym = closingRec?.baseKind === 'usdg' ? 'USDG' : 'ETH';
+    await ctx.editMessageText(msg.msgClosing(baseSym), html);
+    const summary = await stopAndCashOut(tokenId, getChain(closingRec?.chain));
     finalizeClose(tokenId, { resultEthWei: summary.baseOutWei, reason: 'cashed', keep: summary.leftover });
     await ctx.reply(summary.text, html);
     await sendProfitCard(ctx, tokenId, closingRec, summary.baseOutWei).catch((e) =>

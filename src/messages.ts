@@ -46,6 +46,7 @@ export function field(label: string, value: string, width: number): string {
 /**
  * Field sheet monospace (Telegram <pre>).
  * rows = [['pair', 'WETH / TENDIES · 1.00%'], ...]
+ * Masih dipakai di tempat yang butuh alignment kaku; kartu utama pakai hybrid.
  */
 export function fieldBlock(
   rows: Array<[string, string]>,
@@ -56,6 +57,21 @@ export function fieldBlock(
   const w = Math.max(minWidth, ...clean.map(([l]) => l.length));
   const text = clean.map(([l, v]) => field(l, String(v), w)).join('\n');
   return `<pre>${esc(text)}</pre>`;
+}
+
+/**
+ * Hybrid row: label font biasa · value monospace (<code>).
+ * Rapi tanpa <pre> penuh; angka tetap tajam.
+ */
+export function hrow(label: string, value: string | number): string {
+  return `${esc(label)} · ${code(value)}`;
+}
+
+/** Beberapa baris hybrid; skip value kosong. */
+export function hrows(rows: Array<[string, string | number | null | undefined]>): string[] {
+  return rows
+    .filter(([, v]) => v !== undefined && v !== null && String(v) !== '')
+    .map(([l, v]) => hrow(l, String(v)));
 }
 
 /** Loose kv (non-aligned) for one-liners outside field sheets. */
@@ -221,13 +237,49 @@ export function msgStart(dryRun: boolean): string {
     `${code('/status')} · wallet & saldo`,
     `${code('/positions')} · LP aktif`,
     `${code('/history')} · jurnal trade`,
+    `${code('/pnl')} · rekap PnL`,
     `${code('/add <CA>')} · buka LP`,
-    `${code('/stop')} · tutup & cash-out`,
+    `${code('/stop')} · tutup posisi`,
+    `${code('/closeall')} · darurat: semua posisi`,
+    `${code('/swap')} · ETH ↔ USDG`,
     `${code('/setsize')} · preset nominal`,
     '',
-    note('⚠️ /add & /stop menggerakkan dana on-chain.'),
+    note('⚠️ /add /stop /swap menggerakkan dana on-chain.'),
   ];
   return card(title('PHILIPS', 'LP cockpit'), body);
+}
+
+/** Hasil sinkron on-chain saat /start. */
+export function msgSyncResult(imported: number, gone: number): string {
+  const body: string[] = [];
+  if (imported) body.push(`🟢 ${bold(String(imported))} posisi on-chain diimpor ${note('(entry tak diketahui)')}`);
+  if (gone) body.push(`⚪ ${bold(String(gone))} posisi ditutup di luar bot → ditandai selesai`);
+  body.push('', note('buka /positions untuk kelola atau tutup.'));
+  return card(`🔄 ${title('SINKRON')}`, body);
+}
+
+/** Kartu posisi Uniswap v4 (baca-saja — PHILIPS mengelola v3). */
+export function msgV4Position(p: {
+  tokenId: string;
+  pair: string;
+  feeLabel: string;
+  rangeLabel: string;
+  liqLabel: string;
+  hasHooks: boolean;
+}): string {
+  const body = [
+    code(p.pair),
+    '',
+    ...hrows([
+      ['Fee', p.feeLabel],
+      ['Range', p.rangeLabel],
+      ['Liquidity', p.liqLabel],
+      ['Hooks', p.hasHooks ? 'ya' : 'tidak'],
+    ]),
+    '',
+    note('Uniswap v4 · baca-saja — kelola/tutup lewat UI/CLI (bot mengelola v3).'),
+  ];
+  return card(`🔷 ${title('V4', `#${p.tokenId}`)}`, body);
 }
 
 /** Alias menu — sama dengan /start. */
@@ -260,48 +312,37 @@ export function msgStatus(opts: {
   const limit =
     opts.maxEthLabel === 'tanpa batas' ? '∞' : opts.maxEthLabel;
 
-  const head: Array<[string, string]> = [
-    ['mode', `${modeMark(opts.dryRun)} ${modeLabel(opts.dryRun)}`],
-    ['chain', String(opts.chainId)],
-    ['open', String(opts.positions)],
-    ['limit', limit],
-  ];
-
-  const saldoRows = balanceFields(opts.gasEth);
-  if (opts.usdg) saldoRows.push(['usdg', `${opts.usdg} USDG`]);
   const body: string[] = [
-    fieldBlock(head),
+    ...hrows([
+      ['Mode', `${modeMark(opts.dryRun)} ${modeLabel(opts.dryRun)}`],
+      ['Chain', String(opts.chainId)],
+      ['Open', String(opts.positions)],
+      ['Limit', limit],
+    ]),
     '',
     section('saldo'),
-    fieldBlock(saldoRows),
   ];
 
+  for (const [lab, val] of balanceFields(opts.gasEth)) {
+    // balanceFields: label chain lowercase → kapital ringan
+    const name = lab === 'saldo' ? 'Saldo' : lab.charAt(0).toUpperCase() + lab.slice(1);
+    body.push(hrow(name, val));
+  }
+  if (opts.usdg) body.push(hrow('USDG', `${opts.usdg} USDG`));
+
   const h = opts.holdings ?? [];
-  body.push('', section('token hold'));
+  body.push('', section('token hold (saldo saja)'));
   if (h.length === 0) {
     body.push(note('✅ bersih — tak ada token nyangkut'));
   } else {
-    const holdRows: Array<[string, string]> = [];
-    let total = 0;
-    let hasUsd = false;
     for (const t of h) {
-      if (t.usd !== null) {
-        total += t.usd;
-        hasUsd = true;
-        holdRows.push([t.symbol, `${usdPlain(t.usd)}  (${t.amount})`]);
-      } else {
-        holdRows.push([t.symbol, t.amount]);
-      }
+      if (t.usd !== null) body.push(hrow(t.symbol, `${usdPlain(t.usd)}  (${t.amount})`));
+      else body.push(hrow(t.symbol, t.amount));
     }
-    if (hasUsd) holdRows.push(['total', usdPlain(total)]);
-    body.push(fieldBlock(holdRows));
+    body.push('', note('hold tanpa valuasi USD — biar /status cepat.'));
   }
 
-  body.push(
-    '',
-    section('wallet'),
-    fieldBlock([['addr', shortAddr(opts.wallet)]]),
-  );
+  body.push('', section('wallet'), code(shortAddr(opts.wallet)));
 
   return card(`${opts.dryRun ? '⚪' : '🟢'} ${title('STATUS')}`, body, footerMode(opts.dryRun));
 }
@@ -344,10 +385,10 @@ export function msgPnl(opts: {
   const body = [
     `${opts.netEth >= 0 ? '🟢' : '🔴'} net ${bold(sgEth(opts.netEth))}`,
     '',
-    fieldBlock(rows),
+    ...hrows(rows),
   ];
   if (opts.excluded && opts.excluded > 0) {
-    body.push(note(`${opts.excluded} trade lama tanpa data hasil diabaikan.`));
+    body.push('', note(`${opts.excluded} trade lama tanpa data hasil diabaikan.`));
   }
   return card(`🧾 ${title('PnL', 'cashout nyata')}`, body, footerMode(opts.dryRun));
 }
@@ -404,10 +445,11 @@ export function msgSwapConfirm(o: {
   const body = [
     `🟢 ≈ dapat ${bold(o.estOutLabel)}`,
     '',
-    fieldBlock([
-      ['tukar', o.amountInLabel],
-      ['floor', 'slippage 5% → 15%'],
+    ...hrows([
+      ['Tukar', o.amountInLabel],
+      ['Floor', 'slippage 5% → 15%'],
     ]),
+    '',
     note('estimasi; jumlah pasti dilindungi quoter saat eksekusi.'),
   ];
   return card(`🔄 ${title('KONFIRMASI SWAP', swapDirLabel(o.dir))}`, body, footerMode(o.dryRun));
@@ -425,16 +467,19 @@ export function msgSwapDone(o: {
     return card(`⚪ ${title('SWAP (DRY)', swapDirLabel(o.dir))}`, [
       note('mode DRY RUN — tidak dieksekusi.'),
       '',
-      fieldBlock([['tukar', o.amountInLabel], ['≈ dapat', o.outLabel]]),
+      ...hrows([
+        ['Tukar', o.amountInLabel],
+        ['≈ dapat', o.outLabel],
+      ]),
     ], footerMode(o.dryRun));
   }
   const body = [
     `🟢 +${o.outLabel}`,
     '',
-    fieldBlock([
-      ['tukar', o.amountInLabel],
-      ['diterima', o.outLabel],
-      ['rute', o.route ?? '—'],
+    ...hrows([
+      ['Tukar', o.amountInLabel],
+      ['Diterima', o.outLabel],
+      ['Rute', o.route ?? '—'],
     ]),
   ];
   return card(`✅ ${title('SWAP SELESAI', swapDirLabel(o.dir))}`, body, footerMode(o.dryRun));
@@ -524,22 +569,26 @@ export function msgPositionCard(opts: {
   baseSymbol?: string; // WETH (default, posisi lama) | USDG
 }): string {
   const base = opts.baseSymbol ?? 'WETH';
-  const rows: Array<[string, string]> = [
-    ['pair', `${base} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
-  ];
-  if (opts.chain) rows.push(['chain', opts.chain]);
-  rows.push(
-    ['invest', `${opts.invest} ${base}`],
-    ['range', opts.range],
-    ['age', opts.age],
-  );
   const statusEmoji = opts.inRange ? '🟢' : '🔴';
   const statusLine = opts.inRange
     ? `${statusEmoji} ${bold('IN RANGE')} — fee mengalir`
     : `${statusEmoji} ${bold('OUT OF RANGE')}`;
+  const body = [
+    code(`${base} / ${opts.symbol} · ${feeLabel(opts.fee)}`),
+    ...(opts.chain ? [code(opts.chain)] : []),
+    '',
+    ...hrows([
+      ['Invest', `${opts.invest} ${base}`],
+      ['Range', opts.range],
+      ['Umur', opts.age],
+    ]),
+    '',
+    bold(`PnL  ${opts.pnlText}`),
+    statusLine,
+  ];
   return card(
     `${statusEmoji} ${title('POSITION', `#${opts.tokenId}`)}`,
-    [fieldBlock(rows), '', `${bold(`PnL  ${opts.pnlText}`)}`, statusLine],
+    body,
     footerMode(opts.dryRun),
   );
 }
@@ -575,21 +624,20 @@ export function msgPositionDetail(opts: {
   baseSymbol?: string;
 }): string {
   const base = opts.baseSymbol ?? 'WETH';
-  const rows: Array<[string, string]> = [
-    ['pair', `${base} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
-  ];
-  if (opts.chain) rows.push(['chain', opts.chain]);
-  rows.push(
-    ['assets', opts.composition],
-    ['value', opts.value],
-    ['fees', opts.fees],
-  );
   const e = opts.inRange ? '🟢' : '🔴';
-  return card(
-    `${e} ${title('DETAIL', `#${opts.tokenId}`)}`,
-    [fieldBlock(rows), '', `${e} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`],
-    nowUtc(),
-  );
+  const body = [
+    code(`${base} / ${opts.symbol} · ${feeLabel(opts.fee)}`),
+    ...(opts.chain ? [code(opts.chain)] : []),
+    '',
+    ...hrows([
+      ['Assets', opts.composition],
+      ['Value', opts.value],
+      ['Fees', opts.fees],
+    ]),
+    '',
+    `${e} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`,
+  ];
+  return card(`${e} ${title('DETAIL', `#${opts.tokenId}`)}`, body, nowUtc());
 }
 
 export function msgPositionsHeader(activeCount: number): string {
@@ -611,7 +659,7 @@ export function msgNoPositions(): string {
   );
 }
 
-/** Riwayat trade — 2 baris per entry (hasil + meta). */
+/** Riwayat trade — hybrid, max 10 entry, multi-baris per trade. */
 export function msgJournal(
   items: Array<{
     tokenId: string;
@@ -628,23 +676,32 @@ export function msgJournal(
     return card(title('JOURNAL'), [note('belum ada trade tertutup.')]);
   }
 
-  const rows: Array<[string, string]> = items.map((r) => {
-    const id = `#${r.tokenId}`;
-    const head =
-      r.reason === 'cashed'
-        ? `${r.symbol}  ${pctSigned(r.pnlPct)}  ${(r.pnlEth >= 0 ? '+' : '') + r.pnlEth.toFixed(5)}`
-        : `${r.symbol}  ${r.reason.toUpperCase()}`;
+  const shown = items.slice(0, 10);
+  const body: string[] = [];
+  for (const r of shown) {
+    if (body.length) body.push('');
+    body.push(`${bold(`#${r.tokenId}`)}  ${esc(r.symbol)}`);
+    if (r.reason === 'cashed') {
+      const eth = (r.pnlEth >= 0 ? '+' : '') + r.pnlEth.toFixed(5);
+      body.push(`${code(eth + ' ETH')}  ·  ${code(pctSigned(r.pnlPct))}`);
+    } else if (r.reason === 'gone') {
+      body.push(note('NFT hilang on-chain'));
+    } else {
+      body.push(note(r.reason));
+    }
     const meta: string[] = [];
     if (r.chain) meta.push(r.chain);
     if (r.ca) meta.push(shortAddr(r.ca));
     if (r.closedAt) meta.push(fmtAge(Date.now() - r.closedAt) + ' ago');
-    const tail = meta.length ? `  ·  ${meta.join(' · ')}` : '';
-    return [id, head + tail];
-  });
+    if (meta.length) body.push(italic(meta.join(' · ')));
+  }
+  if (items.length > 10) {
+    body.push('', note(`+${items.length - 10} trade lain di jurnal.`));
+  }
 
   return card(
     `🧾 ${title('JOURNAL', `${items.length} trade`)}`,
-    [fieldBlock(rows, 8)],
+    body,
     nowUtc(),
   );
 }
@@ -722,18 +779,18 @@ export function msgPlanStep(opts: {
     );
   }
   body.push(
-    fieldBlock([
-      ['pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
-      ['deposit', `${opts.depositAmount} ${opts.baseSymbol}`],
-      ['range', `${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`],
-      ['price', `1 ${opts.symbol} = ${opts.currentPrice} ${opts.baseSymbol}`],
+    ...hrows([
+      ['Pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
+      ['Deposit', `${opts.depositAmount} ${opts.baseSymbol}`],
+      ['Range', `${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`],
+      ['Price', `1 ${opts.symbol} = ${opts.currentPrice} ${opts.baseSymbol}`],
     ]),
     '',
     section('biaya'),
-    fieldBlock([
-      ['gas', `~${opts.gasEth} ETH`],
-      ['perlu', opts.needLabel],
-      ['saldo', opts.balanceLabel],
+    ...hrows([
+      ['Gas', `~${opts.gasEth} ETH`],
+      ['Perlu', opts.needLabel],
+      ['Saldo', opts.balanceLabel],
     ]),
   );
   if (opts.shortLabel) {
@@ -829,11 +886,11 @@ export function msgStopConfirm(opts: {
   otherAmt: string;
 }): string {
   const body = [
-    fieldBlock([
-      ['pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
-      ['age', opts.age],
-      ['fees', opts.feeText],
-      ['out', `${opts.baseAmt} ${opts.baseSymbol} + ${opts.otherAmt} ${opts.symbol}`],
+    ...hrows([
+      ['Pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
+      ['Age', opts.age],
+      ['Fees', opts.feeText],
+      ['Out', `${opts.baseAmt} ${opts.baseSymbol} + ${opts.otherAmt} ${opts.symbol}`],
     ]),
     '',
     bold(`PnL  ${opts.pnlText}`),
@@ -864,8 +921,8 @@ export function msgDryRunClose(tokenId: string): string {
   );
 }
 
-export function msgClosing(): string {
-  return msgProgress('menutup posisi & cash-out ke ETH…');
+export function msgClosing(baseSymbol = 'ETH'): string {
+  return msgProgress(`menutup posisi & cash-out ke ${baseSymbol}…`);
 }
 
 export function msgAlreadyClosed(tokenId: string): string {

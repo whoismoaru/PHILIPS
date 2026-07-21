@@ -22,7 +22,11 @@ export async function swapEthToUsdg(
   if (!ctx.usdgAddress) throw new Error(`USDG tak tersedia di ${ctx.label}.`);
   const { wallet, provider } = ctx;
 
-  const ethBal = await provider.getBalance(wallet.address);
+  // Cek saldo ETH + WETH terpakai serentak (independen).
+  const [ethBal, weth] = await Promise.all([
+    provider.getBalance(wallet.address),
+    ctx.weth.balanceOf(wallet.address) as Promise<bigint>,
+  ]);
   if (ethBal < amountEthWei + GAS_RESERVE) {
     throw new Error(
       `Saldo ETH kurang: butuh ~${ethers.formatEther(amountEthWei + GAS_RESERVE)} (swap+gas), ` +
@@ -32,7 +36,6 @@ export async function swapEthToUsdg(
 
   const txHashes: string[] = [];
   // Wrap seperlunya (pakai WETH yang sudah ada dulu).
-  let weth: bigint = await ctx.weth.balanceOf(wallet.address);
   if (weth < amountEthWei) {
     const tx = await ctx.weth.deposit({ value: amountEthWei - weth });
     await tx.wait();

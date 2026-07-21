@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { bold, card, code, esc, fieldBlock, nowUtc } from './messages.js';
+import { bold, card, code, esc, hrows, nowUtc } from './messages.js';
 import { getChain, basesFor, type ChainCtx } from './chains.js';
 
 const QUOTER_ABI = [
@@ -24,17 +24,21 @@ async function simulateSellPath(
 ): Promise<{ status: SellStatus; flag: Flag | null }> {
   try {
     // Pool base terdalam untuk token ini.
-    let best: { baseAddr: string; decimals: number; fee: number; reserve: bigint } | null = null;
-    for (const base of basesFor(ctx)) {
-      const baseC = new ethers.Contract(base.address, BAL_ABI, ctx.provider);
-      for (const fee of FEE_TIERS) {
-        const pool: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
-        if (!pool || pool === ethers.ZeroAddress) continue;
-        const reserve: bigint = await baseC.balanceOf(pool);
-        if (!best || reserve > best.reserve)
-          best = { baseAddr: base.address, decimals: base.decimals, fee, reserve };
-      }
-    }
+    type Cand = { baseAddr: string; decimals: number; fee: number; reserve: bigint };
+    // Semua (base × fee) diperiksa serentak — deteksi pool terdalam tanpa loop beruntun.
+    const cands = await Promise.all(
+      basesFor(ctx).flatMap((base) => {
+        const baseC = new ethers.Contract(base.address, BAL_ABI, ctx.provider);
+        return FEE_TIERS.map(async (fee): Promise<Cand | null> => {
+          const pool: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
+          if (!pool || pool === ethers.ZeroAddress) return null;
+          const reserve: bigint = await baseC.balanceOf(pool);
+          return { baseAddr: base.address, decimals: base.decimals, fee, reserve };
+        });
+      }),
+    );
+    let best: Cand | null = null;
+    for (const c of cands) if (c && (!best || c.reserve > best.reserve)) best = c;
     if (!best || best.reserve === 0n) return { status: 'unknown', flag: null };
 
     const quoter = new ethers.Contract(ctx.quoterAddress, QUOTER_ABI, ctx.provider);
@@ -110,13 +114,23 @@ export type ScreenResult = {
   verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA';
 };
 
+// Cache off-chain read (Blockscout/DexScreener) per-URL. Data screening bersifat
+// advisory & tak berubah detik-ke-detik; /add ulang token sama jadi instan.
+// Sell-path (quoter on-chain) TIDAK lewat sini → tetap live.
+const _jsonCache = new Map<string, { t: number; v: any }>();
+const JSON_TTL = 60_000;
+
 async function fetchJson(url: string): Promise<any | null> {
+  const hit = _jsonCache.get(url);
+  if (hit && Date.now() - hit.t < JSON_TTL) return hit.v;
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 15_000);
+  const t = setTimeout(() => ctrl.abort(), 10_000); // cap worst-case; fail-open (null) sudah ditangani
   try {
     const res = await fetch(url, { signal: ctrl.signal });
     if (!res.ok) return null;
-    return await res.json();
+    const v = await res.json();
+    _jsonCache.set(url, { t: Date.now(), v });
+    return v;
   } catch {
     return null;
   } finally {
@@ -292,11 +306,10 @@ export async function getEthUsd(
   return best;
 }
 
-/** Laporan screening dalam HTML rapi (kirim dengan parse_mode: 'HTML'). */
+/** Laporan screening hybrid: header verdict + metrik ringkas (bukan full pre). */
 export function formatScreen(s: ScreenResult): string {
   const money = (n: number | null) =>
     n === null ? '—' : '$' + Math.round(n).toLocaleString('en-US');
-  const num = (n: number | null) => (n === null ? '—' : n.toLocaleString('en-US'));
   const pct = (n: number | null) => (n === null ? '—' : Number(n.toFixed(1)) + '%');
   const age =
     s.pairAgeHours === null
@@ -307,36 +320,39 @@ export function formatScreen(s: ScreenResult): string {
 
   const verdictLabel =
     s.verdict === 'BAHAYA' ? 'BAHAYA' : s.verdict === 'HATI-HATI' ? 'HATI-HATI' : 'AMAN';
+  const headEmoji =
+    s.verdict === 'BAHAYA' ? '🔴' : s.verdict === 'HATI-HATI' ? '⚠️' : '🛡';
 
   const kontrakVal =
     (s.verified === null ? '?' : s.verified ? 'verified' : 'unverified') +
     (s.isProxy ? ' · proxy' : '');
 
-  const top1 = pct(s.top1Pct) + (s.top1IsContract ? ' (contract)' : '');
-  // Teks polos di dalam <pre> (emoji dilarang di pre — rusak alignment; tg-ui).
   const sellLabel =
     s.sellPath === 'ok' ? 'ok'
     : s.sellPath === 'blocked' ? 'BLOCKED'
     : s.sellPath === 'costly' ? 'boros'
     : '?';
 
+  // Compact: 5 metrik inti (+ contract)
   const body = [
-    fieldBlock([
-      ['contract', kontrakVal],
-      ['holders', num(s.holdersCount)],
-      ['liq', money(s.liquidityUsd)],
-      ['vol24h', money(s.volume24h)],
-      ['age', age],
-      ['price', s.priceUsd ? '$' + s.priceUsd : '—'],
-      ['top1', top1],
-      ['top10', pct(s.top10Pct)],
-      ['flow', `${num(s.buys24h)} / ${num(s.sells24h)}`],
-      ['sell', sellLabel],
-      ['verdict', verdictLabel],
+    ...hrows([
+      ['Contract', kontrakVal],
+      ['Liq', money(s.liquidityUsd)],
+      ['Vol 24h', money(s.volume24h)],
+      ['Age', age],
+      ['Sell', sellLabel],
+      ['Top1', pct(s.top1Pct) + (s.top1IsContract ? ' (contract)' : '')],
     ]),
   ];
 
-  // Catatan hanya sinyal berisiko (verifikasi/proxy sudah di baris contract).
+  if (s.verdict === 'AMAN') {
+    body.push('', `🟢 ${bold('AMAN')} — lanjut pilih pool aman.`);
+  } else if (s.verdict === 'HATI-HATI') {
+    body.push('', `⚠️ ${bold('HATI-HATI')} — lanjut dengan waspada.`);
+  } else {
+    body.push('', `🔴 ${bold('BAHAYA')} — lanjut hanya jika yakin.`);
+  }
+
   const riskNotes = s.flags.filter(
     (f) =>
       (f.level === 'BAHAYA' || f.level === 'HATI-HATI') &&
@@ -344,14 +360,13 @@ export function formatScreen(s: ScreenResult): string {
   );
   if (riskNotes.length > 0) {
     body.push('', bold('flags'));
-    for (const f of riskNotes) {
-      const tag = f.level === 'BAHAYA' ? 'RISK' : 'WARN';
-      body.push(`  ${code(tag)}  ${esc(f.msg)}`);
+    for (const f of riskNotes.slice(0, 4)) {
+      body.push(`• ${esc(f.msg)}`);
     }
   }
 
   return card(
-    `${bold('SCREEN')} · ${bold(s.name)} ${code('$' + s.symbol)}`,
+    `${headEmoji} ${bold('SCREEN · ' + verdictLabel)} · ${esc(s.symbol)}`,
     body,
     nowUtc(),
   );

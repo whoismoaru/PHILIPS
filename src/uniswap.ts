@@ -82,8 +82,7 @@ export async function loadPool(
   const currentTick = Number(slot0[1]);
   const baseIsToken0 = token0.toLowerCase() === base.address.toLowerCase();
 
-  const sdkToken0 = await toSdkToken(token0, ctx);
-  const sdkToken1 = await toSdkToken(token1, ctx);
+  const [sdkToken0, sdkToken1] = await Promise.all([toSdkToken(token0, ctx), toSdkToken(token1, ctx)]);
   const sdkPool = new Pool(
     sdkToken0,
     sdkToken1,
@@ -348,6 +347,8 @@ export async function executeAdd(
 
 export type PositionInfo = {
   tokenId: string;
+  token0: string; // alamat (untuk deteksi base/ca saat sinkron)
+  token1: string;
   token0Symbol: string;
   token1Symbol: string;
   fee: number;
@@ -382,6 +383,8 @@ export async function listPositions(ctx: ChainCtx = getChain()): Promise<Positio
     }
     out.push({
       tokenId: tokenId.toString(),
+      token0: p.token0,
+      token1: p.token1,
       token0Symbol: m0.symbol,
       token1Symbol: m1.symbol,
       fee: Number(p.fee),
@@ -445,28 +448,30 @@ async function poolsForBase(
   base: BaseAsset,
   ctx: ChainCtx,
 ): Promise<PoolOption[]> {
-  const out: PoolOption[] = [];
   const baseC = base.wrappable ? ctx.weth : new ethers.Contract(base.address, ERC20_ABI, ctx.provider);
-  for (const fee of VALID_FEES) {
-    const poolAddress: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
-    if (!poolAddress || poolAddress === ethers.ZeroAddress) continue;
-    const baseReserve: bigint = await baseC.balanceOf(poolAddress);
-    let priceTokenInBase: string | null = null;
-    try {
-      priceTokenInBase = (await priceInfo(tokenAddress, fee, base, ctx)).priceTokenInBase;
-    } catch {
-      /* abaikan bila harga tak terbaca */
-    }
-    out.push({
-      fee,
-      poolAddress,
-      base: base.kind,
-      baseSymbol: base.symbol,
-      baseDecimals: base.decimals,
-      baseReserve,
-      priceTokenInBase,
-    });
-  }
+  // Semua fee tier diperiksa serentak (round-trip RPC diparalel + auto-batch ethers).
+  const perFee = await Promise.all(
+    VALID_FEES.map(async (fee): Promise<PoolOption | null> => {
+      const poolAddress: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
+      if (!poolAddress || poolAddress === ethers.ZeroAddress) return null;
+      const [baseReserve, priceTokenInBase] = await Promise.all([
+        baseC.balanceOf(poolAddress) as Promise<bigint>,
+        priceInfo(tokenAddress, fee, base, ctx)
+          .then((p) => p.priceTokenInBase)
+          .catch(() => null), // harga tak terbaca → null (tak menggagalkan discovery)
+      ]);
+      return {
+        fee,
+        poolAddress,
+        base: base.kind,
+        baseSymbol: base.symbol,
+        baseDecimals: base.decimals,
+        baseReserve,
+        priceTokenInBase,
+      };
+    }),
+  );
+  const out = perFee.filter((p): p is PoolOption => p !== null);
   out.sort((a, b) => (b.baseReserve > a.baseReserve ? 1 : b.baseReserve < a.baseReserve ? -1 : 0));
   return out;
 }

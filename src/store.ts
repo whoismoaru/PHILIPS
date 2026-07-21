@@ -24,6 +24,7 @@ export type PosRecord = {
   dropAlerted?: boolean; // sudah kirim alert anjlok? (reset saat harga pulih — anti-spam)
   stoppedAt?: number;
   resultEthWei?: string; // ETH diterima saat stop (untuk PnL final)
+  imported?: boolean; // ditemukan on-chain (bukan dibuka via bot) → entry tak diketahui
 };
 
 const FILE = join(process.cwd(), 'data', 'positions.json');
@@ -47,6 +48,31 @@ function persist() {
 export const all = (): PosRecord[] => records;
 export const active = (): PosRecord[] => records.filter((r) => r.status === 'ACTIVE');
 export const get = (tokenId: string): PosRecord | undefined => records.find((r) => r.tokenId === tokenId);
+
+/** Impor posisi yang ditemukan on-chain (bukan dibuka via bot). No-op bila sudah ada. */
+export function addImported(rec: {
+  tokenId: string;
+  chain: string;
+  ca: string;
+  fee: number;
+  symbol: string;
+  baseKind: 'weth' | 'usdg';
+}): void {
+  if (records.some((r) => r.tokenId === rec.tokenId)) return;
+  records.push({
+    tokenId: rec.tokenId,
+    chain: rec.chain,
+    ca: rec.ca,
+    fee: rec.fee,
+    symbol: rec.symbol,
+    baseKind: rec.baseKind,
+    initialWethWei: '0', // entry tak diketahui
+    openedAt: Date.now(),
+    status: 'ACTIVE',
+    imported: true,
+  });
+  persist();
+}
 
 export function add(rec: PosRecord) {
   records = records.filter((r) => r.tokenId !== rec.tokenId).concat(rec);
