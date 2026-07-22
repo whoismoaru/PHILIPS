@@ -25,7 +25,7 @@ import { startMonitor } from './monitor.js';
 import * as store from './store.js';
 import * as journal from './journal.js';
 import * as msg from './messages.js';
-import { MENU_KEYBOARD, resolveMenu } from './menu.js';
+import { resolveMenu } from './menu.js';
 import * as explore from './explore.js';
 import {
   CHAINS,
@@ -327,9 +327,17 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
   return { imported, gone };
 }
 
+// Keyboard inline /start (sama dgn /help tapi tombol Help, bukan Close All).
+const startKeyboard = () =>
+  Markup.inlineKeyboard([
+    [Markup.button.callback('📊 Portfolio', 'portfolio'), Markup.button.callback('📈 Positions', 'positions')],
+    [Markup.button.callback('🔄 Status', 'status'), Markup.button.callback('📜 History', 'history')],
+    [Markup.button.callback('📖 Help', 'help')],
+  ]);
+
 bot.start(async (ctx) => {
   const { imported, gone } = await syncOnChainPositions().catch(() => ({ imported: 0, gone: 0 }));
-  await ctx.reply(msg.msgStart(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD });
+  await ctx.reply(msg.msgStart(config.safety.dryRun), { ...html, ...startKeyboard() });
   if (imported || gone) await ctx.reply(msg.msgSyncResult(imported, gone), html).catch(() => {});
 });
 // Keyboard inline aksi cepat pada kartu /help (di samping reply-keyboard persisten).
@@ -364,6 +372,10 @@ bot.action('history', async (ctx) => {
 bot.action('closeall_confirm', async (ctx) => {
   await ctx.answerCbQuery();
   return cmdCloseAll(ctx);
+});
+bot.action('help', async (ctx) => {
+  await ctx.answerCbQuery();
+  return ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, ...helpKeyboard() });
 });
 
 // Waktu render /status terakhir → footer "Refresh N detik lalu" (owner-only bot).
