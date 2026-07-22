@@ -332,9 +332,39 @@ bot.start(async (ctx) => {
   await ctx.reply(msg.msgStart(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD });
   if (imported || gone) await ctx.reply(msg.msgSyncResult(imported, gone), html).catch(() => {});
 });
+// Keyboard inline aksi cepat pada kartu /help (di samping reply-keyboard persisten).
+const helpKeyboard = () =>
+  Markup.inlineKeyboard([
+    [Markup.button.callback('📊 Portfolio', 'portfolio'), Markup.button.callback('📈 Positions', 'positions')],
+    [Markup.button.callback('🔄 Status', 'status'), Markup.button.callback('📜 History', 'history')],
+    [Markup.button.callback('⚠️ Close All', 'closeall_confirm')],
+  ]);
+
 bot.command(['help', 'menu'], (ctx) =>
-  ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD }),
+  ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, ...helpKeyboard() }),
 );
+
+// Tombol inline /help → jalankan command terkait (ctx.reply bekerja dari callback).
+bot.action('portfolio', async (ctx) => {
+  await ctx.answerCbQuery();
+  return cmdPortfolio(ctx);
+});
+bot.action('positions', async (ctx) => {
+  await ctx.answerCbQuery();
+  return cmdPositions(ctx);
+});
+bot.action('status', async (ctx) => {
+  await ctx.answerCbQuery();
+  return renderStatus(ctx, false);
+});
+bot.action('history', async (ctx) => {
+  await ctx.answerCbQuery();
+  return cmdHistory(ctx);
+});
+bot.action('closeall_confirm', async (ctx) => {
+  await ctx.answerCbQuery();
+  return cmdCloseAll(ctx);
+});
 
 // Waktu render /status terakhir → footer "Refresh N detik lalu" (owner-only bot).
 let lastStatusAt = 0;
@@ -1717,7 +1747,7 @@ bot.on(message('text'), async (ctx) => {
       case '/stop': return cmdStop(ctx);
       case '/swap': return cmdSwap(ctx);
       case '/setsize': return ctx.reply(sizeText(), { ...html, ...sizeKeyboard() });
-      case '/help': return ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD });
+      case '/help': return ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, ...helpKeyboard() });
       case '/add': return ctx.reply(msg.msgAddPrompt(), html);
     }
   }

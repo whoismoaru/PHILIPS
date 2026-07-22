@@ -381,7 +381,36 @@ export function msgV4Range(tokenId: string, inRange: boolean): string {
 
 /** Alias menu — sama dengan /start. */
 export function msgHelp(dryRun: boolean): string {
-  return msgStart(dryRun);
+  const modeLine = dryRun ? '⚪ <b>DRY RUN</b>' : '🟢 <b>LIVE</b>';
+  const HR = '━━━━━━━━━━━━━━━━━━━━━━';
+  // Command + deskripsi rata kolom (padding sblm escape agar <CA> tak ganggu lebar).
+  const cmd = (c: string, d: string) => esc(`${c.padEnd(13)}· ${d}`);
+  const lines: string[] = [
+    '🟢 <b>PHILIPS · LP COCKPIT</b>',
+    'LP single-sided <b>WETH / USDG</b> · Uniswap v3',
+    HR,
+    modeLine,
+    '',
+    '📊 <b>VIEW</b>',
+    cmd('/portfolio', 'ekuitas total'),
+    cmd('/status', 'wallet & saldo'),
+    cmd('/positions', 'LP aktif'),
+    cmd('/history', 'jurnal trade'),
+    cmd('/pnl', 'rekap PnL'),
+    cmd('/explore', 'pool APR tertinggi'),
+    '',
+    '⚙️ <b>ACTION</b>',
+    cmd('/add <CA>', 'buka LP'),
+    cmd('/stop', 'tutup posisi'),
+    cmd('/swap', 'ETH ⇄ USDG'),
+    cmd('/setsize', 'preset nominal'),
+    '',
+    '🚨 <b>EMERGENCY</b>',
+    cmd('/closeall', 'tutup SEMUA posisi'),
+    '',
+    '⚠️ <i>/add /stop /swap /closeall menggerakkan dana on-chain</i>',
+  ];
+  return lines.join('\n');
 }
 
 export function msgUnknown(txt: string): string {
