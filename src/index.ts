@@ -128,8 +128,9 @@ async function walletHoldings(cc: ChainCtx = getChain()): Promise<Holding[]> {
     )
   ).filter(Boolean) as Row[];
 
-  // Tanpa USD: urut jumlah mentah (approx); cap.
-  rows.sort((a, b) => b.amountNum - a.amountNum);
+  // JANGAN urut jumlah mentah — lintas-desimal (1e18 vs 1e6) tak sebanding &
+  // menyesatkan. Pertahankan urutan kandidat: posisi aktif dulu, lalu jurnal
+  // terbaru. Cap tampilan.
   return rows.slice(0, HOLDINGS_CAP).map((r) => ({
     symbol: r.symbol,
     amount: r.amount,
@@ -235,8 +236,13 @@ type AddFlow = {
   ethAmount?: string;
   awaitingAmount?: boolean; // menunggu user mengetik nominal
   plan?: AddPlan;
+  startedAt: number; // epoch ms — untuk kadaluarsa sesi (anti "angka lama termakan")
 };
 const flows = new Map<number, AddFlow>();
+// Sesi wizard/swap kedaluwarsa: bila user tinggalkan lalu ketik angka lain jauh
+// kemudian, jangan sampai termakan flow basi. 15 menit.
+const FLOW_TTL_MS = 15 * 60_000;
+const isStaleFlow = (startedAt: number): boolean => Date.now() - startedAt > FLOW_TTL_MS;
 // Preset nominal ETH: tersimpan di data/settings.json, dikelola via /setsize.
 
 // Pilihan lebar rentang (%) + label risiko.
@@ -669,6 +675,59 @@ function cmdPnl(ctx: any) {
 }
 bot.command('pnl', cmdPnl);
 
+// /portfolio — ekuitas total (wallet + nilai posisi v3+v4) + realized PnL.
+async function cmdPortfolio(ctx: any) {
+  const cc = getChain();
+  const prog = await ctx.reply(msg.msgProgress('menghitung portofolio…'), html);
+  const usdgC = cc.usdgAddress ? new ethers.Contract(cc.usdgAddress, ERC20_ABI, cc.provider) : null;
+  const [ethBal, usdgBal, ethUsd] = await Promise.all([
+    cc.provider.getBalance(cc.wallet.address),
+    usdgC ? (usdgC.balanceOf(cc.wallet.address) as Promise<bigint>) : Promise.resolve(0n),
+    getEthUsd(cc.wethAddress, cc).catch(() => null),
+  ]);
+  const ethToUsd = (eth: number) => (ethUsd !== null ? eth * ethUsd : 0);
+  // Nilai posisi v3 (USD).
+  let posUsd = 0;
+  const activeV3 = store.active();
+  for (const rec of activeV3) {
+    try {
+      const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+      const valBase = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
+      posUsd += d.baseKind === 'usdg' ? valBase : ethToUsd(valBase);
+    } catch {
+      /* posisi bermasalah — lewati dari total */
+    }
+  }
+  // Nilai posisi v4.
+  const v4 = v4Supported(cc) ? await listPositionsV4(cc).catch(() => []) : [];
+  for (const p of v4) {
+    if (p.valueBaseWei === null) continue;
+    const valBase = Number(ethers.formatUnits(p.valueBaseWei, p.base === 'USDG' ? 6 : 18));
+    posUsd += p.base === 'USDG' ? valBase : ethToUsd(valBase);
+  }
+  const ethF = Number(ethers.formatEther(ethBal));
+  const usdgF = Number(ethers.formatUnits(usdgBal, 6));
+  const walletUsd = ethToUsd(ethF) + usdgF;
+  const s = journal.lifetimeStats();
+  await editProgress(
+    ctx,
+    prog,
+    msg.msgPortfolio({
+      totalUsd: walletUsd + posUsd,
+      walletUsd,
+      posUsd,
+      ethLabel: ethF.toFixed(5),
+      usdgLabel: usdgF.toFixed(2),
+      openV3: activeV3.length,
+      openV4: v4.length,
+      realizedNetEth: s.netEth,
+      realizedNetUsd: ethUsd !== null ? s.netEth * ethUsd : null,
+      dryRun: config.safety.dryRun,
+    }),
+  );
+}
+bot.command('portfolio', cmdPortfolio);
+
 // /explore — top 5 pool by APR (single-sided ETH/USDG), sinkron REAL-TIME Uniswap.
 const exploreKb = () =>
   Markup.inlineKeyboard([[Markup.button.callback('🔄 Refresh', 'explore:refresh')]]);
@@ -749,14 +808,14 @@ function poolKeyboard(pools: PoolOption[]) {
   ]);
 }
 
-/** Langkah 1/3 — pilih pool (pasangan + fee tier). */
+/** Langkah 1/4 — pilih pool (pasangan + fee tier). */
 async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
   const text = msg.msgPoolStep();
   const extra = { ...html, ...poolKeyboard(flow.pools) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-/** Step 2/4 — pilih lebar rentang (%). */
+/** Langkah 2/4 — pilih lebar rentang (%). */
 async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
   const rows = RANGE_OPTIONS.map((o) => [
     Markup.button.callback(`${o.pct}%  ·  ${o.label}`, `rng:${o.pct}`),
@@ -880,7 +939,7 @@ async function continueAddlp(
   pools.sort((a, b) => usdDepth(b) - usdDepth(a));
 
   // 3) Mulai wizard — reuse bubble progress jadi step pilih pool.
-  const flow: AddFlow = { token, chain: chainKey, screenBahaya, screenFailed, pools };
+  const flow: AddFlow = { token, chain: chainKey, screenBahaya, screenFailed, pools, startedAt: Date.now() };
   flows.set(ctx.from.id, flow);
   await editProgress(ctx, prog, msg.msgPoolStep(), { ...html, ...poolKeyboard(pools) });
 }
@@ -1121,7 +1180,7 @@ async function cmdCloseAll(ctx: any) {
 bot.command('closeall', cmdCloseAll);
 
 // ---------- Swap ETH ↔ USDG ----------
-type SwapFlow = { dir: SwapDir; awaitingAmount: boolean; amountWei?: bigint };
+type SwapFlow = { dir: SwapDir; awaitingAmount: boolean; amountWei?: bigint; startedAt: number };
 const swapFlows = new Map<number, SwapFlow>();
 const swapInFlight = new Set<number>(); // cegah double-tap Konfirmasi swap
 
@@ -1158,7 +1217,7 @@ bot.action(/^swapdir:(e2u|u2e)$/, async (ctx) => {
   } catch {
     /* saldo opsional — lanjut tanpa baris saldo */
   }
-  swapFlows.set(ctx.from!.id, { dir, awaitingAmount: true });
+  swapFlows.set(ctx.from!.id, { dir, awaitingAmount: true, startedAt: Date.now() });
   await ctx.reply(msg.msgSwapAmountPrompt(dir, balanceLine), html);
 });
 
@@ -1530,6 +1589,10 @@ bot.on(message('text'), async (ctx) => {
 
   // Swap menunggu ketikan jumlah.
   const sflow = swapFlows.get(ctx.from.id);
+  if (sflow?.awaitingAmount && isStaleFlow(sflow.startedAt)) {
+    swapFlows.delete(ctx.from.id);
+    return ctx.reply(msg.msgSessionExpired(), html);
+  }
   if (sflow?.awaitingAmount) {
     const num = Number(raw);
     if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
@@ -1569,6 +1632,10 @@ bot.on(message('text'), async (ctx) => {
 
   // Wizard /add menunggu ketikan nominal.
   const flow = getFlow(ctx);
+  if (flow?.awaitingAmount && isStaleFlow(flow.startedAt)) {
+    flows.delete(ctx.from.id);
+    return ctx.reply(msg.msgSessionExpired(), html);
+  }
   if (flow?.awaitingAmount && flow.rangePct !== undefined) {
     const num = Number(raw);
     if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);

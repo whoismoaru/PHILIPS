@@ -234,10 +234,12 @@ export function msgStart(dryRun: boolean): string {
     bold(modeBadge(dryRun)),
     '',
     section('commands'),
+    `${code('/portfolio')} · ekuitas total`,
     `${code('/status')} · wallet & saldo`,
     `${code('/positions')} · LP aktif`,
     `${code('/history')} · jurnal trade`,
     `${code('/pnl')} · rekap PnL`,
+    `${code('/explore')} · pool APR tertinggi`,
     `${code('/add <CA>')} · buka LP`,
     `${code('/stop')} · tutup posisi`,
     `${code('/closeall')} · darurat: semua posisi`,
@@ -417,15 +419,12 @@ export function msgStatus(opts: {
   if (opts.usdg) body.push(hrow('USDG', `${opts.usdg} USDG`));
 
   const h = opts.holdings ?? [];
-  body.push('', section('token hold (saldo saja)'));
   if (h.length === 0) {
-    body.push(note('✅ bersih — tak ada token nyangkut'));
+    body.push('', section('token nyangkut'), note('✅ bersih'));
   } else {
-    for (const t of h) {
-      if (t.usd !== null) body.push(hrow(t.symbol, `${usdPlain(t.usd)}  (${t.amount})`));
-      else body.push(hrow(t.symbol, t.amount));
-    }
-    body.push('', note('hold tanpa valuasi USD — biar /status cepat.'));
+    body.push('', section(`token nyangkut · ${h.length}`));
+    for (const t of h) body.push(hrow(t.symbol, t.amount));
+    body.push('', note('disapu otomatis ke ETH tiap ~30m (nilai debu dilewati).'));
   }
 
   body.push('', section('wallet'), code(shortAddr(opts.wallet)));
@@ -477,6 +476,35 @@ export function msgPnl(opts: {
     body.push('', note(`${opts.excluded} trade lama tanpa data hasil diabaikan.`));
   }
   return card(`🧾 ${title('PnL', 'cashout nyata')}`, body, footerMode(opts.dryRun));
+}
+
+/** Pandangan portofolio tunggal: ekuitas total (wallet + posisi) + realized PnL. */
+export function msgPortfolio(o: {
+  totalUsd: number;
+  walletUsd: number;
+  posUsd: number;
+  ethLabel: string;
+  usdgLabel: string;
+  openV3: number;
+  openV4: number;
+  realizedNetEth: number;
+  realizedNetUsd: number | null;
+  dryRun: boolean;
+}): string {
+  const body = [
+    `💰 ${bold(`ekuitas ${usdPlain(o.totalUsd)}`)}`,
+    '',
+    ...hrows([
+      ['Wallet', `${usdPlain(o.walletUsd)}  (${o.ethLabel} ETH · ${o.usdgLabel} USDG)`],
+      ['Posisi LP', `${usdPlain(o.posUsd)}  (${o.openV3} v3 · ${o.openV4} v4)`],
+    ]),
+    '',
+    section('realized · seumur hidup'),
+    ...hrows([
+      ['PnL', o.realizedNetUsd !== null ? `${usdSigned(o.realizedNetUsd)}  (${sgEth(o.realizedNetEth)})` : sgEth(o.realizedNetEth)],
+    ]),
+  ];
+  return card(`📊 ${title('PORTFOLIO')}`, body, footerMode(o.dryRun));
 }
 
 /** Alert harga token anjlok ≥ambang dari harga entry (auto-monitor). */
@@ -533,7 +561,7 @@ export function msgSwapConfirm(o: {
     '',
     ...hrows([
       ['Tukar', o.amountInLabel],
-      ['Floor', 'slippage 5% → 15%'],
+      ['Toleransi harga', 'maks 5% (naik 15% bila gagal)'],
     ]),
     '',
     note('estimasi; jumlah pasti dilindungi quoter saat eksekusi.'),
@@ -1082,14 +1110,16 @@ export function msgRangeExit(
 }
 
 export function msgCrash(kind: string, err: string): string {
+  // Hanya baris pertama (pesan), BUKAN stack — hindari bocor internal/RPC & bikin
+  // panik. Reassure: restart otomatis, dana/posisi aman on-chain.
+  const firstLine = String(err).split('\n')[0].trim().slice(0, 160) || 'error tak dikenal';
   return card(
-    `⚠️ ${title('CRASH')}`,
+    `⚠️ ${title('GANGGUAN SEBENTAR')}`,
     [
-      fieldBlock([['kind', kind]]),
+      `😵 error tak terduga (${bold(kind)}).`,
       '',
-      pre(err.slice(0, 300)),
-      '',
-      note('restart otomatis…'),
+      note(`teknis: ${firstLine}`),
+      note('bot restart otomatis — dana & posisi aman on-chain.'),
     ],
     nowUtc(),
   );
@@ -1097,6 +1127,11 @@ export function msgCrash(kind: string, err: string): string {
 
 export function msgInvalidAmount(): string {
   return card(title('INVALID'), [note('masukkan angka ETH valid, mis. 0.02')]);
+}
+
+/** Sesi wizard/swap kedaluwarsa (ditinggalkan terlalu lama). */
+export function msgSessionExpired(): string {
+  return card(`⌛ ${title('SESI HABIS')}`, [note('sesi lama ditutup — mulai lagi dari menu bila mau lanjut.')]);
 }
 
 export function msgOverLimit(maxLabel: string): string {
