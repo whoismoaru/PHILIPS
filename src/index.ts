@@ -14,10 +14,9 @@ import {
   discoverAllPools,
   listPositions,
   type AddPlan,
-  type PoolOption,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4 } from './uniswapV4.js';
+import { listPositionsV4, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4, valuePositionV4 } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
@@ -229,10 +228,11 @@ type AddFlow = {
   chain: string; // kunci chain tempat token berada
   screenBahaya: boolean;
   screenFailed?: boolean; // screening ERROR (bukan BAHAYA) → token tak terverifikasi
-  pools: PoolOption[];
+  pools: explore.TokenPool[]; // cerminan app.uniswap.org (v3 + v4), urut TVL
+  selected?: explore.TokenPool; // pool yang dipilih user
   base?: BaseKind; // pasangan pool terpilih (weth | usdg)
   fee?: number;
-  rangePct?: number;
+  rangePct?: number; // v3: lebar rentang %. v4: -1 = default single-sided
   ethAmount?: string;
   awaitingAmount?: boolean; // menunggu user mengetik nominal
   plan?: AddPlan;
@@ -796,16 +796,37 @@ bot.action(/^back:card:(\d+)$/, async (ctx) => {
 // ---------- Fase 3: tulis (wizard /add bertahap) ----------
 
 /** Keyboard pilih pool: pasangan (WETH/USDG) · fee · kedalaman. Callback bawa base. */
-function poolKeyboard(pools: PoolOption[]) {
+const POOL_PICK_MAX = 8; // batas tombol keyboard (sisanya debu; sudah urut TVL)
+
+function poolKeyboard(pools: explore.TokenPool[]) {
   return Markup.inlineKeyboard([
-    ...pools.map((p) => [
+    ...pools.slice(0, POOL_PICK_MAX).map((p, i) => [
       Markup.button.callback(
-        `${p.baseSymbol} · ${msg.feeLabel(p.fee)} · ${Number(ethers.formatUnits(p.baseReserve, p.baseDecimals)).toFixed(2)} ${p.baseSymbol}`,
-        `pick:${p.base}:${p.fee}`,
+        `${p.otherSymbol}/${p.baseSymbol} · ${p.protocol} · ${msg.feeLabel(p.fee)} · ${msg.usdCompact(p.tvlUsd)}`,
+        `pick:${i}`,
       ),
     ]),
     [Markup.button.callback('Batal', 'cancel')],
   ]);
+}
+
+/**
+ * Fallback discovery: gateway Uniswap down → pakai factory v3 on-chain (aman,
+ * tetap bisa buka posisi). Petakan PoolOption v3 → TokenPool (TVL≈baseReserve USD).
+ */
+async function discoverAllPoolsFallback(token: string, cc: ChainCtx): Promise<explore.TokenPool[]> {
+  const [raw, eu, otherSymbol] = await Promise.all([
+    discoverAllPools(token, cc).then((ps) => ps.filter((p) => p.baseReserve > 0n)),
+    getEthUsd(cc.wethAddress, cc).catch(() => null),
+    new ethers.Contract(token, ERC20_ABI, cc.provider).symbol().catch(() => '?') as Promise<string>,
+  ]);
+  const mapped: explore.TokenPool[] = raw.map((p) => {
+    const amt = Number(ethers.formatUnits(p.baseReserve, p.baseDecimals));
+    const tvlUsd = p.base === 'usdg' ? amt : eu !== null ? amt * eu : amt;
+    return { protocol: 'v3', base: p.base, baseSymbol: p.baseSymbol, otherSymbol, fee: p.fee, tvlUsd };
+  });
+  mapped.sort((a, b) => b.tvlUsd - a.tvlUsd);
+  return mapped;
 }
 
 /** Langkah 1/4 — pilih pool (pasangan + fee tier). */
@@ -838,8 +859,10 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
     rows.push(presets.slice(i, i + 2).map((a) => Markup.button.callback(`${a} ETH`, `amt:${a}`)));
   }
   rows.push([Markup.button.callback('Ketik nominal', 'amt:custom')]);
+  // v4 lewati step rentang → "Kembali" ke pemilihan pool; v3 kembali ke rentang.
+  const backTo = flow.selected?.protocol === 'v4' ? 'back:pool' : 'back:range';
   rows.push([
-    Markup.button.callback('Kembali', 'back:range'),
+    Markup.button.callback('Kembali', backTo),
     Markup.button.callback('Batal', 'cancel'),
   ]);
   const text = msg.msgAmountStep(maxEthLabel);
@@ -849,6 +872,7 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
 
 /** Langkah 4/4 — hitung & tampilkan rencana + konfirmasi. */
 async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
+  if (flow.selected?.protocol === 'v4') return renderPlanStepV4(ctx, flow, edit);
   const cc = getChain(flow.chain);
   const base = baseOf(cc, flow.base ?? 'weth');
   // plan + estimasi biaya paralel (saling independen).
@@ -891,6 +915,40 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
+/** Langkah 4/4 versi v4 — dry-run staticCall utk validasi + preview rentang. */
+async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
+  const cc = getChain(flow.chain);
+  const pool = flow.selected!;
+  const pk = pool.poolKey!;
+  const amountWei = ethers.parseEther(flow.ethAmount!);
+  // Dry-run selalu (walau mode live) → staticCall memvalidasi mint sebelum konfirmasi.
+  const sim = await openPositionV4(cc, pk, pool.baseIsCurrency0!, amountWei, { dryRun: true });
+  const val = await valuePositionV4(cc, pk, sim.tickLower, sim.tickUpper, sim.liquidity);
+  const text = msg.msgPlanStepV4({
+    screenDanger: flow.screenBahaya,
+    screenFailed: flow.screenFailed,
+    baseSymbol: pool.baseSymbol,
+    symbol: pool.otherSymbol,
+    fee: pool.fee,
+    tvlUsd: pool.tvlUsd,
+    depositAmount: flow.ethAmount!,
+    rangePctHigh: val.rangePctHigh,
+    rangePctLow: val.rangePctLow,
+    dryRun: config.safety.dryRun,
+  });
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('🟢 Konfirmasi', 'addok')],
+      [
+        Markup.button.callback('Ubah Nominal', 'back:amount'),
+        Markup.button.callback('Batal', 'cancel'),
+      ],
+    ]),
+  };
+  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+}
+
 /**
  * Lanjutan /add setelah chain diketahui: screening → pool → wizard.
  * `prog` = bubble progress yang di-edit (kurangi spam chat).
@@ -917,26 +975,20 @@ async function continueAddlp(
     await ctx.reply(msg.msgScreeningFailed(), html);
   }
 
-  // 2) Cari pool berlikuiditas di SEMUA base (WETH + USDG bila ada).
-  prog = await editProgress(ctx, prog, msg.msgProgress('mencari pool (WETH & USDG)…'));
-  let pools: PoolOption[];
+  // 2) Cari pool — cerminan app.uniswap.org (v3 + v4, semua fee, urut TVL) via
+  // gateway. Gagal gateway → fallback discovery on-chain v3 (aman, tetap jalan).
+  prog = await editProgress(ctx, prog, msg.msgProgress('mencari pool (v3 & v4 di Uniswap)…'));
+  let pools: explore.TokenPool[];
   try {
-    pools = (await discoverAllPools(token, cc)).filter((p) => p.baseReserve > 0n);
+    pools = await explore.poolsForToken(cc, token);
   } catch (err) {
-    await editProgress(ctx, prog, msg.msgError('discover', (err as Error).message));
-    return;
+    console.log('[poolsForToken] gateway gagal, fallback v3 on-chain:', String(err).slice(0, 120));
+    pools = await discoverAllPoolsFallback(token, cc).catch(() => []);
   }
   if (pools.length === 0) {
     await editProgress(ctx, prog, msg.msgNoPools());
     return;
   }
-  // "Pool terbaik": urut kedalaman dalam USD (WETH×ethUsd, USDG≈$1) menurun.
-  const eu = await getEthUsd(cc.wethAddress, cc);
-  const usdDepth = (p: PoolOption) => {
-    const amt = Number(ethers.formatUnits(p.baseReserve, p.baseDecimals));
-    return p.base === 'usdg' ? amt : eu !== null ? amt * eu : amt;
-  };
-  pools.sort((a, b) => usdDepth(b) - usdDepth(a));
 
   // 3) Mulai wizard — reuse bubble progress jadi step pilih pool.
   const flow: AddFlow = { token, chain: chainKey, screenBahaya, screenFailed, pools, startedAt: Date.now() };
@@ -993,15 +1045,36 @@ bot.action(/^chn:(\w+)$/, async (ctx) => {
 // --- Navigasi wizard (maju & mundur) ---
 const getFlow = (ctx: any): AddFlow | undefined => flows.get(ctx.from!.id);
 
-bot.action(/^pick:(weth|usdg):(\d+)$/, async (ctx) => {
+bot.action(/^pick:(\d+)$/, async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
-  flow.base = ctx.match[1] as BaseKind;
-  flow.fee = Number(ctx.match[2]);
-  flow.rangePct = undefined;
+  const sel = flow.pools[Number(ctx.match[1])];
+  if (!sel) return ctx.answerCbQuery('Pilihan tak valid, ulangi /add.');
+  // v4 buka posisi hanya utk pool base ETH-native (konsisten dgn jalur add-v4 yg
+  // ada). Pool v4 USDG/WETH tetap TAMPIL (paritas Uniswap) tapi belum bisa dibuka.
+  if (sel.protocol === 'v4') {
+    const pk = sel.poolKey!;
+    const baseCur = sel.baseIsCurrency0 ? pk.currency0 : pk.currency1;
+    if (baseCur !== ethers.ZeroAddress) {
+      await ctx.answerCbQuery();
+      return ctx.reply(msg.msgV4BaseUnsupported(), html);
+    }
+  }
+  flow.selected = sel;
+  flow.base = sel.base;
+  flow.fee = sel.fee;
   flow.plan = undefined;
+  flow.ethAmount = undefined;
   await ctx.answerCbQuery();
-  await renderRangeStep(ctx, flow, true);
+  if (sel.protocol === 'v4') {
+    // v4 single-sided pakai lebar default (seperti jalur add-v4 yg sudah ada) →
+    // lewati step rentang %, langsung nominal. Sentinel -1 melewati guard rangePct.
+    flow.rangePct = -1;
+    await renderAmountStep(ctx, flow, true);
+  } else {
+    flow.rangePct = undefined;
+    await renderRangeStep(ctx, flow, true);
+  }
 });
 
 bot.action(/^rng:(\d+)$/, async (ctx) => {
@@ -1039,6 +1112,7 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
 bot.action('back:pool', async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  flow.selected = undefined;
   flow.base = undefined;
   flow.fee = undefined;
   flow.rangePct = undefined;
@@ -1068,6 +1142,48 @@ bot.action('back:amount', async (ctx) => {
 
 bot.action('addok', async (ctx) => {
   const flow = getFlow(ctx);
+  // --- Jalur v4 (buka posisi single-sided ETH di pool v4) ---
+  if (flow?.selected?.protocol === 'v4') {
+    if (!flow.ethAmount) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+    const { selected, ethAmount, chain } = flow;
+    flows.delete(ctx.from!.id); // idempotency: double-tap tak buka dobel
+    await ctx.answerCbQuery('Diproses…');
+    if (config.safety.dryRun) return void (await ctx.editMessageText(msg.msgDryRunAddDone(), html));
+    try {
+      await ctx.editMessageText(msg.msgOpeningLp(), html);
+      const cc = getChain(chain);
+      const pk = selected.poolKey!;
+      const amountWei = ethers.parseEther(ethAmount);
+      const r = await openPositionV4(cc, pk, selected.baseIsCurrency0!, amountWei, { dryRun: false });
+      if (r.tokenId) {
+        v4store.trackV4({
+          tokenId: r.tokenId,
+          chain: cc.key,
+          currency0: pk.currency0,
+          currency1: pk.currency1,
+          fee: pk.fee,
+          tickSpacing: pk.tickSpacing,
+          hooks: pk.hooks,
+          base: 'ETH', // pick sudah menjamin base currency = ETH-native
+          baseIsCurrency0: r.baseIsCurrency0,
+          entryBaseWei: amountWei.toString(),
+        });
+      }
+      await ctx.editMessageText(
+        msg.msgV4Added({
+          tokenId: r.tokenId,
+          sizeEth: ethAmount,
+          rangeLabel: 'single-sided ETH · di atas harga',
+          txHash: r.txHash,
+          dryRun: false,
+        }),
+        html,
+      );
+    } catch (err) {
+      await ctx.reply(msg.msgError('addlp v4', (err as Error).message), html);
+    }
+    return;
+  }
   if (!flow?.plan || flow.fee === undefined || !flow.ethAmount)
     return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
   // Idempotency: hapus flow SEBELUM eksekusi (sinkron, sebelum await pertama) →

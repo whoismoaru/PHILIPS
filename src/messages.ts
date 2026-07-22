@@ -147,6 +147,15 @@ export function usdPlain(n: number): string {
   return '$' + n.toFixed(2);
 }
 
+/** USD ringkas: $1.5M / $50.9K / $79. Untuk daftar pool & kedalaman. */
+export function usdCompact(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (a >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+  return '$' + Math.round(n);
+}
+
 export function pctSigned(n: number): string {
   return (n >= 0 ? '+' : '') + Number(n.toFixed(1)) + '%';
 }
@@ -827,7 +836,7 @@ export function msgPoolStep(): string {
     title('ADD LP', '1/4'),
     [
       section('pilih pool'),
-      note('pasangan · fee · kedalaman — terdalam di atas'),
+      note('v3 & v4 dari Uniswap · pair · fee · TVL — terdalam di atas'),
     ],
   );
 }
@@ -921,6 +930,51 @@ export function msgPlanStep(opts: {
     body.push('', note('konfirmasi = kirim tx + monitor aktif'));
   }
   return card(title('PREVIEW', '4/4'), body, footerMode(opts.dryRun));
+}
+
+/** Preview buka posisi v4 single-sided ETH (validasi via dry-run staticCall). */
+export function msgPlanStepV4(opts: {
+  screenDanger: boolean;
+  screenFailed?: boolean;
+  baseSymbol: string;
+  symbol: string;
+  fee: number;
+  tvlUsd: number;
+  depositAmount: string;
+  rangePctHigh: number;
+  rangePctLow: number;
+  dryRun: boolean;
+}): string {
+  const body: string[] = [];
+  if (opts.screenDanger) {
+    body.push(quoteHtml(`${bold('SCREEN · BAHAYA')} — token berisiko. Lanjut hanya jika yakin.`), '');
+  } else if (opts.screenFailed) {
+    body.push(quoteHtml(`${bold('SCREEN · GAGAL')} — token TIDAK terverifikasi. Lanjut dgn risiko sendiri.`), '');
+  }
+  body.push(
+    ...hrows([
+      ['Pair', `${opts.symbol} / ${opts.baseSymbol} · ${feeLabel(opts.fee)}`],
+      ['Protokol', `Uniswap v4 · TVL ${usdCompact(opts.tvlUsd)}`],
+      ['Deposit', `${opts.depositAmount} ${opts.baseSymbol}`],
+      ['Range', `${fmtPct(opts.rangePctHigh)} → ${fmtPct(opts.rangePctLow)}`],
+    ]),
+    '',
+    note('single-sided ETH — LP ditaruh di sisi ETH; fee mengalir saat harga bergerak masuk rentang.'),
+  );
+  if (opts.dryRun) {
+    body.push('', note('⚪ simulasi — tidak mengirim tx on-chain'));
+  } else {
+    body.push('', `🟢 ${bold('tersimulasi OK')} — siap eksekusi`, note('konfirmasi = kirim tx + monitor aktif'));
+  }
+  return card(title('PREVIEW v4', '4/4'), body, footerMode(opts.dryRun));
+}
+
+/** Pool v4 dipilih tapi base-nya bukan ETH-native (belum didukung utk buka). */
+export function msgV4BaseUnsupported(): string {
+  return card(`ℹ️ ${title('POOL v4 NON-ETH')}`, [
+    note('pool v4 ini pakai base USDG/WETH — buka posisi belum didukung.'),
+    note('pilih pool base ETH (v4) atau pool v3 dari daftar.'),
+  ]);
 }
 
 export function msgAddlpUsage(): string {

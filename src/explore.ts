@@ -12,6 +12,8 @@
  * Read-only murni: tak menyentuh wallet/on-chain. Aman gagal (throw → kartu error).
  */
 import { getChain, type ChainCtx } from './chains.js';
+import type { PoolKeyV4 } from './uniswapV4.js';
+import { ethers } from 'ethers';
 import * as m from './messages.js';
 
 const GATEWAY = 'https://interface.gateway.uniswap.org/v1/graphql';
@@ -137,6 +139,109 @@ export async function fetchTopPools(
   }
   out.sort((a, b) => b.apr - a.apr);
   return out.slice(0, limit);
+}
+
+// ─── discovery per-token (untuk /add) ──────────────────────────────
+
+/** Kandidat pool untuk 1 token — dipakai wizard /add. Cerminan app.uniswap.org. */
+export type TokenPool = {
+  protocol: 'v3' | 'v4';
+  base: 'weth' | 'usdg'; // sisi base bot (WETH/ETH atau USDG)
+  baseSymbol: string; // 'ETH' | 'WETH' | 'USDG' (apa adanya dari Uniswap)
+  otherSymbol: string; // simbol token target
+  fee: number;
+  tvlUsd: number;
+  poolKey?: PoolKeyV4; // v4 saja — currency0/1, fee, tickSpacing, hooks
+  baseIsCurrency0?: boolean; // v4 saja
+};
+
+// Query pool untuk 1 token (v3 + v4) via tokenFilter — persis sumber Explore.
+const TOKEN_POOL_FIELDS = `
+    protocolVersion
+    feeTier
+    totalLiquidity { value }
+    token0 { symbol address }
+    token1 { symbol address }`;
+const TOKEN_QUERY = `query PoolsForToken($chain: Chain!, $n: Int!, $t: String!) {
+  topV3Pools(chain: $chain, first: $n, tokenFilter: $t) {${TOKEN_POOL_FIELDS}
+  }
+  topV4Pools(chain: $chain, first: $n, tokenFilter: $t) {${TOKEN_POOL_FIELDS}
+    tickSpacing
+    hook { address }
+  }
+}`;
+
+const baseKindOf = (sym: string | null | undefined, addr: string | null | undefined, ctx: ChainCtx): 'weth' | 'usdg' | null => {
+  const s = (sym ?? '').toUpperCase();
+  const a = (addr ?? '').toLowerCase();
+  if (s === 'ETH' || s === 'WETH' || (a && a === ctx.wethAddress.toLowerCase())) return 'weth';
+  if (ctx.usdgAddress && (s === 'USDG' || (a && a === ctx.usdgAddress.toLowerCase()))) return 'usdg';
+  return null;
+};
+
+/**
+ * Semua pool (v3 + v4) yang memuat `token` dan bisa di-LP single-sided (satu sisi
+ * base ETH/WETH/USDG), urut TVL menurun. Cerminan langsung app.uniswap.org.
+ * Pool v4 BER-HOOK di-skip (hook bisa ubah fee/behavior — riskan utk auto-LP).
+ * Throw bila gateway gagal → pemanggil bisa fallback ke discovery on-chain v3.
+ */
+export async function poolsForToken(ctx: ChainCtx, token: string): Promise<TokenPool[]> {
+  const chain = UNISWAP_CHAIN[ctx.key];
+  if (!chain) throw new Error(`Chain ${ctx.label} tak didukung Explore Uniswap.`);
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20_000);
+  let json: any;
+  try {
+    const res = await fetch(GATEWAY, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://app.uniswap.org' },
+      body: JSON.stringify({ query: TOKEN_QUERY, variables: { chain, n: 40, t: token } }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`gateway ${res.status}`);
+    json = await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+  if (json?.errors?.length) throw new Error(json.errors[0]?.message ?? 'gateway error');
+
+  const out: TokenPool[] = [];
+  const push = (p: ApiPool & { tickSpacing?: number; hook?: { address?: string } | null }, protocol: 'v3' | 'v4') => {
+    const t0 = p.token0,
+      t1 = p.token1;
+    if (!t0 || !t1) return;
+    const b0 = baseKindOf(t0.symbol, t0.address, ctx);
+    const b1 = baseKindOf(t1.symbol, t1.address, ctx);
+    // Wajib TEPAT satu sisi base (single-sided-able); skip base/base atau non-base.
+    if ((b0 && b1) || (!b0 && !b1)) return;
+    const fee = p.feeTier ?? 0;
+    const tvl = p.totalLiquidity?.value ?? 0;
+    if (fee <= 0) return;
+    if (protocol === 'v4' && p.hook) return; // ber-hook → skip (aman)
+
+    const baseIsCurrency0 = !!b0;
+    const base = (b0 ?? b1)!;
+    const baseSymbol = (baseIsCurrency0 ? t0.symbol : t1.symbol) ?? (base === 'usdg' ? 'USDG' : 'ETH');
+    const otherSymbol = (baseIsCurrency0 ? t1.symbol : t0.symbol) ?? '?';
+    const tp: TokenPool = { protocol, base, baseSymbol, otherSymbol, fee, tvlUsd: tvl };
+    if (protocol === 'v4') {
+      tp.poolKey = {
+        currency0: t0.address ?? ethers.ZeroAddress, // ETH native = null → 0x0
+        currency1: t1.address ?? ethers.ZeroAddress,
+        fee,
+        tickSpacing: p.tickSpacing ?? 0,
+        hooks: ethers.ZeroAddress,
+      };
+      tp.baseIsCurrency0 = baseIsCurrency0;
+      if (!tp.poolKey.tickSpacing) return; // tanpa tickSpacing tak bisa dibuka
+    }
+    out.push(tp);
+  };
+  for (const p of json?.data?.topV3Pools ?? []) push(p, 'v3');
+  for (const p of json?.data?.topV4Pools ?? []) push(p, 'v4');
+  out.sort((a, b) => b.tvlUsd - a.tvlUsd);
+  return out;
 }
 
 // ─── format ────────────────────────────────────────────────────────
