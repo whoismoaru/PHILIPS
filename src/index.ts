@@ -386,6 +386,9 @@ async function renderStatus(ctx: any, edit: boolean) {
     };
     await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
   } catch (err) {
+    // "message is not modified" = refresh saat data tak berubah → benign, abaikan
+    // (kalau tidak, tertangkap di sini & salah tampil sbg ❌ ERROR · network).
+    if (/not modified/i.test((err as Error).message)) return;
     await ctx.reply(msg.msgError('network', (err as Error).message), html);
   }
 }
