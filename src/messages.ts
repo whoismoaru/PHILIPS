@@ -263,23 +263,79 @@ export function msgV4Position(p: {
   tokenId: string;
   pair: string;
   feeLabel: string;
-  rangeLabel: string;
-  liqLabel: string;
-  hasHooks: boolean;
+  valueLabel: string; // "$12.34" / "0.02 ETH" / "—"
+  rangeLabel: string; // "+5.2% / -3.1%" / "—"
+  inRange: boolean | null;
+  pnlText?: string; // hanya bila dikelola bot (entry diketahui)
+  tracked: boolean;
 }): string {
-  const body = [
-    code(p.pair),
+  const emoji = p.inRange === null ? '🔷' : p.inRange ? '🟢' : '🔴';
+  const body: string[] = [
+    code(`${p.pair} · ${p.feeLabel}`),
     '',
     ...hrows([
-      ['Fee', p.feeLabel],
+      ['Nilai', p.valueLabel],
       ['Range', p.rangeLabel],
-      ['Liquidity', p.liqLabel],
-      ['Hooks', p.hasHooks ? 'ya' : 'tidak'],
     ]),
-    '',
-    note('Uniswap v4 · baca-saja — kelola/tutup lewat UI/CLI (bot mengelola v3).'),
   ];
-  return card(`🔷 ${title('V4', `#${p.tokenId}`)}`, body);
+  if (p.pnlText) body.push('', bold(`PnL  ${p.pnlText}`));
+  if (p.inRange !== null) body.push('', p.inRange ? `🟢 ${bold('IN RANGE')} — fee mengalir` : `🔴 ${bold('OUT OF RANGE')}`);
+  body.push('', note(p.tracked ? 'Uniswap v4 · dikelola bot' : 'Uniswap v4 · baca-saja (dibuka di luar bot)'));
+  return card(`${emoji} ${title('V4', `#${p.tokenId}`)}`, body);
+}
+
+/** Hasil tutup posisi v4 (atau simulasi dry-run). */
+export function msgV4Closed(o: {
+  tokenId: string;
+  base: 'ETH' | 'USDG' | null;
+  cashedOut?: string;
+  leftover?: boolean;
+  txHash?: string;
+  pnlText?: string;
+  dryRun: boolean;
+}): string {
+  if (o.dryRun) {
+    return card(`⚪ ${title('CLOSE v4 (DRY)', `#${o.tokenId}`)}`, [
+      note(`simulasi valid — saat live, dana kembali${o.base ? ` & di-cash-out ke ${o.base}` : ''}.`),
+    ]);
+  }
+  const body: string[] = [];
+  if (o.cashedOut) body.push(`💰 ${bold(`semua jadi ${o.base}`)}`);
+  else if (o.leftover) body.push(`⚠️ ${bold('token receh tak dapat rute swap')} — tetap di wallet (bisa /swap manual).`);
+  else body.push(`💰 ${bold('dana kembali ke wallet')}`);
+  if (o.pnlText) body.push('', bold(`PnL  ${o.pnlText}`));
+  if (o.txHash) body.push('', ...hrows([['tx', shortAddr(o.txHash)]]));
+  return card(`✅ ${title('CLOSED v4', `#${o.tokenId}`)}`, body, nowUtc());
+}
+
+/** Hasil tambah likuiditas v4 (atau simulasi dry-run). */
+export function msgV4Added(o: {
+  tokenId?: string;
+  sizeEth: string;
+  rangeLabel: string;
+  txHash?: string;
+  dryRun: boolean;
+}): string {
+  if (o.dryRun) {
+    return card(`⚪ ${title('ADD v4 (DRY)')}`, [
+      ...hrows([
+        ['Deposit', `${o.sizeEth} ETH`],
+        ['Range', o.rangeLabel],
+      ]),
+      '',
+      note('simulasi valid — tidak mengirim tx.'),
+    ]);
+  }
+  const body: string[] = [
+    `🟢 ${bold('posisi v4 baru dibuka')} — monitor aktif`,
+    '',
+    ...hrows([
+      ['Deposit', `${o.sizeEth} ETH`],
+      ['Range', o.rangeLabel],
+    ]),
+  ];
+  if (o.txHash) body.push('', ...hrows([['tx', shortAddr(o.txHash)]]));
+  return card(`✅ ${title('ADDED v4', o.tokenId ? `#${o.tokenId}` : '')}`, body, nowUtc());
 }
 
 /** Konfirmasi tutup posisi Uniswap v4. */
@@ -303,6 +359,13 @@ export function msgV4AddConfirm(tokenId: string, sizeEth: string): string {
     '',
     bold('Lanjut tambah?'),
   ]);
+}
+
+/** Alert monitor: posisi v4 (dikelola bot) masuk/keluar range. */
+export function msgV4Range(tokenId: string, inRange: boolean): string {
+  return inRange
+    ? card(`🟢 ${title('V4 IN RANGE', `#${tokenId}`)}`, [`🟢 ${bold('kembali dalam rentang')} — fee mengalir lagi.`], nowUtc())
+    : card(`🔴 ${title('V4 OUT OF RANGE', `#${tokenId}`)}`, [`🔴 ${bold('keluar rentang')} — posisi v4 di luar; pertimbangkan tutup.`], nowUtc());
 }
 
 /** Alias menu — sama dengan /start. */

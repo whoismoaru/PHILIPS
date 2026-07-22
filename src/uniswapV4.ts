@@ -47,6 +47,11 @@ export type V4Position = {
   tickUpper: number;
   liquidity: bigint;
   base: 'ETH' | 'USDG' | null; // aset dasar pasangan (utk add/cash-out)
+  poolKey: PoolKeyV4;
+  valueBaseWei: bigint | null; // nilai posisi dlm base (null bila gagal baca harga)
+  rangePctHigh: number | null; // % ujung terdekat dari harga sekarang
+  rangePctLow: number | null;
+  inRange: boolean | null;
 };
 
 /** Tentukan aset dasar pasangan + apakah base = currency0. */
@@ -206,6 +211,22 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
         if (onlyLive && liquidity === 0n) return null;
         const [sym0, sym1] = await Promise.all([tokenSymbol(pk.currency0, cc), tokenSymbol(pk.currency1, cc)]);
         const fee = Number(pk.fee);
+        const tickLower = signExt24((info >> 8n) & 0xffffffn);
+        const tickUpper = signExt24((info >> 32n) & 0xffffffn);
+        const poolKey: PoolKeyV4 = {
+          currency0: pk.currency0,
+          currency1: pk.currency1,
+          fee,
+          tickSpacing: Number(pk.tickSpacing),
+          hooks: pk.hooks,
+        };
+        // Valuasi (nilai + range %); gagal baca harga → null (kartu tetap tampil).
+        let val: Awaited<ReturnType<typeof valuePositionV4>> | null = null;
+        try {
+          val = await valuePositionV4(cc, poolKey, tickLower, tickUpper, liquidity);
+        } catch {
+          /* biarkan null */
+        }
         return {
           tokenId: id,
           sym0,
@@ -213,9 +234,14 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
           fee,
           dynamicFee: fee === DYNAMIC_FEE_FLAG,
           hasHooks: pk.hooks !== ethers.ZeroAddress,
-          tickLower: signExt24((info >> 8n) & 0xffffffn),
-          tickUpper: signExt24((info >> 32n) & 0xffffffn),
+          tickLower,
+          tickUpper,
           liquidity,
+          poolKey,
+          valueBaseWei: val ? val.valueBaseWei : null,
+          rangePctHigh: val ? val.rangePctHigh : null,
+          rangePctLow: val ? val.rangePctLow : null,
+          inRange: val ? val.inRange : null,
           base: pairBase(cc, pk.currency0, pk.currency1).base,
         };
       } catch {
@@ -275,7 +301,7 @@ export async function openPositionV4(
   baseIsCurrency0: boolean,
   baseAmountWei: bigint,
   opts: { widthSpacings?: number; gapSpacings?: number; dryRun: boolean },
-): Promise<{ dryRun?: boolean; txHash?: string; tickLower: number; tickUpper: number; liquidity: bigint }> {
+): Promise<{ dryRun?: boolean; txHash?: string; tokenId?: string; tickLower: number; tickUpper: number; liquidity: bigint; baseIsCurrency0: boolean }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr || !V4_POOL_MANAGER[cc.key]) throw new Error(`Uniswap v4 tak didukung di ${cc.label}.`);
   const spacing = poolKey.tickSpacing;
@@ -327,10 +353,25 @@ export async function openPositionV4(
   if (!isNative && !opts.dryRun) await ensurePermit2(cc, baseCurrency, pmAddr, baseAmountWei);
 
   await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address, value });
-  if (opts.dryRun) return { dryRun: true, tickLower, tickUpper, liquidity };
+  if (opts.dryRun) return { dryRun: true, tickLower, tickUpper, liquidity, baseIsCurrency0 };
   const tx = await pm.modifyLiquidities(unlockData, deadline, { value });
   const rc = await tx.wait();
-  return { txHash: rc?.hash ?? tx.hash, tickLower, tickUpper, liquidity };
+  // tokenId NFT baru = event Transfer(from=0x0, to=wallet) dari PositionManager.
+  let tokenId: string | undefined;
+  const transferTopic = ethers.id('Transfer(address,address,uint256)');
+  const toPadded = ethers.zeroPadValue(cc.wallet.address, 32).toLowerCase();
+  for (const log of rc?.logs ?? []) {
+    if (
+      log.address.toLowerCase() === pmAddr.toLowerCase() &&
+      log.topics[0] === transferTopic &&
+      log.topics[1] === ethers.ZeroHash &&
+      (log.topics[2] ?? '').toLowerCase() === toPadded
+    ) {
+      tokenId = BigInt(log.topics[3]).toString();
+      break;
+    }
+  }
+  return { txHash: rc?.hash ?? tx.hash, tokenId, tickLower, tickUpper, liquidity, baseIsCurrency0 };
 }
 
 /** PoolKey + info base sebuah posisi v4 (untuk add ke pool yg sama). */
@@ -342,4 +383,98 @@ export async function getPoolKeyV4(cc: ChainCtx, tokenId: string): Promise<{ poo
   const poolKey: PoolKeyV4 = { currency0: pk.currency0, currency1: pk.currency1, fee: Number(pk.fee), tickSpacing: Number(pk.tickSpacing), hooks: pk.hooks };
   const { base, baseIsCurrency0 } = pairBase(cc, pk.currency0, pk.currency1);
   return { poolKey, baseIsCurrency0, base };
+}
+
+// ── Valuasi posisi v4 (nilai dalam base + range %) ──────────────────────────
+/** Baca slot0 pool v4: tick + sqrtPriceX96 sekarang. */
+async function readPoolState(cc: ChainCtx, pk: PoolKeyV4): Promise<{ tick: number; sqrtPriceX96: bigint }> {
+  const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const poolId = ethers.keccak256(coder.encode(['tuple(address,address,uint24,int24,address)'], [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]]));
+  const slot = ethers.keccak256(ethers.concat([poolId, ethers.zeroPadValue(ethers.toBeHex(6n), 32)]));
+  const raw = BigInt(await mgr.extsload(slot));
+  const sqrtPriceX96 = raw & ((1n << 160n) - 1n);
+  let tick = Number((raw >> 160n) & 0xffffffn);
+  if (tick >= 2 ** 23) tick -= 2 ** 24;
+  return { tick, sqrtPriceX96 };
+}
+
+function amount0Delta(a: bigint, b: bigint, L: bigint): bigint {
+  if (a > b) [a, b] = [b, a];
+  if (a === 0n) return 0n;
+  return (L * Q96 * (b - a)) / b / a;
+}
+function amount1Delta(a: bigint, b: bigint, L: bigint): bigint {
+  if (a > b) [a, b] = [b, a];
+  return (L * (b - a)) / Q96;
+}
+function amountsForLiquidity(sqrtP: bigint, sqrtA: bigint, sqrtB: bigint, L: bigint): { amount0: bigint; amount1: bigint } {
+  if (sqrtA > sqrtB) [sqrtA, sqrtB] = [sqrtB, sqrtA];
+  if (sqrtP <= sqrtA) return { amount0: amount0Delta(sqrtA, sqrtB, L), amount1: 0n };
+  if (sqrtP < sqrtB) return { amount0: amount0Delta(sqrtP, sqrtB, L), amount1: amount1Delta(sqrtA, sqrtP, L) };
+  return { amount0: 0n, amount1: amount1Delta(sqrtA, sqrtB, L) };
+}
+
+export type V4Valuation = {
+  amount0: bigint;
+  amount1: bigint;
+  base: 'ETH' | 'USDG' | null;
+  baseIsCurrency0: boolean;
+  valueBaseWei: bigint; // nilai posisi dalam unit base (raw, desimal base)
+  rangePctHigh: number; // % ujung terdekat dari harga sekarang
+  rangePctLow: number;
+  inRange: boolean;
+  currentTick: number;
+};
+
+/** Nilai posisi v4 (token amounts, nilai dalam base, range %). */
+export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: number, tickUpper: number, liquidity: bigint): Promise<V4Valuation> {
+  const { tick, sqrtPriceX96 } = await readPoolState(cc, pk);
+  const sqrtL = sqrtAtTick(tickLower);
+  const sqrtU = sqrtAtTick(tickUpper);
+  const { amount0, amount1 } = amountsForLiquidity(sqrtPriceX96, sqrtL, sqrtU, liquidity);
+  const { base, baseIsCurrency0 } = pairBase(cc, pk.currency0, pk.currency1);
+  // sqrtPriceX96 = sqrt(token1/token0)*Q96 (rasio raw). Nilai dlm base:
+  const p2 = sqrtPriceX96 * sqrtPriceX96; // (token1/token0)*Q96^2
+  let valueBaseWei = 0n;
+  if (baseIsCurrency0) {
+    valueBaseWei = amount0 + (p2 === 0n ? 0n : (amount1 * Q96 * Q96) / p2);
+  } else {
+    valueBaseWei = amount1 + (amount0 * p2) / (Q96 * Q96);
+  }
+  const sgn = baseIsCurrency0 ? -1 : 1;
+  const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - tick)) - 1) * 100;
+  const pcts = [pctOf(tickUpper), pctOf(tickLower)].sort((a, b) => b - a);
+  return {
+    amount0,
+    amount1,
+    base,
+    baseIsCurrency0,
+    valueBaseWei,
+    rangePctHigh: pcts[0],
+    rangePctLow: pcts[1],
+    inRange: tick >= tickLower && tick < tickUpper,
+    currentTick: tick,
+  };
+}
+
+/** Status ringkas posisi v4 untuk monitor: masih ada? dalam range? */
+export async function checkV4Status(cc: ChainCtx, tokenId: string): Promise<{ exists: boolean; inRange: boolean }> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr) return { exists: false, inRange: false };
+  const pm = new ethers.Contract(pmAddr, V4_ABI, cc.provider);
+  try {
+    const [pk, info] = await pm.getPoolAndPositionInfo(tokenId);
+    const liquidity: bigint = await pm.getPositionLiquidity(tokenId);
+    if (liquidity === 0n || (pk.currency0 === ethers.ZeroAddress && pk.currency1 === ethers.ZeroAddress)) {
+      return { exists: false, inRange: false };
+    }
+    const tickLower = signExt24((info >> 8n) & 0xffffffn);
+    const tickUpper = signExt24((info >> 32n) & 0xffffffn);
+    const poolKey: PoolKeyV4 = { currency0: pk.currency0, currency1: pk.currency1, fee: Number(pk.fee), tickSpacing: Number(pk.tickSpacing), hooks: pk.hooks };
+    const { tick } = await readPoolState(cc, poolKey);
+    return { exists: true, inRange: tick >= tickLower && tick < tickUpper };
+  } catch {
+    return { exists: true, inRange: false }; // error transien → jangan hapus dari tracking
+  }
 }

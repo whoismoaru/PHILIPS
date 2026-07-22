@@ -18,6 +18,7 @@ import {
   type PositionDetail,
 } from './uniswap.js';
 import { listPositionsV4, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4 } from './uniswapV4.js';
+import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { swapEthToUsdg, swapUsdgToEth, type SwapDir } from './swap.js';
@@ -26,6 +27,7 @@ import * as store from './store.js';
 import * as journal from './journal.js';
 import * as msg from './messages.js';
 import { MENU_KEYBOARD, resolveMenu } from './menu.js';
+import * as explore from './explore.js';
 import {
   CHAINS,
   getChain,
@@ -577,23 +579,47 @@ async function cmdPositions(ctx: any) {
   for (const c of cards) {
     await ctx.reply(c.text, c.extra);
   }
-  // v4: kartu + tombol tutup (close v4 sudah didukung; add belum).
+  // v4: kartu (nilai + range% + PnL bila dikelola bot) + tombol add/tutup.
+  const ethUsdV4 = v4.some((p) => p.base === 'ETH') ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
   for (const p of v4) {
     const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
+    const dec = p.base === 'USDG' ? 6 : 18;
+    let valueLabel = '—';
+    if (p.valueBaseWei !== null && p.base === 'ETH') {
+      const eth = Number(ethers.formatEther(p.valueBaseWei));
+      valueLabel = ethUsdV4 !== null ? `${msg.usdPlain(eth * ethUsdV4)}  (${eth.toFixed(5)} ETH)` : `${eth.toFixed(5)} ETH`;
+    } else if (p.valueBaseWei !== null && p.base === 'USDG') {
+      valueLabel = `${Number(ethers.formatUnits(p.valueBaseWei, 6)).toFixed(2)} USDG`;
+    }
+    const rangeLabel =
+      p.rangePctHigh !== null && p.rangePctLow !== null ? `${msg.fmtPct(p.rangePctHigh)} / ${msg.fmtPct(p.rangePctLow)}` : '—';
+    const tracked = v4store.getV4(p.tokenId);
+    let pnlText: string | undefined;
+    if (tracked && p.valueBaseWei !== null && p.base) {
+      const curF = Number(ethers.formatUnits(p.valueBaseWei, dec));
+      const entF = Number(ethers.formatUnits(BigInt(tracked.entryBaseWei), dec));
+      const pnlF = curF - entF;
+      const pct = entF > 0 ? (pnlF / entF) * 100 : 0;
+      pnlText =
+        p.base === 'ETH' && ethUsdV4 !== null
+          ? `${msg.usdSigned(pnlF * ethUsdV4)} (${msg.pctSigned(pct)})`
+          : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${p.base} (${msg.pctSigned(pct)})`;
+    }
     await ctx
       .reply(
         msg.msgV4Position({
           tokenId: p.tokenId,
           pair: `${p.sym0} / ${p.sym1}`,
           feeLabel,
-          rangeLabel: `tick ${p.tickLower} … ${p.tickUpper}`,
-          liqLabel: p.liquidity.toString(),
-          hasHooks: p.hasHooks,
+          valueLabel,
+          rangeLabel,
+          inRange: p.inRange,
+          pnlText,
+          tracked: !!tracked,
         }),
         {
           ...html,
           ...Markup.inlineKeyboard([
-            // Add single-sided ETH (pool base ETH saja) pakai preset nominal.
             ...(p.base === 'ETH'
               ? [store.getSizes().map((s) => Markup.button.callback(`➕ ${s} ETH`, `addv4:${p.tokenId}:${s}`))]
               : []),
@@ -642,6 +668,47 @@ function cmdPnl(ctx: any) {
   );
 }
 bot.command('pnl', cmdPnl);
+
+// /explore — top 5 pool by APR (single-sided ETH/USDG), sinkron REAL-TIME Uniswap.
+const exploreKb = () =>
+  Markup.inlineKeyboard([[Markup.button.callback('🔄 Refresh', 'explore:refresh')]]);
+
+async function loadExplore(): Promise<string> {
+  const cc = getChain();
+  const pools = await explore.fetchTopPools(cc, 5);
+  return explore.renderExplore(pools, cc.label);
+}
+
+async function cmdExplore(ctx: any) {
+  const loading = await ctx.reply('📈 memuat pool teratas dari Uniswap…');
+  try {
+    const text = await loadExplore();
+    await ctx.telegram.editMessageText(loading.chat.id, loading.message_id, undefined, text, {
+      ...html,
+      ...exploreKb(),
+    });
+  } catch (e) {
+    await ctx.telegram.editMessageText(
+      loading.chat.id,
+      loading.message_id,
+      undefined,
+      msg.msgError('explore', (e as Error).message),
+      html,
+    );
+  }
+}
+bot.command('explore', cmdExplore);
+
+bot.action('explore:refresh', async (ctx) => {
+  await ctx.answerCbQuery('Memuat…');
+  try {
+    const text = await loadExplore();
+    await ctx.editMessageText(text, { ...html, ...exploreKb() });
+  } catch (e) {
+    if (/not modified/i.test((e as Error).message)) return; // data sama — bukan error
+    await ctx.reply(msg.msgError('explore', (e as Error).message), html);
+  }
+});
 
 bot.action(/^detail:(\d+)$/, async (ctx) => {
   const rec = store.get(ctx.match[1]);
@@ -1304,15 +1371,18 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery('Diproses…');
     await ctx.editMessageText(msg.msgProgress('menutup posisi v4…'), html).catch(() => {});
     const r = await closePositionV4(tokenId, getChain(), { dryRun: config.safety.dryRun });
-    if (r.dryRun) {
-      await ctx.reply(`⚪ DRY-RUN — simulasi close v4 #${tokenId} VALID${r.base ? ` lalu cash-out semua ke ${r.base}` : ''}.`, html);
-    } else {
-      let line = `✅ Close v4 #${tokenId} berhasil.`;
-      if (r.cashedOut) line += ` Cash-out → semua ${r.cashedOut}.`;
-      else if (r.base && r.leftover) line += ` ⚠️ Cash-out ke ${r.base} tak dapat rute — ${r.sym0}/${r.sym1} tetap di wallet (bisa /swap manual).`;
-      else line += ` Diterima ${r.sym0} + ${r.sym1}.`;
-      await ctx.reply(`${line}\ntx: ${r.txHash}`, html);
-    }
+    if (!r.dryRun) v4store.removeV4(tokenId); // berhenti dilacak setelah tertutup
+    await ctx.reply(
+      msg.msgV4Closed({
+        tokenId,
+        base: r.base,
+        cashedOut: r.cashedOut,
+        leftover: !!r.leftover,
+        txHash: r.txHash,
+        dryRun: !!r.dryRun,
+      }),
+      html,
+    );
   } catch (e) {
     await ctx.reply(msg.msgError('close v4', (e as Error).message), html);
   } finally {
@@ -1349,11 +1419,25 @@ bot.action(/^addv4go:(\d+):([\d.]+)$/, async (ctx) => {
     const { poolKey, baseIsCurrency0, base } = await getPoolKeyV4(cc, tokenId);
     if (base !== 'ETH') throw new Error('Add v4 saat ini hanya untuk pool base ETH.');
     const r = await openPositionV4(cc, poolKey, baseIsCurrency0, ethers.parseEther(size), { dryRun: config.safety.dryRun });
-    if (r.dryRun) {
-      await ctx.reply(`⚪ DRY-RUN — simulasi add ${size} ETH v4 VALID (range tick [${r.tickLower}, ${r.tickUpper}]).`, html);
-    } else {
-      await ctx.reply(`✅ Add ${size} ETH v4 berhasil — posisi baru di pool #${tokenId} (range [${r.tickLower}, ${r.tickUpper}]).\ntx: ${r.txHash}`, html);
+    if (!r.dryRun && r.tokenId) {
+      // Catat posisi baru → PnL & monitor jalan.
+      v4store.trackV4({
+        tokenId: r.tokenId,
+        chain: cc.key,
+        currency0: poolKey.currency0,
+        currency1: poolKey.currency1,
+        fee: poolKey.fee,
+        tickSpacing: poolKey.tickSpacing,
+        hooks: poolKey.hooks,
+        base,
+        baseIsCurrency0: r.baseIsCurrency0,
+        entryBaseWei: ethers.parseEther(size).toString(),
+      });
     }
+    await ctx.reply(
+      msg.msgV4Added({ tokenId: r.tokenId, sizeEth: size, rangeLabel: 'single-sided ETH · di atas harga', txHash: r.txHash, dryRun: !!r.dryRun }),
+      html,
+    );
   } catch (e) {
     await ctx.reply(msg.msgError('add v4', (e as Error).message), html);
   } finally {
@@ -1419,6 +1503,7 @@ bot.on(message('text'), async (ctx) => {
   if (menuCmd) {
     switch (menuCmd) {
       case '/status': return renderStatus(ctx, false);
+      case '/explore': return cmdExplore(ctx);
       case '/positions': return cmdPositions(ctx);
       case '/pnl': return cmdPnl(ctx);
       case '/history': return cmdHistory(ctx);
@@ -1522,6 +1607,7 @@ const BOT_COMMANDS = [
   { command: 'help', description: 'Daftar perintah' },
   { command: 'status', description: 'Koneksi jaringan & saldo dompet' },
   { command: 'positions', description: 'Posisi LP yang aktif (live)' },
+  { command: 'explore', description: 'Top pool by APR (ETH/USDG) — sinkron Uniswap' },
   { command: 'history', description: 'Riwayat trade tertutup (jurnal)' },
   { command: 'pnl', description: 'Rekap PnL seumur hidup' },
   { command: 'add', description: 'Tambah LP: /add <CA>' },

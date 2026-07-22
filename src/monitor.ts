@@ -6,7 +6,9 @@ import { swapTokenToEthRobust } from './relay.js';
 import { ethers } from 'ethers';
 import * as store from './store.js';
 import * as journal from './journal.js';
-import { msgRangeEnter, msgRangeExit, msgPriceDrop } from './messages.js';
+import * as v4store from './v4store.js';
+import { checkV4Status } from './uniswapV4.js';
+import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgV4Range } from './messages.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -124,6 +126,21 @@ export function startMonitor(bot: Telegraf) {
           store.remove(rec.tokenId);
         }
         /* error lain: lewati ronde ini */
+      }
+    }
+    // Monitor posisi v4 yang DIKELOLA bot (alert in/out-range; bersihkan bila tertutup).
+    for (const rec of v4store.allV4()) {
+      try {
+        const st = await checkV4Status(getChain(rec.chain), rec.tokenId);
+        if (!st.exists) {
+          v4store.removeV4(rec.tokenId); // ditutup di luar bot
+          continue;
+        }
+        if (v4store.setV4InRange(rec.tokenId, st.inRange)) {
+          await bot.telegram.sendMessage(config.telegram.allowedUserId, msgV4Range(rec.tokenId, st.inRange), html);
+        }
+      } catch {
+        /* lewati ronde ini */
       }
     }
   }, INTERVAL_MS);
