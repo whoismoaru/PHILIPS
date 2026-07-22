@@ -174,6 +174,20 @@ export async function closePositionV4(
       out.leftover = (e as Error).message.slice(0, 100); // token receh tetap di wallet (aman)
     }
   }
+
+  // Base ETH: jalur fallback Uniswap menghasilkan WETH (wrapped) → unwrap ke ETH
+  // native supaya benar-benar "semua ke ETH" (samakan dgn v3 stopAndCashOut).
+  if (base === 'ETH') {
+    try {
+      const wbal: bigint = await cc.weth.balanceOf(cc.wallet.address);
+      if (wbal > 0n) {
+        await (await cc.weth.withdraw(wbal)).wait();
+        out.cashedOut = out.cashedOut ? `${out.cashedOut} + unwrap WETH` : 'ETH (unwrap WETH)';
+      }
+    } catch {
+      /* WETH tetap di wallet — tak fatal, bisa unwrap manual */
+    }
+  }
   return out;
 }
 
