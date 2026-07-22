@@ -414,23 +414,24 @@ export function msgStatus(opts: {
   const hr2 = '────────────────────';
   const usdCol = (u: number | null) => (u === null ? '≈ $?' : `≈ ${usdPlain(u)}`);
 
-  // Tabel saldo → <pre> agar kolom rata (tanpa emoji, patuh tg-ui).
+  // Tabel saldo = teks polos (bukan <pre>) — seragam dgn seluruh kartu; kolom
+  // dirapikan dgn padding spasi (dipertahankan Telegram di mode HTML).
   const rows = opts.chains.map((c) => [c.label, `${c.amount} ${c.symbol}`, usdCol(c.usd)]);
   if (opts.usdg) rows.push(['USDG', `${opts.usdg.amount} USDG`, usdCol(opts.usdg.usd)]);
   const w1 = Math.max(...rows.map((r) => r[0].length));
   const w2 = Math.max(...rows.map((r) => r[1].length));
-  const table = rows.map((r) => `${r[0].padEnd(w1)}   ${r[1].padEnd(w2)}   ${r[2]}`).join('\n');
+  const tableLines = rows.map((r) => esc(`${r[0].padEnd(w1)}   ${r[1].padEnd(w2)}   ${r[2]}`));
 
   const lines: string[] = [
     `${dot} <b>STATUS</b> · ${modeTxt}`,
     HR,
-    `⚙️ ${'Mode'.padEnd(6)} <b>${esc(modeTxt)}</b>`,
-    `🔗 ${'Chain'.padEnd(6)} <b>${esc(String(opts.chainId))}</b>`,
-    `📂 ${'Open'.padEnd(6)} <b>${opts.positions}</b>`,
-    `♾️ ${'Limit'.padEnd(6)} <b>${esc(opts.limitLabel)}</b>`,
+    `⚙️ Mode      <b>${esc(modeTxt)}</b>`,
+    `🔗 Chain     <b>${esc(String(opts.chainId))}</b>`,
+    `📂 Open      <b>${opts.positions}</b>`,
+    `♾️ Limit     <b>${esc(opts.limitLabel)}</b>`,
     '',
     '💰 <b>SALDO</b>',
-    pre(table),
+    ...tableLines,
     hr2,
     `💵 <b>Total ${usdCol(opts.totalUsd)}</b>`,
     '',
