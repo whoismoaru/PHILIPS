@@ -16,7 +16,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4, valuePositionV4 } from './uniswapV4.js';
+import { listPositionsV4, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4, valuePositionV4, type V4Position } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
@@ -619,86 +619,209 @@ function finalizeClose(
   }
 }
 
-// /positions HANYA menampilkan posisi live (history ada di /history).
-async function cmdPositions(ctx: any) {
-  const active = store.active();
-  const cc = getChain();
-  // Posisi Uniswap v4 (baca-saja) — jangan gagalkan /positions bila error.
-  const v4 = v4Supported(cc) ? await listPositionsV4(cc).catch(() => []) : [];
+/** Kartu detail satu posisi v4 (nilai + range% + PnL bila dikelola bot) + tombol. */
+function buildV4Card(p: V4Position, ethUsdV4: number | null): { text: string; extra: Record<string, unknown> } {
+  const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
+  const dec = p.base === 'USDG' ? 6 : 18;
+  let valueLabel = '—';
+  if (p.valueBaseWei !== null && p.base === 'ETH') {
+    const eth = Number(ethers.formatEther(p.valueBaseWei));
+    valueLabel = ethUsdV4 !== null ? `${msg.usdPlain(eth * ethUsdV4)}  (${eth.toFixed(5)} ETH)` : `${eth.toFixed(5)} ETH`;
+  } else if (p.valueBaseWei !== null && p.base === 'USDG') {
+    valueLabel = `${Number(ethers.formatUnits(p.valueBaseWei, 6)).toFixed(2)} USDG`;
+  }
+  const rangeLabel =
+    p.rangePctHigh !== null && p.rangePctLow !== null ? `${msg.fmtPct(p.rangePctHigh)} / ${msg.fmtPct(p.rangePctLow)}` : '—';
+  const tracked = v4store.getV4(p.tokenId);
+  let pnlText: string | undefined;
+  if (tracked && p.valueBaseWei !== null && p.base) {
+    const curF = Number(ethers.formatUnits(p.valueBaseWei, dec));
+    const entF = Number(ethers.formatUnits(BigInt(tracked.entryBaseWei), dec));
+    const pnlF = curF - entF;
+    const pct = entF > 0 ? (pnlF / entF) * 100 : 0;
+    pnlText =
+      p.base === 'ETH' && ethUsdV4 !== null
+        ? `${msg.usdSigned(pnlF * ethUsdV4)} (${msg.pctSigned(pct)})`
+        : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${p.base} (${msg.pctSigned(pct)})`;
+  }
+  const text = msg.msgV4Position({
+    tokenId: p.tokenId,
+    pair: `${p.sym0} / ${p.sym1}`,
+    feeLabel,
+    valueLabel,
+    rangeLabel,
+    inRange: p.inRange,
+    pnlText,
+    tracked: !!tracked,
+  });
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([
+      ...(p.base === 'ETH'
+        ? [store.getSizes().map((s) => Markup.button.callback(`➕ ${s} ETH`, `addv4:${p.tokenId}:${s}`))]
+        : []),
+      [Markup.button.callback('🔴 Tutup posisi v4', `closev4:${p.tokenId}`)],
+    ]),
+  };
+  return { text, extra };
+}
 
+type PosRow = {
+  id: string;
+  pair: string;
+  investLabel: string;
+  age: string;
+  pnlUsd: number | null;
+  pnlPct: number | null;
+  inRange: boolean;
+  wethEq: number; // setara-WETH utk total invest (USDG→WETH via ethUsd)
+};
+
+// /positions — SATU pesan konsolidasi: ringkasan + pohon per-posisi (v3 + v4).
+async function cmdPositions(ctx: any, edit = false) {
+  const cc = getChain();
+  const active = store.active();
+  const v4 = v4Supported(cc) ? await listPositionsV4(cc).catch(() => []) : [];
   if (active.length === 0 && v4.length === 0) {
-    return ctx.reply(msg.msgNoPositions(), html);
+    const t = msg.msgNoPositions();
+    return edit ? ctx.editMessageText(t, html).catch(() => {}) : ctx.reply(t, html);
   }
-  // Header hanya jika >1 posisi v3 (1 kartu sudah self-explanatory).
-  if (active.length > 1) {
-    await ctx.reply(msg.msgPositionsHeader(active.length), html);
-  }
-  // v3: build RPC parallel (bounded), kirim ke TG sequential (urutan stabil).
-  const cards = await mapLimit(active, POS_CARD_CONCURRENCY, async (rec) => {
+  const ethUsd = await getEthUsd(cc.wethAddress, cc).catch(() => null);
+
+  // v3 (RPC paralel, urutan stabil). Posisi hilang (NFT burned) → finalize & buang.
+  const v3rows = await mapLimit(active, POS_CARD_CONCURRENCY, async (rec): Promise<PosRow | null> => {
     try {
-      return await buildPositionCard(rec);
-    } catch (e) {
+      const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+      const dec = d.baseDecimals;
+      const curF = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec));
+      const initF = rec.imported ? null : Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
+      let pnlUsd: number | null = null;
+      let pnlPct: number | null = null;
+      if (initF !== null && initF > 0) {
+        const pnlF = curF - initF;
+        pnlPct = (pnlF / initF) * 100;
+        pnlUsd = await baseToUsd(d.baseKind, pnlF, cc);
+      }
+      const investNum = initF ?? curF;
       return {
-        text: msg.msgPositionReadFail(rec.tokenId, (e as Error).message),
-        extra: html as Record<string, unknown>,
+        id: rec.tokenId,
+        pair: `${d.baseSymbol}/${rec.symbol}`,
+        investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${d.baseSymbol}`,
+        age: msg.fmtAge(Date.now() - rec.openedAt),
+        pnlUsd,
+        pnlPct,
+        inRange: d.inRange,
+        wethEq: d.baseKind === 'weth' ? investNum : ethUsd ? investNum / ethUsd : 0,
+      };
+    } catch (e) {
+      if (isGoneErr(e)) {
+        finalizeClose(rec.tokenId, { reason: 'gone' });
+        return null;
+      }
+      return {
+        id: rec.tokenId,
+        pair: `#${rec.tokenId}`,
+        investLabel: 'baca gagal',
+        age: '—',
+        pnlUsd: null,
+        pnlPct: null,
+        inRange: false,
+        wethEq: 0,
       };
     }
   });
-  for (const c of cards) {
-    await ctx.reply(c.text, c.extra);
-  }
-  // v4: kartu (nilai + range% + PnL bila dikelola bot) + tombol add/tutup.
-  const ethUsdV4 = v4.some((p) => p.base === 'ETH') ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
+
+  const rows: PosRow[] = v3rows.filter((r): r is PosRow => r !== null);
+
+  // v4 (baca-saja + PnL bila dikelola bot).
   for (const p of v4) {
-    const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
     const dec = p.base === 'USDG' ? 6 : 18;
-    let valueLabel = '—';
-    if (p.valueBaseWei !== null && p.base === 'ETH') {
-      const eth = Number(ethers.formatEther(p.valueBaseWei));
-      valueLabel = ethUsdV4 !== null ? `${msg.usdPlain(eth * ethUsdV4)}  (${eth.toFixed(5)} ETH)` : `${eth.toFixed(5)} ETH`;
-    } else if (p.valueBaseWei !== null && p.base === 'USDG') {
-      valueLabel = `${Number(ethers.formatUnits(p.valueBaseWei, 6)).toFixed(2)} USDG`;
-    }
-    const rangeLabel =
-      p.rangePctHigh !== null && p.rangePctLow !== null ? `${msg.fmtPct(p.rangePctHigh)} / ${msg.fmtPct(p.rangePctLow)}` : '—';
     const tracked = v4store.getV4(p.tokenId);
-    let pnlText: string | undefined;
-    if (tracked && p.valueBaseWei !== null && p.base) {
-      const curF = Number(ethers.formatUnits(p.valueBaseWei, dec));
+    const curF = p.valueBaseWei !== null ? Number(ethers.formatUnits(p.valueBaseWei, dec)) : null;
+    let investNum = curF ?? 0;
+    let pnlUsd: number | null = null;
+    let pnlPct: number | null = null;
+    if (tracked) {
       const entF = Number(ethers.formatUnits(BigInt(tracked.entryBaseWei), dec));
-      const pnlF = curF - entF;
-      const pct = entF > 0 ? (pnlF / entF) * 100 : 0;
-      pnlText =
-        p.base === 'ETH' && ethUsdV4 !== null
-          ? `${msg.usdSigned(pnlF * ethUsdV4)} (${msg.pctSigned(pct)})`
-          : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${p.base} (${msg.pctSigned(pct)})`;
+      investNum = entF;
+      if (curF !== null && entF > 0) {
+        const pnlF = curF - entF;
+        pnlPct = (pnlF / entF) * 100;
+        pnlUsd = p.base === 'ETH' ? (ethUsd !== null ? pnlF * ethUsd : null) : pnlF; // USDG ≈ $1
+      }
     }
-    await ctx
-      .reply(
-        msg.msgV4Position({
-          tokenId: p.tokenId,
-          pair: `${p.sym0} / ${p.sym1}`,
-          feeLabel,
-          valueLabel,
-          rangeLabel,
-          inRange: p.inRange,
-          pnlText,
-          tracked: !!tracked,
-        }),
-        {
-          ...html,
-          ...Markup.inlineKeyboard([
-            ...(p.base === 'ETH'
-              ? [store.getSizes().map((s) => Markup.button.callback(`➕ ${s} ETH`, `addv4:${p.tokenId}:${s}`))]
-              : []),
-            [Markup.button.callback('🔴 Tutup posisi v4', `closev4:${p.tokenId}`)],
-          ]),
-        },
-      )
-      .catch(() => {});
+    const sym = p.base === 'USDG' ? 'USDG' : 'ETH';
+    rows.push({
+      id: p.tokenId,
+      pair: `${p.sym0}/${p.sym1}`,
+      investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${sym} · v4`,
+      age: tracked ? msg.fmtAge(Date.now() - tracked.openedAt) : '—',
+      pnlUsd,
+      pnlPct,
+      inRange: p.inRange ?? false, // null (tak diketahui) → dianggap out (konservatif)
+      wethEq: p.base === 'USDG' ? (ethUsd ? investNum / ethUsd : 0) : investNum,
+    });
   }
+
+  const totalWethEq = rows.reduce((s, r) => s + r.wethEq, 0);
+  const pnlVals = rows.map((r) => r.pnlUsd).filter((x): x is number => x !== null);
+  const totalPnlUsd = pnlVals.length ? pnlVals.reduce((a, b) => a + b, 0) : null;
+  const text = msg.msgPositionsList({
+    dryRun: config.safety.dryRun,
+    activeCount: rows.length,
+    totalInvestLabel: `≈ ${totalWethEq.toFixed(4)} WETH`,
+    totalPnlUsd,
+    outOfRange: rows.filter((r) => !r.inRange).length,
+    rows,
+  });
+
+  const idBtns = rows.map((r) => Markup.button.callback(`#${r.id}`, `pos_detail_${r.id}`));
+  const kbRows: ReturnType<typeof Markup.button.callback>[][] = [];
+  for (let i = 0; i < idBtns.length; i += 2) kbRows.push(idBtns.slice(i, i + 2));
+  kbRows.push([
+    Markup.button.callback('🔄 Refresh', 'positions_refresh'),
+    Markup.button.callback('🚨 Close All', 'closeall_confirm'),
+  ]);
+  const extra = { ...html, ...Markup.inlineKeyboard(kbRows) };
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
-bot.command('positions', cmdPositions);
+bot.command('positions', (ctx) => cmdPositions(ctx, false));
+
+// Refresh daftar posisi (edit pesan yang sama).
+bot.action('positions_refresh', async (ctx) => {
+  await ctx.answerCbQuery('Memuat ulang…');
+  try {
+    await cmdPositions(ctx, true);
+  } catch (e) {
+    if (/not modified/i.test((e as Error).message)) return; // data sama — benign
+    await ctx.reply(msg.msgError('positions', (e as Error).message), html);
+  }
+});
+
+// Detail satu posisi (dari tombol #id di daftar) — kartu penuh v3 atau v4.
+bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
+  const id = ctx.match[1];
+  await ctx.answerCbQuery('Memuat…');
+  const rec = store.get(id);
+  if (rec) {
+    try {
+      const c = await buildPositionCard(rec);
+      return ctx.reply(c.text, c.extra);
+    } catch (e) {
+      return ctx.reply(msg.msgError('detail', (e as Error).message), html);
+    }
+  }
+  try {
+    const cc = getChain();
+    const p = (await listPositionsV4(cc).catch(() => [])).find((x) => x.tokenId === id);
+    if (!p) return ctx.reply(msg.msgError('detail', 'posisi tak ditemukan.'), html);
+    const ethUsdV4 = p.base === 'ETH' ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
+    const c = buildV4Card(p, ethUsdV4);
+    return ctx.reply(c.text, c.extra);
+  } catch (e) {
+    return ctx.reply(msg.msgError('detail', (e as Error).message), html);
+  }
+});
 
 // /history — riwayat trade tertutup, dari file jurnal khusus (tak muncul di /positions).
 function cmdHistory(ctx: any) {

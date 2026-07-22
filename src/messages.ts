@@ -804,6 +804,50 @@ export function msgPositionsHeader(activeCount: number): string {
   );
 }
 
+/** Daftar posisi konsolidasi: ringkasan + pohon per-posisi (satu pesan). */
+export function msgPositionsList(opts: {
+  dryRun: boolean;
+  activeCount: number;
+  totalInvestLabel: string;
+  totalPnlUsd: number | null;
+  outOfRange: number;
+  rows: Array<{
+    id: string;
+    pair: string;
+    investLabel: string;
+    age: string;
+    pnlUsd: number | null;
+    pnlPct: number | null;
+    inRange: boolean;
+  }>;
+}): string {
+  const dot = opts.dryRun ? '⚪' : '🟢';
+  const HR = '━━━━━━━━━━━━━━━━━━━━━━';
+  const dollar = (n: number) => `$${n >= 0 ? '+' : ''}${n.toFixed(2)}`;
+  const lines: string[] = [
+    `${dot} <b>POSITIONS</b> · Active ${opts.activeCount}`,
+    HR,
+    `💵 Total Invest   ${esc(opts.totalInvestLabel)}`,
+    `📊 Total PnL     <b>${opts.totalPnlUsd === null ? '—' : dollar(opts.totalPnlUsd)}</b>`,
+    `🔴 Out of Range   ${opts.outOfRange} dari ${opts.activeCount}`,
+    '',
+  ];
+  const last = opts.rows.length - 1;
+  opts.rows.forEach((r, i) => {
+    const prefix = i === 0 ? '┌' : i === last ? '└' : '├';
+    const status = r.inRange ? '🟢 In Range' : '🔴 Out';
+    lines.push(`${prefix} <b>#${esc(r.id)}</b>  ${esc(r.pair)}`);
+    lines.push(`│ ${esc(r.investLabel)} · ${esc(r.age)}`);
+    if (r.pnlUsd === null || r.pnlPct === null) {
+      lines.push(`│ PnL <b>—</b>  ${status}`);
+    } else {
+      lines.push(`│ PnL <b>${dollar(r.pnlUsd)}</b> (${fmtPct(r.pnlPct)})  ${status}`);
+    }
+    if (i < last) lines.push('│');
+  });
+  return lines.join('\n');
+}
+
 export function msgNoPositions(): string {
   return card(
     title('POSITIONS'),
