@@ -399,46 +399,50 @@ export function msgUnknown(txt: string): string {
 export function msgStatus(opts: {
   dryRun: boolean;
   chainId: string | number | bigint;
-  gasEth: string;
   positions: number;
-  maxEthLabel: string;
+  limitLabel: string; // '∞' atau mis. '0.5 ETH'
   wallet: string;
-  usdg?: string; // saldo USDG (base asset) di chain utama, mis. '18.82' — tampil bila > 0
-  holdings?: Array<{ symbol: string; amount: string; usd: number | null }>;
+  chains: Array<{ label: string; amount: string; symbol: string; usd: number | null }>;
+  usdg?: { amount: string; usd: number }; // base USDG di chain utama — tampil bila > 0
+  totalUsd: number | null; // null = harga ETH tak terbaca
+  holdingsCount: number;
+  refreshRel?: string; // 'baru saja' | '2 detik lalu' — kesegaran data
 }): string {
-  const limit =
-    opts.maxEthLabel === 'tanpa batas' ? '∞' : opts.maxEthLabel;
+  const modeTxt = opts.dryRun ? 'DRY RUN' : 'LIVE';
+  const dot = opts.dryRun ? '⚪' : '🟢';
+  const HR = '━━━━━━━━━━━━━━━━━━━━';
+  const hr2 = '────────────────────';
+  const usdCol = (u: number | null) => (u === null ? '≈ $?' : `≈ ${usdPlain(u)}`);
 
-  const body: string[] = [
-    ...hrows([
-      ['Mode', `${modeMark(opts.dryRun)} ${modeLabel(opts.dryRun)}`],
-      ['Chain', String(opts.chainId)],
-      ['Open', String(opts.positions)],
-      ['Limit', limit],
-    ]),
+  // Tabel saldo → <pre> agar kolom rata (tanpa emoji, patuh tg-ui).
+  const rows = opts.chains.map((c) => [c.label, `${c.amount} ${c.symbol}`, usdCol(c.usd)]);
+  if (opts.usdg) rows.push(['USDG', `${opts.usdg.amount} USDG`, usdCol(opts.usdg.usd)]);
+  const w1 = Math.max(...rows.map((r) => r[0].length));
+  const w2 = Math.max(...rows.map((r) => r[1].length));
+  const table = rows.map((r) => `${r[0].padEnd(w1)}   ${r[1].padEnd(w2)}   ${r[2]}`).join('\n');
+
+  const lines: string[] = [
+    `${dot} <b>STATUS</b> · ${modeTxt}`,
+    HR,
+    `⚙️ ${'Mode'.padEnd(6)} <b>${esc(modeTxt)}</b>`,
+    `🔗 ${'Chain'.padEnd(6)} <b>${esc(String(opts.chainId))}</b>`,
+    `📂 ${'Open'.padEnd(6)} <b>${opts.positions}</b>`,
+    `♾️ ${'Limit'.padEnd(6)} <b>${esc(opts.limitLabel)}</b>`,
     '',
-    section('saldo'),
+    '💰 <b>SALDO</b>',
+    pre(table),
+    hr2,
+    `💵 <b>Total ${usdCol(opts.totalUsd)}</b>`,
+    '',
+    opts.holdingsCount === 0
+      ? '✅ Token nyangkut: <b>bersih</b>'
+      : `⚠️ Token nyangkut: <b>${opts.holdingsCount}</b>`,
+    `👛 <code>${esc(shortAddr(opts.wallet))}</code>`,
+    '',
+    `🕒 ${modeTxt} · ${nowUtc()}`,
   ];
-
-  for (const [lab, val] of balanceFields(opts.gasEth)) {
-    // balanceFields: label chain lowercase → kapital ringan
-    const name = lab === 'saldo' ? 'Saldo' : lab.charAt(0).toUpperCase() + lab.slice(1);
-    body.push(hrow(name, val));
-  }
-  if (opts.usdg) body.push(hrow('USDG', `${opts.usdg} USDG`));
-
-  const h = opts.holdings ?? [];
-  if (h.length === 0) {
-    body.push('', section('token nyangkut'), note('✅ bersih'));
-  } else {
-    body.push('', section(`token nyangkut · ${h.length}`));
-    for (const t of h) body.push(hrow(t.symbol, t.amount));
-    body.push('', note('disapu otomatis ke ETH tiap ~30m (nilai debu dilewati).'));
-  }
-
-  body.push('', section('wallet'), code(shortAddr(opts.wallet)));
-
-  return card(`${opts.dryRun ? '⚪' : '🟢'} ${title('STATUS')}`, body, footerMode(opts.dryRun));
+  if (opts.refreshRel) lines.push(`🔄 Refresh ${esc(opts.refreshRel)}`);
+  return lines.join('\n');
 }
 
 export function msgDenied(): string {

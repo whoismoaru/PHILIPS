@@ -336,49 +336,78 @@ bot.command(['help', 'menu'], (ctx) =>
   ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, reply_markup: MENU_KEYBOARD }),
 );
 
+// Waktu render /status terakhir → footer "Refresh N detik lalu" (owner-only bot).
+let lastStatusAt = 0;
+function relTime(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 1) return 'baru saja';
+  if (s < 60) return `${s} detik lalu`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} menit lalu`;
+  return `${Math.round(m / 60)} jam lalu`;
+}
+
 async function renderStatus(ctx: any, edit: boolean) {
   try {
-    const network = await provider.getNetwork();
-    // Saldo gas di SEMUA chain (paralel; chain yang gagal ditampilkan '?').
-    const balances = await Promise.all(
-      Object.values(CHAINS).map(async (c) => {
-        try {
-          const b = await c.provider.getBalance(c.wallet.address);
-          return `${c.label} ${Number(ethers.formatEther(b)).toFixed(4)} ${c.nativeSymbol}`;
-        } catch {
-          return `${c.label} ?`;
-        }
-      }),
-    );
-    // Token yang tersimpan di wallet + nilai USD (best-effort; gagal → kosong).
+    // Harga ETH (chain utama) sekali — dipakai valuasi semua chain ETH-native.
+    const ethUsd = await getEthUsd(getChain().wethAddress, getChain()).catch(() => null);
+    const [network, chains] = await Promise.all([
+      provider.getNetwork(),
+      // Saldo native di SEMUA chain (paralel; chain gagal → amount '?', usd null).
+      Promise.all(
+        Object.values(CHAINS).map(async (c) => {
+          try {
+            const b = await c.provider.getBalance(c.wallet.address);
+            const amt = Number(ethers.formatEther(b));
+            // USD hanya utk ETH-native (pakai ethUsd). Native lain (BNB) tanpa feed:
+            // saldo 0 → $0; saldo > 0 tanpa harga → null (tampil "$?", tak dijumlah).
+            const usd =
+              c.nativeSymbol === 'ETH' ? (ethUsd !== null ? amt * ethUsd : null) : amt === 0 ? 0 : null;
+            return { label: c.label, amount: amt.toFixed(4), symbol: c.nativeSymbol, usd };
+          } catch {
+            return { label: c.label, amount: '?', symbol: c.nativeSymbol, usd: null };
+          }
+        }),
+      ),
+    ]);
+    // Token yang tersimpan di wallet (best-effort; gagal → 0 → "bersih").
     let holdings: Holding[] = [];
     try {
       holdings = await walletHoldings();
     } catch {
-      /* abaikan — status tetap tampil tanpa holdings */
+      /* abaikan — status tetap tampil */
     }
     // Saldo USDG (base asset) di chain utama — best-effort; hanya tampil bila > 0.
-    let usdg: string | undefined;
+    let usdg: { amount: string; usd: number } | undefined;
     try {
       const cc = getChain();
       if (cc.usdgAddress) {
         const uc = new ethers.Contract(cc.usdgAddress, ERC20_ABI, cc.provider);
         const b: bigint = await uc.balanceOf(cc.wallet.address);
         const amt = Number(ethers.formatUnits(b, 6));
-        if (amt > 0) usdg = amt.toFixed(2);
+        if (amt > 0) usdg = { amount: amt.toFixed(2), usd: amt }; // USDG ≈ $1
       }
     } catch {
       /* abaikan — status tetap tampil tanpa USDG */
     }
+    // Total USD: null bila harga ETH tak terbaca (ETH mendominasi → total tak sahih).
+    const totalUsd =
+      ethUsd === null ? null : chains.reduce((s, c) => s + (c.usd ?? 0), 0) + (usdg?.usd ?? 0);
+    // Kesegaran data: waktu sejak render sebelumnya (owner-only → satu penanda).
+    const rel = lastStatusAt ? relTime(Date.now() - lastStatusAt) : 'baru saja';
+    lastStatusAt = Date.now();
+
     const text = msg.msgStatus({
       dryRun: config.safety.dryRun,
       chainId: network.chainId,
-      gasEth: balances.join(' · '),
       positions: store.active().length,
-      maxEthLabel,
+      limitLabel: maxEthLabel === 'tanpa batas' ? '∞' : maxEthLabel,
       wallet: wallet.address,
+      chains,
       usdg,
-      holdings,
+      totalUsd,
+      holdingsCount: holdings.length,
+      refreshRel: rel,
     });
     const extra = {
       ...html,
