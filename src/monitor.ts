@@ -1,7 +1,7 @@
 import type { Telegraf } from 'telegraf';
 import { config } from './config.js';
 import { getPositionDetail } from './uniswap.js';
-import { getChain, ERC20_ABI } from './chains.js';
+import { getChain, CHAINS, ERC20_ABI } from './chains.js';
 import { swapTokenToEthRobust } from './relay.js';
 import { ethers } from 'ethers';
 import * as store from './store.js';
@@ -86,6 +86,35 @@ async function sweepLeftovers(bot: Telegraf) {
         saveSweep();
       }
       console.log(`[sweep] ${r.symbol} gagal: ${emsg.slice(0, 120)}`);
+    }
+  }
+  await sweepStuckWeth(bot);
+}
+
+// Ambang debu WETH: < 0.00001 WETH diabaikan (gas unwrap > nilainya).
+const WETH_DUST = 10_000_000_000_000n;
+
+/**
+ * Unwrap WETH NYANGKUT → ETH. WETH cuma perantara di bot ini (wrap saat open/swap);
+ * sisa apa pun dari operasi gagal-separuh dikembalikan ke ETH native. Tanpa ini,
+ * WETH menumpuk & harus di-unwrap manual (keluhan berulang user).
+ */
+async function sweepStuckWeth(bot: Telegraf) {
+  for (const cc of Object.values(CHAINS)) {
+    if (!cc.hasWethBase) continue;
+    try {
+      const bal: bigint = await cc.weth.balanceOf(cc.wallet.address);
+      if (bal < WETH_DUST) continue;
+      if (config.safety.dryRun) continue;
+      const tx = await cc.weth.withdraw(bal);
+      await tx.wait();
+      console.log(`[sweep-weth] unwrap ${ethers.formatEther(bal)} WETH → ETH (${cc.key})`);
+      await bot.telegram.sendMessage(
+        config.telegram.allowedUserId,
+        `♻️ WETH nyangkut ${Number(ethers.formatEther(bal)).toFixed(6)} disapu → ETH (${cc.label})`,
+      );
+    } catch (e) {
+      console.log(`[sweep-weth] ${cc.key} gagal: ${(e as Error).message.slice(0, 80)}`);
     }
   }
 }
