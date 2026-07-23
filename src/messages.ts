@@ -920,22 +920,22 @@ export function msgRangeStep(fee: number): string {
   );
 }
 
-export function msgAmountStep(maxLabel: string): string {
+export function msgAmountStep(symbol: string, maxLabel: string): string {
   return card(
     title('ADD LP', '3/4'),
     [
-      section('nominal ETH'),
+      section(`nominal ${symbol}`),
       fieldBlock([['maks', maxLabel]]),
     ],
   );
 }
 
-export function msgAmountCustom(maxLabel: string): string {
+export function msgAmountCustom(symbol: string, maxLabel: string, example: string): string {
   return card(
     title('ADD LP', 'nominal'),
     [
-      note(`ketik jumlah ETH (maks ${maxLabel})`),
-      `contoh · ${code('0.02')}`,
+      note(`ketik jumlah ${symbol} (maks ${maxLabel})`),
+      `contoh · ${code(example)}`,
     ],
   );
 }

@@ -1051,12 +1051,31 @@ async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
 }
 
 /** Langkah 3/4 — pilih nominal ETH. */
+// Preset nominal untuk base stablecoin (USDG/USDT) — dolar, bukan ETH.
+const STABLE_SIZES = [10, 50, 100, 250];
+
+/** Base asset yang dipilih di wizard (weth/usdg/usdt). */
+const wizardBase = (flow: AddFlow): BaseAsset => baseOf(getChain(flow.chain), flow.base ?? 'weth');
+
+/** Konteks nominal base-aware: preset, simbol, batas, contoh ketik. */
+function amountCtx(flow: AddFlow) {
+  const base = wizardBase(flow);
+  const stable = isStableBase(base.kind);
+  return {
+    symbol: base.symbol,
+    presets: stable ? STABLE_SIZES : store.getSizes().filter((a) => a <= maxEth),
+    cap: stable ? Infinity : maxEth, // batas ETH hanya berlaku utk base WETH
+    capLabel: stable ? 'tanpa batas' : maxEthLabel,
+    example: stable ? '50' : '0.02',
+  };
+}
+
 async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   flow.awaitingAmount = false;
-  const presets = store.getSizes().filter((a) => a <= maxEth);
+  const a = amountCtx(flow);
   const rows: any[] = [];
-  for (let i = 0; i < presets.length; i += 2) {
-    rows.push(presets.slice(i, i + 2).map((a) => Markup.button.callback(`${a} ETH`, `amt:${a}`)));
+  for (let i = 0; i < a.presets.length; i += 2) {
+    rows.push(a.presets.slice(i, i + 2).map((p) => Markup.button.callback(`${p} ${a.symbol}`, `amt:${p}`)));
   }
   rows.push([Markup.button.callback('Ketik nominal', 'amt:custom')]);
   // v4 lewati step rentang → "Kembali" ke pemilihan pool; v3 kembali ke rentang.
@@ -1065,7 +1084,7 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
     Markup.button.callback('Kembali', backTo),
     Markup.button.callback('Batal', 'cancel'),
   ]);
-  const text = msg.msgAmountStep(maxEthLabel);
+  const text = msg.msgAmountStep(a.symbol, a.capLabel);
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
@@ -1291,15 +1310,16 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow || flow.fee === undefined || flow.rangePct === undefined)
     return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  const a = amountCtx(flow);
   const v = ctx.match[1];
   if (v === 'custom') {
     flow.awaitingAmount = true;
     await ctx.answerCbQuery();
-    await ctx.editMessageText(msg.msgAmountCustom(maxEthLabel), html);
+    await ctx.editMessageText(msg.msgAmountCustom(a.symbol, a.capLabel, a.example), html);
     return;
   }
   const num = Number(v);
-  if (!(num > 0) || num > maxEth) return ctx.answerCbQuery('Nominal tidak valid.');
+  if (!(num > 0) || num > a.cap) return ctx.answerCbQuery('Nominal tidak valid.');
   flow.ethAmount = v;
   await ctx.answerCbQuery('Menghitung preview…');
   try {
@@ -1953,9 +1973,10 @@ bot.on(message('text'), async (ctx) => {
     return ctx.reply(msg.msgSessionExpired(), html);
   }
   if (flow?.awaitingAmount && flow.rangePct !== undefined) {
+    const a = amountCtx(flow);
     const num = Number(raw);
     if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
-    if (num > maxEth) return ctx.reply(msg.msgOverLimit(maxEthLabel), html);
+    if (num > a.cap) return ctx.reply(msg.msgOverLimit(a.capLabel), html);
     flow.awaitingAmount = false;
     flow.ethAmount = raw;
     try {
