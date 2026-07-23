@@ -595,6 +595,7 @@ export function msgSwapConfirm(o: {
     ...hrows([
       ['Tukar', o.amountInLabel],
       ['Toleransi harga', 'maks 5% (naik 15% bila gagal)'],
+      ['Estimasi', '~beberapa detik (1 tx)'],
     ]),
     '',
     note('estimasi; jumlah pasti dilindungi quoter saat eksekusi.'),
@@ -666,7 +667,10 @@ export function msgFundConfirm(q: {
   outUsd: string | null;
   feeUsd: string | null;
   impactPct: string | null;
+  etaSec: number | null;
 }, dryRun: boolean): string {
+  const eta =
+    q.etaSec == null ? '—' : q.etaSec < 60 ? `~${Math.max(1, Math.round(q.etaSec))} detik` : `~${Math.round(q.etaSec / 60)} menit`;
   const body = [
     `🟢 ≈ terima ${bold(q.outLabel)}${q.outUsd ? ` (${'$' + q.outUsd})` : ''}`,
     '',
@@ -675,6 +679,7 @@ export function msgFundConfirm(q: {
       ['≈ Terima', q.outLabel],
       ['Biaya', q.feeUsd ? `$${q.feeUsd}` : '—'],
       ['Impact', q.impactPct ? `${q.impactPct}%` : '—'],
+      ['Estimasi', eta],
     ]),
     '',
     note('bridge via Relay — dana tiba di wallet yang sama di chain tujuan (~detik).'),

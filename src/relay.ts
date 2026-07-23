@@ -22,6 +22,7 @@ export type BridgeQuote = {
   outUsd: string | null;
   feeUsd: string | null;
   impactPct: string | null;
+  etaSec: number | null; // estimasi waktu sampai (detik)
 };
 
 export async function getBridgeQuote(opts: {
@@ -82,6 +83,7 @@ export async function getBridgeQuote(opts: {
     outUsd: co.amountUsd != null ? Number(co.amountUsd).toFixed(2) : null,
     feeUsd,
     impactPct: det.totalImpact?.percent != null ? String(det.totalImpact.percent) : null,
+    etaSec: det.timeEstimate != null ? Number(det.timeEstimate) : null,
   };
 }
 
