@@ -662,6 +662,7 @@ export function msgFundAmountPrompt(symbol: string, balanceLabel: string): strin
 }
 
 export function msgFundConfirm(q: {
+  provider: 'relay' | 'lifi';
   inLabel: string;
   outLabel: string;
   outUsd: string | null;
@@ -682,7 +683,7 @@ export function msgFundConfirm(q: {
       ['Estimasi', eta],
     ]),
     '',
-    note('bridge via Relay — dana tiba di wallet yang sama di chain tujuan (~detik).'),
+    note(`via ${q.provider === 'lifi' ? 'LiFi' : 'Relay'} · dana tiba di wallet yang sama di chain tujuan.`),
   ];
   return card(`🌉 ${title('KONFIRMASI BRIDGE')}`, body, footerMode(dryRun));
 }
