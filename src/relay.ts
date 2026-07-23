@@ -48,7 +48,25 @@ export async function getBridgeQuote(opts: {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Relay quote gagal (${res.status}): ${(await res.text()).slice(0, 160)}`);
+  if (!res.ok) {
+    // Ambil pesan bersih dari JSON error Relay + terjemahkan kode yg umum.
+    let msg = (await res.text()).slice(0, 160);
+    let code = '';
+    try {
+      const j = JSON.parse(msg);
+      msg = j.message ?? msg;
+      code = j.errorCode ?? '';
+    } catch {
+      /* biarkan teks apa adanya */
+    }
+    if (code === 'NO_SWAP_ROUTES_FOUND' || /no routes/i.test(msg)) {
+      throw new Error('rute bridge belum tersedia untuk chain ini saat ini (likuiditas Relay menipis) — coba lagi nanti.');
+    }
+    if (code === 'INSUFFICIENT_LIQUIDITY') {
+      throw new Error(`likuiditas bridge kurang untuk nominal ini — ${msg}. Coba nominal lebih kecil.`);
+    }
+    throw new Error(msg);
+  }
   const q: any = await res.json();
   if (!Array.isArray(q.steps)) throw new Error(`Relay: ${q.message ?? 'quote tak berisi langkah'}`);
   const det = q.details ?? {};
