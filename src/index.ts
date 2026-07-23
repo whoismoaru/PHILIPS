@@ -1536,43 +1536,69 @@ async function cmdSwap(ctx: any) {
 }
 bot.command('swap', cmdSwap);
 
-// ---------- /fund — bridge cross-chain ke USDT @Stable via Relay ----------
-type FundFlow = { source: 'eth' | 'usdg'; awaitingAmount: boolean; quote?: BridgeQuote; startedAt: number };
+// ---------- /fund — bridge cross-chain Robinhood ⇄ Stable via Relay ----------
+// topup: Robinhood(ETH/USDG) → USDT@Stable. withdraw: USDT@Stable → Robinhood(ETH/USDG).
+type FundDir = 'topup' | 'withdraw';
+type FundFlow = { dir: FundDir; asset: 'eth' | 'usdg'; awaitingAmount: boolean; quote?: BridgeQuote; startedAt: number };
 const fundFlows = new Map<number, FundFlow>();
 const fundInFlight = new Set<number>(); // cegah double-tap Konfirmasi bridge
 
+/** Origin ctx untuk arah bridge (withdraw = Stable, topup = Robinhood). */
+const fundOrigin = (dir: FundDir): ChainCtx => (dir === 'withdraw' ? CHAINS.stable : getChain());
+
+async function fundBalanceLabel(dir: FundDir, asset: 'eth' | 'usdg'): Promise<string> {
+  try {
+    if (dir === 'topup') {
+      const o = getChain();
+      if (asset === 'eth') {
+        const b = await o.provider.getBalance(o.wallet.address);
+        return `Saldo ${Number(ethers.formatEther(b)).toFixed(4)} ETH`;
+      }
+      const uc = new ethers.Contract(o.usdgAddress!, ERC20_ABI, o.provider);
+      return `Saldo ${Number(ethers.formatUnits(await uc.balanceOf(o.wallet.address), 6)).toFixed(2)} USDG`;
+    }
+    const s = CHAINS.stable!;
+    const uc = new ethers.Contract(s.usdtAddress!, ERC20_ABI, s.provider);
+    return `Saldo ${Number(ethers.formatUnits(await uc.balanceOf(s.wallet.address), 6)).toFixed(2)} USDT`;
+  } catch {
+    return '';
+  }
+}
+
 function cmdFund(ctx: any) {
   if (!CHAINS.stable) return ctx.reply(msg.msgFundNoStable(), html);
-  const origin = getChain(); // Robinhood
-  const row = [Markup.button.callback('ETH', 'fund:eth')];
-  if (origin.usdgAddress) row.push(Markup.button.callback('USDG', 'fund:usdg'));
   return ctx.reply(msg.msgFundStart(), {
     ...html,
-    ...Markup.inlineKeyboard([row, [Markup.button.callback('Batal', 'cancel')]]),
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('⬆️ Isi Stable (→ USDT)', 'funddir:topup')],
+      [Markup.button.callback('⬇️ Tarik dari Stable (USDT →)', 'funddir:withdraw')],
+      [Markup.button.callback('Batal', 'cancel')],
+    ]),
   });
 }
 bot.command(['fund', 'bridge'], cmdFund);
 
-bot.action(/^fund:(eth|usdg)$/, async (ctx) => {
-  const source = ctx.match[1] as 'eth' | 'usdg';
-  fundFlows.set(ctx.from!.id, { source, awaitingAmount: true, startedAt: Date.now() });
+// Arah dipilih → pilih aset non-USDT (sumber saat topup, tujuan saat withdraw).
+bot.action(/^funddir:(topup|withdraw)$/, async (ctx) => {
+  const dir = ctx.match[1] as FundDir;
   await ctx.answerCbQuery();
   const origin = getChain();
-  const sym = source === 'eth' ? 'ETH' : 'USDG';
-  let balLabel = '';
-  try {
-    if (source === 'eth') {
-      const b = await origin.provider.getBalance(origin.wallet.address);
-      balLabel = `Saldo ${Number(ethers.formatEther(b)).toFixed(4)} ETH`;
-    } else {
-      const uc = new ethers.Contract(origin.usdgAddress!, ERC20_ABI, origin.provider);
-      const b: bigint = await uc.balanceOf(origin.wallet.address);
-      balLabel = `Saldo ${Number(ethers.formatUnits(b, 6)).toFixed(2)} USDG`;
-    }
-  } catch {
-    /* saldo opsional */
-  }
-  await ctx.editMessageText(msg.msgFundAmountPrompt(sym, balLabel), html);
+  const row = [Markup.button.callback('ETH', `fundasset:${dir}:eth`)];
+  if (origin.usdgAddress) row.push(Markup.button.callback('USDG', `fundasset:${dir}:usdg`));
+  await ctx.editMessageText(msg.msgFundAssetPick(dir), {
+    ...html,
+    ...Markup.inlineKeyboard([row, [Markup.button.callback('Batal', 'cancel')]]),
+  });
+});
+
+bot.action(/^fundasset:(topup|withdraw):(eth|usdg)$/, async (ctx) => {
+  const dir = ctx.match[1] as FundDir;
+  const asset = ctx.match[2] as 'eth' | 'usdg';
+  fundFlows.set(ctx.from!.id, { dir, asset, awaitingAmount: true, startedAt: Date.now() });
+  await ctx.answerCbQuery();
+  // Simbol yang diketik: topup = aset sumber; withdraw = USDT (yang dikirim dari Stable).
+  const inSym = dir === 'topup' ? (asset === 'eth' ? 'ETH' : 'USDG') : 'USDT';
+  await ctx.editMessageText(msg.msgFundAmountPrompt(inSym, await fundBalanceLabel(dir, asset)), html);
 });
 
 bot.action('fundok', async (ctx) => {
@@ -1581,17 +1607,17 @@ bot.action('fundok', async (ctx) => {
   if (!fflow?.quote) return ctx.answerCbQuery('Kedaluwarsa, ulangi /fund.');
   if (fundInFlight.has(uid)) return ctx.answerCbQuery('Sedang diproses…');
   fundInFlight.add(uid);
-  const quote = fflow.quote;
+  const { quote, dir } = fflow;
   fundFlows.delete(uid); // idempotency: hapus sebelum eksekusi
   try {
     await ctx.answerCbQuery('Diproses…');
     if (config.safety.dryRun) {
-      await ctx.editMessageText(msg.msgFundDone([], quote.outLabel, true), html);
+      await ctx.editMessageText(msg.msgFundDone([], quote!.outLabel, true), html);
       return;
     }
     await ctx.editMessageText(msg.msgProgress('mengirim bridge via Relay…'), html);
-    const { txHashes } = await executeBridge(quote, getChain());
-    await ctx.editMessageText(msg.msgFundDone(txHashes, quote.outLabel, false), html);
+    const { txHashes } = await executeBridge(quote!, fundOrigin(dir));
+    await ctx.editMessageText(msg.msgFundDone(txHashes, quote!.outLabel, false), html);
   } catch (e) {
     await ctx.reply(msg.msgError('fund', (e as Error).message), html);
   } finally {
@@ -1996,23 +2022,39 @@ bot.on(message('text'), async (ctx) => {
   if (fflow?.awaitingAmount) {
     const num = Number(raw);
     if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
-    const origin = getChain();
+    const rh = getChain();
     const stable = CHAINS.stable;
     if (!stable?.usdtAddress) return ctx.reply(msg.msgFundNoStable(), html);
-    const originCurrency = fflow.source === 'eth' ? NATIVE : origin.usdgAddress!;
-    const amountWei = fflow.source === 'eth' ? ethers.parseEther(raw) : ethers.parseUnits(raw, 6);
-    const sym = fflow.source === 'eth' ? 'ETH' : 'USDG';
-    // Cek saldo cukup (native = butuh amount + cadangan gas; USDG = amount).
+    const usdg = rh.usdgAddress;
+    // Rakit parameter bridge per arah.
+    let originCtx: ChainCtx, originCurrency: string, amountWei: bigint, destChainId: number, destCurrency: string, label: string;
+    if (fflow.dir === 'topup') {
+      originCtx = rh;
+      originCurrency = fflow.asset === 'eth' ? NATIVE : usdg!;
+      amountWei = fflow.asset === 'eth' ? ethers.parseEther(raw) : ethers.parseUnits(raw, 6);
+      destChainId = stable.chainId;
+      destCurrency = stable.usdtAddress;
+      label = `${fflow.asset === 'eth' ? 'ETH' : 'USDG'}→USDT`;
+    } else {
+      originCtx = stable;
+      originCurrency = stable.usdtAddress;
+      amountWei = ethers.parseUnits(raw, 6);
+      destChainId = rh.chainId;
+      destCurrency = fflow.asset === 'eth' ? NATIVE : usdg!;
+      label = `USDT→${fflow.asset === 'eth' ? 'ETH' : 'USDG'}`;
+    }
+    // Cek saldo cukup di chain asal (best-effort).
     try {
-      if (fflow.source === 'eth') {
-        const bal = await origin.provider.getBalance(origin.wallet.address);
+      if (fflow.dir === 'topup' && fflow.asset === 'eth') {
+        const bal = await rh.provider.getBalance(rh.wallet.address);
         if (amountWei + ethers.parseEther('0.0005') > bal)
           return ctx.reply(msg.msgError('fund', `Saldo ETH kurang (ada ${ethers.formatEther(bal)}).`), html);
       } else {
-        const uc = new ethers.Contract(origin.usdgAddress!, ERC20_ABI, origin.provider);
-        const bal: bigint = await uc.balanceOf(origin.wallet.address);
+        const tokenAddr = fflow.dir === 'topup' ? usdg! : stable.usdtAddress;
+        const uc = new ethers.Contract(tokenAddr, ERC20_ABI, originCtx.provider);
+        const bal: bigint = await uc.balanceOf(originCtx.wallet.address);
         if (amountWei > bal)
-          return ctx.reply(msg.msgError('fund', `Saldo USDG kurang (ada ${ethers.formatUnits(bal, 6)}).`), html);
+          return ctx.reply(msg.msgError('fund', `Saldo kurang (ada ${ethers.formatUnits(bal, 6)}).`), html);
       }
     } catch {
       /* cek saldo best-effort */
@@ -2020,12 +2062,12 @@ bot.on(message('text'), async (ctx) => {
     const prog = await ctx.reply(msg.msgProgress('minta quote Relay…'), html);
     try {
       const quote = await getBridgeQuote({
-        originCtx: origin,
+        originCtx,
         originCurrency,
         amountWei,
-        destChainId: stable.chainId,
-        destCurrency: stable.usdtAddress,
-        recipient: origin.wallet.address,
+        destChainId,
+        destCurrency,
+        recipient: originCtx.wallet.address,
       });
       fflow.quote = quote;
       fflow.awaitingAmount = false;
@@ -2037,7 +2079,7 @@ bot.on(message('text'), async (ctx) => {
       });
     } catch (e) {
       fundFlows.delete(ctx.from.id);
-      await editProgress(ctx, prog, msg.msgError('fund', `${sym}→USDT: ${(e as Error).message}`));
+      await editProgress(ctx, prog, msg.msgError('fund', `${label}: ${(e as Error).message}`));
     }
     return;
   }

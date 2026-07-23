@@ -640,15 +640,21 @@ export function msgFundNoStable(): string {
 }
 
 export function msgFundStart(): string {
-  return card(`🌉 ${title('FUND STABLE', 'via Relay')}`, [
-    'Kirim aset dari Robinhood → USDT di StableChain.',
+  return card(`🌉 ${title('BRIDGE', 'Robinhood ⇄ Stable')}`, [
+    'Pindah dana lintas-chain via Relay.',
     '',
-    note('pilih sumber dana:'),
+    note('pilih arah:'),
   ]);
 }
 
+export function msgFundAssetPick(dir: 'topup' | 'withdraw'): string {
+  return dir === 'topup'
+    ? card(`🌉 ${title('ISI STABLE', 'Robinhood → USDT')}`, [note('pilih sumber dana di Robinhood:')])
+    : card(`🌉 ${title('TARIK DARI STABLE', 'USDT → Robinhood')}`, [note('pilih aset tujuan di Robinhood:')]);
+}
+
 export function msgFundAmountPrompt(symbol: string, balanceLabel: string): string {
-  return card(`🌉 ${title('FUND STABLE', symbol)}`, [
+  return card(`🌉 ${title('BRIDGE', symbol)}`, [
     balanceLabel,
     `💬 Ketik jumlah ${bold(symbol)} yang mau di-bridge (contoh: ${code(symbol === 'ETH' ? '0.02' : '10')})`,
   ]);
@@ -662,7 +668,7 @@ export function msgFundConfirm(q: {
   impactPct: string | null;
 }, dryRun: boolean): string {
   const body = [
-    `🟢 ≈ terima ${bold(q.outLabel)}${q.outUsd ? ` (${'$' + q.outUsd})` : ''} di Stable`,
+    `🟢 ≈ terima ${bold(q.outLabel)}${q.outUsd ? ` (${'$' + q.outUsd})` : ''}`,
     '',
     ...hrows([
       ['Kirim', q.inLabel],
@@ -671,21 +677,21 @@ export function msgFundConfirm(q: {
       ['Impact', q.impactPct ? `${q.impactPct}%` : '—'],
     ]),
     '',
-    note('bridge via Relay — dana tiba di wallet yang sama di StableChain (~detik).'),
+    note('bridge via Relay — dana tiba di wallet yang sama di chain tujuan (~detik).'),
   ];
-  return card(`🌉 ${title('KONFIRMASI FUND')}`, body, footerMode(dryRun));
+  return card(`🌉 ${title('KONFIRMASI BRIDGE')}`, body, footerMode(dryRun));
 }
 
 export function msgFundDone(txHashes: string[], outLabel: string, dryRun: boolean): string {
   if (dryRun) {
-    return card(`⚪ ${title('FUND (DRY)')}`, [note('mode DRY RUN — tidak dieksekusi.'), '', hrow('≈ terima', outLabel)]);
+    return card(`⚪ ${title('BRIDGE (DRY)')}`, [note('mode DRY RUN — tidak dieksekusi.'), '', hrow('≈ terima', outLabel)]);
   }
-  return card(`✅ ${title('FUND TERKIRIM')}`, [
-    `🟢 ≈ ${bold(outLabel)} sedang menuju StableChain`,
+  return card(`✅ ${title('BRIDGE TERKIRIM')}`, [
+    `🟢 ≈ ${bold(outLabel)} sedang menuju chain tujuan`,
     '',
     hrow('Tx', String(txHashes.length)),
     '',
-    note('cek /status beberapa detik lagi — saldo USDT di Stable akan muncul.'),
+    note('cek /status beberapa detik lagi — saldo di chain tujuan akan muncul.'),
   ], footerMode(dryRun));
 }
 
