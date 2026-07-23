@@ -146,7 +146,7 @@ export async function fetchTopPools(
 /** Kandidat pool untuk 1 token — dipakai wizard /add. Cerminan app.uniswap.org. */
 export type TokenPool = {
   protocol: 'v3' | 'v4';
-  base: 'weth' | 'usdg'; // sisi base bot (WETH/ETH atau USDG)
+  base: 'weth' | 'usdg' | 'usdt'; // sisi base bot (WETH/ETH, USDG, atau USDT)
   baseSymbol: string; // 'ETH' | 'WETH' | 'USDG' (apa adanya dari Uniswap)
   otherSymbol: string; // simbol token target
   fee: number;

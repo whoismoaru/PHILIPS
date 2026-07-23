@@ -12,7 +12,7 @@ export type PosRecord = {
   ca: string; // alamat token (non-base)
   fee: number;
   symbol: string;
-  baseKind?: 'weth' | 'usdg'; // aset pasangan; kosong = weth (posisi lama)
+  baseKind?: 'weth' | 'usdg' | 'usdt'; // aset pasangan; kosong = weth (posisi lama)
   initialWethWei: string; // modal awal (base disetor) dalam unit base (WETH 18-dec / USDG 6-dec)
   nominalEth?: string; // nominal yang dipilih user (tampilan bersih)
   rangeLowPct?: number; // % ujung terjauh dari harga saat buka
@@ -56,7 +56,7 @@ export function addImported(rec: {
   ca: string;
   fee: number;
   symbol: string;
-  baseKind: 'weth' | 'usdg';
+  baseKind: 'weth' | 'usdg' | 'usdt';
 }): void {
   if (records.some((r) => r.tokenId === rec.tokenId)) return;
   records.push({

@@ -33,6 +33,8 @@ import {
   detectChains,
   baseOf,
   detectBase,
+  isStableBase,
+  baseSymbolOf,
   type ChainCtx,
   type BaseKind,
   type BaseAsset,
@@ -161,11 +163,12 @@ async function sweepTokenToBase(
     }
     prev = bal;
     try {
-      if (base.kind === 'usdg') {
+      if (isStableBase(base.kind)) {
+        // Stablecoin base (USDG/USDT): swap token → base (fungsi generik pakai base.address).
         const r = await swapTokenToUsdgRobust(otherAddr, bal, base.address, cc);
         baseOut += r.outWei;
         txHashes.push(...r.txHashes);
-        notes.push(`Swap ${attempt}: token → USDG via ${r.route}`);
+        notes.push(`Swap ${attempt}: token → ${base.symbol} via ${r.route}`);
       } else {
         const r = await swapTokenToEthRobust(otherAddr, bal, cc);
         baseOut += r.outEthWei;
@@ -478,7 +481,7 @@ bot.action('refresh:status', async (ctx) => {
 
 /** Nilai base (float) → USD. WETH: ×ethUsd (bisa null). USDG: 1:1 dollar. */
 async function baseToUsd(baseKind: BaseKind, amountFloat: number, cc: ChainCtx): Promise<number | null> {
-  if (baseKind === 'usdg') return amountFloat; // USDG ≈ $1
+  if (isStableBase(baseKind)) return amountFloat; // USDG/USDT ≈ $1
   const eu = await getEthUsd(cc.wethAddress, cc);
   return eu !== null ? amountFloat * eu : null;
 }
@@ -518,7 +521,7 @@ async function buildPositionCard(
     if (isGoneErr(e)) {
       finalizeClose(rec.tokenId, { reason: 'gone' });
       return {
-        text: msg.msgPositionGone(rec.tokenId, rec.symbol, rec.baseKind === 'usdg' ? 'USDG' : 'WETH'),
+        text: msg.msgPositionGone(rec.tokenId, rec.symbol, baseSymbolOf(rec.baseKind)),
         extra: html,
       };
     }

@@ -25,30 +25,42 @@ export type ChainCtx = {
   factory: ethers.Contract;
   positionManager: ethers.Contract;
   weth: ethers.Contract;
-  wethAddress: string;
+  wethAddress: string; // WETH canonical; ZeroAddress bila chain tak punya WETH (stablecoin-native)
+  hasWethBase: boolean; // apakah WETH boleh jadi base LP di chain ini
   usdgAddress?: string; // hanya chain yg punya USDG (Global Dollar). undefined = tak ada.
+  usdtAddress?: string; // hanya chain yg punya USDT (mis. Stable). undefined = tak ada.
   pmAddress: string;
   routerAddress: string;
   quoterAddress: string;
 };
 
-// --- Base asset (aset pasangan LP): WETH selalu ada; USDG opsional per chain. ---
-export type BaseKind = 'weth' | 'usdg';
+// --- Base asset (aset pasangan LP). Per chain: WETH (bila hasWethBase), USDG dan/atau
+// USDT (stablecoin 6-desimal). Chain stablecoin-native (mis. Stable) = USDT saja. ---
+export type BaseKind = 'weth' | 'usdg' | 'usdt';
 export type BaseAsset = {
   kind: BaseKind;
   address: string;
-  decimals: number; // WETH 18, USDG 6 — KRITIS untuk parseUnits, JANGAN parseEther utk USDG
-  symbol: string; // 'WETH' | 'USDG'
-  wrappable: boolean; // WETH: bisa wrap dari ETH native. USDG: ERC20 biasa, harus sudah dipegang.
+  decimals: number; // WETH 18, USDG/USDT 6 — KRITIS untuk parseUnits, JANGAN parseEther utk stablecoin
+  symbol: string; // 'WETH' | 'USDG' | 'USDT'
+  wrappable: boolean; // WETH: bisa wrap dari ETH native. Stablecoin: ERC20 biasa, harus sudah dipegang.
 };
 
-/** Daftar base asset yang tersedia di chain ini (WETH + USDG bila ada). */
+/** true bila base ini stablecoin dolar (USDG/USDT ≈ $1, 6-desimal, non-wrappable). */
+export const isStableBase = (kind: BaseKind): boolean => kind === 'usdg' || kind === 'usdt';
+
+/** Simbol tampilan sebuah base kind. */
+export const baseSymbolOf = (kind: BaseKind | undefined): string =>
+  kind === 'usdg' ? 'USDG' : kind === 'usdt' ? 'USDT' : 'WETH';
+
+/** Daftar base asset yang tersedia di chain ini. */
 export function basesFor(ctx: ChainCtx): BaseAsset[] {
-  const out: BaseAsset[] = [
-    { kind: 'weth', address: ctx.wethAddress, decimals: 18, symbol: 'WETH', wrappable: true },
-  ];
+  const out: BaseAsset[] = [];
+  if (ctx.hasWethBase)
+    out.push({ kind: 'weth', address: ctx.wethAddress, decimals: 18, symbol: 'WETH', wrappable: true });
   if (ctx.usdgAddress)
     out.push({ kind: 'usdg', address: ctx.usdgAddress, decimals: 6, symbol: 'USDG', wrappable: false });
+  if (ctx.usdtAddress)
+    out.push({ kind: 'usdt', address: ctx.usdtAddress, decimals: 6, symbol: 'USDT', wrappable: false });
   return out;
 }
 
@@ -84,6 +96,8 @@ type Def = {
   quoter: string;
   weth: string;
   usdg?: string;
+  usdt?: string;
+  hasWethBase?: boolean; // default true; false utk chain stablecoin-native (Stable)
 };
 
 const DEFS: Record<string, Def> = {
@@ -148,6 +162,27 @@ const DEFS: Record<string, Def> = {
   },
 };
 
+// --- StableChain (L1 stablecoin, gas USDT0). AKTIF hanya bila RPC_URL_STABLE diset ---
+// Uniswap v3 kanonik (docs.stable.xyz/reference/dexes). Base LP = USDT single-side
+// (6-desimal, non-wrappable, ≈$1 — pola sama dgn USDG). Tak ada WETH → hasWethBase=false.
+if (process.env.RPC_URL_STABLE) {
+  DEFS.stable = {
+    label: 'Stable',
+    chainId: Number(process.env.STABLE_CHAIN_ID ?? 988),
+    nativeSymbol: 'USDT0',
+    dexKey: 'stable', // DexScreener key (fail-open bila belum didukung)
+    blockscout: null, // stablescan.xyz bukan Blockscout — screening fallback DexScreener/on-chain
+    rpc: process.env.RPC_URL_STABLE,
+    factory: '0x88F0a512eF09175D456bc9547f914f48C013E4aA',
+    pm: '0x3BdC3437405f7D801b6036532713fc1F179136a6',
+    router: '0x32eaf9B5d5F2CD7361c5012890C943D7de84C22a',
+    quoter: '0xb070179E7032CdA868b53e6C1742F80c9e940d1A',
+    weth: ethers.ZeroAddress, // tak ada WETH di Stable
+    usdt: process.env.STABLE_USDT ?? '0x779Ded0c9e1022225f8E0630b35a9b54bE713736', // USDT 6-desimal
+    hasWethBase: false, // base LP = USDT saja
+  };
+}
+
 function build(key: string, d: Def): ChainCtx {
   const provider = new ethers.JsonRpcProvider(d.rpc, d.chainId);
   const wallet = new ethers.Wallet(config.wallet.privateKey, provider);
@@ -164,7 +199,9 @@ function build(key: string, d: Def): ChainCtx {
     positionManager: new ethers.Contract(d.pm, POSITION_MANAGER_ABI, wallet),
     weth: new ethers.Contract(d.weth, WETH_ABI, wallet),
     wethAddress: d.weth,
+    hasWethBase: d.hasWethBase ?? true,
     usdgAddress: d.usdg,
+    usdtAddress: d.usdt,
     pmAddress: d.pm,
     routerAddress: d.router,
     quoterAddress: d.quoter,
