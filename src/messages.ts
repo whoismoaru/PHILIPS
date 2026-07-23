@@ -254,12 +254,13 @@ function cockpitLines(dryRun: boolean): string[] {
     cmd('/add <CA>', 'buka LP'),
     cmd('/stop', 'tutup posisi'),
     cmd('/swap', 'ETH ⇄ USDG'),
+    cmd('/fund', 'bridge → USDT @Stable'),
     cmd('/setsize', 'preset nominal'),
     '',
     '🚨 <b>EMERGENCY</b>',
     cmd('/closeall', 'tutup SEMUA posisi'),
     '',
-    '⚠️ <i>/add /stop /swap /closeall menggerakkan dana on-chain</i>',
+    '⚠️ <i>/add /stop /swap /fund /closeall menggerakkan dana on-chain</i>',
   ];
 }
 
@@ -629,6 +630,63 @@ export function msgSwapDone(o: {
     ]),
   ];
   return card(`✅ ${title('SWAP SELESAI', swapDirLabel(o.dir))}`, body, footerMode(o.dryRun));
+}
+
+// ─── /fund — bridge cross-chain ke USDT @Stable via Relay ──────────────
+export function msgFundNoStable(): string {
+  return card(`🌉 ${title('FUND STABLE')}`, [
+    note('StableChain belum aktif — set RPC_URL_STABLE di .env & restart dulu.'),
+  ]);
+}
+
+export function msgFundStart(): string {
+  return card(`🌉 ${title('FUND STABLE', 'via Relay')}`, [
+    'Kirim aset dari Robinhood → USDT di StableChain.',
+    '',
+    note('pilih sumber dana:'),
+  ]);
+}
+
+export function msgFundAmountPrompt(symbol: string, balanceLabel: string): string {
+  return card(`🌉 ${title('FUND STABLE', symbol)}`, [
+    balanceLabel,
+    `💬 Ketik jumlah ${bold(symbol)} yang mau di-bridge (contoh: ${code(symbol === 'ETH' ? '0.02' : '10')})`,
+  ]);
+}
+
+export function msgFundConfirm(q: {
+  inLabel: string;
+  outLabel: string;
+  outUsd: string | null;
+  feeUsd: string | null;
+  impactPct: string | null;
+}, dryRun: boolean): string {
+  const body = [
+    `🟢 ≈ terima ${bold(q.outLabel)}${q.outUsd ? ` (${'$' + q.outUsd})` : ''} di Stable`,
+    '',
+    ...hrows([
+      ['Kirim', q.inLabel],
+      ['≈ Terima', q.outLabel],
+      ['Biaya', q.feeUsd ? `$${q.feeUsd}` : '—'],
+      ['Impact', q.impactPct ? `${q.impactPct}%` : '—'],
+    ]),
+    '',
+    note('bridge via Relay — dana tiba di wallet yang sama di StableChain (~detik).'),
+  ];
+  return card(`🌉 ${title('KONFIRMASI FUND')}`, body, footerMode(dryRun));
+}
+
+export function msgFundDone(txHashes: string[], outLabel: string, dryRun: boolean): string {
+  if (dryRun) {
+    return card(`⚪ ${title('FUND (DRY)')}`, [note('mode DRY RUN — tidak dieksekusi.'), '', hrow('≈ terima', outLabel)]);
+  }
+  return card(`✅ ${title('FUND TERKIRIM')}`, [
+    `🟢 ≈ ${bold(outLabel)} sedang menuju StableChain`,
+    '',
+    hrow('Tx', String(txHashes.length)),
+    '',
+    note('cek /status beberapa detik lagi — saldo USDT di Stable akan muncul.'),
+  ], footerMode(dryRun));
 }
 
 /** Prompt saat tombol menu "Tambah LP" ditekan (butuh argumen CA). */

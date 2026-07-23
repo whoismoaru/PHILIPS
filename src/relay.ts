@@ -8,7 +8,84 @@ import { getChain, type ChainCtx } from './chains.js';
  */
 
 const RELAY_API = 'https://api.relay.link/quote';
-const NATIVE = '0x0000000000000000000000000000000000000000';
+export const NATIVE = '0x0000000000000000000000000000000000000000';
+
+/**
+ * Bridge CROSS-CHAIN via Relay: aset origin (native/ERC20) → currency tujuan di
+ * chain lain (mis. WETH/USDG @Robinhood → USDT @Stable). Dua tahap: getBridgeQuote
+ * (preview, tanpa tx) → executeBridge (kirim langkah approve+deposit).
+ */
+export type BridgeQuote = {
+  raw: any; // quote penuh Relay (dipakai executeBridge)
+  inLabel: string; // "0.01 WETH"
+  outLabel: string; // "19.29 USDT0"
+  outUsd: string | null;
+  feeUsd: string | null;
+  impactPct: string | null;
+};
+
+export async function getBridgeQuote(opts: {
+  originCtx: ChainCtx;
+  originCurrency: string; // NATIVE (0x0) atau alamat ERC20
+  amountWei: bigint;
+  destChainId: number;
+  destCurrency: string;
+  recipient: string;
+}): Promise<BridgeQuote> {
+  const { originCtx, originCurrency, amountWei, destChainId, destCurrency, recipient } = opts;
+  const body = {
+    user: originCtx.wallet.address,
+    recipient,
+    originChainId: originCtx.chainId,
+    destinationChainId: destChainId,
+    originCurrency: originCurrency === NATIVE ? NATIVE : ethers.getAddress(originCurrency),
+    destinationCurrency: ethers.getAddress(destCurrency),
+    amount: amountWei.toString(),
+    tradeType: 'EXACT_INPUT',
+  };
+  const res = await fetch(RELAY_API, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Relay quote gagal (${res.status}): ${(await res.text()).slice(0, 160)}`);
+  const q: any = await res.json();
+  if (!Array.isArray(q.steps)) throw new Error(`Relay: ${q.message ?? 'quote tak berisi langkah'}`);
+  const det = q.details ?? {};
+  const ci = det.currencyIn ?? {};
+  const co = det.currencyOut ?? {};
+  const feeGas = q.fees?.gas?.amountUsd;
+  const feeRel = q.fees?.relayer?.amountUsd;
+  const feeUsd = feeGas != null || feeRel != null ? (Number(feeGas ?? 0) + Number(feeRel ?? 0)).toFixed(2) : null;
+  return {
+    raw: q,
+    inLabel: `${ci.amountFormatted ?? '?'} ${ci.currency?.symbol ?? ''}`.trim(),
+    outLabel: `${co.amountFormatted ?? '?'} ${co.currency?.symbol ?? ''}`.trim(),
+    outUsd: co.amountUsd != null ? Number(co.amountUsd).toFixed(2) : null,
+    feeUsd,
+    impactPct: det.totalImpact?.percent != null ? String(det.totalImpact.percent) : null,
+  };
+}
+
+/** Eksekusi langkah bridge (approve bila ERC20, lalu deposit). Return tx hashes. */
+export async function executeBridge(quote: BridgeQuote, originCtx: ChainCtx): Promise<{ txHashes: string[] }> {
+  const wallet = originCtx.wallet;
+  const txHashes: string[] = [];
+  for (const step of quote.raw.steps ?? []) {
+    for (const item of step.items ?? []) {
+      const d = item?.data;
+      if (!d?.to) continue;
+      const tx = await wallet.sendTransaction({
+        to: d.to,
+        data: d.data,
+        value: d.value ? BigInt(d.value) : 0n,
+      });
+      const rc = await tx.wait();
+      if (rc) txHashes.push(rc.hash);
+    }
+  }
+  return { txHashes };
+}
 
 export async function swapTokenToEthViaRelay(
   tokenAddress: string,
