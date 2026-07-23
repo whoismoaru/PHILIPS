@@ -1079,7 +1079,7 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   }
   rows.push([Markup.button.callback('Ketik nominal', 'amt:custom')]);
   // v4 lewati step rentang → "Kembali" ke pemilihan pool; v3 kembali ke rentang.
-  const backTo = flow.selected?.protocol === 'v4' ? 'back:pool' : 'back:range';
+  const backTo = 'back:range'; // v3 & v4 sama-sama lewat step range
   rows.push([
     Markup.button.callback('Kembali', backTo),
     Markup.button.callback('Batal', 'cancel'),
@@ -1134,14 +1134,26 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
+// Petakan lebar rentang % → jumlah tick-spacing utk posisi v4 single-sided.
+// widthTicks = ln(1+pct/100)/ln(1.0001); dibagi tickSpacing (min 1 spacing).
+function rangePctToSpacings(pct: number, tickSpacing: number): number {
+  const widthTicks = Math.log(1 + pct / 100) / Math.log(1.0001);
+  return Math.max(1, Math.round(widthTicks / tickSpacing));
+}
+
+/** Nominal base v4 dalam wei sesuai desimal base (ETH 18-dec / USDG 6-dec). */
+const v4AmountWei = (flow: AddFlow): bigint =>
+  ethers.parseUnits(flow.ethAmount!, wizardBase(flow).decimals);
+
 /** Langkah 4/4 versi v4 — dry-run staticCall utk validasi + preview rentang. */
 async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
   const cc = getChain(flow.chain);
   const pool = flow.selected!;
   const pk = pool.poolKey!;
-  const amountWei = ethers.parseEther(flow.ethAmount!);
+  const amountWei = v4AmountWei(flow);
+  const widthSpacings = rangePctToSpacings(flow.rangePct!, pk.tickSpacing);
   // Dry-run selalu (walau mode live) → staticCall memvalidasi mint sebelum konfirmasi.
-  const sim = await openPositionV4(cc, pk, pool.baseIsCurrency0!, amountWei, { dryRun: true });
+  const sim = await openPositionV4(cc, pk, pool.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: true });
   const val = await valuePositionV4(cc, pk, sim.tickLower, sim.tickUpper, sim.liquidity);
   const text = msg.msgPlanStepV4({
     screenDanger: flow.screenBahaya,
@@ -1271,12 +1283,12 @@ bot.action(/^pick:(\d+)$/, async (ctx) => {
   if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
   const sel = flow.pools[Number(ctx.match[1])];
   if (!sel) return ctx.answerCbQuery('Pilihan tak valid, ulangi /add.');
-  // v4 buka posisi hanya utk pool base ETH-native (konsisten dgn jalur add-v4 yg
-  // ada). Pool v4 USDG/WETH tetap TAMPIL (paritas Uniswap) tapi belum bisa dibuka.
+  // v4: dukung base ETH-native & USDG. WETH-wrapped (bukan native) di-skip —
+  // wallet pegang ETH native (bukan WETH), jadi tak bisa mendanai.
   if (sel.protocol === 'v4') {
     const pk = sel.poolKey!;
     const baseCur = sel.baseIsCurrency0 ? pk.currency0 : pk.currency1;
-    if (baseCur !== ethers.ZeroAddress) {
+    if (sel.base === 'weth' && baseCur !== ethers.ZeroAddress) {
       await ctx.answerCbQuery();
       return ctx.reply(msg.msgV4BaseUnsupported(), html);
     }
@@ -1286,16 +1298,10 @@ bot.action(/^pick:(\d+)$/, async (ctx) => {
   flow.fee = sel.fee;
   flow.plan = undefined;
   flow.ethAmount = undefined;
+  flow.rangePct = undefined;
   await ctx.answerCbQuery();
-  if (sel.protocol === 'v4') {
-    // v4 single-sided pakai lebar default (seperti jalur add-v4 yg sudah ada) →
-    // lewati step rentang %, langsung nominal. Sentinel -1 melewati guard rangePct.
-    flow.rangePct = -1;
-    await renderAmountStep(ctx, flow, true);
-  } else {
-    flow.rangePct = undefined;
-    await renderRangeStep(ctx, flow, true);
-  }
+  // v3 & v4 sama-sama pilih range dulu (v4: % dipetakan ke lebar tick).
+  await renderRangeStep(ctx, flow, true);
 });
 
 bot.action(/^rng:(\d+)$/, async (ctx) => {
@@ -1366,8 +1372,8 @@ bot.action('addok', async (ctx) => {
   const flow = getFlow(ctx);
   // --- Jalur v4 (buka posisi single-sided ETH di pool v4) ---
   if (flow?.selected?.protocol === 'v4') {
-    if (!flow.ethAmount) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
-    const { selected, ethAmount, chain } = flow;
+    if (!flow.ethAmount || flow.rangePct === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+    const { selected, ethAmount, chain, rangePct } = flow;
     flows.delete(ctx.from!.id); // idempotency: double-tap tak buka dobel
     await ctx.answerCbQuery('Diproses…');
     if (config.safety.dryRun) return void (await ctx.editMessageText(msg.msgDryRunAddDone(), html));
@@ -1375,8 +1381,10 @@ bot.action('addok', async (ctx) => {
       await ctx.editMessageText(msg.msgOpeningLp(), html);
       const cc = getChain(chain);
       const pk = selected.poolKey!;
-      const amountWei = ethers.parseEther(ethAmount);
-      const r = await openPositionV4(cc, pk, selected.baseIsCurrency0!, amountWei, { dryRun: false });
+      const base = baseOf(cc, selected.base); // 'weth'→ETH-native / 'usdg'→USDG
+      const amountWei = ethers.parseUnits(ethAmount, base.decimals);
+      const widthSpacings = rangePctToSpacings(rangePct, pk.tickSpacing);
+      const r = await openPositionV4(cc, pk, selected.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: false });
       if (r.tokenId) {
         v4store.trackV4({
           tokenId: r.tokenId,
@@ -1386,7 +1394,7 @@ bot.action('addok', async (ctx) => {
           fee: pk.fee,
           tickSpacing: pk.tickSpacing,
           hooks: pk.hooks,
-          base: 'ETH', // pick sudah menjamin base currency = ETH-native
+          base: selected.base === 'usdg' ? 'USDG' : 'ETH',
           baseIsCurrency0: r.baseIsCurrency0,
           entryBaseWei: amountWei.toString(),
         });
@@ -1394,8 +1402,8 @@ bot.action('addok', async (ctx) => {
       await ctx.editMessageText(
         msg.msgV4Added({
           tokenId: r.tokenId,
-          sizeEth: ethAmount,
-          rangeLabel: 'single-sided ETH · di atas harga',
+          sizeEth: `${ethAmount} ${base.symbol}`,
+          rangeLabel: `single-sided ${base.symbol} · rentang ~${rangePct}%`,
           txHash: r.txHash,
           dryRun: false,
         }),
@@ -1921,7 +1929,7 @@ bot.action(/^addv4go:(\d+):([\d.]+)$/, async (ctx) => {
       });
     }
     await ctx.reply(
-      msg.msgV4Added({ tokenId: r.tokenId, sizeEth: size, rangeLabel: 'single-sided ETH · di atas harga', txHash: r.txHash, dryRun: !!r.dryRun }),
+      msg.msgV4Added({ tokenId: r.tokenId, sizeEth: `${size} ETH`, rangeLabel: 'single-sided ETH · di atas harga', txHash: r.txHash, dryRun: !!r.dryRun }),
       html,
     );
   } catch (e) {

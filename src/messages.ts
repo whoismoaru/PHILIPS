@@ -344,7 +344,7 @@ export function msgV4Added(o: {
   if (o.dryRun) {
     return card(`⚪ ${title('ADD v4 (DRY)')}`, [
       ...hrows([
-        ['Deposit', `${o.sizeEth} ETH`],
+        ['Deposit', o.sizeEth],
         ['Range', o.rangeLabel],
       ]),
       '',
@@ -1102,9 +1102,9 @@ export function msgPlanStepV4(opts: {
 
 /** Pool v4 dipilih tapi base-nya bukan ETH-native (belum didukung utk buka). */
 export function msgV4BaseUnsupported(): string {
-  return card(`ℹ️ ${title('POOL v4 NON-ETH')}`, [
-    note('pool v4 ini pakai base USDG/WETH — buka posisi belum didukung.'),
-    note('pilih pool base ETH (v4) atau pool v3 dari daftar.'),
+  return card(`ℹ️ ${title('POOL v4 WETH-BUNGKUS')}`, [
+    note('pool v4 ini pakai WETH terbungkus (bukan ETH-native) — belum didukung.'),
+    note('pilih pool base ETH-native / USDG (v4) atau pool v3 dari daftar.'),
   ]);
 }
 

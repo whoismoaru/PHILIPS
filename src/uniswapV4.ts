@@ -352,7 +352,12 @@ export async function openPositionV4(
 
   if (!isNative && !opts.dryRun) await ensurePermit2(cc, baseCurrency, pmAddr, baseAmountWei);
 
-  await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address, value });
+  // staticCall memvalidasi mint sebelum kirim. Utk base non-native saat DRY-RUN,
+  // Permit2 belum diset → staticCall pasti revert; lewati (validasi tetap jalan di
+  // jalur live: ensurePermit2 dulu, lalu staticCall di bawah, baru tx).
+  if (isNative || !opts.dryRun) {
+    await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address, value });
+  }
   if (opts.dryRun) return { dryRun: true, tickLower, tickUpper, liquidity, baseIsCurrency0 };
   const tx = await pm.modifyLiquidities(unlockData, deadline, { value });
   const rc = await tx.wait();
