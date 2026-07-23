@@ -1232,7 +1232,9 @@ bot.command(['add', 'addlp'], async (ctx) => {
       prog,
       msg.msgError(
         'chain',
-        'Token tidak ditemukan di chain mana pun (Robinhood/Ethereum/Base/BSC).',
+        `Token tidak ditemukan di chain mana pun (${Object.values(CHAINS)
+          .map((c) => c.label)
+          .join('/')}).`,
       ),
     );
   }
