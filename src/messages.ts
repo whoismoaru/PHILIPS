@@ -665,6 +665,7 @@ export function msgFundConfirm(q: {
   provider: 'relay' | 'lifi';
   inLabel: string;
   outLabel: string;
+  inUsd: string | null;
   outUsd: string | null;
   feeUsd: string | null;
   impactPct: string | null;
@@ -672,6 +673,9 @@ export function msgFundConfirm(q: {
 }, dryRun: boolean): string {
   const eta =
     q.etaSec == null ? '—' : q.etaSec < 60 ? `~${Math.max(1, Math.round(q.etaSec))} detik` : `~${Math.round(q.etaSec / 60)} menit`;
+  // Estimasi PnL transfer = nilai diterima − nilai dikirim (rugi ke biaya+impact).
+  const net = q.inUsd != null && q.outUsd != null ? Number(q.outUsd) - Number(q.inUsd) : null;
+  const netLabel = net != null ? `${usdSigned(net)}${q.inUsd && Number(q.inUsd) > 0 ? ` (${pctSigned((net / Number(q.inUsd)) * 100)})` : ''}` : '—';
   const body = [
     `🟢 ≈ terima ${bold(q.outLabel)}${q.outUsd ? ` (${'$' + q.outUsd})` : ''}`,
     '',
@@ -680,6 +684,7 @@ export function msgFundConfirm(q: {
       ['≈ Terima', q.outLabel],
       ['Biaya', q.feeUsd ? `$${q.feeUsd}` : '—'],
       ['Impact', q.impactPct ? `${q.impactPct}%` : '—'],
+      ['Est. PnL', netLabel],
       ['Estimasi', eta],
     ]),
     '',
@@ -1017,6 +1022,7 @@ export function msgPlanStep(opts: {
   symbol: string;
   fee: number;
   depositAmount: string;
+  depositUsd?: number; // nilai entry USD (estimasi modal masuk)
   pctHigh: number;
   pctLow: number;
   currentPrice: string;
@@ -1041,7 +1047,7 @@ export function msgPlanStep(opts: {
   body.push(
     ...hrows([
       ['Pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
-      ['Deposit', `${opts.depositAmount} ${opts.baseSymbol}`],
+      ['Deposit', `${opts.depositAmount} ${opts.baseSymbol}${opts.depositUsd != null ? ` ≈ $${opts.depositUsd.toFixed(2)}` : ''}`],
       ['Range', `${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`],
       ['Price', `1 ${opts.symbol} = ${opts.currentPrice} ${opts.baseSymbol}`],
     ]),
@@ -1061,6 +1067,7 @@ export function msgPlanStep(opts: {
   } else {
     body.push('', `🟢 ${bold('saldo cukup')} — siap eksekusi`);
   }
+  body.push('', note('est. PnL = fee terkumpul − impermanent loss; dipantau live di /positions.'));
   if (opts.dryRun) {
     body.push('', note('⚪ simulasi — tidak mengirim tx on-chain'));
   } else {
@@ -1078,6 +1085,7 @@ export function msgPlanStepV4(opts: {
   fee: number;
   tvlUsd: number;
   depositAmount: string;
+  depositUsd?: number; // nilai entry USD (estimasi modal masuk)
   rangePctHigh: number;
   rangePctLow: number;
   dryRun: boolean;
@@ -1092,12 +1100,13 @@ export function msgPlanStepV4(opts: {
     ...hrows([
       ['Pair', `${opts.symbol} / ${opts.baseSymbol} · ${feeLabel(opts.fee)}`],
       ['Protokol', `Uniswap v4 · TVL ${usdCompact(opts.tvlUsd)}`],
-      ['Deposit', `${opts.depositAmount} ${opts.baseSymbol}`],
+      ['Deposit', `${opts.depositAmount} ${opts.baseSymbol}${opts.depositUsd != null ? ` ≈ $${opts.depositUsd.toFixed(2)}` : ''}`],
       ['Range', `${fmtPct(opts.rangePctHigh)} → ${fmtPct(opts.rangePctLow)}`],
     ]),
     '',
     note('single-sided ETH — LP ditaruh di sisi ETH; fee mengalir saat harga bergerak masuk rentang.'),
   );
+  body.push('', note('est. PnL = fee terkumpul − impermanent loss; dipantau live di /positions.'));
   if (opts.dryRun) {
     body.push('', note('⚪ simulasi — tidak mengirim tx on-chain'));
   } else {

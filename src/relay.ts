@@ -23,7 +23,8 @@ export type BridgeQuote = {
   raw: any;
   inLabel: string; // "0.01 WETH"
   outLabel: string; // "19.29 USDT0"
-  outUsd: string | null;
+  inUsd: string | null; // nilai USD yang dikirim
+  outUsd: string | null; // nilai USD yang diterima
   feeUsd: string | null;
   impactPct: string | null;
   etaSec: number | null; // estimasi waktu sampai (detik)
@@ -83,6 +84,7 @@ async function relayQuote(opts: QuoteOpts): Promise<BridgeQuote> {
     raw: q,
     inLabel: `${ci.amountFormatted ?? '?'} ${ci.currency?.symbol ?? ''}`.trim(),
     outLabel: `${co.amountFormatted ?? '?'} ${co.currency?.symbol ?? ''}`.trim(),
+    inUsd: ci.amountUsd != null ? Number(ci.amountUsd).toFixed(2) : null,
     outUsd: co.amountUsd != null ? Number(co.amountUsd).toFixed(2) : null,
     feeUsd,
     impactPct: det.totalImpact?.percent != null ? String(det.totalImpact.percent) : null,
@@ -116,6 +118,7 @@ async function lifiQuote(opts: QuoteOpts): Promise<BridgeQuote> {
     raw: d,
     inLabel: `${ethers.formatUnits(est.fromAmount, act.fromToken.decimals)} ${act.fromToken.symbol}`,
     outLabel: `${ethers.formatUnits(est.toAmount, act.toToken.decimals)} ${act.toToken.symbol}`,
+    inUsd: fromUsd ? fromUsd.toFixed(2) : null,
     outUsd: toUsd ? toUsd.toFixed(2) : null,
     feeUsd,
     impactPct: impact != null ? impact.toFixed(2) : null,

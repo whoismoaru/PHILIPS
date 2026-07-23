@@ -1105,6 +1105,7 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   let cost: Awaited<ReturnType<typeof estimateAddCost>> | null = null;
   if (costSettled.status === 'fulfilled') cost = costSettled.value;
   else console.log('[estimateAddCost] gagal:', String(costSettled.reason).slice(0, 120));
+  const depositUsd = (await baseToUsd(base.kind, Number(flow.ethAmount!), cc)) ?? undefined;
   const text = msg.msgPlanStep({
     screenDanger: flow.screenBahaya,
     screenFailed: flow.screenFailed,
@@ -1112,6 +1113,7 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
     symbol: plan.otherSymbol,
     fee: flow.fee!,
     depositAmount: flow.ethAmount!,
+    depositUsd,
     pctHigh: plan.pctHigh,
     pctLow: plan.pctLow,
     currentPrice: String(plan.currentPrice),
@@ -1155,6 +1157,7 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
   // Dry-run selalu (walau mode live) → staticCall memvalidasi mint sebelum konfirmasi.
   const sim = await openPositionV4(cc, pk, pool.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: true });
   const val = await valuePositionV4(cc, pk, sim.tickLower, sim.tickUpper, sim.liquidity);
+  const depositUsd = (await baseToUsd(wizardBase(flow).kind, Number(flow.ethAmount!), cc)) ?? undefined;
   const text = msg.msgPlanStepV4({
     screenDanger: flow.screenBahaya,
     screenFailed: flow.screenFailed,
@@ -1163,6 +1166,7 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
     fee: pool.fee,
     tvlUsd: pool.tvlUsd,
     depositAmount: flow.ethAmount!,
+    depositUsd,
     rangePctHigh: val.rangePctHigh,
     rangePctLow: val.rangePctLow,
     dryRun: config.safety.dryRun,
