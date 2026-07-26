@@ -181,16 +181,17 @@ export function modeLabel(dryRun: boolean): string {
   return dryRun ? 'DRY RUN' : 'LIVE';
 }
 
-export function nowUtc(): string {
-  const d = new Date();
+/** Jam lokal pemilik bot (WIB, UTC+7) — bukan UTC: kartu dibaca dari HP di Jakarta. */
+export function nowWib(): string {
+  const d = new Date(Date.now() + 7 * 3_600_000);
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
-  return `${hh}:${mm} UTC`;
+  return `${hh}:${mm} WIB`;
 }
 
 function footerMode(dryRun?: boolean): string {
-  if (dryRun === undefined) return nowUtc();
-  return `${modeLabel(dryRun)} · ${nowUtc()}`;
+  if (dryRun === undefined) return nowWib();
+  return `${modeLabel(dryRun)} · ${nowWib()}`;
 }
 
 /** Parse multi-chain balance string into field rows. */
@@ -287,7 +288,7 @@ export function msgStarted(o: {
       '',
       note('/help untuk daftar perintah'),
     ],
-    nowUtc(),
+    nowWib(),
   );
 }
 
@@ -338,7 +339,7 @@ export function msgV4Closed(o: {
   else body.push(`💰 ${bold('dana kembali ke wallet')}`);
   if (o.pnlText) body.push('', bold(`PnL  ${o.pnlText}`));
   if (o.txHash) body.push('', ...hrows([['tx', shortAddr(o.txHash)]]));
-  return card(`✅ ${title('CLOSED v4', `#${o.tokenId}`)}`, body, nowUtc());
+  return card(`✅ ${title('CLOSED v4', `#${o.tokenId}`)}`, body, nowWib());
 }
 
 /** Hasil tambah likuiditas v4 (atau simulasi dry-run). */
@@ -368,7 +369,7 @@ export function msgV4Added(o: {
     ]),
   ];
   if (o.txHash) body.push('', ...hrows([['tx', shortAddr(o.txHash)]]));
-  return card(`✅ ${title('ADDED v4', o.tokenId ? `#${o.tokenId}` : '')}`, body, nowUtc());
+  return card(`✅ ${title('ADDED v4', o.tokenId ? `#${o.tokenId}` : '')}`, body, nowWib());
 }
 
 /** Konfirmasi tutup posisi Uniswap v4. */
@@ -383,8 +384,8 @@ export function msgV4CloseConfirm(tokenId: string): string {
 /** Alert monitor: posisi v4 (dikelola bot) masuk/keluar range. */
 export function msgV4Range(tokenId: string, inRange: boolean): string {
   return inRange
-    ? card(`🟢 ${title('V4 IN RANGE', `#${tokenId}`)}`, [`🟢 ${bold('kembali dalam rentang')} — fee mengalir lagi.`], nowUtc())
-    : card(`🔴 ${title('V4 OUT OF RANGE', `#${tokenId}`)}`, [`🔴 ${bold('keluar rentang')} — posisi v4 di luar; pertimbangkan tutup.`], nowUtc());
+    ? card(`🟢 ${title('V4 IN RANGE', `#${tokenId}`)}`, [`🟢 ${bold('kembali dalam rentang')} — fee mengalir lagi.`], nowWib())
+    : card(`🔴 ${title('V4 OUT OF RANGE', `#${tokenId}`)}`, [`🔴 ${bold('keluar rentang')} — posisi v4 di luar; pertimbangkan tutup.`], nowWib());
 }
 
 
@@ -486,7 +487,7 @@ export function msgStatus(opts: {
   return card(
     `${dot} ${title('UANG', modeTxt)}`,
     body,
-    `${modeTxt} · chain ${esc(String(opts.chainId))} · limit ${esc(opts.limitLabel)} · ${nowUtc()}`,
+    `${modeTxt} · chain ${esc(String(opts.chainId))} · limit ${esc(opts.limitLabel)} · ${nowWib()}`,
   );
 }
 
@@ -738,7 +739,7 @@ export function msgError(where: string, err: string): string {
   return card(
     `❌ ${title('ERROR', where)}`,
     [note(first), '', note('coba ulangi — detail lengkap ada di log service.')],
-    nowUtc(),
+    nowWib(),
   );
 }
 
@@ -815,7 +816,7 @@ export function msgPositionGone(tokenId: string, symbol: string, baseSymbol = 'W
       fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
       note('sudah tertutup on-chain — dibersihkan dari daftar aktif.'),
     ],
-    nowUtc(),
+    nowWib(),
   );
 }
 
@@ -823,7 +824,7 @@ export function msgPositionReadFail(tokenId: string, err: string): string {
   return card(
     title('READ FAIL', `#${tokenId}`),
     [esc(err)],
-    nowUtc(),
+    nowWib(),
   );
 }
 
@@ -852,7 +853,7 @@ export function msgPositionDetail(opts: {
     '',
     `${e} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`,
   ];
-  return card(`${e} ${title('DETAIL', `#${opts.tokenId}`)}`, body, nowUtc());
+  return card(`${e} ${title('DETAIL', `#${opts.tokenId}`)}`, body, nowWib());
 }
 
 /** Daftar posisi konsolidasi: ringkasan + pohon per-posisi (satu pesan). */
@@ -872,29 +873,35 @@ export function msgPositionsList(opts: {
     inRange: boolean;
   }>;
 }): string {
-  const dot = opts.dryRun ? '⚪' : '🟢';
-  // Satu tabel <pre> (kolom benar-benar sejajar) + satu highlight, bukan pohon
-  // ┌│└ 4-baris/posisi yang menggantung di item terakhir.
-  const header = ['id', 'pair', 'modal', 'pnl', 'umur'];
-  const rows = opts.rows.map((r) => [
-    r.id,
-    r.pair.length > 13 ? r.pair.slice(0, 12) + '…' : r.pair,
+  // Satu baris per posisi, kolom sejajar di dalam <pre>. Emoji status ditaruh di
+  // UJUNG baris supaya lebarnya yang tak menentu tak menggeser kolom di depannya.
+  const MAX_ROWS = 8; // kartu tetap terbaca di HP; sisanya disebut, bukan dihilangkan diam-diam
+  const shown = opts.rows.slice(0, MAX_ROWS);
+  const cells = shown.map((r) => [
+    `#${r.id}`,
+    r.pair.length > 14 ? r.pair.slice(0, 13) + '…' : r.pair,
     r.investLabel,
     r.pnlUsd === null ? '—' : usdSigned(r.pnlUsd),
     r.age,
   ]);
-  const out = opts.rows.filter((r) => !r.inRange);
-  const body: string[] = [
-    pre(alignTable(header, rows, [false, false, true, true, true])),
+  const w = [0, 1, 2, 3, 4].map((i) => Math.max(...cells.map((c) => c[i].length)));
+  const lines = cells.map(
+    (c, i) =>
+      `${c[0].padEnd(w[0])}  ${c[1].padEnd(w[1])}  ${c[2].padStart(w[2])}  ${c[3].padStart(w[3])}  ${c[4].padStart(w[4])}  ${shown[i].inRange ? '🟢' : '🔴'}`,
+  );
+  const width = Math.max(...lines.map((l) => l.length - 2), 24); // -2: emoji dihitung 1 kolom
+  const hr = '-'.repeat(Math.min(width, 47));
+
+  const out = [
+    `<b>POSITION</b>`,
     '',
-    `💰 ${bold(`net ${opts.totalPnlUsd === null ? '—' : usdSigned(opts.totalPnlUsd)}`)} · modal ${esc(opts.totalInvestLabel)}`,
+    pre([hr, '', lines.join('\n\n'), '', hr].join('\n')),
+    '',
+    `💵 ${bold(`Net ${opts.totalPnlUsd === null ? '—' : usdSigned(opts.totalPnlUsd)}`)}`,
   ];
-  if (out.length) {
-    body.push(
-      `🔴 ${bold(out.map((r) => '#' + r.id).join(' · '))} di luar rentang — fee berhenti`,
-    );
-  }
-  return card(`${dot} ${title('POSISI', `${opts.activeCount} aktif`)}`, body, footerMode(opts.dryRun));
+  if (opts.rows.length > MAX_ROWS) out.push(italic(`+${opts.rows.length - MAX_ROWS} posisi lain — tutup dulu untuk melihatnya`));
+  out.push('', italic(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
+  return out.join('\n');
 }
 
 export function msgNoPositions(): string {
@@ -948,7 +955,7 @@ export function msgJournal(
   if (totalInJournal && totalInJournal > items.length) {
     body.push(note(`jurnal menyimpan ${totalInJournal} trade — rekap penuh di /pnl.`));
   }
-  return card(`🧾 ${title('RIWAYAT', `${items.length} terakhir`)}`, body, nowUtc());
+  return card(`🧾 ${title('RIWAYAT', `${items.length} terakhir`)}`, body, nowWib());
 }
 
 // ─── wizard steps ──────────────────────────────────────────────────
@@ -1049,7 +1056,7 @@ export function msgPlanStep(opts: {
   return card(
     `${dot} ${title('PREVIEW', `${opts.symbol} · 4/4`)}`,
     body,
-    `${opts.dryRun ? 'DRY RUN — tidak kirim tx' : 'LIVE · konfirmasi = kirim tx'} · ${nowUtc()}`,
+    `${opts.dryRun ? 'DRY RUN — tidak kirim tx' : 'LIVE · konfirmasi = kirim tx'} · ${nowWib()}`,
   );
 }
 
@@ -1159,7 +1166,7 @@ export function msgLpOpened(tokenId: string, notes: string[]): string {
     body.push('', section('notes'));
     for (const n of notes) body.push(`  ${esc(n)}`);
   }
-  return card(`✅ ${title('OPENED', `#${tokenId}`)}`, body, nowUtc());
+  return card(`✅ ${title('OPENED', `#${tokenId}`)}`, body, nowWib());
 }
 
 // ─── stop / close ──────────────────────────────────────────────────
@@ -1187,7 +1194,7 @@ export function msgStopConfirm(opts: {
     '',
     quoteHtml(`⚠️ Menutup = remove + swap semua ke ${esc(opts.baseSymbol)}. Tak bisa dibatalkan.`),
   ];
-  return card(title('CLOSE', `#${opts.tokenId}`), body, nowUtc());
+  return card(title('CLOSE', `#${opts.tokenId}`), body, nowWib());
 }
 
 export function msgStopPick(): string {
@@ -1219,7 +1226,7 @@ export function msgAlreadyClosed(tokenId: string): string {
   return card(
     title('ALREADY CLOSED', `#${tokenId}`),
     [note('ditandai STOPPED & dibersihkan.')],
-    nowUtc(),
+    nowWib(),
   );
 }
 
@@ -1242,7 +1249,7 @@ export function msgCashOut(opts: {
     body.push('', section('notes'));
     for (const n of opts.notes) body.push(`  ${esc(n)}`);
   }
-  return card(`✅ ${title('CASHED OUT', `#${opts.tokenId}`)}`, body, nowUtc());
+  return card(`✅ ${title('CASHED OUT', `#${opts.tokenId}`)}`, body, nowWib());
 }
 
 // ─── monitor ───────────────────────────────────────────────────────
@@ -1254,7 +1261,7 @@ export function msgRangeEnter(tokenId: string, symbol: string, baseSymbol = 'WET
       fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
       `🟢 ${bold('fee mulai mengalir')} — ${esc(baseSymbol)} konversi ke ${esc(symbol)}.`,
     ],
-    nowUtc(),
+    nowWib(),
   );
 }
 
@@ -1271,7 +1278,7 @@ export function msgRangeExit(
         fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
         `🟢 ${bold('AMAN')} — harga naik keluar rentang; posisi kembali 100% ${esc(baseSymbol)} + fee.`,
       ],
-      nowUtc(),
+      nowWib(),
     );
   }
   return card(
@@ -1281,7 +1288,7 @@ export function msgRangeExit(
       `🔴 ${bold('RISIKO')} — ${esc(baseSymbol)} sudah 100% jadi ${esc(symbol)}.`,
       note(`pulih hanya bila harga naik lagi. Pertimbangkan /stop.`),
     ],
-    nowUtc(),
+    nowWib(),
   );
 }
 
@@ -1297,7 +1304,7 @@ export function msgCrash(kind: string, err: string): string {
       note(`teknis: ${firstLine}`),
       note('bot restart otomatis — dana & posisi aman on-chain.'),
     ],
-    nowUtc(),
+    nowWib(),
   );
 }
 

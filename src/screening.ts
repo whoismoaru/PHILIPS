@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { bold, card, code, esc, hrows, nowUtc } from './messages.js';
+import { bold, card, code, esc, hrows, nowWib } from './messages.js';
 import { getChain, basesFor, type ChainCtx } from './chains.js';
 
 const QUOTER_ABI = [
@@ -368,6 +368,6 @@ export function formatScreen(s: ScreenResult): string {
   return card(
     `${headEmoji} ${bold('SCREEN · ' + verdictLabel)} · ${esc(s.symbol)}`,
     body,
-    nowUtc(),
+    nowWib(),
   );
 }

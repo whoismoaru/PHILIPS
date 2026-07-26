@@ -268,7 +268,7 @@ export function renderExplore(pools: ExplorePool[], chainLabel: string): string 
     return m.card(`📈 ${m.title('EXPLORE', chainLabel)}`, [
       m.note('Belum ada pool ETH/USDG yang memenuhi syarat. Coba lagi nanti.'),
       '',
-      m.italic(`Uniswap · ${m.nowUtc()}`),
+      m.italic(`Uniswap · ${m.nowWib()}`),
     ]);
   }
 
@@ -291,7 +291,7 @@ export function renderExplore(pools: ExplorePool[], chainLabel: string): string 
     `📈 ${m.bold(`#1 ${top.pair} · ${aprLabel(top.apr)} APR`)}`,
     '',
     m.note(`top 5 by APR · single-sided ETH/USDG · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · APR = fee 1D disetahunkan`),
-    m.italic(`Uniswap · sinkron · ${m.nowUtc()}`),
+    m.italic(`Uniswap · sinkron · ${m.nowWib()}`),
   ];
   return m.card(`📈 ${m.title('EXPLORE', chainLabel)}`, body);
 }
