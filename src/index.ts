@@ -360,16 +360,6 @@ bot.action('help', async (ctx) => {
 });
 
 // Waktu render /status terakhir → footer "Refresh N detik lalu" (owner-only bot).
-let lastStatusAt = 0;
-function relTime(ms: number): string {
-  const s = Math.round(ms / 1000);
-  if (s < 1) return 'baru saja';
-  if (s < 60) return `${s} detik lalu`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m} menit lalu`;
-  return `${Math.round(m / 60)} jam lalu`;
-}
-
 async function renderStatus(ctx: any, edit: boolean) {
   try {
     // Harga ETH (chain utama) sekali — dipakai valuasi semua chain ETH-native.
@@ -414,12 +404,37 @@ async function renderStatus(ctx: any, edit: boolean) {
     } catch {
       /* abaikan — status tetap tampil tanpa USDG */
     }
+    // Nilai posisi LP aktif (v3 + v4). Gagal baca satu posisi tak boleh menggagalkan kartu;
+    // jumlah yang gagal dilaporkan supaya total tak terbaca sebagai fakta.
+    let lpUsd: number | null = null;
+    let lpFailed = 0;
+    try {
+      const ccLp = getChain();
+      const vals = await mapLimit(store.active(), POS_CARD_CONCURRENCY, async (rec) => {
+        try {
+          const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+          const v = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
+          return isStableBase(d.baseKind) ? v : ethUsd !== null ? v * ethUsd : null;
+        } catch {
+          return undefined;
+        }
+      });
+      const v4 = v4Supported(ccLp) ? await listPositionsV4(ccLp).catch(() => []) : [];
+      const v4Vals = v4.map((p) => {
+        if (p.valueBaseWei === null || !p.base) return undefined;
+        const v = Number(ethers.formatUnits(p.valueBaseWei, p.base === 'USDG' ? 6 : 18));
+        return p.base === 'USDG' ? v : ethUsd !== null ? v * ethUsd : null;
+      });
+      const all = [...vals, ...v4Vals];
+      lpFailed = all.filter((v) => v === undefined).length;
+      const known = all.filter((v): v is number => typeof v === 'number');
+      lpUsd = all.some((v) => v === null) && known.length === 0 ? null : known.reduce((a, b) => a + b, 0);
+    } catch {
+      lpUsd = null;
+    }
     // Total USD: null bila harga ETH tak terbaca (ETH mendominasi → total tak sahih).
     const totalUsd =
       ethUsd === null ? null : chains.reduce((s, c) => s + (c.usd ?? 0), 0) + (usdg?.usd ?? 0);
-    // Kesegaran data: waktu sejak render sebelumnya (owner-only → satu penanda).
-    const rel = lastStatusAt ? relTime(Date.now() - lastStatusAt) : 'baru saja';
-    lastStatusAt = Date.now();
 
     const text = msg.msgStatus({
       dryRun: config.safety.dryRun,
@@ -431,7 +446,9 @@ async function renderStatus(ctx: any, edit: boolean) {
       usdg,
       totalUsd,
       holdingsCount,
-      refreshRel: rel,
+      lpUsd,
+      lpFailed,
+      realizedEth: journal.lifetimeStats().netEth,
     });
     const extra = {
       ...html,

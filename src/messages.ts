@@ -87,10 +87,6 @@ export function note(text: string): string {
   return italic(text);
 }
 
-export function quote(text: string): string {
-  return `<blockquote>${esc(text)}</blockquote>`;
-}
-
 export function quoteHtml(innerHtml: string): string {
   return `<blockquote>${innerHtml}</blockquote>`;
 }
@@ -99,6 +95,12 @@ export function quoteHtml(innerHtml: string): string {
  * Tabel monospace rata kolom (dipakai di dalam <pre>). right[i] = rata kanan (angka).
  * padEnd di luar <pre> TIDAK pernah sejajar: font Telegram proporsional.
  */
+/** Blok 'label : value' sejajar untuk di dalam <pre>. */
+export function sheet(rows: Array<[string, string]>): string {
+  const w = Math.max(...rows.map((r) => r[0].length));
+  return rows.map(([k, v]) => `${k.padEnd(w)} : ${v}`).join('\n');
+}
+
 export function alignTable(header: string[], rows: string[][], right: boolean[]): string {
   const w = header.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
   const line = (cells: string[]) =>
@@ -177,11 +179,6 @@ export function shortAddr(a: string): string {
 
 export function modeLabel(dryRun: boolean): string {
   return dryRun ? 'DRY RUN' : 'LIVE';
-}
-
-/** Badge mode dgn emoji semantik (tg-ui): 🟢 LIVE · ⚪ DRY RUN. */
-export function modeBadge(dryRun: boolean): string {
-  return dryRun ? '⚪ DRY RUN' : '🟢 LIVE';
 }
 
 export function nowUtc(): string {
@@ -386,48 +383,44 @@ export function msgStatus(opts: {
   wallet: string;
   chains: Array<{ label: string; amount: string; symbol: string; usd: number | null }>;
   usdg?: { amount: string; usd: number }; // base USDG di chain utama — tampil bila > 0
-  totalUsd: number | null; // null = harga ETH tak terbaca
+  totalUsd: number | null; // null = harga ETH tak terbaca (JANGAN 0)
   holdingsCount: number | null; // null = pembacaan gagal (BUKAN 'bersih')
-  refreshRel?: string; // 'baru saja' | '2 detik lalu' — kesegaran data
+  lpUsd?: number | null; // nilai posisi LP aktif
+  lpFailed?: number; // posisi yang gagal dibaca → total belum lengkap
+  realizedEth?: number; // PnL cashout seumur hidup
 }): string {
   const modeTxt = opts.dryRun ? 'DRY RUN' : 'LIVE';
   const dot = opts.dryRun ? '⚪' : '🟢';
-  const HR = '━━━━━━━━━━━━━━━━━━━━';
-  const hr2 = '────────────────────';
-  const usdCol = (u: number | null) => (u === null ? '≈ $?' : `≈ ${usdPlain(u)}`);
+  const usdCol = (u: number | null | undefined) => (u === null || u === undefined ? '$?' : usdPlain(u));
 
-  // Tabel saldo = teks polos (bukan <pre>) — seragam dgn seluruh kartu; kolom
-  // dirapikan dgn padding spasi (dipertahankan Telegram di mode HTML).
-  const rows = opts.chains.map((c) => [c.label, `${c.amount} ${c.symbol}`, usdCol(c.usd)]);
-  if (opts.usdg) rows.push(['USDG', `${opts.usdg.amount} USDG`, usdCol(opts.usdg.usd)]);
-  const w1 = Math.max(...rows.map((r) => r[0].length));
-  const w2 = Math.max(...rows.map((r) => r[1].length));
-  const tableLines = rows.map((r) => esc(`${r[0].padEnd(w1)}   ${r[1].padEnd(w2)}   ${r[2]}`));
+  // Ringkasan uang: wallet + LP + realized. Satu <pre> supaya kolom benar-benar sejajar.
+  const sum: string[][] = [['wallet', usdCol(opts.totalUsd)]];
+  if (opts.lpUsd !== undefined) sum.push(['lp aktif', `${usdCol(opts.lpUsd)}   (${opts.positions} posisi)`]);
+  if (opts.realizedEth !== undefined) sum.push(['realized', `${opts.realizedEth >= 0 ? '+' : ''}${opts.realizedEth.toFixed(5)} ETH`]);
 
-  const lines: string[] = [
-    `${dot} <b>STATUS</b> · ${modeTxt}`,
-    HR,
-    `⚙️ Mode      <b>${esc(modeTxt)}</b>`,
-    `🔗 Chain     <b>${esc(String(opts.chainId))}</b>`,
-    `📂 Open      <b>${opts.positions}</b>`,
-    `♾️ Limit     <b>${esc(opts.limitLabel)}</b>`,
+  // Chain bersaldo 0 disembunyikan: baris '$0.00' tak membawa keputusan apa pun.
+  const rows = opts.chains
+    .filter((c) => Number(c.amount) > 0)
+    .map((c) => [c.label.toLowerCase(), `${c.amount} ${c.symbol}`, usdCol(c.usd)]);
+  if (opts.usdg) rows.push(['usdg', `${opts.usdg.amount} USDG`, usdCol(opts.usdg.usd)]);
+
+  const equity =
+    opts.totalUsd === null ? '$?' : usdPlain(opts.totalUsd + (opts.lpUsd ?? 0));
+  const body: string[] = [
+    `💰 ${bold(`ekuitas ≈ ${equity}`)}`,
     '',
-    '💰 <b>SALDO</b>',
-    ...tableLines,
-    hr2,
-    `💵 <b>Total ${usdCol(opts.totalUsd)}</b>`,
-    '',
-    opts.holdingsCount === null
-      ? '🟡 baca token gagal — coba Refresh'
-      : opts.holdingsCount === 0
-        ? '✅ Token nyangkut: <b>bersih</b>'
-        : `⚠️ ${bold(String(opts.holdingsCount))} token nyangkut — jual lewat /sell`,
-    `👛 <code>${esc(shortAddr(opts.wallet))}</code>`,
-    '',
-    `🕒 ${modeTxt} · ${nowUtc()}`,
+    pre(sheet(sum as Array<[string, string]>)),
   ];
-  if (opts.refreshRel) lines.push(`🔄 Refresh ${esc(opts.refreshRel)}`);
-  return lines.join('\n');
+  if (rows.length) body.push('', pre(alignTable(['chain', 'saldo', 'usd'], rows, [false, true, true])));
+  if (opts.lpFailed) body.push('', `🟡 ${opts.lpFailed} posisi gagal dibaca — total belum lengkap`);
+  if (opts.holdingsCount === null) body.push('🟡 baca token gagal — coba Refresh');
+  else if (opts.holdingsCount > 0) body.push(`⚠️ ${bold(String(opts.holdingsCount))} token nyangkut — jual lewat /sell`);
+  body.push(`👛 <code>${esc(shortAddr(opts.wallet))}</code>`);
+  return card(
+    `${dot} ${title('UANG', modeTxt)}`,
+    body,
+    `${modeTxt} · chain ${esc(String(opts.chainId))} · limit ${esc(opts.limitLabel)} · ${nowUtc()}`,
+  );
 }
 
 /** ETH bertanda ringkas: '+0.01820 ETH' / '-0.00284 ETH'. */
@@ -480,19 +473,17 @@ export function msgPnl(opts: {
 
 /** Alert harga token anjlok ≥ambang dari harga entry (auto-monitor). */
 export function msgPriceDrop(tokenId: string, symbol: string, dropPct: number, baseSymbol = 'WETH'): string {
-  return card(`⚠️ ${title('ANJLOK', esc(symbol))}`, [
-    `🔴 turun ${bold(fmtPct(-dropPct))} dari entry`,
+  return card(`⚠️ ${title('ANJLOK', symbol)}`, [
+    pre(`pair   : ${baseSymbol} / ${symbol}\nposisi : #${tokenId}`),
     '',
-    fieldBlock([
-      ['token', symbol],
-      ['pair', `${baseSymbol} / ${symbol}`],
-      ['posisi', `#${tokenId}`],
-    ]),
-    quote('harga token jatuh sejak buka — cek apakah perlu /stop.'),
+    `🔴 ${bold(`turun ${fmtPct(-dropPct)} dari entry`)}`,
+    '',
+    // Tombol '⛔ Tutup Sekarang' menyertai pesan ini (monitor.ts) — microcopy harus
+    // menunjuk ke tombol itu, bukan menyuruh mengetik command saat harga jatuh.
+    quoteHtml('Tutup sekarang, atau biarkan bila kamu masih yakin.'),
   ]);
 }
 
-/** Header /closeall — bingkai darurat, tetap konfirmasi per posisi (mekanisme = /stop). */
 export function msgCloseAllPick(countV3: number, countV4 = 0): string {
   const total = countV3 + countV4;
   return card(`⛔ ${title('TUTUP SEMUA')}`, [
@@ -960,53 +951,41 @@ export function msgPlanStep(opts: {
   costFailed?: boolean; // estimasi biaya gagal → JANGAN klaim saldo cukup
   dryRun: boolean;
 }): string {
+  const dot = opts.dryRun ? '⚪' : opts.shortLabel ? '🔴' : opts.costFailed ? '🟡' : '⚠️';
   const body: string[] = [];
-  if (opts.screenDanger) {
-    body.push(
-      quoteHtml(`${bold('SCREEN · BAHAYA')} — token berisiko. Lanjut hanya jika yakin.`),
-      '',
-    );
-  } else if (opts.screenFailed) {
-    body.push(
-      quoteHtml(`${bold('SCREEN · GAGAL')} — token TIDAK terverifikasi keamanannya. Lanjut dgn risiko sendiri.`),
-      '',
-    );
-  }
+  if (opts.screenDanger) body.push(`⚠️ ${bold('SCREEN: BAHAYA')} — pertimbangkan batal.`, '');
+  else if (opts.screenFailed) body.push(`🟡 ${bold('SCREEN: GAGAL')} — token tak terverifikasi.`, '');
   body.push(
-    ...hrows([
-      ['Pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
-      ['Deposit', `${opts.depositAmount} ${opts.baseSymbol}${opts.depositUsd != null ? ` ≈ $${opts.depositUsd.toFixed(2)}` : ''}`],
-      ['Range', `${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`],
-      ['Price', `1 ${opts.symbol} = ${opts.currentPrice} ${opts.baseSymbol}`],
-    ]),
-    '',
-    section('biaya'),
-    ...hrows([
-      ['Gas', `~${opts.gasEth} ETH`],
-      ['Perlu', opts.needLabel],
-      ['Saldo', opts.balanceLabel],
-    ]),
+    pre(
+      sheet([
+        ['pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
+        ['deposit', `${opts.depositAmount} ${opts.baseSymbol}${opts.depositUsd ? ` ≈ ${usdPlain(opts.depositUsd)}` : ''}`],
+        ['rentang', `${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`],
+        ['harga', `1 ${opts.symbol} = ${opts.currentPrice} ${opts.baseSymbol}`],
+        ['gas est', `~${opts.gasEth} ETH`],
+        ['perlu', String(opts.needLabel)],
+        ['saldo', String(opts.balanceLabel)],
+      ]),
+    ),
   );
   if (opts.costFailed) {
     body.push('', `🟡 ${bold('saldo belum terverifikasi')} — RPC biaya gagal. Cek /status dulu.`);
   } else if (opts.shortLabel) {
-    body.push(
-      '',
-      quoteHtml(`🔴 ${bold('KURANG')} ${esc(opts.shortLabel)} — top up dulu.`),
-    );
+    body.push('', `🔴 ${bold(`KURANG ${opts.shortLabel}`)} — top up dulu, lalu ulangi /add.`);
   } else {
     body.push('', `🟢 ${bold('saldo cukup')} — siap eksekusi`);
   }
-  body.push('', note('est. PnL = fee terkumpul − impermanent loss; dipantau live di /positions.'));
-  if (opts.dryRun) {
-    body.push('', note('⚪ simulasi — tidak mengirim tx on-chain'));
-  } else {
-    body.push('', note('konfirmasi = kirim tx + monitor aktif'));
-  }
-  return card(title('PREVIEW', '4/4'), body, footerMode(opts.dryRun));
+  body.push(
+    '',
+    quoteHtml('PnL LP = fee − impermanent loss. Tak ada SL/TP otomatis — proteksi manual lewat /positions.'),
+  );
+  return card(
+    `${dot} ${title('PREVIEW', `${opts.symbol} · 4/4`)}`,
+    body,
+    `${opts.dryRun ? 'DRY RUN — tidak kirim tx' : 'LIVE · konfirmasi = kirim tx'} · ${nowUtc()}`,
+  );
 }
 
-/** Preview buka posisi v4 single-sided ETH (validasi via dry-run staticCall). */
 export function msgPlanStepV4(opts: {
   screenDanger: boolean;
   screenFailed?: boolean;
