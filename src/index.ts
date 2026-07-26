@@ -305,11 +305,13 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
 }
 
 // Keyboard inline /start (sama dgn /help tapi tombol Help, bukan Close All).
+// 'portfolio' & 'status' kini kartu yang SAMA (kartu uang) — cukup satu tombol.
+// Action 'portfolio' tetap hidup untuk tombol di pesan-pesan lama.
 const startKeyboard = () =>
   Markup.inlineKeyboard([
-    [Markup.button.callback('📊 Portfolio', 'portfolio'), Markup.button.callback('📈 Positions', 'positions')],
-    [Markup.button.callback('🔄 Status', 'status'), Markup.button.callback('📜 History', 'history')],
-    [Markup.button.callback('📖 Help', 'help')],
+    [Markup.button.callback('💰 Uang', 'status'), Markup.button.callback('📋 Posisi', 'positions')],
+    [Markup.button.callback('🧾 PnL', 'pnl'), Markup.button.callback('📜 Riwayat', 'history')],
+    [Markup.button.callback('📖 Bantuan', 'help')],
   ]);
 
 bot.start(async (ctx) => {
@@ -320,9 +322,9 @@ bot.start(async (ctx) => {
 // Keyboard inline aksi cepat pada kartu /help (di samping reply-keyboard persisten).
 const helpKeyboard = () =>
   Markup.inlineKeyboard([
-    [Markup.button.callback('📊 Portfolio', 'portfolio'), Markup.button.callback('📈 Positions', 'positions')],
-    [Markup.button.callback('🔄 Status', 'status'), Markup.button.callback('📜 History', 'history')],
-    [Markup.button.callback('⛔ Tutup Semua', 'closeall_confirm')],
+    [Markup.button.callback('💰 Uang', 'status'), Markup.button.callback('📋 Posisi', 'positions')],
+    [Markup.button.callback('🧾 PnL', 'pnl'), Markup.button.callback('📜 Riwayat', 'history')],
+    [Markup.button.callback('⛔ Tutup Semua', 'closeall_confirm')], // aksi uang: baris sendiri
   ]);
 
 bot.command(['help', 'menu'], (ctx) =>
