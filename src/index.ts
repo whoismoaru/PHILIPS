@@ -820,17 +820,17 @@ async function cmdPositions(ctx: any, edit = false) {
   });
 
   // Maks 6 tombol id (posisi ke-7+ tetap tercantum di daftar & bisa lewat /stop).
-  // Label = NAMA TOKEN saja. pair berbentuk base/token, jadi yang dipakai adalah
-  // sisi yang BUKAN base; kalau dua-duanya base (mis. ETH/USDT) pakai sisi kiri.
-  const BASES = new Set(['WETH', 'ETH', 'USDG', 'USDT', 'USDC']);
-  const tokenOf = (pair: string): string => {
-    const [a, b] = pair.split('/').map((s) => s.trim());
-    if (!b) return a;
-    if (!BASES.has(b.toUpperCase())) return b;
-    return a;
+  // Label = pair LENGKAP. v4 menulis 'WETH / PONS' (berspasi) — dirapatkan supaya
+  // tombol tak melebar, dan dipotong bila simbol tokennya panjang.
+  const labelOf = (pair: string): string => {
+    const s = pair
+      .split('/')
+      .map((p) => p.trim())
+      .join('/');
+    return s.length > 20 ? s.slice(0, 19) + '…' : s;
   };
   const top = rows.slice(0, 6);
-  const names = top.map((r) => tokenOf(r.pair));
+  const names = top.map((r) => labelOf(r.pair));
   // Dua posisi token sama → tombolnya kembar dan tak bisa dibedakan. Yang kembar saja diberi #id.
   const dup = new Set(names.filter((n, i) => names.indexOf(n) !== i));
   const idBtns = top.map((r, i) =>
