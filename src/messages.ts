@@ -244,7 +244,7 @@ function cockpitLines(dryRun: boolean): string[] {
   ];
 }
 
-/** Kartu daftar perintah (/help · /menu). */
+/** Kartu daftar perintah (/help). */
 export function msgHelp(dryRun: boolean): string {
   return [
     '🟢 <b>PHILIPS · LP COCKPIT</b>',
@@ -623,7 +623,7 @@ export function msgTSwapDone(o: {
   ], footerMode(o.dryRun));
 }
 
-// ─── /fund — bridge cross-chain ke USDT @Stable via Relay ──────────────
+// ─── /bridge — cross-chain ke USDT @Stable via Relay ───────────────────
 export function msgFundNoStable(): string {
   return card(`🌉 ${title('FUND STABLE')}`, [
     note('StableChain belum aktif — set RPC_URL_STABLE di .env & restart dulu.'),

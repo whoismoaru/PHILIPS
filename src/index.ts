@@ -45,7 +45,8 @@ const isGoneErr = (e: unknown) => /invalid token id/i.test(String((e as Error)?.
 
 /**
  * PHILIPS LP Bot — otak utama.
- * Command aktif: /start /help /status /positions /history /add /stop /setsize
+ * Command aktif: /start /help /status /positions /history /pnl /explore /add /stop
+ * /closeall /buy /sell /bridge /size
  * Screening token berjalan otomatis di dalam /add.
  */
 
@@ -215,7 +216,7 @@ function resetFlows(uid: number): void {
 // kemudian, jangan sampai termakan flow basi. 15 menit.
 const FLOW_TTL_MS = 15 * 60_000;
 const isStaleFlow = (startedAt: number): boolean => Date.now() - startedAt > FLOW_TTL_MS;
-// Preset nominal ETH: tersimpan di data/settings.json, dikelola via /setsize.
+// Preset nominal ETH: tersimpan di data/settings.json, dikelola via /size.
 
 // Pilihan lebar rentang (%) + label risiko.
 const RANGE_OPTIONS = [
@@ -336,7 +337,7 @@ const helpKeyboard = () =>
     [Markup.button.callback('⛔ Tutup Semua', 'closeall_confirm')], // aksi uang: baris sendiri
   ]);
 
-bot.command(['help', 'menu'], (ctx) =>
+bot.command('help', (ctx) =>
   ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, ...helpKeyboard() }),
 );
 
@@ -1267,7 +1268,7 @@ async function continueAddlp(
 
 // Simpan token yang menunggu pilihan chain.
 
-bot.command(['add', 'addlp'], async (ctx) => {
+bot.command('add', async (ctx) => {
   resetFlows(ctx.from!.id); // alur baru = buang sisa alur lama (anti-hijack ketikan)
   const [, token] = ctx.message.text.trim().split(/\s+/);
   if (!token) return ctx.reply(msg.msgAddlpUsage(), html);
@@ -1448,7 +1449,7 @@ bot.action('addok', async (ctx) => {
         html,
       );
     } catch (err) {
-      await ctx.reply(msg.msgError('addlp v4', (err as Error).message), html);
+      await ctx.reply(msg.msgError('add v4', (err as Error).message), html);
     } finally {
       store.endMoneyOp();
     }
@@ -1509,7 +1510,7 @@ bot.action('addok', async (ctx) => {
       }
     }
   } catch (err) {
-    await ctx.reply(msg.msgError('addlp', (err as Error).message), html);
+    await ctx.reply(msg.msgError('add', (err as Error).message), html);
   } finally {
     store.endMoneyOp();
   }
@@ -1571,7 +1572,7 @@ async function replyActiveCards(ctx: any, header: string | null) {
 async function cmdStop(ctx: any) {
   await replyActiveCards(ctx, msg.msgStopPick());
 }
-bot.command(['stop', 'stoplp'], cmdStop);
+bot.command('stop', cmdStop);
 
 // /closeall — darurat: tutup semua posisi. Konfirmasi per posisi (mekanisme = /stop).
 async function cmdCloseAll(ctx: any) {
@@ -1591,7 +1592,7 @@ async function cmdCloseAll(ctx: any) {
 }
 bot.command('closeall', cmdCloseAll);
 
-// ---------- /fund — bridge cross-chain Robinhood ⇄ Stable via Relay ----------
+// ---------- /bridge — cross-chain Robinhood ⇄ Stable via Relay ----------
 // topup: Robinhood(ETH/USDG) → USDT@Stable. withdraw: USDT@Stable → Robinhood(ETH/USDG).
 type FundDir = 'topup' | 'withdraw';
 type FundFlow = { dir: FundDir; asset: 'eth' | 'usdg'; awaitingAmount: boolean; quote?: BridgeQuote; startedAt: number };
@@ -1621,7 +1622,7 @@ async function fundBalanceLabel(dir: FundDir, asset: 'eth' | 'usdg'): Promise<st
   }
 }
 
-// Tiap langkah /fund = renderer sendiri + tombol "Kembali" ke langkah sebelumnya.
+// Tiap langkah /bridge = renderer sendiri + tombol "Kembali" ke langkah sebelumnya.
 /**
  * Arah + aset dalam SATU langkah: hanya 2×2 kombinasi, muat di satu papan tombol.
  * callback_data lama (`fundasset:<dir>:<asset>`) dipertahankan → handler tak berubah.
@@ -1645,12 +1646,12 @@ async function fundAmountPrompt(ctx: any, flow: FundFlow, edit: boolean) {
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
-function cmdFund(ctx: any) {
+function cmdBridge(ctx: any) {
   resetFlows(ctx.from.id);
   if (!CHAINS.stable) return ctx.reply(msg.msgFundNoStable(), html);
   return fundStep(ctx, false);
 }
-bot.command(['fund', 'bridge'], cmdFund);
+bot.command('bridge', cmdBridge);
 
 bot.action(/^fundasset:(topup|withdraw):(eth|usdg)$/, async (ctx) => {
   const dir = ctx.match[1] as FundDir;
@@ -2619,12 +2620,12 @@ function cmdSize(ctx: any) {
     html,
   );
 }
-bot.command(['size', 'setsize'], cmdSize);
+bot.command('size', cmdSize);
 
 bot.on(message('text'), async (ctx) => {
   const raw = (ctx.message.text || '').trim();
 
-  // /fund menunggu ketikan jumlah → minta quote Relay → kartu konfirmasi.
+  // /bridge menunggu ketikan jumlah → minta quote Relay → kartu konfirmasi.
   const fflow = fundFlows.get(ctx.from.id);
   if (fflow?.awaitingAmount && isStaleFlow(fflow.startedAt)) {
     fundFlows.delete(ctx.from.id);
