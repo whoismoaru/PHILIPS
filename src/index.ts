@@ -825,12 +825,26 @@ async function cmdPositions(ctx: any, edit = false) {
     .map((r) => Markup.button.callback(`${r.pair.split('/')[1] ?? r.pair} #${r.id}`, `pos_detail_${r.id}`));
   const kbRows: ReturnType<typeof Markup.button.callback>[][] = [];
   for (let i = 0; i < idBtns.length; i += 2) kbRows.push(idBtns.slice(i, i + 2));
-  kbRows.push([Markup.button.callback('🔄 Refresh', 'positions_refresh')]);
+  kbRows.push([
+    Markup.button.callback('‹ Kembali', 'positions_back'),
+    Markup.button.callback('🔄 Refresh', 'positions_refresh'),
+  ]);
   kbRows.push([Markup.button.callback('⛔ Tutup Semua', 'closeall_confirm')]);
   const extra = { ...html, ...Markup.inlineKeyboard(kbRows) };
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 bot.command('positions', (ctx) => cmdPositions(ctx, false));
+
+// Kembali dari daftar posisi → kartu menu, EDIT pesan yang sama (tak menumpuk bubble baru).
+bot.action('positions_back', async (ctx) => {
+  await ctx.answerCbQuery();
+  const extra = { ...html, ...helpKeyboard() };
+  try {
+    return await ctx.editMessageText(msg.msgHelp(config.safety.dryRun), extra);
+  } catch {
+    return ctx.reply(msg.msgHelp(config.safety.dryRun), extra); // pesan terlalu tua untuk diedit
+  }
+});
 
 // Refresh daftar posisi (edit pesan yang sama).
 bot.action('positions_refresh', async (ctx) => {
