@@ -873,15 +873,16 @@ export function msgPositionsList(opts: {
     inRange: boolean;
   }>;
 }): string {
-  // TANPA monospace: hanya tag HTML biasa (b/i). Konsekuensi yang disadari —
-  // kolom TIDAK sejajar, jadi bentuknya bukan tabel melainkan daftar memanjang:
-  // tiap posisi 2 baris, dan antar posisi TANPA baris kosong (rapat).
-  const MAX_ROWS = 10;
+  // TANPA monospace: hanya tag HTML biasa. Satu posisi = satu baris, status
+  // ditulis sebagai kata (in)/(out) — bukan emoji — supaya lebarnya konsisten
+  // di semua perangkat. Kolom memang tak sejajar; itu harga membuang mono.
+  const MAX_ROWS = 12;
   const shown = opts.rows.slice(0, MAX_ROWS);
-  const lines = shown.flatMap((r) => [
-    `${r.inRange ? '🟢' : '🔴'} ${bold(esc(r.pair))} · ${italic(`#${r.id}`)}`,
-    `${r.investLabel} · ${bold(r.pnlUsd === null ? '—' : usdSigned(r.pnlUsd))} · ${r.age}`,
-  ]);
+  const lines = shown.map(
+    (r) =>
+      ` #${r.id} | ${esc(r.pair)} · ${r.investLabel} · ` +
+      `${r.pnlUsd === null ? '—' : usdSigned(r.pnlUsd)} · ${r.age} (${r.inRange ? 'in' : 'out'})`,
+  );
 
   const out = [
     `<b>POSITION</b>`,
@@ -891,7 +892,7 @@ export function msgPositionsList(opts: {
     `💵 Net ${opts.totalPnlUsd === null ? '—' : usdSigned(opts.totalPnlUsd)}`,
   ];
   if (opts.rows.length > MAX_ROWS) out.push('', `+${opts.rows.length - MAX_ROWS} posisi lain — tutup dulu untuk melihatnya`);
-  out.push('', '', `${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`);
+  out.push('', `${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`);
   return out.join('\n');
 }
 
