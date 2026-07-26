@@ -2650,7 +2650,7 @@ async function sendProfitCard(
     usd = eu !== null ? pnl * eu : null;
   }
   const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
-  const buf = renderProfitCard({
+  const buf = await renderProfitCard({
     pair: `${baseSym} / ${rec.symbol}`,
     positive,
     pnlBig: usd !== null ? msg.usdSigned(usd) : `${positive ? '+' : ''}${pnl.toFixed(dec >= 18 ? 5 : 2)} ${baseSym}`,

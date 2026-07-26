@@ -1,4 +1,5 @@
-import { createCanvas, GlobalFonts, type SKRSContext2D } from '@napi-rs/canvas';
+import { createCanvas, loadImage, GlobalFonts, type Image, type SKRSContext2D } from '@napi-rs/canvas';
+import { join } from 'node:path';
 
 /**
  * Render kartu PNG "momen kunci" (profit card saat close). Murni presentasi —
@@ -21,6 +22,25 @@ function ensureFonts() {
   reg('DejaVuSans-Bold.ttf', 'PhSansB');
   reg('DejaVuSansMono.ttf', 'PhMono');
   fontsReady = true;
+}
+
+/**
+ * Latar kartu: artwork di data/. Di-decode SEKALI lalu di-cache — close bisa
+ * beruntun dan decode JPEG tiap kali itu sia-sia.
+ * File hilang/rusak → null, kartu jatuh ke latar gradient (close TAK boleh gagal
+ * gara-gara hiasan).
+ */
+const BG_FILE = join(process.cwd(), 'data', 'PHILIPS ANIME.jpg');
+let bgImg: Image | null | undefined;
+async function background(): Promise<Image | null> {
+  if (bgImg !== undefined) return bgImg;
+  try {
+    bgImg = await loadImage(BG_FILE);
+  } catch (e) {
+    bgImg = null;
+    console.error(`[card] latar tak terbaca (${BG_FILE}) — pakai gradient:`, (e as Error).message);
+  }
+  return bgImg;
 }
 
 const W = 1200;
@@ -57,94 +77,86 @@ export type ProfitCardOpts = {
   footerLeft: string; // '#199367 · 19 Jul 2026 17:08 UTC'
 };
 
-export function renderProfitCard(o: ProfitCardOpts): Buffer {
+export async function renderProfitCard(o: ProfitCardOpts): Promise<Buffer> {
   ensureFonts();
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
   const accent = o.positive ? COL.green : COL.red;
 
-  // Latar: gradient gelap + kartu ber-radius + glow aksen halus.
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, COL.bg0);
-  g.addColorStop(1, COL.bg1);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.fillStyle = COL.card;
-  roundRect(ctx, 24, 24, W - 48, H - 48, 28);
-  ctx.fill();
-
-  const glow = ctx.createRadialGradient(W - 200, 140, 20, W - 200, 140, 420);
-  glow.addColorStop(0, accent + '33');
-  glow.addColorStop(1, accent + '00');
-  ctx.fillStyle = glow;
-  roundRect(ctx, 24, 24, W - 48, H - 48, 28);
-  ctx.fill();
-
-  // Aksen batang kiri.
-  ctx.fillStyle = accent;
-  roundRect(ctx, 48, 210, 10, 200, 5);
-  ctx.fill();
+  const img = await background();
+  if (img) {
+    // Cover RATA KANAN, bukan crop tengah: komposisi artwork menaruh karakter di
+    // kanan dan ruang kosong di kiri — persis tempat teks kartu ini.
+    const s = Math.max(W / img.width, H / img.height);
+    ctx.drawImage(img, W - img.width * s, (H - img.height * s) / 2, img.width * s, img.height * s);
+    // Scrim gelap: pekat di kiri (agar teks terbaca), menghilang di kanan (agar
+    // karakternya tetap kelihatan).
+    const sc = ctx.createLinearGradient(0, 0, W, 0);
+    sc.addColorStop(0, 'rgba(7,10,16,0.94)');
+    sc.addColorStop(0.5, 'rgba(7,10,16,0.80)');
+    sc.addColorStop(0.78, 'rgba(7,10,16,0.18)');
+    sc.addColorStop(1, 'rgba(7,10,16,0.05)');
+    ctx.fillStyle = sc;
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, COL.bg0);
+    g.addColorStop(1, COL.bg1);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    const glow = ctx.createRadialGradient(W - 200, 140, 20, W - 200, 140, 420);
+    glow.addColorStop(0, accent + '33');
+    glow.addColorStop(1, accent + '00');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, W, H);
+  }
 
   // Header brand.
   ctx.fillStyle = COL.text;
-  ctx.font = '38px PhSansB';
-  ctx.fillText('PHILIPS', PAD, 108);
+  ctx.font = '36px PhSansB';
+  ctx.fillText('PHILIPS', PAD, 100);
   ctx.fillStyle = COL.muted;
   ctx.font = '22px PhSans';
-  ctx.fillText('LP cockpit · Robinhood', PAD, 142);
-
-  // Chip pasangan (kanan atas).
-  ctx.font = '26px PhSansB';
-  const pairW = ctx.measureText(o.pair).width;
-  const chipW = pairW + 56;
-  ctx.fillStyle = COL.chipBg;
-  roundRect(ctx, W - PAD - chipW, 84, chipW, 52, 26);
-  ctx.fill();
-  ctx.fillStyle = COL.text;
-  ctx.fillText(o.pair, W - PAD - chipW + 28, 118);
+  ctx.fillText(o.pair, PAD, 136);
 
   // Hero: label + PnL besar + persen.
   ctx.fillStyle = COL.muted;
   ctx.font = '24px PhSansB';
   ctx.fillText(o.positive ? 'PROFIT' : 'LOSS', PAD, 250);
-
   ctx.fillStyle = accent;
   ctx.font = '118px PhSansB';
   ctx.fillText(o.pnlBig, PAD - 2, 356);
-
   ctx.font = '46px PhSansB';
   ctx.fillText(o.pnlPct, PAD, 412);
 
-  // Divider.
-  ctx.strokeStyle = COL.line;
+  // Divider hanya selebar area teks — jangan memotong karakter di kanan.
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(PAD, 470);
-  ctx.lineTo(W - PAD, 470);
+  ctx.moveTo(PAD, 466);
+  ctx.lineTo(660, 466);
   ctx.stroke();
 
-  // Stats (≤4 kolom).
-  const stats = o.stats.slice(0, 4);
-  const span = (W - PAD * 2) / stats.length;
-  stats.forEach((s, i) => {
-    const x = PAD + span * i;
+  // Stats: jarak dari lebar TERUKUR. Jarak mati membuat nilai panjang bertabrakan.
+  let x = PAD;
+  for (const s of o.stats.slice(0, 4)) {
+    const label = s.label.toUpperCase();
+    ctx.font = '20px PhSansB';
+    const lw = ctx.measureText(label).width;
+    ctx.font = '28px PhSans';
+    const vw = ctx.measureText(s.value).width;
     ctx.fillStyle = COL.muted;
     ctx.font = '20px PhSansB';
-    ctx.fillText(s.label.toUpperCase(), x, 522);
+    ctx.fillText(label, x, 518);
     ctx.fillStyle = COL.text;
-    ctx.font = '30px PhSans';
-    ctx.fillText(s.value, x, 560);
-  });
+    ctx.font = '28px PhSans';
+    ctx.fillText(s.value, x, 556);
+    x += Math.max(lw, vw) + 46;
+  }
 
-  // Footer.
   ctx.fillStyle = COL.muted;
   ctx.font = '20px PhMono';
   ctx.fillText(o.footerLeft, PAD, H - 40);
-  const right = 'uniswap v3';
-  ctx.font = '20px PhSans';
-  const rw = ctx.measureText(right).width;
-  ctx.fillText(right, W - PAD - rw, H - 40);
 
   return canvas.toBuffer('image/png');
 }
