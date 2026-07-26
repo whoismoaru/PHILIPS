@@ -1,6 +1,7 @@
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ethers } from 'ethers';
+import { isStableBase } from './chains.js';
 
 /**
  * Jurnal riwayat trade (append-only, file khusus `data/journal.jsonl`).
@@ -13,6 +14,7 @@ export type JournalEntry = {
   symbol: string;
   ca?: string; // alamat token (untuk sweep sisa token yang belum ter-swap)
   chain?: string;
+  baseKind?: 'weth' | 'usdg' | 'usdt'; // denominasi modal & hasil; kosong = weth (entri lama)
   openedAt: number;
   closedAt: number;
   initialWethWei: string;
@@ -35,12 +37,22 @@ export function record(e: JournalEntry): void {
 
 /** Catat penutupan dari sebuah PosRecord (hitung PnL bila hasil diketahui). */
 export function recordClose(
-  rec: { tokenId: string; symbol: string; ca?: string; chain?: string; openedAt: number; initialWethWei: string },
+  rec: {
+    tokenId: string;
+    symbol: string;
+    ca?: string;
+    chain?: string;
+    baseKind?: 'weth' | 'usdg' | 'usdt';
+    openedAt: number;
+    initialWethWei: string;
+  },
   opts: { resultEthWei?: bigint; reason: JournalEntry['reason'] },
 ): void {
-  const initF = Number(ethers.formatEther(BigInt(rec.initialWethWei || '0')));
+  // Desimal mengikuti base: USDG/USDT 6-dec. formatEther tanpa syarat = salah 10^12 (PRD §8.9).
+  const dec = isStableBase(rec.baseKind ?? 'weth') ? 6 : 18;
+  const initF = Number(ethers.formatUnits(BigInt(rec.initialWethWei || '0'), dec));
   const has = opts.resultEthWei !== undefined;
-  const resF = has ? Number(ethers.formatEther(opts.resultEthWei as bigint)) : 0;
+  const resF = has ? Number(ethers.formatUnits(opts.resultEthWei as bigint, dec)) : 0;
   const pnlEth = has ? resF - initF : 0;
   const pnlPct = has && initF > 0 ? (pnlEth / initF) * 100 : 0;
   record({
@@ -48,6 +60,7 @@ export function recordClose(
     symbol: rec.symbol,
     ca: rec.ca,
     chain: rec.chain,
+    baseKind: rec.baseKind,
     openedAt: rec.openedAt,
     closedAt: Date.now(),
     initialWethWei: rec.initialWethWei,
@@ -92,8 +105,7 @@ export type LifetimeStats = {
  *   - resultEthWei == 0        → placeholder backfill trade lama (posisi dimigrasi TANPA data
  *     hasil → default 0). Ini BUKAN rugi total: cashout nyata selalu kembalikan >0. Dulu 12
  *     entri semacam ini memalsukan net jadi -0.83 ETH padahal cashout riil ≈ +0.016 ETH.
- * ponytail: pnlEth dijumlah sebagai ETH. Semua close sejauh ini = WETH (USDG belum live). Bila
- * USDG dipakai: tambah baseKind ke JournalEntry & pisahkan agregat per-denominasi.
+ *   - baseKind != weth      → close berdenominasi stablecoin; JANGAN dijumlahkan ke net ETH.
  */
 export function lifetimeStats(): LifetimeStats {
   const all = read(Number.MAX_SAFE_INTEGER);
@@ -103,6 +115,7 @@ export function lifetimeStats(): LifetimeStats {
   for (const e of all) {
     if (e.resultEthWei === undefined) continue; // gone/burned → tak terukur
     if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; } // placeholder backfill lama
+    if ((e.baseKind ?? 'weth') !== 'weth') { excluded++; continue; } // denominasi stablecoin
     known++;
     netEth += e.pnlEth;
     if (e.pnlEth >= 0) { wins++; grossWin += e.pnlEth; } else { losses++; grossLoss += e.pnlEth; }

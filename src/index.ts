@@ -538,7 +538,9 @@ async function buildPositionCard(
   const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
   const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
   const range = `${msg.fmtPct(pcts[0])} / ${msg.fmtPct(pcts[1])}`;
-  const invest = rec.imported ? '—' : (rec.nominalEth ?? msg.cleanEth(BigInt(rec.initialWethWei)));
+  const invest = rec.imported
+    ? '—'
+    : (rec.nominalEth ?? msg.cleanUnits(BigInt(rec.initialWethWei), isStableBase(rec.baseKind ?? 'weth') ? 6 : 18));
   const text = msg.msgPositionCard({
     tokenId: rec.tokenId,
     symbol: rec.symbol,
@@ -899,7 +901,7 @@ async function cmdPortfolio(ctx: any) {
     try {
       const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
       const valBase = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
-      posUsd += d.baseKind === 'usdg' ? valBase : ethToUsd(valBase);
+      posUsd += isStableBase(d.baseKind) ? valBase : ethToUsd(valBase);
     } catch {
       /* posisi bermasalah — lewati dari total */
     }
@@ -2251,15 +2253,16 @@ async function sendProfitCard(
   baseOutWei: bigint,
 ): Promise<void> {
   if (!rec) return;
-  const dec = rec.baseKind === 'usdg' ? 6 : 18;
-  const baseSym = rec.baseKind === 'usdg' ? 'USDG' : 'WETH';
+  const stable = isStableBase(rec.baseKind ?? 'weth');
+  const dec = stable ? 6 : 18;
+  const baseSym = baseSymbolOf(rec.baseKind);
   const baseIn = Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
   const baseOut = Number(ethers.formatUnits(baseOutWei, dec));
   const pnl = baseOut - baseIn;
   const pnlPct = baseIn > 0 ? (pnl / baseIn) * 100 : 0;
   const positive = pnl >= 0;
   let usd: number | null = null;
-  if (rec.baseKind === 'usdg') usd = pnl;
+  if (stable) usd = pnl;
   else {
     const cc = getChain(rec.chain);
     const eu = await getEthUsd(cc.wethAddress, cc);
@@ -2292,7 +2295,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       await ctx.editMessageText(msg.msgDryRunClose(tokenId), html);
       return;
     }
-    const baseSym = closingRec?.baseKind === 'usdg' ? 'USDG' : 'ETH';
+    const baseSym = isStableBase(closingRec?.baseKind ?? 'weth') ? baseSymbolOf(closingRec?.baseKind) : 'ETH';
     await ctx.editMessageText(msg.msgClosing(baseSym), html);
     const summary = await stopAndCashOut(tokenId, getChain(closingRec?.chain));
     finalizeClose(tokenId, { resultEthWei: summary.baseOutWei, reason: 'cashed', keep: summary.leftover });
@@ -2392,11 +2395,39 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   const key = `v4:${tokenId}`;
   if (closeLocked(key)) return ctx.answerCbQuery('Sedang diproses…');
   closingInFlight.set(key, Date.now());
+  const cc = getChain();
+  const tracked = v4store.getV4(tokenId); // tangkap SEBELUM removeV4
+  const beforeWei = await cc.provider.getBalance(cc.wallet.address).catch(() => null);
+  store.beginMoneyOp();
   try {
     await ctx.answerCbQuery('Diproses…');
     await ctx.editMessageText(msg.msgProgress('menutup posisi v4…'), html).catch(() => {});
-    const r = await closePositionV4(tokenId, getChain(), { dryRun: config.safety.dryRun });
-    if (!r.dryRun) v4store.removeV4(tokenId); // berhenti dilacak setelah tertutup
+    const r = await closePositionV4(tokenId, cc, { dryRun: config.safety.dryRun });
+    if (!r.dryRun) {
+      // Jurnalkan sebelum berhenti melacak — tanpa ini /history & /pnl buta pada v4,
+      // dan sisa token v4 tak pernah jadi kandidat sweep (ca hanya ada di jurnal).
+      if (r.base === 'ETH' || r.base === 'USDG') {
+        const afterWei =
+          r.base === 'ETH' ? await cc.provider.getBalance(cc.wallet.address).catch(() => null) : null;
+        // ponytail: hasil ETH = delta saldo native (ikut memotong gas → PnL konservatif).
+        // Ledger presisi baru perlu kalau v4 jadi jalur utama.
+        const measured =
+          beforeWei !== null && afterWei !== null && afterWei > beforeWei ? afterWei - beforeWei : undefined;
+        journal.recordClose(
+          {
+            tokenId,
+            symbol: `${r.sym0}/${r.sym1}`,
+            ca: r.other,
+            chain: cc.key,
+            baseKind: r.base === 'USDG' ? 'usdg' : 'weth',
+            openedAt: tracked?.openedAt ?? Date.now(),
+            initialWethWei: tracked?.entryBaseWei ?? '0',
+          },
+          { resultEthWei: measured, reason: 'cashed' },
+        );
+      }
+      v4store.removeV4(tokenId); // berhenti dilacak setelah tertutup
+    }
     await ctx.reply(
       msg.msgV4Closed({
         tokenId,
@@ -2412,6 +2443,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     await ctx.reply(msg.msgError('close v4', (e as Error).message), html);
   } finally {
     closingInFlight.delete(key);
+    store.endMoneyOp();
   }
 });
 

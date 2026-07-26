@@ -387,13 +387,18 @@ async function relayVerified(
   ctx: ChainCtx,
 ): Promise<{ txHashes: string[]; outEthWei: bigint }> {
   const before = await tokenBalance(tokenAddress, ctx);
+  const ethBefore = await ctx.provider.getBalance(ctx.wallet.address).catch(() => null);
   const r = await swapTokenToEthViaRelay(tokenAddress, amountWei, ctx);
   const after = await tokenBalance(tokenAddress, ctx);
   // Harus berkurang ≥90% dari yang diminta; kalau tidak, anggap Relay no-op.
   if (before - after < (amountWei * 9n) / 10n) {
     throw new Error(`relay tak mengurangi saldo token (before=${before} after=${after})`);
   }
-  return r;
+  // outEthWei dari quote hanyalah ESTIMASI (kadang 0) — dan angka itu dipakai
+  // sebagai hasil close di jurnal. Ukur dari delta saldo native bila bisa.
+  const ethAfter = await ctx.provider.getBalance(ctx.wallet.address).catch(() => null);
+  const measured = ethBefore !== null && ethAfter !== null && ethAfter > ethBefore ? ethAfter - ethBefore : 0n;
+  return { ...r, outEthWei: measured > 0n ? measured : r.outEthWei };
 }
 
 export async function swapTokenToEthRobust(

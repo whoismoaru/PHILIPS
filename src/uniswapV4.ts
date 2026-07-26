@@ -120,7 +120,16 @@ export async function closePositionV4(
   tokenId: string,
   cc: ChainCtx,
   opts: { dryRun: boolean },
-): Promise<{ dryRun?: boolean; txHash?: string; sym0: string; sym1: string; base: 'ETH' | 'USDG' | null; cashedOut?: string; leftover?: string }> {
+): Promise<{
+  dryRun?: boolean;
+  txHash?: string;
+  sym0: string;
+  sym1: string;
+  base: 'ETH' | 'USDG' | null;
+  other?: string; // token non-base → jurnal & kandidat sweep
+  cashedOut?: string;
+  leftover?: string;
+}> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 tak didukung di ${cc.label}.`);
   const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
@@ -153,15 +162,24 @@ export async function closePositionV4(
 
   // Simulasi WAJIB (burn+take) — revert di sini = batalkan sebelum kirim tx.
   await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
-  if (opts.dryRun) return { dryRun: true, sym0, sym1, base };
+  if (opts.dryRun) return { dryRun: true, sym0, sym1, base, other: other ?? undefined };
 
   const tx = await pm.modifyLiquidities(unlockData, deadline);
   const rc = await tx.wait();
-  const out: { txHash: string; sym0: string; sym1: string; base: 'ETH' | 'USDG' | null; cashedOut?: string; leftover?: string } = {
+  const out: {
+    txHash: string;
+    sym0: string;
+    sym1: string;
+    base: 'ETH' | 'USDG' | null;
+    other?: string; // alamat token non-base → dipakai jurnal & kandidat sweep
+    cashedOut?: string;
+    leftover?: string;
+  } = {
     txHash: rc?.hash ?? tx.hash,
     sym0,
     sym1,
     base,
+    other: other ?? undefined,
   };
 
   // Cash-out: swap token "receh" → base (best-effort; gagal → biarkan sbg leftover, tak hilang).
