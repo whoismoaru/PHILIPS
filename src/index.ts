@@ -2662,7 +2662,10 @@ async function sendProfitCard(
     ],
     footerLeft: `#${tokenId} · ${new Date().toISOString().slice(0, 10)}`,
   });
-  await ctx.replyWithPhoto(Input.fromBuffer(buf, 'philips.png'));
+  // sendDocument, BUKAN sendPhoto: Telegram me-render ulang foto jadi JPEG
+  // (terukur 1130 KB -> 185 KB) dan artefaknya paling terlihat pada teks tajam
+  // di latar gelap — persis isi kartu ini. Sebagai dokumen, PNG-nya utuh (HD).
+  await ctx.replyWithDocument(Input.fromBuffer(buf, `philips-${tokenId}.png`));
 }
 
 bot.action(/^close:(\d+)$/, async (ctx) => {

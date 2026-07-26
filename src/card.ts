@@ -77,10 +77,17 @@ export type ProfitCardOpts = {
   footerLeft: string; // '#199367 · 19 Jul 2026 17:08 UTC'
 };
 
-export async function renderProfitCard(o: ProfitCardOpts): Promise<Buffer> {
+/**
+ * scale: kelipatan resolusi keluaran. Seluruh tata letak tetap ditulis dalam
+ * satuan logis (W x H) — ctx.scale yang membesarkannya, jadi tak ada koordinat
+ * yang perlu diubah. Teks jadi tajam saat di-zoom; artwork sumbernya 1280x720
+ * sehingga di atas ~1.9x ia mulai melunak.
+ */
+export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Buffer> {
   ensureFonts();
-  const canvas = createCanvas(W, H);
+  const canvas = createCanvas(Math.round(W * scale), Math.round(H * scale));
   const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
   const accent = o.positive ? COL.green : COL.red;
 
   const img = await background();
