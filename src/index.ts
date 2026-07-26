@@ -1963,28 +1963,31 @@ async function renderTokenHub(
     sc && sc.liquidityUsd != null
       ? `likuiditas ${msg.usdCompact(sc.liquidityUsd)}${sc.pairAgeHours != null ? ` · pool ${Math.round(sc.pairAgeHours)} jam` : ''}`
       : undefined;
-  const text = msg.msgTokenHub({
-    symbol: sym,
-    chainLabel: cc.label,
-    ca,
-    verdict: sc?.verdict ?? null,
-    verdictNote: note,
-    priceUsd,
-    balanceLabel: bal > 0n ? `${msg.cleanUnits(bal, dec)} ${sym}` : undefined,
-    balanceUsd: bal > 0n && priceUsd ? balNum * Number(priceUsd) : null,
-    lpCount: v3.length + v4.length,
-    lpIds: [...v3.map((r) => r.tokenId), ...v4],
-    dryRun: config.safety.dryRun,
-  });
+  // Kartu yang TAMPIL = kartu DETAIL TOKEN hasil screening (bukan lagi msgTokenHub):
+  // satu kartu, bukan dua yang isinya tumpang-tindih.
+  const text = sc
+    ? formatScreen(sc, {
+        ca,
+        chainLabel: cc.label,
+        heldLabel: bal > 0n ? `${msg.cleanUnits(bal, dec)} ${sym}` : null,
+        lpCount: v3.length + v4.length,
+      })
+    : msg.msgScreeningFailed();
 
-  // Beli/jual hanya di chain yang punya rute swap bot (Robinhood/Stable).
-  const swappable = swapTokenChains().some((c) => c.key === cc.key);
-  const enter = [Markup.button.callback('➕ Buka LP', `ca:add:${ca}`)];
-  if (swappable) enter.push(Markup.button.callback('📈 Beli', `ca:buy:${ca}`));
-  const exit: ReturnType<typeof Markup.button.callback>[] = [];
-  if (v3.length + v4.length > 0) exit.push(Markup.button.callback('⛔ Tutup LP', `ca:close:${ca}`));
-  if (swappable && bal > 0n) exit.push(Markup.button.callback('📉 Jual', `ca:sell:${ca}`));
-  const kb = Markup.inlineKeyboard([enter, ...(exit.length ? [exit] : []), [Markup.button.callback('Batal', 'cancel')]]);
+  // Empat tombol SELALU tampil — tata letak tetap sama tiap kali, jadi jempol hafal
+  // posisinya. Kasus kosong (tak ada LP / saldo 0 / chain tanpa rute swap) ditangkap
+  // handler dengan pesan jelas, bukan disembunyikan.
+  const kb = Markup.inlineKeyboard([
+    [
+      Markup.button.callback('➕ Tambah LP', `ca:add:${ca}`),
+      Markup.button.callback('📤 Jual LP', `ca:close:${ca}`),
+    ],
+    [
+      Markup.button.callback('📈 Beli Token', `ca:buy:${ca}`),
+      Markup.button.callback('📉 Jual Token', `ca:sell:${ca}`),
+    ],
+    [Markup.button.callback('Batal', 'cancel')],
+  ]);
 
   hubs.set(ctx.from.id, {
     ca,
@@ -1993,14 +1996,7 @@ async function renderTokenHub(
     kb,
     sym,
     dec,
-    screenText: sc
-      ? formatScreen(sc, {
-          ca,
-          chainLabel: cc.label,
-          heldLabel: bal > 0n ? `${ethers.formatUnits(bal, dec)} ${sym}` : null,
-          lpCount: v3.length + v4.length,
-        })
-      : msg.msgScreeningFailed(),
+    screenText: text,
     bahaya: sc?.verdict === 'BAHAYA',
     failed: !sc,
   });
@@ -2024,6 +2020,15 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   if (what === 'add') {
     // Wizard /add penuh; screening dari hub dioper → kartu SCREEN tak dikirim dua kali.
     return continueAddlp(ctx, ca, h.chainKey, prog, { bahaya: h.bahaya, failed: h.failed });
+  }
+
+  // Beli/Jual Token butuh rute swap bot. Tombolnya selalu tampil, jadi jelaskan di sini
+  // daripada gagal dengan pesan membingungkan di tengah alur.
+  if ((what === 'buy' || what === 'sell') && !swapTokenChains().some((c) => c.key === h.chainKey)) {
+    return ctx.editMessageText(
+      msg.msgError(what === 'buy' ? 'beli' : 'jual', `${cc.label} belum punya rute swap bot — hanya Tambah/Jual LP di chain ini.`),
+      html,
+    );
   }
 
   if (what === 'buy') {
