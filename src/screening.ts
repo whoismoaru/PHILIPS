@@ -363,7 +363,7 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
 
   const price = s.priceUsd ? `$${s.priceUsd}` : UNK;
   const holders = s.holdersCount === null ? UNK : s.holdersCount.toLocaleString('en-US');
-  const pool = s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} jam`;
+  const pool = s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)}j`;
   const g = s.gmgn;
 
   // NoHoneypot: simulasi jalur jual PHILIPS lebih dipercaya (on-chain, live) —
@@ -377,7 +377,7 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   // Tax: dua angka jadi satu kolom. Nol pun ditulis '0', bukan '?'.
   const tax =
     g && (g.buyTaxPct !== null || g.sellTaxPct !== null)
-      ? `${g.buyTaxPct === null ? UNK : Number(g.buyTaxPct.toFixed(1))}/${g.sellTaxPct === null ? UNK : Number(g.sellTaxPct.toFixed(1))}`
+      ? `${g.buyTaxPct === null ? UNK : Number(g.buyTaxPct.toFixed(1))}/${g.sellTaxPct === null ? UNK : Number(g.sellTaxPct.toFixed(1))}%`
       : `${UNK}/${UNK}`;
 
   // Top 10: UTAMAKAN GMGN. Angka Blockscout menghitung kontrak pool sebagai
@@ -391,15 +391,20 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   const symUp = s.symbol.toUpperCase().replace(/^\$+/, '');
   const head = `${bold('$' + esc(symUp))}${opts?.chainLabel ? ` | ${esc(opts.chainLabel)}` : ''}`;
 
+  const sniper = g?.sniperCount === null || g?.sniperCount === undefined ? UNK : String(g.sniperCount);
+
+  // Dikelompokkan menurut MAKNA, maks 4 item per baris supaya tak melipat di HP.
+  // Angka penentu keputusan (Top 10, LP Locked, Tax) di-bold.
+  // Cluster / Dex Paid / Phishing TIDAK ditampilkan sama sekali: tak ada sumber
+  // datanya, dan slot '?' hanya jadi derau di antara angka yang nyata.
   const out = [
     head,
     '',
-    `${price} · MC ${compact(s.marketCapUsd)} · Liq ${compact(s.liquidityUsd)}`,
-    `Vol ${compact(s.volume24h)} · Holders ${holders} · Tax ${tax}`,
-    `Top 10 ${top10} · DEV ${pct(g?.devPct ?? null)} · Insiders ${pct(g?.insidersPct ?? null)}`,
-    `Sniper ${g?.sniperCount === null || g?.sniperCount === undefined ? UNK : g.sniperCount} · Bundler ${pct(g?.bundlerPct ?? null)} · Dex Paid ${UNK}`,
-    `Pool ${pool} · LP Locked ${pct(g?.lpLockedPct ?? null)} · Cluster ${UNK}`,
-    `NoHoneypot ${noHoney} · Phishing ${UNK} · Verified ${verified} · Renounced ${renouncedMark} · Burnt ${pct(g?.burntPct ?? null)}`,
+    `${bold(price)} · MC ${compact(s.marketCapUsd)} · Liq ${compact(s.liquidityUsd)} · Vol ${compact(s.volume24h)}`,
+    `Holders ${holders} · Top 10 ${bold(top10)} · DEV ${pct(g?.devPct ?? null)} · Insiders ${pct(g?.insidersPct ?? null)}`,
+    `Sniper ${sniper} · Bundler ${pct(g?.bundlerPct ?? null)}`,
+    `Pool ${pool} · LP Locked ${bold(pct(g?.lpLockedPct ?? null))} · Burnt ${pct(g?.burntPct ?? null)} · Tax ${bold(tax)}`,
+    `NoHoneypot ${noHoney} · Verified ${verified} · Renounced ${renouncedMark}`,
   ];
 
   if (opts?.ca) out.push('', code(opts.ca));
