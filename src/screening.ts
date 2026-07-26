@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { bold, code, esc, nowWib } from './messages.js';
 import { getChain, basesFor, type ChainCtx } from './chains.js';
+import { gmgnExtra, type GmgnExtra } from './gmgn.js';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
@@ -111,6 +112,7 @@ export type ScreenResult = {
   marketCapUsd: number | null; // dari DexScreener (marketCap, fallback fdv)
   pairAgeHours: number | null;
   renounced: boolean | null; // null = tak bisa ditentukan (owner() tak ada / RPC gagal)
+  gmgn: GmgnExtra | null; // pengisi celah dari GMGN; null = tak dipanggil/gagal
   sellPath: SellStatus; // simulasi jalur jual (exit-liquidity)
   flags: Flag[];
   verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA';
@@ -174,13 +176,14 @@ export async function screenToken(
   const bs = ctx.blockscout; // null = explorer tak tersedia (mis. BSC)
 
   // Jalankan semua permintaan sekaligus (termasuk simulasi jalur jual on-chain).
-  const [tokenInfo, holders, contract, dex, sell, renounced] = await Promise.all([
+  const [tokenInfo, holders, contract, dex, sell, renounced, gmgn] = await Promise.all([
     bs ? fetchJson(`${bs}/tokens/${addr}`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/tokens/${addr}/holders`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/smart-contracts/${addr}`) : Promise.resolve(null),
     fetchJson(`${DEXSCREENER}/${addr}`),
     simulateSellPath(addr, ctx),
     readRenounced(addr, ctx),
+    gmgnExtra(addr, ctx.key).catch(() => null), // fail-open: data tambahan
   ]);
   if (sell.flag) flags.push(sell.flag);
 
@@ -292,6 +295,7 @@ export async function screenToken(
     marketCapUsd,
     pairAgeHours,
     renounced,
+    gmgn,
     sellPath: sell.status,
     flags,
     verdict: worst(flags),
@@ -360,20 +364,42 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   const price = s.priceUsd ? `$${s.priceUsd}` : UNK;
   const holders = s.holdersCount === null ? UNK : s.holdersCount.toLocaleString('en-US');
   const pool = s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} jam`;
-  // Honeypot dibaca dari simulasi jalur jual: 'ok' = bisa dijual, 'blocked' = TIDAK bisa.
-  const noHoney = s.sellPath === 'ok' ? '✓' : s.sellPath === 'blocked' ? '✗' : UNK;
+  const g = s.gmgn;
 
-  const head = `${bold('$' + esc(s.symbol.toUpperCase()))}${opts?.chainLabel ? ` | ${esc(opts.chainLabel)}` : ''}`;
+  // NoHoneypot: simulasi jalur jual PHILIPS lebih dipercaya (on-chain, live) —
+  // GMGN dipakai hanya bila simulasi tak memberi jawaban.
+  const noHoney =
+    s.sellPath === 'ok' ? '✓'
+    : s.sellPath === 'blocked' ? '✗'
+    : g?.honeypot === null || g?.honeypot === undefined ? UNK
+    : g.honeypot ? '✗' : '✓';
+
+  // Tax: dua angka jadi satu kolom. Nol pun ditulis '0', bukan '?'.
+  const tax =
+    g && (g.buyTaxPct !== null || g.sellTaxPct !== null)
+      ? `${g.buyTaxPct === null ? UNK : Number(g.buyTaxPct.toFixed(1))}/${g.sellTaxPct === null ? UNK : Number(g.sellTaxPct.toFixed(1))}`
+      : `${UNK}/${UNK}`;
+
+  // Top 10: UTAMAKAN GMGN. Angka Blockscout menghitung kontrak pool sebagai
+  // 'holder' sehingga melambung (terukur 41.27% vs 16.72% pada CA yang sama) —
+  // itu membaca seperti konsentrasi bahaya padahal likuiditasnya sendiri.
+  const top10 = g?.top10Pct != null ? pct(g.top10Pct) : pct(s.top10Pct);
+  const verified = s.verified !== null ? mark(s.verified) : mark(g?.openSource ?? null);
+  const renouncedMark = s.renounced !== null ? mark(s.renounced) : mark(g?.renounced ?? null);
+
+  // Simbol seperti '$1' sudah berawalan $ — jangan jadi '$$1'.
+  const symUp = s.symbol.toUpperCase().replace(/^\$+/, '');
+  const head = `${bold('$' + esc(symUp))}${opts?.chainLabel ? ` | ${esc(opts.chainLabel)}` : ''}`;
 
   const out = [
     head,
     '',
     `${price} · MC ${compact(s.marketCapUsd)} · Liq ${compact(s.liquidityUsd)}`,
-    `Vol ${compact(s.volume24h)} · Holders ${holders} · Tax ${UNK}/${UNK}`,
-    `Top 10 ${pct(s.top10Pct)} · DEV ${UNK} · Insiders ${UNK}`,
-    `Sniper ${UNK} · Bundler ${UNK} · Dex Paid ${UNK}`,
-    `Pool ${pool} · LP Locked ${UNK} · Cluster ${UNK}`,
-    `NoHoneypot ${noHoney} · Phishing ${UNK} · Verified ${mark(s.verified)} · Renounced ${mark(s.renounced)} · Burnt ${UNK}`,
+    `Vol ${compact(s.volume24h)} · Holders ${holders} · Tax ${tax}`,
+    `Top 10 ${top10} · DEV ${pct(g?.devPct ?? null)} · Insiders ${pct(g?.insidersPct ?? null)}`,
+    `Sniper ${g?.sniperCount === null || g?.sniperCount === undefined ? UNK : g.sniperCount} · Bundler ${pct(g?.bundlerPct ?? null)} · Dex Paid ${UNK}`,
+    `Pool ${pool} · LP Locked ${pct(g?.lpLockedPct ?? null)} · Cluster ${UNK}`,
+    `NoHoneypot ${noHoney} · Phishing ${UNK} · Verified ${verified} · Renounced ${renouncedMark} · Burnt ${pct(g?.burntPct ?? null)}`,
   ];
 
   if (opts?.ca) out.push('', code(opts.ca));
