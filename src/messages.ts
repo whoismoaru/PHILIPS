@@ -873,9 +873,9 @@ export function msgPositionsList(opts: {
     inRange: boolean;
   }>;
 }): string {
-  // Kolom sejajar HANYA mungkin di dalam <pre> — font Telegram di luar itu proporsional,
-  // spasi sebanyak apa pun tak membuat kolom lurus. Emoji ditaruh di UJUNG baris supaya
-  // lebarnya yang tak menentu tak menggeser kolom di depannya.
+  // <code> per baris, BUKAN <pre>: fontnya tetap monospace (kolom lurus) tapi tanpa
+  // kotak blok kode ala terminal. Emoji ditaruh di UJUNG baris supaya lebarnya yang
+  // tak menentu tak menggeser kolom di depannya.
   const MAX_ROWS = 8; // kartu tetap terbaca di HP; sisanya disebut, bukan dihilangkan diam-diam
   const shown = opts.rows.slice(0, MAX_ROWS);
   const cells = shown.map((r) => [
@@ -888,15 +888,21 @@ export function msgPositionsList(opts: {
   const w = [0, 1, 2, 3, 4].map((i) => Math.max(...cells.map((c) => c[i].length)));
   const lines = cells.map(
     (c, i) =>
-      `${c[0].padEnd(w[0])}  ${c[1].padEnd(w[1] + 1)}  ${c[2].padStart(w[2])}  ` +
-      `${c[3].padStart(w[3])}  ${c[4].padStart(w[4])}  ${shown[i].inRange ? '🟢' : '🔴'}`,
+      code(
+        `${c[0].padEnd(w[0])}  ${c[1].padEnd(w[1] + 1)}  ${c[2].padStart(w[2])}  ` +
+          `${c[3].padStart(w[3])}  ${c[4].padStart(w[4])}  ${shown[i].inRange ? '🟢' : '🔴'}`,
+      ),
   );
-  const hr = '-'.repeat(47);
+  const hr = code('-'.repeat(47));
 
   const out = [
     `<b>POSITION</b>`,
     '',
-    pre([hr, '', lines.join('\n\n'), '', hr].join('\n')),
+    hr,
+    '',
+    lines.join('\n\n'),
+    '',
+    hr,
     '',
     `💵 Net ${opts.totalPnlUsd === null ? '—' : usdSigned(opts.totalPnlUsd)}`,
   ];
