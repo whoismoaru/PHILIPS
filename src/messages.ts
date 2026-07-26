@@ -873,34 +873,35 @@ export function msgPositionsList(opts: {
     inRange: boolean;
   }>;
 }): string {
-  // Tanpa monospace: font Telegram proporsional, jadi padding kolom TIDAK sejajar —
-  // pakai pemisah '·'. Emoji status tetap di ujung baris.
+  // Kolom sejajar HANYA mungkin di dalam <pre> — font Telegram di luar itu proporsional,
+  // spasi sebanyak apa pun tak membuat kolom lurus. Emoji ditaruh di UJUNG baris supaya
+  // lebarnya yang tak menentu tak menggeser kolom di depannya.
   const MAX_ROWS = 8; // kartu tetap terbaca di HP; sisanya disebut, bukan dihilangkan diam-diam
   const shown = opts.rows.slice(0, MAX_ROWS);
-  const lines = shown.map((r) =>
-    [
-      `#${r.id}`,
-      esc(r.pair.length > 14 ? r.pair.slice(0, 13) + '…' : r.pair),
-      r.investLabel,
-      r.pnlUsd === null ? '—' : usdSigned(r.pnlUsd),
-      `${r.age} ${r.inRange ? '🟢' : '🔴'}`,
-    ].join(' · '),
+  const cells = shown.map((r) => [
+    `#${r.id}`,
+    r.pair.length > 14 ? r.pair.slice(0, 13) + '…' : r.pair,
+    r.investLabel,
+    r.pnlUsd === null ? '—' : usdSigned(r.pnlUsd),
+    r.age,
+  ]);
+  const w = [0, 1, 2, 3, 4].map((i) => Math.max(...cells.map((c) => c[i].length)));
+  const lines = cells.map(
+    (c, i) =>
+      `${c[0].padEnd(w[0])}  ${c[1].padEnd(w[1] + 1)}  ${c[2].padStart(w[2])}  ` +
+      `${c[3].padStart(w[3])}  ${c[4].padStart(w[4])}  ${shown[i].inRange ? '🟢' : '🔴'}`,
   );
-  const hr = '─'.repeat(18);
+  const hr = '-'.repeat(47);
 
   const out = [
     `<b>POSITION</b>`,
     '',
-    hr,
+    pre([hr, '', lines.join('\n\n'), '', hr].join('\n')),
     '',
-    lines.join('\n\n'),
-    '',
-    hr,
-    '',
-    `💵 ${bold(`Net ${opts.totalPnlUsd === null ? '—' : usdSigned(opts.totalPnlUsd)}`)}`,
+    `💵 Net ${opts.totalPnlUsd === null ? '—' : usdSigned(opts.totalPnlUsd)}`,
   ];
-  if (opts.rows.length > MAX_ROWS) out.push(italic(`+${opts.rows.length - MAX_ROWS} posisi lain — tutup dulu untuk melihatnya`));
-  out.push('', italic(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
+  if (opts.rows.length > MAX_ROWS) out.push('', `+${opts.rows.length - MAX_ROWS} posisi lain — tutup dulu untuk melihatnya`);
+  out.push('', '', `${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`);
   return out.join('\n');
 }
 
