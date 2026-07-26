@@ -148,3 +148,150 @@ export function renderProfitCard(o: ProfitCardOpts): Buffer {
 
   return canvas.toBuffer('image/png');
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kartu POSITION (daftar LP aktif) — dirender sebagai PNG, bukan teks Telegram.
+// Alasan: kolom lurus butuh lebar karakter yang bisa diukur. Di pesan Telegram
+// itu hanya mungkin dengan font monospace; di kanvas kita ukur sendiri
+// (measureText) sehingga kolom lurus SEKALIGUS fontnya proporsional & rapi.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type PositionsCardOpts = {
+  rows: Array<{
+    id: string;
+    pair: string;
+    investLabel: string;
+    pnlLabel: string; // '+$1.24' | '—'
+    age: string;
+    inRange: boolean;
+  }>;
+  netLabel: string; // 'Net +$4.73'
+  netPositive: boolean | null; // null = tak diketahui → warna netral
+  footer: string; // 'LIVE · 17:42 WIB'
+  moreCount: number; // baris yang tak muat
+};
+
+export function renderPositionsCard(o: PositionsCardOpts): Buffer {
+  ensureFonts();
+  const PW = 1040;
+  const PADX = 56;
+  const ROW_H = 62;
+  const headTop = 56;
+  const tableTop = headTop + 96;
+  const bodyH = o.rows.length * ROW_H;
+  const footTop = tableTop + bodyH + 34;
+  const PH = footTop + (o.moreCount ? 44 : 0) + 150;
+
+  const canvas = createCanvas(PW, PH);
+  const ctx = canvas.getContext('2d');
+
+  const g = ctx.createLinearGradient(0, 0, 0, PH);
+  g.addColorStop(0, COL.bg0);
+  g.addColorStop(1, COL.bg1);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, PW, PH);
+  ctx.fillStyle = COL.card;
+  roundRect(ctx, 20, 20, PW - 40, PH - 40, 28);
+  ctx.fill();
+
+  // Judul
+  ctx.fillStyle = COL.text;
+  ctx.font = '44px PhSansB';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('POSITION', PADX, headTop + 44);
+
+  const hr = (y: number) => {
+    ctx.strokeStyle = COL.line;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(PADX, y);
+    ctx.lineTo(PW - PADX, y);
+    ctx.stroke();
+  };
+  hr(tableTop - 30);
+
+  // Lebar kolom diukur dari isi sebenarnya — inilah yang membuat kolom lurus
+  // tanpa perlu font monospace.
+  const wOf = (font: string, list: string[]): number => {
+    ctx.font = font;
+    return Math.max(...list.map((s) => ctx.measureText(s).width));
+  };
+  const F_ID = '30px PhSans';
+  const F_PAIR = '31px PhSansB';
+  const F_NUM = '30px PhSans';
+
+  const ids = o.rows.map((r) => `#${r.id}`);
+  const wId = wOf(F_ID, ids);
+  const wInv = wOf(F_NUM, o.rows.map((r) => r.investLabel));
+  const wPnl = wOf(F_NUM, o.rows.map((r) => r.pnlLabel));
+  const wAge = wOf(F_NUM, o.rows.map((r) => r.age));
+
+  // Kolom kanan disimpan sebagai TEPI KANAN: dengan textAlign='right', fillText(s, X)
+  // menaruh ujung kanan teks tepat di X.
+  const xId = PADX;
+  const xPair = xId + wId + 28;
+  const xDot = PW - PADX - 9;
+  const rAge = xDot - 32;
+  const rPnl = rAge - wAge - 30;
+  const rInv = rPnl - wPnl - 30;
+  const pairMax = rInv - wInv - xPair - 28;
+
+  o.rows.forEach((r, i) => {
+    const y = tableTop + i * ROW_H + 40;
+    if (i % 2 === 1) {
+      ctx.fillStyle = COL.chipBg + '66';
+      roundRect(ctx, PADX - 18, y - 40, PW - 2 * PADX + 36, ROW_H - 6, 12);
+      ctx.fill();
+    }
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = COL.muted;
+    ctx.font = F_ID;
+    ctx.fillText(ids[i], xId, y);
+
+    ctx.fillStyle = COL.text;
+    ctx.font = F_PAIR;
+    let pair = r.pair;
+    while (ctx.measureText(pair).width > pairMax && pair.length > 3) pair = pair.slice(0, -2) + '…';
+    ctx.fillText(pair, xPair, y);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = COL.muted;
+    ctx.font = F_NUM;
+    ctx.fillText(r.investLabel, rInv, y);
+
+    const neg = r.pnlLabel.trim().startsWith('-');
+    ctx.fillStyle = r.pnlLabel === '—' ? COL.muted : neg ? COL.red : COL.green;
+    ctx.fillText(r.pnlLabel, rPnl, y);
+
+    ctx.fillStyle = COL.muted;
+    ctx.fillText(r.age, rAge, y);
+
+    // Titik status: lingkaran, bukan emoji — ukurannya pasti di semua sistem.
+    ctx.beginPath();
+    ctx.arc(xDot, y - 10, 9, 0, Math.PI * 2);
+    ctx.fillStyle = r.inRange ? COL.green : COL.red;
+    ctx.fill();
+    ctx.textAlign = 'left';
+  });
+
+  hr(tableTop + bodyH + 4);
+
+  ctx.fillStyle = o.netPositive === null ? COL.text : o.netPositive ? COL.green : COL.red;
+  ctx.font = '40px PhSansB';
+  ctx.fillText(o.netLabel, PADX, footTop + 42);
+
+  let y = footTop + 42;
+  if (o.moreCount) {
+    y += 44;
+    ctx.fillStyle = COL.muted;
+    ctx.font = '26px PhSans';
+    ctx.fillText(`+${o.moreCount} posisi lain — tutup dulu untuk melihatnya`, PADX, y);
+  }
+
+  ctx.fillStyle = COL.muted;
+  ctx.font = '26px PhSans';
+  ctx.fillText(o.footer, PADX, y + 60);
+
+  return canvas.toBuffer('image/png');
+}

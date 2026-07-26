@@ -1,5 +1,6 @@
 import { Telegraf, Markup, Input } from 'telegraf';
 import { renderProfitCard } from './card.js';
+import * as card from './card.js';
 import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
 import { config } from './config.js';
@@ -830,8 +831,33 @@ async function cmdPositions(ctx: any, edit = false) {
     Markup.button.callback('🔄 Refresh', 'positions_refresh'),
   ]);
   kbRows.push([Markup.button.callback('⛔ Tutup Semua', 'closeall_confirm')]);
-  const extra = { ...html, ...Markup.inlineKeyboard(kbRows) };
-  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+  const kb = Markup.inlineKeyboard(kbRows);
+  const extra = { ...html, ...kb };
+
+  // Kartu PNG: kolom lurus tanpa font monospace (lebar diukur di kanvas).
+  // Render gagal TAK boleh menjatuhkan /positions — jatuh ke kartu teks.
+  try {
+    const png = card.renderPositionsCard({
+      rows: rows.slice(0, 12).map((r) => ({
+        id: r.id,
+        pair: r.pair,
+        investLabel: r.investLabel,
+        pnlLabel: r.pnlUsd === null ? '—' : msg.usdSigned(r.pnlUsd),
+        age: r.age,
+        inRange: r.inRange,
+      })),
+      netLabel: `Net ${totalPnlUsd === null ? '—' : msg.usdSigned(totalPnlUsd)}`,
+      netPositive: totalPnlUsd === null ? null : totalPnlUsd >= 0,
+      footer: `${config.safety.dryRun ? 'DRY RUN' : 'LIVE'} · ${msg.nowWib()}`,
+      moreCount: Math.max(0, rows.length - 12),
+    });
+    const media = { type: 'photo' as const, media: { source: png } };
+    // edit=true tapi pesan lama berupa TEKS → editMessageMedia ditolak; ditangkap di bawah.
+    return edit ? await ctx.editMessageMedia(media, kb) : await ctx.replyWithPhoto({ source: png }, kb);
+  } catch (e) {
+    console.error('[positions] kartu PNG gagal, pakai teks:', (e as Error).message);
+    return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+  }
 }
 bot.command('positions', (ctx) => cmdPositions(ctx, false));
 
@@ -839,11 +865,10 @@ bot.command('positions', (ctx) => cmdPositions(ctx, false));
 bot.action('positions_back', async (ctx) => {
   await ctx.answerCbQuery();
   const extra = { ...html, ...helpKeyboard() };
-  try {
-    return await ctx.editMessageText(msg.msgHelp(config.safety.dryRun), extra);
-  } catch {
-    return ctx.reply(msg.msgHelp(config.safety.dryRun), extra); // pesan terlalu tua untuk diedit
-  }
+  // Kartu posisi kini FOTO — editMessageText tak berlaku. Hapus lalu kirim menu:
+  // hasilnya tetap terasa "kembali", bukan menumpuk bubble.
+  await ctx.deleteMessage().catch(() => undefined);
+  return ctx.reply(msg.msgHelp(config.safety.dryRun), extra);
 });
 
 // Refresh daftar posisi (edit pesan yang sama).
