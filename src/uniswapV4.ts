@@ -283,18 +283,6 @@ function liqForAmount1(a: bigint, b: bigint, amt1: bigint): bigint {
 
 export type PoolKeyV4 = { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string };
 
-/** Tick harga sekarang pool v4 (via PoolManager.extsload slot0, POOLS_SLOT=6). */
-async function readPoolTick(cc: ChainCtx, pk: PoolKeyV4): Promise<number> {
-  const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
-  const coder = ethers.AbiCoder.defaultAbiCoder();
-  const poolId = ethers.keccak256(coder.encode(['tuple(address,address,uint24,int24,address)'], [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]]));
-  const slot = ethers.keccak256(ethers.concat([poolId, ethers.zeroPadValue(ethers.toBeHex(6n), 32)]));
-  const raw = BigInt(await mgr.extsload(slot));
-  let tick = Number((raw >> 160n) & 0xffffffn);
-  if (tick >= 2 ** 23) tick -= 2 ** 24;
-  return tick;
-}
-
 async function ensurePermit2(cc: ChainCtx, token: string, spender: string, amount: bigint): Promise<void> {
   const erc = new ethers.Contract(token, ['function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'], cc.wallet);
   if ((await erc.allowance(cc.wallet.address, PERMIT2)) < amount) {
@@ -327,7 +315,7 @@ export async function openPositionV4(
   // gap default 0 → tepi-dekat MENEMPEL harga sekarang supaya posisi mulai terisi
   // sejak pergerakan pertama ke arah kita (bukan menunggu turun berspasi dulu).
   const gap = (opts.gapSpacings ?? 0) * spacing;
-  const current = await readPoolTick(cc, poolKey);
+  const current = (await readPoolState(cc, poolKey)).tick;
   const aligned = nearestUsableTick(current, spacing);
   let tickLower: number;
   let tickUpper: number;

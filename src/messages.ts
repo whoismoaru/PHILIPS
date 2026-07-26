@@ -79,11 +79,6 @@ export function kv(label: string, valueHtml: string): string {
   return `${esc(label)} · ${valueHtml}`;
 }
 
-/** Compat alias used by screening.ts */
-export function row(label: string, valueHtml: string, _width = 10): string {
-  return kv(label, valueHtml);
-}
-
 export function section(name: string): string {
   return bold(name);
 }
@@ -104,14 +99,6 @@ export function pre(text: string): string {
   return `<pre>${esc(text)}</pre>`;
 }
 
-export function link(label: string, url: string): string {
-  return `<a href="${esc(url)}">${esc(label)}</a>`;
-}
-
-export function spoiler(text: string): string {
-  return `<tg-spoiler>${esc(text)}</tg-spoiler>`;
-}
-
 export function card(titleLine: string, body: string[], footer?: string): string {
   const parts = [titleLine, ''];
   parts.push(...body);
@@ -124,10 +111,6 @@ export function card(titleLine: string, body: string[], footer?: string): string
 }
 
 // ─── number / money helpers ────────────────────────────────────────
-
-export function cleanEth(wei: bigint): string {
-  return Number(ethers.formatEther(wei)).toLocaleString('en-US', { maximumFractionDigits: 6 });
-}
 
 export function cleanUnits(wei: bigint, dec: number): string {
   return Number(ethers.formatUnits(wei, dec)).toLocaleString('en-US', {
@@ -188,17 +171,9 @@ export function modeLabel(dryRun: boolean): string {
   return dryRun ? 'DRY RUN' : 'LIVE';
 }
 
-export function modeMark(dryRun: boolean): string {
-  return dryRun ? '◇' : '◆';
-}
-
 /** Badge mode dgn emoji semantik (tg-ui): 🟢 LIVE · ⚪ DRY RUN. */
 export function modeBadge(dryRun: boolean): string {
   return dryRun ? '⚪ DRY RUN' : '🟢 LIVE';
-}
-
-export function rangeStatus(inRange: boolean): string {
-  return inRange ? 'IN RANGE' : 'OUT OF RANGE';
 }
 
 export function nowUtc(): string {
@@ -243,7 +218,6 @@ function cockpitLines(dryRun: boolean): string[] {
     dryRun ? '⚪ <b>DRY RUN</b>' : '🟢 <b>LIVE</b>',
     '',
     '📊 <b>VIEW</b>',
-    cmd('/portfolio', 'ekuitas total'),
     cmd('/status', 'wallet & saldo'),
     cmd('/positions', 'LP aktif'),
     cmd('/history', 'jurnal trade'),
@@ -256,10 +230,9 @@ function cockpitLines(dryRun: boolean): string[] {
     cmd('/buy', 'beli token (rute terbaik)'),
     cmd('/sell', 'jual token (rute terbaik)'),
     cmd('/bridge', 'antar-chain → USDT @Stable'),
-    cmd('/swapbase', 'tukar base ETH ⇄ USDG'),
     cmd('/size', 'preset nominal (ETH & Stablecoin)'),
     '',
-    '🚨 <b>EMERGENCY</b>',
+    '⛔ <b>EMERGENCY</b>',
     cmd('/closeall', 'tutup SEMUA posisi'),
     '',
     '⚠️ <i>/add /stop /buy /sell /bridge /closeall menggerakkan dana on-chain</i>',
@@ -395,15 +368,8 @@ export function msgV4Range(tokenId: string, inRange: boolean): string {
     : card(`🔴 ${title('V4 OUT OF RANGE', `#${tokenId}`)}`, [`🔴 ${bold('keluar rentang')} — posisi v4 di luar; pertimbangkan tutup.`], nowUtc());
 }
 
-/** Alias menu — sama dengan /start. */
-export function msgHelp(dryRun: boolean): string {
-  return [
-    '🟢 <b>PHILIPS · LP COCKPIT</b>',
-    'LP single-sided <b>WETH / USDG</b> · Uniswap v3',
-    '━━━━━━━━━━━━━━━━━━━━━━',
-    ...cockpitLines(dryRun),
-  ].join('\n');
-}
+/** /help = kartu yang sama dengan /start (dulu dua builder yang saling menyalin). */
+export const msgHelp = msgStart;
 
 export function msgUnknown(txt: string): string {
   const shown = (txt || '').trim().slice(0, 40) || '…';
@@ -426,7 +392,7 @@ export function msgStatus(opts: {
   chains: Array<{ label: string; amount: string; symbol: string; usd: number | null }>;
   usdg?: { amount: string; usd: number }; // base USDG di chain utama — tampil bila > 0
   totalUsd: number | null; // null = harga ETH tak terbaca
-  holdingsCount: number;
+  holdingsCount: number | null; // null = pembacaan gagal (BUKAN 'bersih')
   refreshRel?: string; // 'baru saja' | '2 detik lalu' — kesegaran data
 }): string {
   const modeTxt = opts.dryRun ? 'DRY RUN' : 'LIVE';
@@ -456,9 +422,11 @@ export function msgStatus(opts: {
     hr2,
     `💵 <b>Total ${usdCol(opts.totalUsd)}</b>`,
     '',
-    opts.holdingsCount === 0
-      ? '✅ Token nyangkut: <b>bersih</b>'
-      : `⚠️ Token nyangkut: <b>${opts.holdingsCount}</b>`,
+    opts.holdingsCount === null
+      ? '🟡 baca token gagal — coba Refresh'
+      : opts.holdingsCount === 0
+        ? '✅ Token nyangkut: <b>bersih</b>'
+        : `⚠️ ${bold(String(opts.holdingsCount))} token nyangkut — jual lewat /sell`,
     `👛 <code>${esc(shortAddr(opts.wallet))}</code>`,
     '',
     `🕒 ${modeTxt} · ${nowUtc()}`,
@@ -509,35 +477,6 @@ export function msgPnl(opts: {
   return card(`🧾 ${title('PnL', 'cashout nyata')}`, body, footerMode(opts.dryRun));
 }
 
-/** Pandangan portofolio tunggal: ekuitas total (wallet + posisi) + realized PnL. */
-export function msgPortfolio(o: {
-  totalUsd: number;
-  walletUsd: number;
-  posUsd: number;
-  ethLabel: string;
-  usdgLabel: string;
-  openV3: number;
-  openV4: number;
-  realizedNetEth: number;
-  realizedNetUsd: number | null;
-  dryRun: boolean;
-}): string {
-  const body = [
-    `💰 ${bold(`ekuitas ${usdPlain(o.totalUsd)}`)}`,
-    '',
-    ...hrows([
-      ['Wallet', `${usdPlain(o.walletUsd)}  (${o.ethLabel} ETH · ${o.usdgLabel} USDG)`],
-      ['Posisi LP', `${usdPlain(o.posUsd)}  (${o.openV3} v3 · ${o.openV4} v4)`],
-    ]),
-    '',
-    section('realized · seumur hidup'),
-    ...hrows([
-      ['PnL', o.realizedNetUsd !== null ? `${usdSigned(o.realizedNetUsd)}  (${sgEth(o.realizedNetEth)})` : sgEth(o.realizedNetEth)],
-    ]),
-  ];
-  return card(`📊 ${title('PORTFOLIO')}`, body, footerMode(o.dryRun));
-}
-
 /** Alert harga token anjlok ≥ambang dari harga entry (auto-monitor). */
 export function msgPriceDrop(tokenId: string, symbol: string, dropPct: number, baseSymbol = 'WETH'): string {
   return card(`⚠️ ${title('ANJLOK', esc(symbol))}`, [
@@ -562,10 +501,6 @@ export function msgCloseAllPick(countV3: number, countV4 = 0): string {
 }
 
 // ─── /buy /sell token (base↔token, rute terbaik) ───────────────────────
-export function msgTSwapChain(buy: boolean, dryRun: boolean): string {
-  const t = buy ? '🟢 BELI TOKEN' : '🔴 JUAL TOKEN';
-  return card(`🔄 ${title(t)}`, [note('pilih chain di bawah.')], footerMode(dryRun));
-}
 export function msgBuyAskCA(dryRun: boolean): string {
   return card(`🟢 ${title('BELI TOKEN')}`, [
     note('chain terdeteksi otomatis dari CA.'),
@@ -593,13 +528,6 @@ export function msgSellTypeAmount(sym: string): string {
 export function msgTSwapBase(chainLabel: string, buy: boolean): string {
   const q = buy ? 'bayar pakai base apa?' : 'terima base apa?';
   return card(`🔄 ${title('SWAP TOKEN', chainLabel)}`, [note(q)]);
-}
-export function msgTSwapTokenPrompt(buy: boolean, baseSym: string): string {
-  const arah = buy ? `beli token pakai ${bold(baseSym)}` : `jual token → ${bold(baseSym)}`;
-  return card(`🔄 ${title('SWAP TOKEN')}`, [
-    note(arah),
-    `💬 Tempel ${bold('alamat kontrak token')} (0x…).`,
-  ]);
 }
 export function msgTSwapAmountPrompt(buy: boolean, sym: string, balanceLine: string): string {
   const what = buy ? `jumlah ${bold(sym)} untuk dibelanjakan` : `jumlah ${bold(sym)} untuk dijual`;
@@ -730,24 +658,12 @@ export function msgFundDone(txHashes: string[], outLabel: string, dryRun: boolea
   ], footerMode(dryRun));
 }
 
-/** Prompt saat tombol menu "Tambah LP" ditekan (butuh argumen CA). */
-export function msgAddPrompt(): string {
-  return card(`➕ ${title('TAMBAH LP')}`, [
-    `Tempel alamat token: ${code('/add <CA>')}`,
-    note('contoh: /add 0xabc…'),
-  ]);
-}
-
 export function msgError(where: string, err: string): string {
   return card(
     `❌ ${title('ERROR', where)}`,
     [pre(err.slice(0, 400)), '', note('coba ulangi — bila berulang, cek log service.')],
     nowUtc(),
   );
-}
-
-export function msgInfo(titleText: string, lines: string[]): string {
-  return card(title(titleText), lines.map((l) => esc(l)));
 }
 
 export function msgProgress(text: string): string {
@@ -762,13 +678,6 @@ export function msgChainPick(): string {
   return card(
     title('CHAIN'),
     [note('token ditemukan di beberapa chain — pilih di bawah.')],
-  );
-}
-
-export function msgChainChosen(label: string): string {
-  return card(
-    title('CHAIN'),
-    [fieldBlock([['selected', label]])],
   );
 }
 
@@ -868,13 +777,6 @@ export function msgPositionDetail(opts: {
     `${e} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`,
   ];
   return card(`${e} ${title('DETAIL', `#${opts.tokenId}`)}`, body, nowUtc());
-}
-
-export function msgPositionsHeader(activeCount: number): string {
-  return card(
-    title('POSITIONS'),
-    [fieldBlock([['active', String(activeCount)]])],
-  );
 }
 
 /** Daftar posisi konsolidasi: ringkasan + pohon per-posisi (satu pesan). */
@@ -1004,12 +906,17 @@ export function msgRangeStep(fee: number): string {
   );
 }
 
-export function msgAmountStep(symbol: string, maxLabel: string): string {
+export function msgAmountStep(symbol: string, maxLabel: string, balanceLabel?: string): string {
   return card(
     title('ADD LP', '3/4'),
     [
       section(`nominal ${symbol}`),
-      fieldBlock([['maks', maxLabel]]),
+      // Saldo ikut ditampilkan: dulu user memilih buta lalu baru ditolak "KURANG"
+      // di kartu 4/4 (satu langkah + satu round-trip terbuang).
+      fieldBlock([
+        ['saldo', balanceLabel ?? '?'],
+        ['maks', maxLabel],
+      ]),
     ],
   );
 }

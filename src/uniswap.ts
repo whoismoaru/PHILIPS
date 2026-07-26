@@ -461,7 +461,6 @@ export type PoolOption = {
   baseSymbol: string;
   baseDecimals: number;
   baseReserve: bigint; // base tersimpan di pool (proksi kedalaman likuiditas)
-  priceTokenInBase: string | null;
 };
 
 /** Pool base/token di seluruh fee tier, urut kedalaman (base reserve) terbesar. */
@@ -476,12 +475,9 @@ async function poolsForBase(
     VALID_FEES.map(async (fee): Promise<PoolOption | null> => {
       const poolAddress: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
       if (!poolAddress || poolAddress === ethers.ZeroAddress) return null;
-      const [baseReserve, priceTokenInBase] = await Promise.all([
-        baseC.balanceOf(poolAddress) as Promise<bigint>,
-        priceInfo(tokenAddress, fee, base, ctx)
-          .then((p) => p.priceTokenInBase)
-          .catch(() => null), // harga tak terbaca → null (tak menggagalkan discovery)
-      ]);
+      // Dulu ikut memanggil priceInfo (= loadPool penuh) per fee tier hanya untuk
+      // mengisi field yang tak pernah dibaca siapa pun: ~55 RPC terbuang tiap discovery.
+      const baseReserve: bigint = await baseC.balanceOf(poolAddress);
       return {
         fee,
         poolAddress,
@@ -489,7 +485,6 @@ async function poolsForBase(
         baseSymbol: base.symbol,
         baseDecimals: base.decimals,
         baseReserve,
-        priceTokenInBase,
       };
     }),
   );
@@ -515,24 +510,6 @@ export async function discoverAllPools(
   return perBase.flat();
 }
 
-// Cache TTL pendek — HANYA untuk tampilan (mis. /status walletHoldings) agar
-// tak spam RPC saat refresh berulang. JALUR UANG (swap fallback, /add) TETAP
-// pakai discoverPools fresh: data lawas hanya memengaruhi nilai tampilan, bukan
-// keamanan swap (minOut tetap dari quoter live).
-const _poolsCache = new Map<string, { t: number; v: PoolOption[] }>();
-
-export async function discoverPoolsCached(
-  tokenAddress: string,
-  ctx: ChainCtx = getChain(),
-  ttlMs = 30_000,
-): Promise<PoolOption[]> {
-  const key = `${ctx.key}:${tokenAddress.toLowerCase()}`;
-  const hit = _poolsCache.get(key);
-  if (hit && Date.now() - hit.t < ttlMs) return hit.v;
-  const v = await discoverPools(tokenAddress, ctx);
-  _poolsCache.set(key, { t: Date.now(), v });
-  return v;
-}
 
 /** Info harga & sisi base untuk sebuah pool. */
 export async function priceInfo(tokenAddress: string, fee: number, base: BaseAsset, ctx: ChainCtx = getChain()) {

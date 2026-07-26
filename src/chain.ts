@@ -46,24 +46,6 @@ export const POSITION_MANAGER_ABI = [
   'function multicall(bytes[] data) payable returns (bytes[] results)',
 ];
 
-export const factory = new ethers.Contract(config.uniswap.factory, FACTORY_ABI, wallet);
-export const positionManager = new ethers.Contract(
-  config.uniswap.positionManager,
-  POSITION_MANAGER_ABI,
-  wallet,
-);
-export const weth = new ethers.Contract(config.uniswap.weth, WETH_ABI, wallet);
-
-/** Cache metadata token (symbol & decimals) supaya tidak query berulang. */
-const tokenMetaCache = new Map<string, { symbol: string; decimals: number }>();
-
-export async function getTokenMeta(address: string): Promise<{ symbol: string; decimals: number }> {
-  const key = address.toLowerCase();
-  const cached = tokenMetaCache.get(key);
-  if (cached) return cached;
-  const c = new ethers.Contract(address, ERC20_ABI, provider);
-  const [symbol, decimals] = await Promise.all([c.symbol(), c.decimals()]);
-  const meta = { symbol: symbol as string, decimals: Number(decimals) };
-  tokenMetaCache.set(key, meta);
-  return meta;
-}
+// Instance kontrak default-chain sengaja TIDAK dibuat di sini: semua jalur sudah
+// chain-aware lewat chains.ts (cc.factory/cc.positionManager/cc.weth), dan
+// `new Contract('')` saat env kosong dulu meledak di import-time.
