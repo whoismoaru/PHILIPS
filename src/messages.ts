@@ -873,36 +873,20 @@ export function msgPositionsList(opts: {
     inRange: boolean;
   }>;
 }): string {
-  // <code> per baris, BUKAN <pre>: fontnya tetap monospace (kolom lurus) tapi tanpa
-  // kotak blok kode ala terminal. Emoji ditaruh di UJUNG baris supaya lebarnya yang
-  // tak menentu tak menggeser kolom di depannya.
-  const MAX_ROWS = 8; // kartu tetap terbaca di HP; sisanya disebut, bukan dihilangkan diam-diam
+  // TANPA monospace: hanya tag HTML biasa (b/i). Konsekuensi yang disadari —
+  // kolom TIDAK sejajar, jadi bentuknya bukan tabel melainkan daftar memanjang:
+  // tiap posisi 2 baris, dan antar posisi TANPA baris kosong (rapat).
+  const MAX_ROWS = 10;
   const shown = opts.rows.slice(0, MAX_ROWS);
-  const cells = shown.map((r) => [
-    `#${r.id}`,
-    r.pair.length > 14 ? r.pair.slice(0, 13) + '…' : r.pair,
-    r.investLabel,
-    r.pnlUsd === null ? '—' : usdSigned(r.pnlUsd),
-    r.age,
+  const lines = shown.flatMap((r) => [
+    `${r.inRange ? '🟢' : '🔴'} ${bold(esc(r.pair))} · ${italic(`#${r.id}`)}`,
+    `${r.investLabel} · ${bold(r.pnlUsd === null ? '—' : usdSigned(r.pnlUsd))} · ${r.age}`,
   ]);
-  const w = [0, 1, 2, 3, 4].map((i) => Math.max(...cells.map((c) => c[i].length)));
-  const lines = cells.map(
-    (c, i) =>
-      code(
-        `${c[0].padEnd(w[0])}  ${c[1].padEnd(w[1] + 1)}  ${c[2].padStart(w[2])}  ` +
-          `${c[3].padStart(w[3])}  ${c[4].padStart(w[4])}  ${shown[i].inRange ? '🟢' : '🔴'}`,
-      ),
-  );
-  const hr = code('-'.repeat(47));
 
   const out = [
     `<b>POSITION</b>`,
     '',
-    hr,
-    '',
-    lines.join('\n\n'),
-    '',
-    hr,
+    lines.join('\n'),
     '',
     `💵 Net ${opts.totalPnlUsd === null ? '—' : usdSigned(opts.totalPnlUsd)}`,
   ];
