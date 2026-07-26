@@ -310,14 +310,23 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
 const startKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('💰 Uang', 'status'), Markup.button.callback('📋 Posisi', 'positions')],
-    [Markup.button.callback('🧾 PnL', 'pnl'), Markup.button.callback('📜 Riwayat', 'history')],
-    [Markup.button.callback('📖 Bantuan', 'help')],
+    [Markup.button.callback('📖 Daftar Perintah', 'help')],
   ]);
 
 bot.start(async (ctx) => {
   const { imported, gone } = await syncOnChainPositions().catch(() => ({ imported: 0, gone: 0 }));
-  await ctx.reply(msg.msgStart(config.safety.dryRun), { ...html, ...startKeyboard() });
-  if (imported || gone) await ctx.reply(msg.msgSyncResult(imported, gone), html).catch(() => {});
+  const cc = getChain();
+  await ctx.reply(
+    msg.msgStarted({
+      dryRun: config.safety.dryRun,
+      chainLabel: cc.label,
+      chainId: cc.chainId,
+      positions: store.active().length,
+      imported,
+      gone,
+    }),
+    { ...html, ...startKeyboard() },
+  );
 });
 // Keyboard inline aksi cepat pada kartu /help (di samping reply-keyboard persisten).
 const helpKeyboard = () =>
@@ -2804,8 +2813,8 @@ bot.catch((err, ctx) => {
 /** Daftar command menu Telegram (tombol "/" / Menu). */
 const BOT_COMMANDS = [
   // '/start' sengaja TIDAK didaftarkan: Telegram mengirimnya sendiri saat chat dibuka
-  // & tombol Start ditekan, dan kartunya sama dengan /help (msgHelp = msgStart).
-  // Handler bot.start tetap ada — dia yang menjalankan sinkron posisi on-chain.
+  // & tombol Start ditekan. Kartunya = penanda bot hidup + hasil sinkron on-chain;
+  // daftar perintah ada di /help.
   { command: 'help', description: 'Menu, mode bot & daftar perintah' },
   { command: 'status', description: 'Koneksi jaringan & saldo dompet' },
   { command: 'positions', description: 'Posisi LP yang aktif (live)' },

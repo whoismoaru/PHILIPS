@@ -244,7 +244,8 @@ function cockpitLines(dryRun: boolean): string[] {
   ];
 }
 
-export function msgStart(dryRun: boolean): string {
+/** Kartu daftar perintah (/help · /menu). */
+export function msgHelp(dryRun: boolean): string {
   return [
     '🟢 <b>PHILIPS · LP COCKPIT</b>',
     'LP single-sided <b>WETH / USDG</b> di Uniswap v3',
@@ -254,13 +255,40 @@ export function msgStart(dryRun: boolean): string {
   ].join('\n');
 }
 
-/** Hasil sinkron on-chain saat /start. */
-export function msgSyncResult(imported: number, gone: number): string {
-  const body: string[] = [];
-  if (imported) body.push(`🟢 ${bold(String(imported))} posisi on-chain diimpor ${note('(entry tak diketahui)')}`);
-  if (gone) body.push(`⚪ ${bold(String(gone))} posisi ditutup di luar bot → ditandai selesai`);
-  body.push('', note('buka /positions untuk kelola atau tutup.'));
-  return card(`🔄 ${title('SINKRON')}`, body);
+/**
+ * Kartu /start — PENANDA BOT HIDUP saja (Telegram mengirim /start otomatis saat
+ * chat dibuka & tombol Start ditekan). Daftar perintah ada di /help; di sini cukup
+ * satu keadaan + hasil sinkron, supaya tak jadi dua bubble.
+ */
+export function msgStarted(o: {
+  dryRun: boolean;
+  chainLabel: string;
+  chainId: string | number | bigint;
+  positions: number;
+  imported: number;
+  gone: number;
+}): string {
+  const rows: Array<[string, string]> = [
+    ['mode', o.dryRun ? 'DRY RUN (simulasi)' : 'LIVE (kirim tx)'],
+    ['chain', `${o.chainLabel} · ${o.chainId}`],
+    ['posisi', `${o.positions} aktif`],
+  ];
+  if (o.imported || o.gone) {
+    rows.push(['sinkron', [o.imported ? `+${o.imported} diimpor` : '', o.gone ? `${o.gone} selesai di luar bot` : '']
+      .filter(Boolean)
+      .join(' · ')]);
+  }
+  return card(
+    `${o.dryRun ? '⚪' : '🟢'} ${title('PHILIPS', 'siap')}`,
+    [
+      `🤖 ${bold(o.dryRun ? 'bot aktif — mode simulasi' : 'bot aktif — mode LIVE')}`,
+      '',
+      pre(sheet(rows)),
+      '',
+      note('/help untuk daftar perintah'),
+    ],
+    nowUtc(),
+  );
 }
 
 /** Kartu posisi Uniswap v4 (baca-saja — PHILIPS mengelola v3). */
@@ -359,8 +387,6 @@ export function msgV4Range(tokenId: string, inRange: boolean): string {
     : card(`🔴 ${title('V4 OUT OF RANGE', `#${tokenId}`)}`, [`🔴 ${bold('keluar rentang')} — posisi v4 di luar; pertimbangkan tutup.`], nowUtc());
 }
 
-/** /help = kartu yang sama dengan /start (dulu dua builder yang saling menyalin). */
-export const msgHelp = msgStart;
 
 export function msgUnknown(txt: string, isAddress = false): string {
   const shown = (txt || '').trim().slice(0, 40) || '…';
