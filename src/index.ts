@@ -2803,8 +2803,10 @@ bot.catch((err, ctx) => {
 
 /** Daftar command menu Telegram (tombol "/" / Menu). */
 const BOT_COMMANDS = [
-  { command: 'start', description: 'Menu & status singkat' },
-  { command: 'help', description: 'Daftar perintah' },
+  // '/start' sengaja TIDAK didaftarkan: Telegram mengirimnya sendiri saat chat dibuka
+  // & tombol Start ditekan, dan kartunya sama dengan /help (msgHelp = msgStart).
+  // Handler bot.start tetap ada — dia yang menjalankan sinkron posisi on-chain.
+  { command: 'help', description: 'Menu, mode bot & daftar perintah' },
   { command: 'status', description: 'Koneksi jaringan & saldo dompet' },
   { command: 'positions', description: 'Posisi LP yang aktif (live)' },
   { command: 'explore', description: 'Top pool by APR (ETH/USDG) — sinkron Uniswap' },
