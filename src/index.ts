@@ -1974,18 +1974,24 @@ async function renderTokenHub(
       })
     : msg.msgScreeningFailed();
 
-  // Empat tombol SELALU tampil — tata letak tetap sama tiap kali, jadi jempol hafal
-  // posisinya. Kasus kosong (tak ada LP / saldo 0 / chain tanpa rute swap) ditangkap
-  // handler dengan pesan jelas, bukan disembunyikan.
+  // Tombol KELUAR muncul hanya bila ada yang bisa dikeluarkan: Jual LP saat ada
+  // posisi, Jual Token saat saldo > 0. Tak ada = cuma jalur masuk yang tampil.
+  // Beli/Jual Token juga butuh chain dengan rute swap bot.
+  const swappable = swapTokenChains().some((c) => c.key === cc.key);
+  const hasLp = v3.length + v4.length > 0;
+
+  const rowLp = [Markup.button.callback('➕ Tambah LP', `ca:add:${ca}`)];
+  if (hasLp) rowLp.push(Markup.button.callback('📤 Jual LP', `ca:close:${ca}`));
+
+  const rowTok: ReturnType<typeof Markup.button.callback>[] = [];
+  if (swappable) {
+    rowTok.push(Markup.button.callback('📈 Beli Token', `ca:buy:${ca}`));
+    if (bal > 0n) rowTok.push(Markup.button.callback('📉 Jual Token', `ca:sell:${ca}`));
+  }
+
   const kb = Markup.inlineKeyboard([
-    [
-      Markup.button.callback('➕ Tambah LP', `ca:add:${ca}`),
-      Markup.button.callback('📤 Jual LP', `ca:close:${ca}`),
-    ],
-    [
-      Markup.button.callback('📈 Beli Token', `ca:buy:${ca}`),
-      Markup.button.callback('📉 Jual Token', `ca:sell:${ca}`),
-    ],
+    rowLp,
+    ...(rowTok.length ? [rowTok] : []),
     [Markup.button.callback('Batal', 'cancel')],
   ]);
 
@@ -2022,8 +2028,8 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
     return continueAddlp(ctx, ca, h.chainKey, prog, { bahaya: h.bahaya, failed: h.failed });
   }
 
-  // Beli/Jual Token butuh rute swap bot. Tombolnya selalu tampil, jadi jelaskan di sini
-  // daripada gagal dengan pesan membingungkan di tengah alur.
+  // Guard tetap ada walau tombolnya kondisional: hub disimpan di memori, jadi tombol
+  // dari kartu lama masih bisa ditekan setelah keadaan berubah.
   if ((what === 'buy' || what === 'sell') && !swapTokenChains().some((c) => c.key === h.chainKey)) {
     return ctx.editMessageText(
       msg.msgError(what === 'buy' ? 'beli' : 'jual', `${cc.label} belum punya rute swap bot — hanya Tambah/Jual LP di chain ini.`),
