@@ -467,10 +467,6 @@ export function msgStatus(opts: {
   return lines.join('\n');
 }
 
-export function msgDenied(): string {
-  return card(title('DENIED'), [note('kamu tidak berhak memakai bot ini.')]);
-}
-
 /** ETH bertanda ringkas: '+0.01820 ETH' / '-0.00284 ETH'. */
 function sgEth(n: number): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(5)} ETH`;
@@ -557,9 +553,10 @@ export function msgPriceDrop(tokenId: string, symbol: string, dropPct: number, b
 }
 
 /** Header /closeall — bingkai darurat, tetap konfirmasi per posisi (mekanisme = /stop). */
-export function msgCloseAllPick(count: number): string {
+export function msgCloseAllPick(countV3: number, countV4 = 0): string {
+  const total = countV3 + countV4;
   return card(`⛔ ${title('TUTUP SEMUA')}`, [
-    `${bold(String(count))} posisi aktif — tap ${bold('Tutup')} di tiap kartu.`,
+    `${bold(String(total))} posisi aktif${countV4 ? ` (${countV3} v3 · ${countV4} v4)` : ''} — tap ${bold('Tutup')} di tiap kartu.`,
     note('tiap penutupan tetap lewat konfirmasi masing-masing.'),
   ]);
 }
@@ -775,37 +772,18 @@ export function msgChainChosen(label: string): string {
   );
 }
 
-export function msgSizePickAsset(): string {
-  return card(title('PRESET NOMINAL'), [
-    note('tombol cepat di langkah nominal /add & /buy.'),
-    '',
-    'pilih aset untuk atur presetnya:',
-  ]);
-}
-
 export function msgSizeList(assetLabel: string, unit: string, sizes: number[]): string {
-  const list = sizes.length
-    ? sizes.map((s) => (unit === 'ETH' ? `${s} ETH` : `$${s}`)).join(' · ')
-    : '—';
+  const list = sizes.length ? sizes.map((s) => (unit === 'ETH' ? `${s} ETH` : `$${s}`)).join(' · ') : '—';
   return card(title('PRESET', assetLabel), [
     kv('sekarang', bold(list)),
     '',
-    '✏️ ubah · 🗑 hapus · ➕ tambah',
+    note('tombol cepat di langkah nominal /add & /buy.'),
+    fieldBlock([
+      ['ganti ETH', '/size 0.01 0.05 0.1'],
+      ['ganti $', '/size $ 10 50 100'],
+    ]),
   ]);
 }
-
-export function msgSetSizePrompt(kind: 'edit' | 'add'): string {
-  return card(
-    title('PRESET', kind === 'add' ? 'tambah' : 'ubah'),
-    [
-      note(kind === 'add' ? 'ketik nominal untuk preset baru' : 'ketik nominal baru untuk preset ini'),
-      '',
-      fieldBlock([['contoh', '0.05 (ETH) atau 50 ($)']]),
-    ],
-  );
-}
-
-// ─── position cards ────────────────────────────────────────────────
 
 export function msgPositionCard(opts: {
   tokenId: string;
@@ -1251,7 +1229,7 @@ export function msgStopConfirm(opts: {
 export function msgStopPick(): string {
   return card(
     title('STOP LP'),
-    [note('pilih posisi — tap Tutup pada kartu.')],
+    [note('pilih posisi — tap Tutup pada kartu.'), note('posisi v4 ditutup dari /positions atau /closeall.')],
   );
 }
 

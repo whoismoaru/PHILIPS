@@ -80,6 +80,17 @@ async function sweepLeftovers(bot: Telegraf) {
       saveSweep();
       if (config.safety.dryRun) continue;
       const res = await swapTokenToEthRobust(r.ca, bal, cc);
+      // Sisa sudah pulih → record STOPPED tak perlu dipertahankan (kalau tidak ia
+      // menumpuk selamanya & tetap jadi kandidat sweep tiap ronde).
+      const st = store
+        .all()
+        .find(
+          (x) =>
+            x.status === 'STOPPED' &&
+            (x.chain ?? 'robinhood') === (r.chain ?? 'robinhood') &&
+            x.ca?.toLowerCase() === r.ca.toLowerCase(),
+        );
+      if (st) store.remove(st.tokenId);
       console.log(`[sweep] ${r.symbol} (${cc.key}) → +${ethers.formatEther(res.outEthWei)} ETH via ${res.route}`);
       await bot.telegram.sendMessage(
         config.telegram.allowedUserId,
@@ -158,10 +169,17 @@ async function tick(bot: Telegraf) {
       if (entry > 0 && cur > 0) {
         const dropPct = (1 - cur / entry) * 100;
         if (dropPct >= DROP_ALERT_PCT && !rec.dropAlerted) {
+          // Tombol menuju kartu KONFIRMASI tutup (stop:), bukan kirim tx — invariant
+          // §8.5 utuh, tapi user tak perlu mengetik command saat harga jatuh.
           await bot.telegram.sendMessage(
             config.telegram.allowedUserId,
             msgPriceDrop(rec.tokenId, rec.symbol, dropPct, d.baseSymbol),
-            html,
+            {
+              ...html,
+              reply_markup: {
+                inline_keyboard: [[{ text: '⛔ Tutup Sekarang', callback_data: `stop:${rec.tokenId}` }]],
+              },
+            },
           );
           store.update(rec.tokenId, { dropAlerted: true });
         } else if (rec.dropAlerted && dropPct < DROP_REARM_PCT) {
@@ -192,7 +210,7 @@ async function tick(bot: Telegraf) {
         v4store.removeV4(rec.tokenId); // ditutup di luar bot
         continue;
       }
-      if (v4store.setV4InRange(rec.tokenId, st.inRange)) {
+      if (st.inRange !== null && v4store.setV4InRange(rec.tokenId, st.inRange)) {
         await bot.telegram.sendMessage(config.telegram.allowedUserId, msgV4Range(rec.tokenId, st.inRange), html);
       }
     } catch {

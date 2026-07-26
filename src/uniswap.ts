@@ -227,7 +227,28 @@ export async function planAddSingleSided(
 /** Pastikan saldo BASE cukup & izin (approve) ke Position Manager.
  *  WETH (wrappable): bungkus ETH native seperlunya. USDG (non-wrappable):
  *  wajib sudah dipegang — tak bisa di-wrap. Semua format pakai base.decimals. */
-const GAS_BUFFER = ethers.parseEther('0.0005'); // cadangan gas L2
+/** Estimasi unit gas buka LP (wrap + approve + mint). Dipakai juga oleh preview biaya. */
+export const ADD_GAS_UNITS = 700_000n;
+
+/**
+ * Cadangan gas saat wrap: dulu datar 0.0005 ETH — di chain gas mahal itu 10× terlalu
+ * kecil, ETH habis ke wrap lalu mint gagal "insufficient funds" & dana terjebak
+ * sebagai WETH. Hitung dari harga gas nyata (+20% headroom), dengan lantai lama.
+ */
+async function gasBuffer(ctx: ChainCtx): Promise<bigint> {
+  try {
+    const fee = await ctx.provider.getFeeData();
+    const price = fee.maxFeePerGas ?? fee.gasPrice;
+    if (price) {
+      const est = (price * ADD_GAS_UNITS * 12n) / 10n;
+      return est > MIN_GAS_BUFFER ? est : MIN_GAS_BUFFER;
+    }
+  } catch {
+    /* pakai lantai */
+  }
+  return MIN_GAS_BUFFER;
+}
+const MIN_GAS_BUFFER = ethers.parseEther('0.0005'); // lantai cadangan gas L2
 
 async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx): Promise<string[]> {
   const { wallet, provider } = ctx;
@@ -248,9 +269,10 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
     const native = ctx.nativeSymbol;
     const need = amountWei - bal;
     const ethBal = await provider.getBalance(wallet.address);
-    if (ethBal < need + GAS_BUFFER) {
+    const buffer = await gasBuffer(ctx);
+    if (ethBal < need + buffer) {
       throw new Error(
-        `Saldo ${native} di ${ctx.label} kurang: butuh ~${ethers.formatEther(need + GAS_BUFFER)} ` +
+        `Saldo ${native} di ${ctx.label} kurang: butuh ~${ethers.formatEther(need + buffer)} ` +
           `(wrap + gas), tersedia ${ethers.formatEther(ethBal)}. Isi wallet dulu atau kecilkan nominal.`,
       );
     }

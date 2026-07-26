@@ -486,9 +486,14 @@ export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: nu
 }
 
 /** Status ringkas posisi v4 untuk monitor: masih ada? dalam range? */
-export async function checkV4Status(cc: ChainCtx, tokenId: string): Promise<{ exists: boolean; inRange: boolean }> {
+export async function checkV4Status(
+  cc: ChainCtx,
+  tokenId: string,
+): Promise<{ exists: boolean; inRange: boolean | null }> {
+  // inRange null = TAK TAHU (RPC gagal / chain tanpa PM). Jangan dipetakan ke false:
+  // itu memicu alert "OUT OF RANGE" palsu yang mendorong keputusan uang.
   const pmAddr = V4_PM[cc.key];
-  if (!pmAddr) return { exists: false, inRange: false };
+  if (!pmAddr) return { exists: true, inRange: null };
   const pm = new ethers.Contract(pmAddr, V4_ABI, cc.provider);
   try {
     const [pk, info] = await pm.getPoolAndPositionInfo(tokenId);
@@ -502,6 +507,6 @@ export async function checkV4Status(cc: ChainCtx, tokenId: string): Promise<{ ex
     const { tick } = await readPoolState(cc, poolKey);
     return { exists: true, inRange: tick >= tickLower && tick < tickUpper };
   } catch {
-    return { exists: true, inRange: false }; // error transien → jangan hapus dari tracking
+    return { exists: true, inRange: null }; // error transien → jangan hapus & jangan alert
   }
 }

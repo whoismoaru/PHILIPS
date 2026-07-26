@@ -72,7 +72,7 @@ async function relayQuote(opts: QuoteOpts): Promise<BridgeQuote> {
     throw new Error(msg);
   }
   const q: any = await res.json();
-  if (!Array.isArray(q.steps)) throw new Error(q.message ?? 'quote tak berisi langkah');
+  if (!Array.isArray(q.steps) || q.steps.length === 0) throw new Error(q.message ?? 'quote tak berisi langkah');
   const det = q.details ?? {};
   const ci = det.currencyIn ?? {};
   const co = det.currencyOut ?? {};
@@ -135,6 +135,9 @@ export async function getBridgeQuote(opts: QuoteOpts): Promise<BridgeQuote> {
   ] as const) {
     try {
       const q = await fn(opts);
+      // Quote tanpa angka nilai apa pun tak bisa diverifikasi — dulu lolos guard
+      // impact dan kartunya tetap hijau (Biaya · — , Impact · —).
+      if (q.impactPct == null && q.outUsd == null) throw new Error('quote tanpa data nilai — tak bisa diverifikasi');
       if (q.impactPct != null && Math.abs(Number(q.impactPct)) > MAX_IMPACT_PCT) {
         throw new Error(`impact ${q.impactPct}% > ${MAX_IMPACT_PCT}%`);
       }
@@ -182,6 +185,8 @@ export async function executeBridge(quote: BridgeQuote, originCtx: ChainCtx): Pr
       if (rc) txHashes.push(rc.hash);
     }
   }
+  // Nol tx = tak ada yang dikirim; jangan laporkan "TERKIRIM" untuk bridge kosong.
+  if (txHashes.length === 0) throw new Error('bridge tak mengirim tx (quote tanpa langkah) — ulangi');
   return { txHashes };
 }
 

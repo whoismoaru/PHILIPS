@@ -6,6 +6,7 @@ import { config } from './config.js';
 import { provider, wallet, positionManager, weth, ERC20_ABI } from './chain.js';
 import {
   planAddSingleSided,
+  ADD_GAS_UNITS,
   executeAdd,
   executeRemove,
   getPositionDetail,
@@ -57,10 +58,22 @@ const bot = new Telegraf(config.telegram.botToken);
 const rawMax = Number(config.safety.maxEthPerTx);
 const maxEth = rawMax > 0 ? rawMax : Infinity;
 
-// Estimasi unit gas buka LP (wrap + approve + mint) — untuk hitung biaya di preview.
-const EST_ADD_GAS = 700_000n;
+
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Ketikan nominal → wei, atau null bila tak masuk akal. `Number(raw) > 0` saja
+ * meloloskan '1e-9' / desimal berlebih yang lalu membuat parseUnits melempar DI LUAR
+ * try (kartu ERROR mentah). Desimal berlebih DIPOTONG (tak pernah membesarkan nominal).
+ */
+function parseAmt(raw: string, dec: number): bigint | null {
+  const t = raw.trim().replace(',', '.');
+  if (!/^\d+(\.\d+)?$/.test(t)) return null;
+  const [i, f = ''] = t.split('.');
+  const wei = ethers.parseUnits(`${i}.${f.slice(0, dec) || '0'}`, dec);
+  return wei > 0n ? wei : null;
+}
 // Berapa kali maksimum ulangi swap saat cash-out sampai token benar-benar habis.
 const MAX_CLOSE_SWEEP = 4;
 /** Max token hold ditampilkan di /status (setelah filter saldo > 0). */
@@ -197,7 +210,7 @@ async function estimateAddCost(cc: ChainCtx, base: import('./chains.js').BaseAss
     cc.provider.getBalance(cc.wallet.address),
   ]);
   const gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
-  const gasWei = gasPrice * EST_ADD_GAS;
+  const gasWei = gasPrice * ADD_GAS_UNITS;
 
   if (base.wrappable) {
     const wethBal: bigint = await cc.weth.balanceOf(cc.wallet.address);
@@ -244,6 +257,18 @@ type AddFlow = {
   startedAt: number; // epoch ms — untuk kadaluarsa sesi (anti "angka lama termakan")
 };
 const flows = new Map<number, AddFlow>();
+
+/**
+ * Buang SEMUA alur yang setengah jalan milik user. Handler teks memilih tujuan
+ * berdasarkan prioritas statis, jadi sisa alur lama bisa menelan ketikan nominal
+ * alur baru (mis. sisa /buy menangkap nominal wizard /add → kartu BELI).
+ * Dipanggil di pintu masuk tiap alur + tombol Batal.
+ */
+function resetFlows(uid: number): void {
+  flows.delete(uid);
+  fundFlows.delete(uid);
+  tswapFlows.delete(uid);
+}
 // Sesi wizard/swap kedaluwarsa: bila user tinggalkan lalu ketik angka lain jauh
 // kemudian, jangan sampai termakan flow basi. 15 menit.
 const FLOW_TTL_MS = 15 * 60_000;
@@ -280,9 +305,11 @@ async function editProgress(
 
 // --- Penjaga: hanya pemilik yang boleh memakai bot ---
 bot.use((ctx, next) => {
-  if (ctx.from?.id !== config.telegram.allowedUserId) {
-    if (ctx.callbackQuery) return ctx.answerCbQuery('Tidak berhak.');
-    return ctx.reply(msg.msgDenied(), html);
+  // Diam-diam abaikan: membalas orang asing = mengonfirmasi bot ini ada & bisa
+  // dipaksa membalas. Grup juga ditolak (kartu saldo terbaca semua anggota).
+  if (ctx.from?.id !== config.telegram.allowedUserId || (ctx.chat && ctx.chat.type !== 'private')) {
+    console.log('[guard] tolak', ctx.from?.id, ctx.chat?.type);
+    return;
   }
   return next();
 });
@@ -308,7 +335,10 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
   // ① Impor posisi on-chain (liquidity > 0) yang belum ada di store.
   for (const p of onchain) {
     if (p.liquidity === 0n || store.get(p.tokenId)) continue;
-    const base = detectBase(cc, p.token0, p.token1) ?? baseOf(cc, 'weth');
+    // Jangan impor pool tanpa base yang dikenal: bot tak punya rute cash-out
+    // dua sisi untuk pool semacam itu (lihat stopAndCashOut).
+    const base = detectBase(cc, p.token0, p.token1);
+    if (!base) continue;
     const isBase0 = base.address.toLowerCase() === p.token0.toLowerCase();
     store.addImported({
       tokenId: p.tokenId,
@@ -1271,9 +1301,9 @@ async function continueAddlp(
 }
 
 // Simpan token yang menunggu pilihan chain.
-const pendingChain = new Map<number, string>();
 
 bot.command(['add', 'addlp'], async (ctx) => {
+  resetFlows(ctx.from!.id); // alur baru = buang sisa alur lama (anti-hijack ketikan)
   const [, token] = ctx.message.text.trim().split(/\s+/);
   if (!token) return ctx.reply(msg.msgAddlpUsage(), html);
   if (!ethers.isAddress(token)) return ctx.reply(msg.msgInvalidAddress(), html);
@@ -1296,20 +1326,19 @@ bot.command(['add', 'addlp'], async (ctx) => {
   if (found.length === 1) return continueAddlp(ctx, token, found[0].key, prog);
 
   // Token ada di beberapa chain → ganti progress jadi pemilih chain.
-  pendingChain.set(ctx.from.id, token);
+  // Token dibawa DI callback (bukan Map global): dulu `/add A` lalu `/add B`
+  // membuat tombol kartu A memproses token B.
   await editProgress(ctx, prog, msg.msgChainPick(), {
     ...html,
     ...Markup.inlineKeyboard([
-      ...found.map((c) => [Markup.button.callback(c.label, `chn:${c.key}`)]),
+      ...found.map((c) => [Markup.button.callback(c.label, `chn:${c.key}:${token}`)]),
       [Markup.button.callback('Batal', 'cancel')],
     ]),
   });
 });
 
-bot.action(/^chn:(\w+)$/, async (ctx) => {
-  const token = pendingChain.get(ctx.from!.id);
-  pendingChain.delete(ctx.from!.id);
-  if (!token) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+bot.action(/^chn:(\w+):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
+  const token = ctx.match[2];
   await ctx.answerCbQuery();
   // Lanjut screening; reuse pesan chain-pick sebagai progress.
   const prog = ctx.callbackQuery?.message
@@ -1460,7 +1489,7 @@ bot.action('addok', async (ctx) => {
     }
     return;
   }
-  if (!flow?.plan || flow.fee === undefined || !flow.ethAmount)
+  if (!flow?.plan || flow.fee === undefined || !flow.ethAmount || flow.rangePct === undefined)
     return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
   // Idempotency: hapus flow SEBELUM eksekusi (sinkron, sebelum await pertama) →
   // double-tap tombol Konfirmasi tak bisa membuka posisi dobel (dobel ETH).
@@ -1474,19 +1503,32 @@ bot.action('addok', async (ctx) => {
   store.beginMoneyOp();
   try {
     await ctx.editMessageText(msg.msgOpeningLp(), html);
-    const { tokenId, notes } = await executeAdd(flow.plan, flow.token, flow.fee, getChain(flow.chain));
+    // Rencana di kartu PREVIEW dihitung saat kartu dirender. Kalau tombol ditekan
+    // jauh kemudian, tick & harga sudah basi → mint revert (gas hangus) atau posisi
+    // mendarat di rentang yang tak relevan. Hitung ulang tepat sebelum kirim tx.
+    // (Jalur v4 sudah melakukan ini; ini menyamakan v3.)
+    const ccAdd = getChain(flow.chain);
+    const plan = await planAddSingleSided(
+      flow.token,
+      flow.fee,
+      flow.ethAmount,
+      flow.rangePct,
+      baseOf(ccAdd, flow.base ?? 'weth'),
+      ccAdd,
+    );
+    const { tokenId, notes } = await executeAdd(plan, flow.token, flow.fee, ccAdd);
     store.add({
       tokenId,
       chain: flow.chain,
       ca: flow.token,
       fee: flow.fee,
-      symbol: flow.plan.otherSymbol,
-      baseKind: flow.plan.baseKind,
-      initialWethWei: flow.plan.baseAmountWei.toString(), // jumlah base (unit base) saat buka
+      symbol: plan.otherSymbol,
+      baseKind: plan.baseKind,
+      initialWethWei: plan.baseAmountWei.toString(), // jumlah base (unit base) saat buka
       nominalEth: flow.ethAmount,
-      rangeLowPct: flow.plan.pctLow,
-      rangeHighPct: flow.plan.pctHigh,
-      entryPrice: flow.plan.currentPrice, // harga token saat buka → basis alert anjlok
+      rangeLowPct: plan.pctLow,
+      rangeHighPct: plan.pctHigh,
+      entryPrice: plan.currentPrice, // harga token saat buka → basis alert anjlok
       openedAt: Date.now(),
       status: 'ACTIVE',
       lastInRange: false,
@@ -1568,9 +1610,19 @@ bot.command(['stop', 'stoplp'], cmdStop);
 
 // /closeall — darurat: tutup semua posisi. Konfirmasi per posisi (mekanisme = /stop).
 async function cmdCloseAll(ctx: any) {
-  const n = store.active().length;
-  if (n === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
-  await replyActiveCards(ctx, msg.msgCloseAllPick(n));
+  // Kartu /positions memperlihatkan posisi v4, jadi tombol "Tutup Semua" yang hanya
+  // menampilkan v3 = user mengira sudah bersih padahal v4 masih terbuka.
+  const cc = getChain();
+  const v4 = v4Supported(cc) ? await listPositionsV4(cc).catch(() => []) : [];
+  const v3 = store.active();
+  if (v3.length + v4.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
+  if (v3.length) await replyActiveCards(ctx, msg.msgCloseAllPick(v3.length, v4.length));
+  else await ctx.reply(msg.msgCloseAllPick(0, v4.length), html);
+  const ethUsd = v4.length ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
+  for (const p of v4) {
+    const c = buildV4Card(p, ethUsd);
+    await ctx.reply(c.text, c.extra);
+  }
 }
 bot.command('closeall', cmdCloseAll);
 
@@ -1580,6 +1632,7 @@ type FundDir = 'topup' | 'withdraw';
 type FundFlow = { dir: FundDir; asset: 'eth' | 'usdg'; awaitingAmount: boolean; quote?: BridgeQuote; startedAt: number };
 const fundFlows = new Map<number, FundFlow>();
 const fundInFlight = new Set<number>(); // cegah double-tap Konfirmasi bridge
+const QUOTE_TTL_MS = 120_000; // umur maksimum quote bridge sebelum wajib diulang
 
 /** Origin ctx untuk arah bridge (withdraw = Stable, topup = Robinhood). */
 const fundOrigin = (dir: FundDir): ChainCtx => (dir === 'withdraw' ? CHAINS.stable : getChain());
@@ -1635,6 +1688,7 @@ async function fundAmountPrompt(ctx: any, flow: FundFlow, edit: boolean) {
 }
 
 function cmdFund(ctx: any) {
+  resetFlows(ctx.from.id);
   if (!CHAINS.stable) return ctx.reply(msg.msgFundNoStable(), html);
   return fundDirStep(ctx, false);
 }
@@ -1676,7 +1730,12 @@ bot.action('fundback:amount', async (ctx) => {
 bot.action('fundok', async (ctx) => {
   const uid = ctx.from!.id;
   const fflow = fundFlows.get(uid);
-  if (!fflow?.quote) return ctx.answerCbQuery('Kedaluwarsa, ulangi /fund.');
+  if (!fflow?.quote) return ctx.answerCbQuery('Kedaluwarsa, ulangi /bridge.');
+  // Calldata bridge berumur pendek: angka di kartu bisa jauh berbeda dari eksekusi.
+  if (Date.now() - fflow.startedAt > QUOTE_TTL_MS) {
+    fundFlows.delete(uid);
+    return ctx.answerCbQuery('Quote kedaluwarsa, ulangi /bridge.');
+  }
   if (fundInFlight.has(uid)) return ctx.answerCbQuery('Sedang diproses…');
   fundInFlight.add(uid);
   store.beginMoneyOp();
@@ -1717,6 +1776,7 @@ type TSwapFlow = {
   screenBahaya?: boolean;        // /buy: verdict screening = BAHAYA
   previewBack?: string;          // action tombol Kembali di kartu Preview/Konfirmasi
   sellList?: SellHolding[];      // /sell: daftar token yg dipegang (index → tombol)
+  sellMultiChain?: boolean;      // /sell: holdings tersebar >1 chain → tampilkan label chain
   tokenBalWei?: bigint;          // /sell: saldo token terpilih (raw) untuk hitung %
   tokenBalNum?: number;          // /sell: saldo token terpilih (angka) untuk label
   amountWei?: bigint;
@@ -1764,14 +1824,16 @@ function buyChainStep(ctx: any, flow: TSwapFlow, keys: string[], edit: boolean) 
 async function buySafetyStep(ctx: any, flow: TSwapFlow, prog: { message_id: number } | null, edit: boolean) {
   const cc = CHAINS[flow.chainKey]!;
   if (flow.tokenDec === undefined) {
-    // symbol + decimals WAJIB (dipakai est-out & eksekusi). Fallback 18 bila gagal baca.
+    // symbol + decimals WAJIB (dipakai est-out & eksekusi). Menebak 18 bisa salah
+    // 10^9 untuk token 9-dec — dan angka itu dasar keputusan beli. Gagal = batal.
     try {
       const t = new ethers.Contract(flow.token!, ['function symbol() view returns (string)', 'function decimals() view returns (uint8)'], cc.provider);
       const [sym, dec] = await Promise.all([t.symbol().catch(() => flow.tokenSym ?? '?'), t.decimals()]);
       flow.tokenSym = String(sym);
       flow.tokenDec = Number(dec);
     } catch {
-      flow.tokenDec = 18;
+      tswapFlows.delete(ctx.from.id);
+      return editProgress(ctx, prog, msg.msgError('beli', 'Gagal baca decimals token — batal (angka bisa salah 10^12).'));
     }
   }
   if (flow.screenText === undefined) {
@@ -1851,6 +1913,8 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
 
 // Mulai alur beli dari CA: deteksi chain → (pilih chain bila banyak) → safety.
 async function buyStartFromCA(ctx: any, ca: string, prog: { message_id: number } | null) {
+  flows.delete(ctx.from.id); // sisa wizard /add jangan menelan ketikan nominal beli
+  fundFlows.delete(ctx.from.id);
   if (!ethers.isAddress(ca)) {
     if (prog) return editProgress(ctx, prog, msg.msgInvalidAddress());
     return ctx.reply(msg.msgInvalidAddress(), html);
@@ -1870,6 +1934,7 @@ async function buyStartFromCA(ctx: any, ca: string, prog: { message_id: number }
 }
 
 async function cmdBuy(ctx: any) {
+  resetFlows(ctx.from.id);
   const ca = ((ctx.message?.text as string) || '').trim().split(/\s+/)[1];
   if (!ca) {
     tswapFlows.set(ctx.from.id, { chainKey: 'robinhood', buy: true, awaitingCA: true, startedAt: Date.now() });
@@ -1943,7 +2008,15 @@ bot.action('buyback:size', async (ctx) => {
 // ── /sell = alur holdings-dulu ───────────────────────────────────────────────
 // /sell → daftar token dipegang → pilih token → %/jumlah → Preview → Konfirmasi →
 //   Hasil. Base TERIMA dipilih OTOMATIS (nilai USD terbaik: ETH vs USDG/USDT).
-type SellHolding = { ca: string; symbol: string; dec: number; balWei: bigint; amountNum: number; usd: number | null };
+type SellHolding = {
+  ca: string;
+  symbol: string;
+  dec: number;
+  balWei: bigint;
+  amountNum: number;
+  usd: number | null;
+  chainKey?: string; // chain tempat token dipegang (dipakai jalur eksekusi jual)
+};
 
 async function bsFetch(url: string): Promise<any | null> {
   try {
@@ -1981,7 +2054,16 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
       const rate = Number(tk.exchange_rate ?? 0);
       // Anti-spam airdrop: hanya token BERNILAI (punya exchange_rate) ATAU yang pernah kita trade.
       if (!(rate > 0) && !known.has(cal)) continue;
-      const dec = Number(tk.decimals ?? 18);
+      // Blockscout kadang tak mengisi decimals; menebak 18 membuat jumlah jual salah.
+      let dec: number;
+      if (tk.decimals != null) dec = Number(tk.decimals);
+      else {
+        const d = await new ethers.Contract(ca, ERC20_ABI, cc.provider)
+          .decimals()
+          .catch(() => null);
+        if (d === null) continue; // tak bisa dipastikan → jangan tawarkan untuk dijual
+        dec = Number(d);
+      }
       const amountNum = Number(ethers.formatUnits(balWei, dec));
       out.push({ ca: ethers.getAddress(ca), symbol: String(tk.symbol || '?'), dec, balWei, amountNum, usd: rate ? amountNum * rate : null });
     }
@@ -2008,9 +2090,10 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
 }
 
 const fmt4 = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 4 });
-function sellListKb(list: SellHolding[]) {
+function sellListKb(list: SellHolding[], showChain = false) {
   const rows = list.map((h, i) => [Markup.button.callback(
-    `${h.symbol} · ${fmt4(h.amountNum)}${h.usd ? ` · $${h.usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : ''}`,
+    `${h.symbol} · ${fmt4(h.amountNum)}${h.usd ? ` · $${h.usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : ''}` +
+      (showChain && h.chainKey ? ` @${CHAINS[h.chainKey]?.label ?? h.chainKey}` : ''),
     `sellpick:${i}`,
   )]);
   rows.push([Markup.button.callback('Batal', 'cancel')]);
@@ -2053,13 +2136,23 @@ async function sellPreview(ctx: any, flow: TSwapFlow, amountWei: bigint, amtLabe
 }
 
 async function cmdSell(ctx: any) {
-  const cc = getChain(); // holdings di chain utama (Robinhood)
+  resetFlows(ctx.from.id);
   const prog = await ctx.reply(msg.msgProgress('membaca holdings…'), html);
-  const list = await sellHoldings(cc);
+  // /buy menerima beberapa chain, jadi /sell harus melihat semuanya — kalau tidak,
+  // token yang dibeli di chain Stable tak punya jalan keluar lewat bot.
+  const chains = swapTokenChains();
+  const lists = await Promise.all(
+    chains.map(async (c) => (await sellHoldings(c).catch(() => [])).map((h) => ({ ...h, chainKey: c.key }))),
+  );
+  const list = lists
+    .flat()
+    .sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0))
+    .slice(0, SELL_HOLDINGS_CAP);
   if (list.length === 0) return editProgress(ctx, prog, msg.msgSellNoHoldings());
-  const flow: TSwapFlow = { chainKey: cc.key, buy: false, sellList: list, startedAt: Date.now() };
+  const multiChain = new Set(list.map((h) => h.chainKey)).size > 1;
+  const flow: TSwapFlow = { chainKey: list[0].chainKey!, buy: false, sellList: list, startedAt: Date.now(), sellMultiChain: multiChain };
   tswapFlows.set(ctx.from.id, flow);
-  return editProgress(ctx, prog, msg.msgSellList(list.length), { ...html, ...sellListKb(list) });
+  return editProgress(ctx, prog, msg.msgSellList(list.length), { ...html, ...sellListKb(list, multiChain) });
 }
 bot.command('sell', cmdSell);
 
@@ -2067,6 +2160,7 @@ bot.action(/^sellpick:(\d+)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
   if (!flow?.sellList) return ctx.answerCbQuery('Kedaluwarsa, ulangi /sell.');
   const h = flow.sellList[Number(ctx.match[1])];
+  if (h?.chainKey) flow.chainKey = h.chainKey; // eksekusi WAJIB di chain token itu
   if (!h) return ctx.answerCbQuery('Pilihan tak valid.');
   flow.token = h.ca;
   flow.tokenSym = h.symbol;
@@ -2100,7 +2194,10 @@ bot.action('sellback:list', async (ctx) => {
   if (!flow?.sellList) return ctx.answerCbQuery('Kedaluwarsa, ulangi /sell.');
   flow.awaitingAmount = false;
   await ctx.answerCbQuery();
-  await ctx.editMessageText(msg.msgSellList(flow.sellList.length), { ...html, ...sellListKb(flow.sellList) });
+  await ctx.editMessageText(msg.msgSellList(flow.sellList.length), {
+    ...html,
+    ...sellListKb(flow.sellList, !!flow.sellMultiChain),
+  });
 });
 bot.action('sellback:amount', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
@@ -2122,6 +2219,17 @@ async function tswapQuoteConfirm(
 ) {
   const base = tflow.base!;
   const prog = prog0 ?? (await ctx.reply(msg.msgProgress('minta quote rute terbaik…'), html));
+  // MAX_ETH_PER_TX dijanjikan README tapi dulu hanya ditegakkan di wizard /add —
+  // preset & ketik-nominal /buy lolos begitu saja. Base stablecoin tetap tanpa batas
+  // (konsisten dengan amountCtx).
+  if (base.wrappable && Number(ethers.formatEther(amountWei)) > maxEth) {
+    tswapFlows.delete(ctx.from!.id);
+    return editProgress(
+      ctx,
+      prog,
+      msg.msgError('swap', `Di atas batas ${maxEthLabel}/tx — turunkan nominal.`),
+    );
+  }
   const q = await previewSwapOut(fromAddr, toAddr, amountWei, cc);
   if (!q) {
     tswapFlows.delete(ctx.from!.id);
@@ -2227,7 +2335,15 @@ bot.action(/^stop:(\d+)$/, async (ctx) => {
       finalizeClose(ctx.match[1], { reason: 'gone' });
       await ctx.editMessageText(msg.msgAlreadyClosed(ctx.match[1]), html);
     } else {
-      await ctx.reply(msg.msgError('stop', (e as Error).message), html);
+      // Gagal BACA detail (timeout RPC / quoter revert) tak berarti posisi tak bisa
+      // ditutup — executeRemove tak butuh satu pun angka itu. Tetap beri jalan keluar.
+      await ctx.reply(msg.msgError('stop', (e as Error).message), {
+        ...html,
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('⛔ Tutup Paksa', `close:${ctx.match[1]}`)],
+          [Markup.button.callback('Batal', 'cancel')],
+        ]),
+      });
     }
   }
 });
@@ -2298,7 +2414,13 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
     const baseSym = isStableBase(closingRec?.baseKind ?? 'weth') ? baseSymbolOf(closingRec?.baseKind) : 'ETH';
     await ctx.editMessageText(msg.msgClosing(baseSym), html);
     const summary = await stopAndCashOut(tokenId, getChain(closingRec?.chain));
-    finalizeClose(tokenId, { resultEthWei: summary.baseOutWei, reason: 'cashed', keep: summary.leftover });
+    // resultEthWei = 0 adalah PLACEHOLDER backfill di jurnal (dikecualikan dari PnL).
+    // Hasil yang benar-benar tak terukur harus undefined, bukan 0.
+    finalizeClose(tokenId, {
+      ...(summary.baseOutWei > 0n ? { resultEthWei: summary.baseOutWei } : {}),
+      reason: 'cashed',
+      keep: summary.leftover,
+    });
     await ctx.reply(summary.text, html);
     await sendProfitCard(ctx, tokenId, closingRec, summary.baseOutWei).catch((e) =>
       console.log('[profit-card] gagal:', (e as Error).message.slice(0, 120)),
@@ -2322,7 +2444,16 @@ async function stopAndCashOut(
 ): Promise<{ text: string; baseOutWei: bigint; leftover: boolean }> {
   const { positionManager: pm, weth: wethC, wallet: w } = cc;
   const p = await pm.positions(tokenId);
-  const base = detectBase(cc, p.token0, p.token1) ?? baseOf(cc, 'weth');
+  // Pool tanpa base yang kita kenal (mis. TOKENA/TOKENB hasil impor): tak ada rute
+  // cash-out dua sisi. Fallback ke WETH akan membakar posisi lalu salah hitung
+  // (unwrap WETH milik operasi lain) dan meninggalkan satu sisi token selamanya.
+  // Gagal SEBELUM burn — dana tetap utuh di posisi.
+  const base = detectBase(cc, p.token0, p.token1);
+  if (!base) {
+    throw new Error(
+      'Pool ini bukan pasangan WETH/USDG/USDT — bot tak bisa cash-out dua sisi. Tutup manual di app.uniswap.org.',
+    );
+  }
   const otherAddr = base.address.toLowerCase() === p.token0.toLowerCase() ? p.token1 : p.token0;
   const otherC = new ethers.Contract(otherAddr, ERC20_ABI, w);
   const baseC = base.wrappable ? wethC : new ethers.Contract(base.address, ERC20_ABI, w);
@@ -2335,14 +2466,25 @@ async function stopAndCashOut(
   const txHashes: string[] = [];
   // ① Swap SELURUH saldo token sisi non-base → base, ulang sampai habis (bukan
   //    sekali/delta). Menutup celah: token sisa dari close lama, RPC telat, no-op.
-  const sw = await sweepTokenToBase(otherAddr, otherC, base, cc, notes);
+  // NFT sudah di-burn di atas: mulai sini TAK BOLEH melempar, kalau tidak user
+  // hanya melihat ERROR mentah & tak tahu posisinya sudah ditarik (PnL pun hilang).
+  let sw: { baseOut: bigint; txHashes: string[]; leftover: boolean } = {
+    baseOut: 0n,
+    txHashes: [],
+    leftover: true, // default konservatif: anggap masih ada sisa → monitor retry
+  };
+  try {
+    sw = await sweepTokenToBase(otherAddr, otherC, base, cc, notes);
+  } catch (e) {
+    notes.push(`Cash-out gagal: ${(e as Error).message.slice(0, 120)} — token ditahan, monitor retry.`);
+  }
   txHashes.push(...sw.txHashes);
 
   let baseOutWei: bigint;
   if (base.wrappable) {
     // ② WETH: unwrap SELURUH WETH (pokok + hasil swap) → ETH native.
     let unwrappedWeth = 0n;
-    const wethBal: bigint = await wethC.balanceOf(w.address);
+    const wethBal: bigint = await wethC.balanceOf(w.address).catch(() => 0n);
     if (wethBal > 0n) {
       try {
         const tx = await wethC.withdraw(wethBal);
@@ -2357,7 +2499,7 @@ async function stopAndCashOut(
     baseOutWei = unwrappedWeth + sw.baseOut;
   } else {
     // ② USDG: tetap sbg stablecoin (tak di-unwrap). Total bersih = kenaikan saldo.
-    const baseAfter: bigint = await baseC.balanceOf(w.address);
+    const baseAfter: bigint = await baseC.balanceOf(w.address).catch(() => baseBefore);
     baseOutWei = baseAfter > baseBefore ? baseAfter - baseBefore : sw.baseOut;
     notes.push(`Terima ${ethers.formatUnits(baseOutWei, base.decimals)} ${base.symbol} (tetap sbg stablecoin)`);
   }
@@ -2504,79 +2646,28 @@ bot.action(/^addv4go:(\d+):([\d.]+)$/, async (ctx) => {
 
 // Batal berlaku untuk semua alur (wizard /add maupun konfirmasi tutup).
 bot.action('cancel', async (ctx) => {
-  flows.delete(ctx.from!.id);
-  fundFlows.delete(ctx.from!.id);
-  tswapFlows.delete(ctx.from!.id);
+  resetFlows(ctx.from!.id);
   await ctx.answerCbQuery('Dibatalkan');
   await ctx.editMessageText(msg.msgCancelled(), html);
 });
 
 // Penangkap ketikan nominal (didaftarkan TERAKHIR agar tak menelan command).
-// ---------- /setsize : kelola preset nominal ETH (tersimpan permanen) ----------
-// ---------- /size — kelola preset nominal per-aset (ETH & Stablecoin) ----------
+// ---------- /size — preset nominal per-aset (ETH & Stablecoin) ----------
+// CRUD tombol dulu memakai Map state + 5 handler; satu baris ketikan cukup dan
+// menutup bug "ketikanku ditelan editor preset".
 type SizeKind = store.SizeKind; // 'eth' | 'stable'
-const sizeEdit = new Map<number, { kind: SizeKind; slot: 'add' | number }>();
-const sizeUnit = (k: SizeKind) => (k === 'eth' ? 'ETH' : '$');
-
-const assetKb = () =>
-  Markup.inlineKeyboard([[Markup.button.callback('ETH', 'sizekind:eth'), Markup.button.callback('Stablecoin (USDG/USDT)', 'sizekind:stable')]]);
 
 function cmdSize(ctx: any) {
-  return ctx.reply(msg.msgSizePickAsset(), { ...html, ...assetKb() });
+  const args = String(ctx.message?.text ?? '').trim().split(/\s+/).slice(1);
+  const kind: SizeKind = args[0] === '$' || args[0]?.toLowerCase() === 'stable' ? 'stable' : 'eth';
+  const nums = args.map(Number).filter((n) => n > 0);
+  if (nums.length) store.setSizes(kind, nums);
+  return ctx.reply(
+    msg.msgSizeList(kind === 'eth' ? 'ETH' : 'Stablecoin', kind === 'eth' ? 'ETH' : '$', store.getSizes(kind)),
+    html,
+  );
 }
 bot.command(['size', 'setsize'], cmdSize);
-
-/** Kartu editor daftar preset satu aset (list + edit/hapus/tambah + kembali). */
-function sizeEditor(kind: SizeKind): { text: string; kb: ReturnType<typeof Markup.inlineKeyboard> } {
-  const unit = sizeUnit(kind);
-  const rows = store.getSizes(kind).map((s, i) => [
-    Markup.button.callback(`✏️ ${s} ${unit}`, `size:edit:${kind}:${i}`),
-    Markup.button.callback('🗑', `size:del:${kind}:${i}`),
-  ]);
-  rows.push([Markup.button.callback('➕ Tambah', `size:add:${kind}`)]);
-  rows.push([Markup.button.callback('‹ Aset', 'size:back')]);
-  return { text: msg.msgSizeList(kind === 'eth' ? 'ETH' : 'Stablecoin', unit, store.getSizes(kind)), kb: Markup.inlineKeyboard(rows) };
-}
-
-async function showSizeEditor(ctx: any, kind: SizeKind) {
-  const e = sizeEditor(kind);
-  try {
-    await ctx.editMessageText(e.text, { ...html, ...e.kb });
-  } catch (err) {
-    if (!/not modified/i.test((err as Error).message)) await ctx.reply(e.text, { ...html, ...e.kb });
-  }
-}
-
-bot.action(/^sizekind:(eth|stable)$/, async (ctx) => {
-  await ctx.answerCbQuery();
-  await showSizeEditor(ctx, ctx.match[1] as SizeKind);
-});
-
-bot.action('size:back', async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.editMessageText(msg.msgSizePickAsset(), { ...html, ...assetKb() });
-});
-
-bot.action(/^size:edit:(eth|stable):(\d+)$/, async (ctx) => {
-  sizeEdit.set(ctx.from!.id, { kind: ctx.match[1] as SizeKind, slot: Number(ctx.match[2]) });
-  await ctx.answerCbQuery();
-  await ctx.reply(msg.msgSetSizePrompt('edit'), html);
-});
-
-bot.action(/^size:add:(eth|stable)$/, async (ctx) => {
-  sizeEdit.set(ctx.from!.id, { kind: ctx.match[1] as SizeKind, slot: 'add' });
-  await ctx.answerCbQuery();
-  await ctx.reply(msg.msgSetSizePrompt('add'), html);
-});
-
-bot.action(/^size:del:(eth|stable):(\d+)$/, async (ctx) => {
-  const kind = ctx.match[1] as SizeKind;
-  const sizes = store.getSizes(kind);
-  const removed = sizes.splice(Number(ctx.match[2]), 1);
-  store.setSizes(kind, sizes);
-  await ctx.answerCbQuery(removed.length ? `${removed[0]} ${sizeUnit(kind)} dihapus` : 'Sudah terhapus');
-  await showSizeEditor(ctx, kind);
-});
 
 bot.on(message('text'), async (ctx) => {
   const raw = (ctx.message.text || '').trim();
@@ -2599,20 +2690,6 @@ bot.on(message('text'), async (ctx) => {
     }
   }
 
-  // Sedang mengubah/menambah preset nominal? Tangkap di sini.
-  const pend = sizeEdit.get(ctx.from.id);
-  if (pend !== undefined) {
-    const num = Number(raw);
-    if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
-    const sizes = store.getSizes(pend.kind);
-    if (pend.slot === 'add') sizes.push(num);
-    else sizes[pend.slot] = num;
-    store.setSizes(pend.kind, sizes);
-    sizeEdit.delete(ctx.from.id);
-    const e = sizeEditor(pend.kind);
-    return ctx.reply(e.text, { ...html, ...e.kb });
-  }
-
   // /fund menunggu ketikan jumlah → minta quote Relay → kartu konfirmasi.
   const fflow = fundFlows.get(ctx.from.id);
   if (fflow?.awaitingAmount && isStaleFlow(fflow.startedAt)) {
@@ -2620,8 +2697,6 @@ bot.on(message('text'), async (ctx) => {
     return ctx.reply(msg.msgSessionExpired(), html);
   }
   if (fflow?.awaitingAmount) {
-    const num = Number(raw);
-    if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
     const rh = getChain();
     const stable = CHAINS.stable;
     if (!stable?.usdtAddress) return ctx.reply(msg.msgFundNoStable(), html);
@@ -2631,14 +2706,18 @@ bot.on(message('text'), async (ctx) => {
     if (fflow.dir === 'topup') {
       originCtx = rh;
       originCurrency = fflow.asset === 'eth' ? NATIVE : usdg!;
-      amountWei = fflow.asset === 'eth' ? ethers.parseEther(raw) : ethers.parseUnits(raw, 6);
+      const w = parseAmt(raw, fflow.asset === 'eth' ? 18 : 6);
+      if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
+      amountWei = w;
       destChainId = stable.chainId;
       destCurrency = stable.usdtAddress;
       label = `${fflow.asset === 'eth' ? 'ETH' : 'USDG'}→USDT`;
     } else {
       originCtx = stable;
       originCurrency = stable.usdtAddress;
-      amountWei = ethers.parseUnits(raw, 6);
+      const w = parseAmt(raw, 6);
+      if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
+      amountWei = w;
       destChainId = rh.chainId;
       destCurrency = fflow.asset === 'eth' ? NATIVE : usdg!;
       label = `USDT→${fflow.asset === 'eth' ? 'ETH' : 'USDG'}`;
@@ -2670,6 +2749,7 @@ bot.on(message('text'), async (ctx) => {
         recipient: originCtx.wallet.address,
       });
       fflow.quote = quote;
+      fflow.startedAt = Date.now(); // umur QUOTE, bukan umur alur
       fflow.awaitingAmount = false;
       await editProgress(ctx, prog, msg.msgFundConfirm(quote, config.safety.dryRun), {
         ...html,
@@ -2704,13 +2784,9 @@ bot.on(message('text'), async (ctx) => {
     if (/^(semua|all|max)$/i.test(raw)) {
       amountWei = bal;
     } else {
-      const num = Number(raw);
-      if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
-      try {
-        amountWei = ethers.parseUnits(raw, tflow.tokenDec!);
-      } catch {
-        return ctx.reply(msg.msgInvalidAmount(), html);
-      }
+      const w = parseAmt(raw, tflow.tokenDec!);
+      if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
+      amountWei = w;
     }
     if (amountWei <= 0n || amountWei > bal) {
       return ctx.reply(msg.msgError('jual', `Jumlah melebihi saldo (${fmt4(tflow.tokenBalNum ?? 0)} ${tflow.tokenSym}).`), html);
@@ -2727,9 +2803,9 @@ bot.on(message('text'), async (ctx) => {
       let fromAddr: string;
       let toAddr: string;
       if (tflow.buy) {
-        const num = Number(raw);
-        if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
-        amountWei = base.wrappable ? ethers.parseEther(raw) : ethers.parseUnits(raw, base.decimals);
+        const w = parseAmt(raw, base.decimals);
+        if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
+        amountWei = w;
         amountInLabel = `${raw} ${base.symbol}`;
         fromAddr = base.address;
         toAddr = tflow.token!;
@@ -2739,9 +2815,9 @@ bot.on(message('text'), async (ctx) => {
         if (/^(semua|all|max)$/i.test(raw)) {
           amountWei = balTok;
         } else {
-          const num = Number(raw);
-          if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
-          amountWei = ethers.parseUnits(raw, tflow.tokenDec!);
+          const w = parseAmt(raw, tflow.tokenDec!);
+          if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
+          amountWei = w;
         }
         if (amountWei <= 0n || amountWei > balTok) {
           return ctx.reply(msg.msgError('swap', `Saldo token kurang (ada ${ethers.formatUnits(balTok, tflow.tokenDec!)}).`), html);
@@ -2765,11 +2841,13 @@ bot.on(message('text'), async (ctx) => {
   }
   if (flow?.awaitingAmount && flow.rangePct !== undefined) {
     const a = amountCtx(flow);
-    const num = Number(raw);
-    if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
+    const dec = baseOf(getChain(flow.chain), flow.base ?? 'weth').decimals;
+    const w = parseAmt(raw, dec);
+    if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
+    const num = Number(ethers.formatUnits(w, dec));
     if (num > a.cap) return ctx.reply(msg.msgOverLimit(a.capLabel), html);
     flow.awaitingAmount = false;
-    flow.ethAmount = raw;
+    flow.ethAmount = ethers.formatUnits(w, dec); // sudah dinormalisasi (desimal dipotong)
     try {
       await renderPlanStep(ctx, flow, false);
     } catch (err) {
