@@ -253,14 +253,16 @@ function cockpitLines(dryRun: boolean): string[] {
     '⚙️ <b>ACTION</b>',
     cmd('/add <CA>', 'buka LP'),
     cmd('/stop', 'tutup posisi'),
-    cmd('/swap', 'ETH ⇄ USDG'),
-    cmd('/fund', 'bridge → USDT @Stable'),
-    cmd('/setsize', 'preset nominal'),
+    cmd('/buy', 'beli token (rute terbaik)'),
+    cmd('/sell', 'jual token (rute terbaik)'),
+    cmd('/bridge', 'antar-chain → USDT @Stable'),
+    cmd('/swapbase', 'tukar base ETH ⇄ USDG'),
+    cmd('/size', 'preset nominal (ETH & Stablecoin)'),
     '',
     '🚨 <b>EMERGENCY</b>',
     cmd('/closeall', 'tutup SEMUA posisi'),
     '',
-    '⚠️ <i>/add /stop /swap /fund /closeall menggerakkan dana on-chain</i>',
+    '⚠️ <i>/add /stop /buy /sell /bridge /closeall menggerakkan dana on-chain</i>',
   ];
 }
 
@@ -562,75 +564,100 @@ export function msgCloseAllPick(count: number): string {
   ]);
 }
 
-// ─── Swap ETH ↔ USDG ───────────────────────────────────────────────
-function swapDirLabel(dir: 'e2u' | 'u2e'): string {
-  return dir === 'e2u' ? 'ETH → USDG' : 'USDG → ETH';
+// ─── /buy /sell token (base↔token, rute terbaik) ───────────────────────
+export function msgTSwapChain(buy: boolean, dryRun: boolean): string {
+  const t = buy ? '🟢 BELI TOKEN' : '🔴 JUAL TOKEN';
+  return card(`🔄 ${title(t)}`, [note('pilih chain di bawah.')], footerMode(dryRun));
 }
-
-/** Kartu pilih arah swap (tombol ditambah di index). */
-export function msgSwapPick(dryRun: boolean): string {
-  return card(`🔄 ${title('SWAP', 'ETH ↔ USDG')}`, [note('pilih arah tukar di bawah.')], footerMode(dryRun));
+export function msgBuyAskCA(dryRun: boolean): string {
+  return card(`🟢 ${title('BELI TOKEN')}`, [
+    note('chain terdeteksi otomatis dari CA.'),
+    `💬 Tempel ${bold('alamat kontrak (CA)')} token (0x…).`,
+  ], footerMode(dryRun));
 }
-
-/** Prompt ketik jumlah untuk swap. */
-export function msgSwapAmountPrompt(dir: 'e2u' | 'u2e', balanceLine: string): string {
-  const inSym = dir === 'e2u' ? 'ETH' : 'USDG';
-  const example = dir === 'e2u' ? '0.01' : '10';
-  return card(`🔄 ${title('SWAP', swapDirLabel(dir))}`, [
-    balanceLine,
-    `💬 Ketik jumlah ${bold(inSym)} (contoh: ${code(example)})`,
+export function msgBuySafetyHint(sym: string): string {
+  return note(`Cek detail & keamanan ${bold(sym)} di atas. Lanjut untuk pilih aset & size.`);
+}
+export function msgSellList(n: number): string {
+  return card(`🔴 ${title('JUAL TOKEN')}`, [note(`${n} token dipegang — pilih yang mau dijual.`)]);
+}
+export function msgSellNoHoldings(): string {
+  return card(`🔴 ${title('JUAL TOKEN')}`, [note('tak ada token dgn saldo di wallet (selain base).')]);
+}
+export function msgSellAmount(sym: string, balLabel: string): string {
+  return card(`🔴 ${title('JUAL', sym)}`, [
+    note(`saldo: ${bold(balLabel)}`),
+    'Pilih porsi yang dijual (base terima dipilih otomatis, rute terbaik).',
   ]);
 }
-
-/** Kartu konfirmasi swap — estimasi di luar pre; jumlah pasti dijaga quoter. */
-export function msgSwapConfirm(o: {
-  dir: 'e2u' | 'u2e';
+export function msgSellTypeAmount(sym: string): string {
+  return card(`🔴 ${title('JUAL', sym)}`, [`💬 Ketik jumlah ${bold(sym)} untuk dijual (atau ${code('semua')}).`]);
+}
+export function msgTSwapBase(chainLabel: string, buy: boolean): string {
+  const q = buy ? 'bayar pakai base apa?' : 'terima base apa?';
+  return card(`🔄 ${title('SWAP TOKEN', chainLabel)}`, [note(q)]);
+}
+export function msgTSwapTokenPrompt(buy: boolean, baseSym: string): string {
+  const arah = buy ? `beli token pakai ${bold(baseSym)}` : `jual token → ${bold(baseSym)}`;
+  return card(`🔄 ${title('SWAP TOKEN')}`, [
+    note(arah),
+    `💬 Tempel ${bold('alamat kontrak token')} (0x…).`,
+  ]);
+}
+export function msgTSwapAmountPrompt(buy: boolean, sym: string, balanceLine: string): string {
+  const what = buy ? `jumlah ${bold(sym)} untuk dibelanjakan` : `jumlah ${bold(sym)} untuk dijual`;
+  return card(`🔄 ${title('SWAP TOKEN')}`, [
+    balanceLine,
+    `💬 Ketik ${what}${buy ? '' : ` (atau ${code('semua')})`}.`,
+  ]);
+}
+export function msgTSwapConfirm(o: {
+  buy: boolean;
+  chainLabel: string;
+  tokenSym: string;
   amountInLabel: string;
   estOutLabel: string;
+  route: string;
   dryRun: boolean;
 }): string {
   const body = [
     `🟢 ≈ dapat ${bold(o.estOutLabel)}`,
     '',
     ...hrows([
-      ['Tukar', o.amountInLabel],
+      [o.buy ? 'Beli' : 'Jual', `${o.tokenSym} @ ${o.chainLabel}`],
+      ['Bayar', o.amountInLabel],
+      ['Rute terbaik', o.route],
       ['Toleransi harga', 'maks 5% (naik 15% bila gagal)'],
-      ['Estimasi', '~beberapa detik (1 tx)'],
     ]),
     '',
     note('estimasi; jumlah pasti dilindungi quoter saat eksekusi.'),
   ];
-  return card(`🔄 ${title('KONFIRMASI SWAP', swapDirLabel(o.dir))}`, body, footerMode(o.dryRun));
+  return card(`🔄 ${title('KONFIRMASI SWAP', o.tokenSym)}`, body, footerMode(o.dryRun));
 }
-
-/** Kartu hasil swap (atau dry-run). */
-export function msgSwapDone(o: {
-  dir: 'e2u' | 'u2e';
+export function msgTSwapDone(o: {
+  buy: boolean;
+  tokenSym: string;
   amountInLabel: string;
   outLabel: string;
   route?: string;
   dryRun: boolean;
 }): string {
   if (o.dryRun) {
-    return card(`⚪ ${title('SWAP (DRY)', swapDirLabel(o.dir))}`, [
+    return card(`⚪ ${title('SWAP (DRY)', o.tokenSym)}`, [
       note('mode DRY RUN — tidak dieksekusi.'),
       '',
-      ...hrows([
-        ['Tukar', o.amountInLabel],
-        ['≈ dapat', o.outLabel],
-      ]),
+      ...hrows([['Bayar', o.amountInLabel], ['≈ dapat', o.outLabel]]),
     ], footerMode(o.dryRun));
   }
-  const body = [
+  return card(`✅ ${title('SWAP SELESAI', o.tokenSym)}`, [
     `🟢 +${o.outLabel}`,
     '',
     ...hrows([
-      ['Tukar', o.amountInLabel],
+      ['Bayar', o.amountInLabel],
       ['Diterima', o.outLabel],
       ['Rute', o.route ?? '—'],
     ]),
-  ];
-  return card(`✅ ${title('SWAP SELESAI', swapDirLabel(o.dir))}`, body, footerMode(o.dryRun));
+  ], footerMode(o.dryRun));
 }
 
 // ─── /fund — bridge cross-chain ke USDT @Stable via Relay ──────────────
@@ -748,28 +775,32 @@ export function msgChainChosen(label: string): string {
   );
 }
 
-export function msgSetSize(): string {
-  return card(
-    title('PRESET', 'nominal /add'),
-    [
-      note('tombol cepat di langkah nominal wizard.'),
-      '',
-      '✏️ ubah · 🗑 hapus · ➕ tambah',
-    ],
-  );
+export function msgSizePickAsset(): string {
+  return card(title('PRESET NOMINAL'), [
+    note('tombol cepat di langkah nominal /add & /buy.'),
+    '',
+    'pilih aset untuk atur presetnya:',
+  ]);
+}
+
+export function msgSizeList(assetLabel: string, unit: string, sizes: number[]): string {
+  const list = sizes.length
+    ? sizes.map((s) => (unit === 'ETH' ? `${s} ETH` : `$${s}`)).join(' · ')
+    : '—';
+  return card(title('PRESET', assetLabel), [
+    kv('sekarang', bold(list)),
+    '',
+    '✏️ ubah · 🗑 hapus · ➕ tambah',
+  ]);
 }
 
 export function msgSetSizePrompt(kind: 'edit' | 'add'): string {
   return card(
     title('PRESET', kind === 'add' ? 'tambah' : 'ubah'),
     [
-      note(
-        kind === 'add'
-          ? 'ketik nominal ETH untuk preset baru'
-          : 'ketik nominal ETH baru untuk preset ini',
-      ),
+      note(kind === 'add' ? 'ketik nominal untuk preset baru' : 'ketik nominal baru untuk preset ini'),
       '',
-      fieldBlock([['contoh', '0.05']]),
+      fieldBlock([['contoh', '0.05 (ETH) atau 50 ($)']]),
     ],
   );
 }

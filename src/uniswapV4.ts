@@ -306,18 +306,22 @@ export async function openPositionV4(
   if (!pmAddr || !V4_POOL_MANAGER[cc.key]) throw new Error(`Uniswap v4 tak didukung di ${cc.label}.`);
   const spacing = poolKey.tickSpacing;
   const width = (opts.widthSpacings ?? 50) * spacing;
-  const gap = (opts.gapSpacings ?? 1) * spacing;
+  // gap default 0 → tepi-dekat MENEMPEL harga sekarang supaya posisi mulai terisi
+  // sejak pergerakan pertama ke arah kita (bukan menunggu turun berspasi dulu).
+  const gap = (opts.gapSpacings ?? 0) * spacing;
   const current = await readPoolTick(cc, poolKey);
   const aligned = nearestUsableTick(current, spacing);
   let tickLower: number;
   let tickUpper: number;
   if (baseIsCurrency0) {
-    tickLower = aligned + gap;
-    if (tickLower <= current) tickLower += spacing;
+    // Deposit currency0 → range di ATAS harga. Tick naik = harga token turun → terisi.
+    // Tepi-dekat = tick usable TERKECIL yang strictly > current (nempel), lalu +gap opsional.
+    tickLower = (aligned > current ? aligned : aligned + spacing) + gap;
     tickUpper = tickLower + width;
   } else {
-    tickUpper = aligned - gap;
-    if (tickUpper >= current) tickUpper -= spacing;
+    // Deposit currency1 → range di BAWAH harga. Tick turun = harga token turun → terisi.
+    // Tepi-dekat = tick usable TERBESAR yang strictly < current (nempel), lalu -gap opsional.
+    tickUpper = (aligned < current ? aligned : aligned - spacing) - gap;
     tickLower = tickUpper - width;
   }
   const sqrtL = sqrtAtTick(tickLower);

@@ -20,7 +20,6 @@ import { listPositionsV4, v4Supported, closePositionV4, openPositionV4, getPoolK
 import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, getBridgeQuote, executeBridge, NATIVE, type BridgeQuote } from './relay.js';
-import { swapEthToUsdg, swapUsdgToEth, type SwapDir } from './swap.js';
 import { startMonitor } from './monitor.js';
 import * as store from './store.js';
 import * as journal from './journal.js';
@@ -32,6 +31,7 @@ import {
   getChain,
   detectChains,
   baseOf,
+  basesFor,
   detectBase,
   isStableBase,
   baseSymbolOf,
@@ -39,6 +39,7 @@ import {
   type BaseKind,
   type BaseAsset,
 } from './chains.js';
+import { swapExactInBest, previewSwapOut } from './swapRoute.js';
 
 const WETH_ADDRESS = config.uniswap.weth;
 
@@ -64,6 +65,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const MAX_CLOSE_SWEEP = 4;
 /** Max token hold ditampilkan di /status (setelah filter saldo > 0). */
 const HOLDINGS_CAP = 5;
+const SELL_HOLDINGS_CAP = 12; // maks token di daftar /sell
 /** Max kandidat CA dicek balance (jurnal + posisi). */
 const HOLDINGS_CAND_MAX = 20;
 /** Concurrency saat membangun kartu posisi. */
@@ -673,7 +675,7 @@ function buildV4Card(p: V4Position, ethUsdV4: number | null): { text: string; ex
     ...html,
     ...Markup.inlineKeyboard([
       ...(p.base === 'ETH'
-        ? [store.getSizes().map((s) => Markup.button.callback(`➕ ${s} ETH`, `addv4:${p.tokenId}:${s}`))]
+        ? [store.getSizes('eth').map((s) => Markup.button.callback(`➕ ${s} ETH`, `addv4:${p.tokenId}:${s}`))]
         : []),
       [Markup.button.callback('🔴 Tutup posisi v4', `closev4:${p.tokenId}`)],
     ]),
@@ -996,16 +998,44 @@ bot.action(/^back:card:(\d+)$/, async (ctx) => {
 // ---------- Fase 3: tulis (wizard /add bertahap) ----------
 
 /** Keyboard pilih pool: pasangan (WETH/USDG) · fee · kedalaman. Callback bawa base. */
-const POOL_PICK_MAX = 8; // batas tombol keyboard (sisanya debu; sudah urut TVL)
+const POOL_PICK_MAX = 8; // batas tombol keyboard (sisanya debu)
+
+// tickSpacing pool: v4 langsung; v3 dipetakan dari fee tier standar.
+function poolSpacing(p: explore.TokenPool): number {
+  if (p.poolKey?.tickSpacing) return p.poolKey.tickSpacing;
+  const m: Record<number, number> = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
+  return m[p.fee] ?? 60;
+}
+// Seberapa dekat harga harus bergerak sebelum single-side MULAI terisi — tepi
+// range wajib kelipatan tickSpacing, worst-case ≈ 1 spacing. Makin kecil, makin cepat isi.
+function fillTightnessPct(p: explore.TokenPool): number {
+  return (Math.pow(1.0001, poolSpacing(p)) - 1) * 100;
+}
+// Ranking utk single-side fill: dahulukan likuiditas se-orde (tier log10 TVL) —
+// biar tak nyangkut ke pool debu — lalu pilih spacing PALING HALUS (isi paling rapat).
+function rankPoolsForFill(pools: explore.TokenPool[]): explore.TokenPool[] {
+  const tier = (tvl: number) => (tvl > 0 ? Math.floor(Math.log10(tvl)) : -1);
+  return [...pools].sort((a, b) => {
+    const t = tier(b.tvlUsd) - tier(a.tvlUsd);
+    if (t) return t;
+    const s = poolSpacing(a) - poolSpacing(b); // spacing halus dulu
+    if (s) return s;
+    return b.tvlUsd - a.tvlUsd;
+  });
+}
 
 function poolKeyboard(pools: explore.TokenPool[]) {
   return Markup.inlineKeyboard([
-    ...pools.slice(0, POOL_PICK_MAX).map((p, i) => [
-      Markup.button.callback(
-        `${p.otherSymbol}/${p.baseSymbol} · ${p.protocol} · ${msg.feeLabel(p.fee)} · ${msg.usdCompact(p.tvlUsd)}`,
-        `pick:${i}`,
-      ),
-    ]),
+    ...pools.slice(0, POOL_PICK_MAX).map((p, i) => {
+      const t = fillTightnessPct(p);
+      const tight = `isi≤${t < 1 ? t.toFixed(1) : Math.round(t)}%`;
+      return [
+        Markup.button.callback(
+          `${p.otherSymbol}/${p.baseSymbol} · ${p.protocol} · ${msg.feeLabel(p.fee)} · ${msg.usdCompact(p.tvlUsd)} · ${tight}`,
+          `pick:${i}`,
+        ),
+      ];
+    }),
     [Markup.button.callback('Batal', 'cancel')],
   ]);
 }
@@ -1051,19 +1081,16 @@ async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
 }
 
 /** Langkah 3/4 — pilih nominal ETH. */
-// Preset nominal untuk base stablecoin (USDG/USDT) — dolar, bukan ETH.
-const STABLE_SIZES = [10, 50, 100, 250];
-
 /** Base asset yang dipilih di wizard (weth/usdg/usdt). */
 const wizardBase = (flow: AddFlow): BaseAsset => baseOf(getChain(flow.chain), flow.base ?? 'weth');
 
-/** Konteks nominal base-aware: preset, simbol, batas, contoh ketik. */
+/** Konteks nominal base-aware: preset (dari /size per-aset), simbol, batas, contoh. */
 function amountCtx(flow: AddFlow) {
   const base = wizardBase(flow);
   const stable = isStableBase(base.kind);
   return {
     symbol: base.symbol,
-    presets: stable ? STABLE_SIZES : store.getSizes().filter((a) => a <= maxEth),
+    presets: stable ? store.getSizes('stable') : store.getSizes('eth').filter((a) => a <= maxEth),
     cap: stable ? Infinity : maxEth, // batas ETH hanya berlaku utk base WETH
     capLabel: stable ? 'tanpa batas' : maxEthLabel,
     example: stable ? '50' : '0.02',
@@ -1136,11 +1163,14 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-// Petakan lebar rentang % → jumlah tick-spacing utk posisi v4 single-sided.
-// widthTicks = ln(1+pct/100)/ln(1.0001); dibagi tickSpacing (min 1 spacing).
+// Petakan lebar rentang (persen PENURUNAN harga token) → jumlah tick-spacing utk
+// posisi v4 single-sided. Ujung terjauh = harga turun tepat X% → faktor 1-X/100 →
+// widthTicks = |ln(1-X/100)|/ln(1.0001). Sama dgn widthInTicks v3 (konsisten).
+// Dibulatkan KELUAR (ceil) supaya rentang minimal menutup X% yang diminta.
 function rangePctToSpacings(pct: number, tickSpacing: number): number {
-  const widthTicks = Math.log(1 + pct / 100) / Math.log(1.0001);
-  return Math.max(1, Math.round(widthTicks / tickSpacing));
+  const frac = Math.min(Math.max(pct, 0.1), 95) / 100;
+  const widthTicks = Math.abs(Math.log(1 - frac)) / Math.log(1.0001);
+  return Math.max(1, Math.ceil(widthTicks / tickSpacing));
 }
 
 /** Nominal base v4 dalam wei sesuai desimal base (ETH 18-dec / USDG 6-dec). */
@@ -1224,6 +1254,8 @@ async function continueAddlp(
     await editProgress(ctx, prog, msg.msgNoPools());
     return;
   }
+  // Bias ke spacing halus (isi rapat) di antara pool likuiditas se-orde.
+  pools = rankPoolsForFill(pools);
 
   // 3) Mulai wizard — reuse bubble progress jadi step pilih pool.
   const flow: AddFlow = { token, chain: chainKey, screenBahaya, screenFailed, pools, startedAt: Date.now() };
@@ -1529,27 +1561,6 @@ async function cmdCloseAll(ctx: any) {
 }
 bot.command('closeall', cmdCloseAll);
 
-// ---------- Swap ETH ↔ USDG ----------
-type SwapFlow = { dir: SwapDir; awaitingAmount: boolean; amountWei?: bigint; startedAt: number };
-const swapFlows = new Map<number, SwapFlow>();
-const swapInFlight = new Set<number>(); // cegah double-tap Konfirmasi swap
-
-/** Chain untuk swap (default = robinhood, satu-satunya yg punya USDG). */
-const swapChain = (): ChainCtx => getChain();
-
-async function cmdSwap(ctx: any) {
-  const cc = swapChain();
-  if (!cc.usdgAddress) return ctx.reply(msg.msgError('swap', `USDG tak tersedia di ${cc.label}.`), html);
-  await ctx.reply(msg.msgSwapPick(config.safety.dryRun), {
-    ...html,
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback('ETH → USDG', 'swapdir:e2u'), Markup.button.callback('USDG → ETH', 'swapdir:u2e')],
-      [Markup.button.callback('Batal', 'cancel')],
-    ]),
-  });
-}
-bot.command('swap', cmdSwap);
-
 // ---------- /fund — bridge cross-chain Robinhood ⇄ Stable via Relay ----------
 // topup: Robinhood(ETH/USDG) → USDT@Stable. withdraw: USDT@Stable → Robinhood(ETH/USDG).
 type FundDir = 'topup' | 'withdraw';
@@ -1579,40 +1590,74 @@ async function fundBalanceLabel(dir: FundDir, asset: 'eth' | 'usdg'): Promise<st
   }
 }
 
-function cmdFund(ctx: any) {
-  if (!CHAINS.stable) return ctx.reply(msg.msgFundNoStable(), html);
-  return ctx.reply(msg.msgFundStart(), {
+// Tiap langkah /fund = renderer sendiri + tombol "Kembali" ke langkah sebelumnya.
+function fundDirStep(ctx: any, edit: boolean) {
+  const extra = {
     ...html,
     ...Markup.inlineKeyboard([
       [Markup.button.callback('⬆️ Isi Stable (→ USDT)', 'funddir:topup')],
       [Markup.button.callback('⬇️ Tarik dari Stable (USDT →)', 'funddir:withdraw')],
       [Markup.button.callback('Batal', 'cancel')],
     ]),
-  });
+  };
+  return edit ? ctx.editMessageText(msg.msgFundStart(), extra) : ctx.reply(msg.msgFundStart(), extra);
+}
+function fundAssetStep(ctx: any, dir: FundDir, edit: boolean) {
+  const origin = getChain();
+  const row = [Markup.button.callback('ETH', `fundasset:${dir}:eth`)];
+  if (origin.usdgAddress) row.push(Markup.button.callback('USDG', `fundasset:${dir}:usdg`));
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([row, [Markup.button.callback('Kembali', 'fundback:dir'), Markup.button.callback('Batal', 'cancel')]]),
+  };
+  return edit ? ctx.editMessageText(msg.msgFundAssetPick(dir), extra) : ctx.reply(msg.msgFundAssetPick(dir), extra);
+}
+async function fundAmountPrompt(ctx: any, flow: FundFlow, edit: boolean) {
+  flow.awaitingAmount = true;
+  // Simbol yang diketik: topup = aset sumber; withdraw = USDT (yang dikirim dari Stable).
+  const inSym = flow.dir === 'topup' ? (flow.asset === 'eth' ? 'ETH' : 'USDG') : 'USDT';
+  const extra = { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('Kembali', 'fundback:asset')]]) };
+  const text = msg.msgFundAmountPrompt(inSym, await fundBalanceLabel(flow.dir, flow.asset));
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
+function cmdFund(ctx: any) {
+  if (!CHAINS.stable) return ctx.reply(msg.msgFundNoStable(), html);
+  return fundDirStep(ctx, false);
 }
 bot.command(['fund', 'bridge'], cmdFund);
 
 // Arah dipilih → pilih aset non-USDT (sumber saat topup, tujuan saat withdraw).
 bot.action(/^funddir:(topup|withdraw)$/, async (ctx) => {
-  const dir = ctx.match[1] as FundDir;
   await ctx.answerCbQuery();
-  const origin = getChain();
-  const row = [Markup.button.callback('ETH', `fundasset:${dir}:eth`)];
-  if (origin.usdgAddress) row.push(Markup.button.callback('USDG', `fundasset:${dir}:usdg`));
-  await ctx.editMessageText(msg.msgFundAssetPick(dir), {
-    ...html,
-    ...Markup.inlineKeyboard([row, [Markup.button.callback('Batal', 'cancel')]]),
-  });
+  await fundAssetStep(ctx, ctx.match[1] as FundDir, true);
 });
 
 bot.action(/^fundasset:(topup|withdraw):(eth|usdg)$/, async (ctx) => {
   const dir = ctx.match[1] as FundDir;
   const asset = ctx.match[2] as 'eth' | 'usdg';
-  fundFlows.set(ctx.from!.id, { dir, asset, awaitingAmount: true, startedAt: Date.now() });
+  const flow: FundFlow = { dir, asset, awaitingAmount: true, startedAt: Date.now() };
+  fundFlows.set(ctx.from!.id, flow);
   await ctx.answerCbQuery();
-  // Simbol yang diketik: topup = aset sumber; withdraw = USDT (yang dikirim dari Stable).
-  const inSym = dir === 'topup' ? (asset === 'eth' ? 'ETH' : 'USDG') : 'USDT';
-  await ctx.editMessageText(msg.msgFundAmountPrompt(inSym, await fundBalanceLabel(dir, asset)), html);
+  await fundAmountPrompt(ctx, flow, true);
+});
+
+// Tombol Kembali /fund.
+bot.action('fundback:dir', async (ctx) => {
+  await ctx.answerCbQuery();
+  await fundDirStep(ctx, true);
+});
+bot.action('fundback:asset', async (ctx) => {
+  const flow = fundFlows.get(ctx.from!.id);
+  if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /fund.');
+  await ctx.answerCbQuery();
+  await fundAssetStep(ctx, flow.dir, true);
+});
+bot.action('fundback:amount', async (ctx) => {
+  const flow = fundFlows.get(ctx.from!.id);
+  if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /fund.');
+  await ctx.answerCbQuery();
+  await fundAmountPrompt(ctx, flow, true);
 });
 
 bot.action('fundok', async (ctx) => {
@@ -1639,61 +1684,520 @@ bot.action('fundok', async (ctx) => {
   }
 });
 
-bot.action(/^swapdir:(e2u|u2e)$/, async (ctx) => {
-  const dir = ctx.match[1] as SwapDir;
-  await ctx.answerCbQuery();
-  const cc = swapChain();
-  let balanceLine = '';
+// ---------- /swap — swap token arbitrer (beli/jual base↔token, RUTE TERBAIK) ----------
+// Base per chain: Robinhood = ETH/USDG (user pilih) · Stable = USDT. Beli: base→token
+// (swapExactInBest). Jual: token→base (swapTokenTo{Eth,Usdg}Robust yang teruji).
+type TSwapFlow = {
+  chainKey: string;
+  buy: boolean;
+  base?: BaseAsset;
+  token?: string;
+  tokenSym?: string;
+  tokenDec?: number;
+  awaitingToken?: boolean;
+  awaitingAmount?: boolean;
+  awaitingCA?: boolean;          // /buy: menunggu user tempel CA
+  chainOptions?: string[];       // /buy: chain kandidat (token ada di >1 chain didukung)
+  screenText?: string;           // /buy: kartu Detail+Safety (cache → Kembali tak re-scan)
+  screenBahaya?: boolean;        // /buy: verdict screening = BAHAYA
+  previewBack?: string;          // action tombol Kembali di kartu Preview/Konfirmasi
+  sellList?: SellHolding[];      // /sell: daftar token yg dipegang (index → tombol)
+  tokenBalWei?: bigint;          // /sell: saldo token terpilih (raw) untuk hitung %
+  tokenBalNum?: number;          // /sell: saldo token terpilih (angka) untuk label
+  amountWei?: bigint;
+  amountInLabel?: string;
+  outLabel?: string;
+  route?: string;
+  startedAt: number;
+};
+const tswapFlows = new Map<number, TSwapFlow>();
+const tswapInFlight = new Set<number>();
+
+/** Chain yang mendukung swap token (punya router+quoter): Robinhood + Stable (bila aktif). */
+const swapTokenChains = (): ChainCtx[] =>
+  Object.values(CHAINS).filter((c) => c.key === 'robinhood' || c.key === 'stable');
+
+// /buy = alur CA-dulu · /sell = alur holdings-dulu (di bawah). Antar-chain: /bridge.
+// Backend quote (tswapQuoteConfirm) + eksekusi (tswapok) dipakai bersama keduanya.
+
+// ── /buy = alur CA-dulu ─────────────────────────────────────────────────────
+// /buy <CA> → Deteksi Chain → Detail+Safety → Pilih Aset → Pilih Size →
+//   Preview Order → Konfirmasi → Hasil. Backend quote+eksekusi dipakai bersama /sell.
+function buyAskCA(ctx: any, edit: boolean) {
+  const extra = { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('Batal', 'cancel')]]) };
+  const text = msg.msgBuyAskCA(config.safety.dryRun);
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
+// Chain kandidat = tempat token ADA ∩ chain yg didukung swap (robinhood/stable).
+async function buyDetectChains(ca: string): Promise<ChainCtx[]> {
+  const swapKeys = new Set(swapTokenChains().map((c) => c.key));
+  return (await detectChains(ca)).filter((c) => swapKeys.has(c.key));
+}
+
+// Langkah 1: pilih chain (hanya bila token ada di >1 chain didukung).
+function buyChainStep(ctx: any, flow: TSwapFlow, keys: string[], edit: boolean) {
+  flow.chainOptions = keys;
+  const rows = keys.map((k) => [Markup.button.callback(CHAINS[k]!.label, `buychain:${k}`)]);
+  rows.push([Markup.button.callback('Kembali', 'buyback:ca'), Markup.button.callback('Batal', 'cancel')]);
+  const extra = { ...html, ...Markup.inlineKeyboard(rows) };
+  const text = msg.msgChainPick();
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
+// Langkah 2: Detail + Safety. Screening di-cache di flow → tombol Kembali tak re-scan.
+async function buySafetyStep(ctx: any, flow: TSwapFlow, prog: { message_id: number } | null, edit: boolean) {
+  const cc = CHAINS[flow.chainKey]!;
+  if (flow.tokenDec === undefined) {
+    // symbol + decimals WAJIB (dipakai est-out & eksekusi). Fallback 18 bila gagal baca.
+    try {
+      const t = new ethers.Contract(flow.token!, ['function symbol() view returns (string)', 'function decimals() view returns (uint8)'], cc.provider);
+      const [sym, dec] = await Promise.all([t.symbol().catch(() => flow.tokenSym ?? '?'), t.decimals()]);
+      flow.tokenSym = String(sym);
+      flow.tokenDec = Number(dec);
+    } catch {
+      flow.tokenDec = 18;
+    }
+  }
+  if (flow.screenText === undefined) {
+    prog = await editProgress(ctx, prog, msg.msgProgress(`menyaring token di ${cc.label}…`));
+    try {
+      const s = await screenToken(flow.token!, cc);
+      flow.token = ethers.getAddress(flow.token!);
+      flow.tokenSym = s.symbol && s.symbol !== '???' ? s.symbol : flow.tokenSym;
+      flow.screenBahaya = s.verdict === 'BAHAYA';
+      flow.screenText = formatScreen(s);
+    } catch {
+      flow.screenBahaya = false;
+      flow.screenText = msg.msgScreeningFailed();
+    }
+  }
+  const back = (flow.chainOptions?.length ?? 0) > 1 ? 'buyback:chain' : 'buyback:ca';
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('🟢 Lanjut', 'buy:go')],
+      [Markup.button.callback('Kembali', back), Markup.button.callback('Batal', 'cancel')],
+    ]),
+  };
+  const text = `${flow.screenText}\n\n${msg.msgBuySafetyHint(flow.tokenSym ?? '?')}`;
+  if (prog) return editProgress(ctx, prog, text, extra);
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
+// Langkah 3: pilih aset bayar (ETH/USDG). Stable → auto USDT, langsung ke size.
+function buyBaseStep(ctx: any, flow: TSwapFlow, edit: boolean) {
+  const cc = CHAINS[flow.chainKey]!;
+  const bases = basesFor(cc);
+  if (bases.length <= 1) {
+    flow.base = bases[0];
+    return buySizeStep(ctx, flow, edit);
+  }
+  const row = bases.map((b) => Markup.button.callback(b.symbol, `buybase:${b.kind}`));
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([row, [Markup.button.callback('Kembali', 'buyback:safety'), Markup.button.callback('Batal', 'cancel')]]),
+  };
+  const text = msg.msgTSwapBase(cc.label, true);
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
+// Langkah 4: pilih size (preset /size aset terpilih + ketik nominal). Preview back → size.
+async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
+  flow.awaitingAmount = true;
+  flow.previewBack = 'buyback:size'; // Kembali dari Preview → balik ke size
+  const cc = CHAINS[flow.chainKey]!;
+  const base = flow.base!;
+  let balLine = '';
   try {
-    if (dir === 'e2u') {
+    if (base.wrappable) {
       const b = await cc.provider.getBalance(cc.wallet.address);
-      balanceLine = msg.note(`saldo: ${Number(ethers.formatEther(b)).toFixed(5)} ETH`);
+      balLine = msg.note(`saldo: ${Number(ethers.formatEther(b)).toFixed(5)} ETH`);
     } else {
-      const usdg = new ethers.Contract(cc.usdgAddress!, ERC20_ABI, cc.provider);
-      const b: bigint = await usdg.balanceOf(cc.wallet.address);
-      balanceLine = msg.note(`saldo: ${Number(ethers.formatUnits(b, 6)).toFixed(2)} USDG`);
+      const bc = new ethers.Contract(base.address, ERC20_ABI, cc.provider);
+      const b: bigint = await bc.balanceOf(cc.wallet.address);
+      balLine = msg.note(`saldo: ${Number(ethers.formatUnits(b, base.decimals)).toFixed(2)} ${base.symbol}`);
     }
   } catch {
-    /* saldo opsional — lanjut tanpa baris saldo */
+    /* saldo opsional */
   }
-  swapFlows.set(ctx.from!.id, { dir, awaitingAmount: true, startedAt: Date.now() });
-  await ctx.reply(msg.msgSwapAmountPrompt(dir, balanceLine), html);
+  const kind: SizeKind = isStableBase(base.kind) ? 'stable' : 'eth';
+  const presets = store.getSizes(kind);
+  const rows: any[] = [];
+  for (let i = 0; i < presets.length; i += 2) {
+    rows.push(presets.slice(i, i + 2).map((p) => Markup.button.callback(`${p} ${base.symbol}`, `tsamt:${p}`)));
+  }
+  const multiBase = basesFor(cc).length > 1;
+  rows.push([Markup.button.callback('Kembali', multiBase ? 'buyback:base' : 'buyback:safety'), Markup.button.callback('Batal', 'cancel')]);
+  const extra = { ...html, ...Markup.inlineKeyboard(rows) };
+  const text = msg.msgTSwapAmountPrompt(true, base.symbol, balLine);
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
+// Mulai alur beli dari CA: deteksi chain → (pilih chain bila banyak) → safety.
+async function buyStartFromCA(ctx: any, ca: string, prog: { message_id: number } | null) {
+  if (!ethers.isAddress(ca)) {
+    if (prog) return editProgress(ctx, prog, msg.msgInvalidAddress());
+    return ctx.reply(msg.msgInvalidAddress(), html);
+  }
+  prog = await editProgress(ctx, prog, msg.msgProgress('mendeteksi chain…'));
+  const found = await buyDetectChains(ca);
+  if (found.length === 0) {
+    return editProgress(ctx, prog, msg.msgError('beli', 'Token tak ditemukan di chain yang didukung /buy (Robinhood/Stable).'));
+  }
+  const flow: TSwapFlow = { chainKey: found[0].key, buy: true, token: ethers.getAddress(ca), startedAt: Date.now() };
+  tswapFlows.set(ctx.from.id, flow);
+  if (found.length > 1) {
+    flow.chainOptions = found.map((c) => c.key);
+    return buyChainStep(ctx, flow, flow.chainOptions, true);
+  }
+  return buySafetyStep(ctx, flow, prog, true);
+}
+
+async function cmdBuy(ctx: any) {
+  const ca = ((ctx.message?.text as string) || '').trim().split(/\s+/)[1];
+  if (!ca) {
+    tswapFlows.set(ctx.from.id, { chainKey: 'robinhood', buy: true, awaitingCA: true, startedAt: Date.now() });
+    return buyAskCA(ctx, false);
+  }
+  const prog = await ctx.reply(msg.msgProgress('mendeteksi chain…'), html);
+  return buyStartFromCA(ctx, ca, { message_id: prog.message_id });
+}
+bot.command('buy', cmdBuy);
+
+bot.action(/^buychain:(\w+)$/, async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.token) return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy.');
+  if (!CHAINS[ctx.match[1]]) return ctx.answerCbQuery('Chain tak tersedia.');
+  flow.chainKey = ctx.match[1];
+  flow.screenText = undefined; // ganti chain → screening ulang
+  await ctx.answerCbQuery();
+  await buySafetyStep(ctx, flow, null, true);
 });
 
-bot.action('swapok', async (ctx) => {
+bot.action('buy:go', async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.token) return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy.');
+  await ctx.answerCbQuery();
+  await buyBaseStep(ctx, flow, true);
+});
+
+bot.action(/^buybase:(weth|usdg|usdt)$/, async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.token) return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy.');
+  flow.base = baseOf(CHAINS[flow.chainKey]!, ctx.match[1] as BaseKind);
+  await ctx.answerCbQuery();
+  await buySizeStep(ctx, flow, true);
+});
+
+// Tombol Kembali /buy.
+bot.action('buyback:ca', async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy.');
+  flow.awaitingCA = true;
+  flow.screenText = undefined;
+  await ctx.answerCbQuery();
+  await buyAskCA(ctx, true);
+});
+bot.action('buyback:chain', async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.chainOptions?.length) return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy.');
+  await ctx.answerCbQuery();
+  await buyChainStep(ctx, flow, flow.chainOptions, true);
+});
+bot.action('buyback:safety', async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.token) return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy.');
+  await ctx.answerCbQuery();
+  await buySafetyStep(ctx, flow, null, true);
+});
+bot.action('buyback:base', async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.token) return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy.');
+  await ctx.answerCbQuery();
+  await buyBaseStep(ctx, flow, true);
+});
+bot.action('buyback:size', async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.base || !flow.token) return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy.');
+  await ctx.answerCbQuery();
+  await buySizeStep(ctx, flow, true);
+});
+
+// Prompt ketik alamat token — Kembali ke base (chain multi-base) atau ke chain (base tunggal).
+// ── /sell = alur holdings-dulu ───────────────────────────────────────────────
+// /sell → daftar token dipegang → pilih token → %/jumlah → Preview → Konfirmasi →
+//   Hasil. Base TERIMA dipilih OTOMATIS (nilai USD terbaik: ETH vs USDG/USDT).
+type SellHolding = { ca: string; symbol: string; dec: number; balWei: bigint; amountNum: number; usd: number | null };
+
+async function bsFetch(url: string): Promise<any | null> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    const r = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    return r.ok ? await r.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Token ERC20 (bukan base) dgn saldo > 0 di wallet. Blockscout dulu; fallback on-chain.
+async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
+  const skip = new Set<string>([cc.wethAddress.toLowerCase()]);
+  if (cc.usdgAddress) skip.add(cc.usdgAddress.toLowerCase());
+  if (cc.usdtAddress) skip.add(cc.usdtAddress.toLowerCase());
+  // Token yang PERNAH kita sentuh (beli/LP) — dianggap sah walau tanpa harga pasar.
+  const known = new Set<string>();
+  for (const t of journal.recentTokens(80)) if (t.ca) known.add(t.ca.toLowerCase());
+  for (const p of store.active()) if (p.ca) known.add(p.ca.toLowerCase());
+  const out: SellHolding[] = [];
+  if (cc.blockscout) {
+    const data = await bsFetch(`${cc.blockscout}/addresses/${cc.wallet.address}/token-balances`);
+    for (const it of Array.isArray(data) ? data : []) {
+      const tk = it?.token;
+      const ca = tk?.address_hash || tk?.address;
+      if (!tk || !ca || (tk.type && tk.type !== 'ERC-20')) continue;
+      const cal = String(ca).toLowerCase();
+      if (skip.has(cal)) continue;
+      let balWei: bigint;
+      try { balWei = BigInt(it.value ?? '0'); } catch { continue; }
+      if (balWei <= 0n) continue;
+      const rate = Number(tk.exchange_rate ?? 0);
+      // Anti-spam airdrop: hanya token BERNILAI (punya exchange_rate) ATAU yang pernah kita trade.
+      if (!(rate > 0) && !known.has(cal)) continue;
+      const dec = Number(tk.decimals ?? 18);
+      const amountNum = Number(ethers.formatUnits(balWei, dec));
+      out.push({ ca: ethers.getAddress(ca), symbol: String(tk.symbol || '?'), dec, balWei, amountNum, usd: rate ? amountNum * rate : null });
+    }
+    out.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
+    return out.slice(0, SELL_HOLDINGS_CAP);
+  }
+  // Fallback (chain tanpa Blockscout, mis. Stable): kandidat dari jurnal + posisi aktif.
+  const cand = new Map<string, string>();
+  for (const t of journal.recentTokens(40)) if (t.ca) cand.set(t.ca.toLowerCase(), t.symbol);
+  for (const p of store.active()) if (p.ca) cand.set(p.ca.toLowerCase(), p.symbol);
+  for (const [ca, sym] of [...cand].slice(0, HOLDINGS_CAND_MAX)) {
+    if (skip.has(ca)) continue;
+    try {
+      const erc = new ethers.Contract(ca, ERC20_ABI, cc.provider);
+      const balWei: bigint = await erc.balanceOf(cc.wallet.address);
+      if (balWei <= 0n) continue;
+      const dec = Number(await erc.decimals().catch(() => 18));
+      out.push({ ca: ethers.getAddress(ca), symbol: sym, dec, balWei, amountNum: Number(ethers.formatUnits(balWei, dec)), usd: null });
+    } catch {
+      /* skip token bermasalah */
+    }
+  }
+  return out.slice(0, SELL_HOLDINGS_CAP);
+}
+
+const fmt4 = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 4 });
+function sellListKb(list: SellHolding[]) {
+  const rows = list.map((h, i) => [Markup.button.callback(
+    `${h.symbol} · ${fmt4(h.amountNum)}${h.usd ? ` · $${h.usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : ''}`,
+    `sellpick:${i}`,
+  )]);
+  rows.push([Markup.button.callback('Batal', 'cancel')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+// Langkah 2: pilih % / jumlah.
+function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
+  flow.awaitingAmount = true;
+  flow.previewBack = 'sellback:amount'; // Kembali dari Preview → step %/jumlah
+  const rows = [
+    [25, 50, 75, 100].map((p) => Markup.button.callback(`${p}%`, `sellpct:${p}`)),
+    [Markup.button.callback('Ketik jumlah', 'sellpct:custom')],
+    [Markup.button.callback('Kembali', 'sellback:list'), Markup.button.callback('Batal', 'cancel')],
+  ];
+  const extra = { ...html, ...Markup.inlineKeyboard(rows) };
+  const text = msg.msgSellAmount(flow.tokenSym!, `${fmt4(flow.tokenBalNum!)} ${flow.tokenSym}`);
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
+// Auto-pilih base TERIMA terbaik (nilai USD tertinggi antar ETH/USDG/USDT) + kartu Preview.
+async function sellPreview(ctx: any, flow: TSwapFlow, amountWei: bigint, amtLabel: string) {
+  const cc = CHAINS[flow.chainKey]!;
+  const prog = await ctx.reply(msg.msgProgress('cari rute jual terbaik…'), html);
+  const ethUsd = await getEthUsd(cc.wethAddress, cc).catch(() => null);
+  let best: { base: BaseAsset; usd: number } | null = null;
+  for (const base of basesFor(cc)) {
+    const q = await previewSwapOut(flow.token!, base.address, amountWei, cc);
+    if (!q || q.out <= 0n) continue;
+    const outNum = Number(ethers.formatUnits(q.out, base.decimals));
+    const usd = isStableBase(base.kind) ? outNum : ethUsd ? outNum * ethUsd : outNum;
+    if (!best || usd > best.usd) best = { base, usd };
+  }
+  if (!best) {
+    tswapFlows.delete(ctx.from!.id);
+    return editProgress(ctx, prog, msg.msgError('jual', 'Tak ada rute jual (likuiditas tipis) untuk token ini.'));
+  }
+  flow.base = best.base;
+  await tswapQuoteConfirm(ctx, flow, cc, flow.token!, best.base.address, amountWei, amtLabel, { message_id: prog.message_id });
+}
+
+async function cmdSell(ctx: any) {
+  const cc = getChain(); // holdings di chain utama (Robinhood)
+  const prog = await ctx.reply(msg.msgProgress('membaca holdings…'), html);
+  const list = await sellHoldings(cc);
+  if (list.length === 0) return editProgress(ctx, prog, msg.msgSellNoHoldings());
+  const flow: TSwapFlow = { chainKey: cc.key, buy: false, sellList: list, startedAt: Date.now() };
+  tswapFlows.set(ctx.from.id, flow);
+  return editProgress(ctx, prog, msg.msgSellList(list.length), { ...html, ...sellListKb(list) });
+}
+bot.command('sell', cmdSell);
+
+bot.action(/^sellpick:(\d+)$/, async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.sellList) return ctx.answerCbQuery('Kedaluwarsa, ulangi /sell.');
+  const h = flow.sellList[Number(ctx.match[1])];
+  if (!h) return ctx.answerCbQuery('Pilihan tak valid.');
+  flow.token = h.ca;
+  flow.tokenSym = h.symbol;
+  flow.tokenDec = h.dec;
+  flow.tokenBalWei = h.balWei;
+  flow.tokenBalNum = h.amountNum;
+  await ctx.answerCbQuery();
+  await sellAmountStep(ctx, flow, true);
+});
+
+bot.action(/^sellpct:(\d+|custom)$/, async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.token || flow.tokenBalWei === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /sell.');
+  if (ctx.match[1] === 'custom') {
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(msg.msgSellTypeAmount(flow.tokenSym!), {
+      ...html,
+      ...Markup.inlineKeyboard([[Markup.button.callback('Kembali', 'sellback:amount')]]),
+    });
+  }
+  const pct = Number(ctx.match[1]);
+  await ctx.answerCbQuery();
+  const amountWei = pct >= 100 ? flow.tokenBalWei : (flow.tokenBalWei * BigInt(pct)) / 100n;
+  const amtLabel = `${fmt4((flow.tokenBalNum! * pct) / 100)} ${flow.tokenSym} (${pct}%)`;
+  await sellPreview(ctx, flow, amountWei, amtLabel);
+});
+
+// Tombol Kembali /sell.
+bot.action('sellback:list', async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.sellList) return ctx.answerCbQuery('Kedaluwarsa, ulangi /sell.');
+  flow.awaitingAmount = false;
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(msg.msgSellList(flow.sellList.length), { ...html, ...sellListKb(flow.sellList) });
+});
+bot.action('sellback:amount', async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.token) return ctx.answerCbQuery('Kedaluwarsa, ulangi /sell.');
+  await ctx.answerCbQuery();
+  await sellAmountStep(ctx, flow, true);
+});
+
+/** Quote rute terbaik + kartu konfirmasi. Dipakai jalur ketik & tombol preset. */
+async function tswapQuoteConfirm(
+  ctx: any,
+  tflow: TSwapFlow,
+  cc: ChainCtx,
+  fromAddr: string,
+  toAddr: string,
+  amountWei: bigint,
+  amountInLabel: string,
+  prog0?: { message_id: number },
+) {
+  const base = tflow.base!;
+  const prog = prog0 ?? (await ctx.reply(msg.msgProgress('minta quote rute terbaik…'), html));
+  const q = await previewSwapOut(fromAddr, toAddr, amountWei, cc);
+  if (!q) {
+    tswapFlows.delete(ctx.from!.id);
+    return editProgress(ctx, prog, msg.msgError('swap', 'Tak ada rute (pool/likuiditas tipis). Coba jumlah/token lain.'));
+  }
+  const outDec = tflow.buy ? tflow.tokenDec! : base.decimals;
+  const outSym = tflow.buy ? tflow.tokenSym! : base.symbol;
+  const estOutLabel = `${Number(ethers.formatUnits(q.out, outDec)).toLocaleString('en-US', { maximumFractionDigits: outDec >= 18 ? 6 : 2 })} ${outSym}`;
+  tflow.amountWei = amountWei;
+  tflow.amountInLabel = amountInLabel;
+  tflow.outLabel = estOutLabel;
+  tflow.route = q.route;
+  tflow.awaitingAmount = false;
+  return editProgress(
+    ctx,
+    prog,
+    msg.msgTSwapConfirm({ buy: tflow.buy, chainLabel: cc.label, tokenSym: tflow.tokenSym!, amountInLabel, estOutLabel, route: q.route, dryRun: config.safety.dryRun }),
+    {
+      ...html,
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('🟢 Konfirmasi', 'tswapok')],
+        [Markup.button.callback('Kembali', tflow.previewBack ?? 'tsback:amount'), Markup.button.callback('Batal', 'cancel')],
+      ]),
+    },
+  );
+}
+
+// Tombol preset nominal di /buy → langsung quote+konfirmasi (base→token).
+bot.action(/^tsamt:(.+)$/, async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.base || !flow.token || !flow.buy) return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy.');
+  const num = Number(ctx.match[1]);
+  if (!(num > 0)) return ctx.answerCbQuery('Nominal tak valid.');
+  await ctx.answerCbQuery();
+  const base = flow.base;
+  const amountWei = base.wrappable ? ethers.parseEther(String(num)) : ethers.parseUnits(String(num), base.decimals);
+  await tswapQuoteConfirm(ctx, flow, CHAINS[flow.chainKey]!, base.address, flow.token, amountWei, `${num} ${base.symbol}`);
+});
+
+bot.action('tswapok', async (ctx) => {
   const uid = ctx.from!.id;
-  const sflow = swapFlows.get(uid);
-  if (!sflow || sflow.amountWei === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /swap.');
-  if (swapInFlight.has(uid)) return ctx.answerCbQuery('Sedang diproses…');
-  const { dir, amountWei } = sflow;
-  swapFlows.delete(uid); // idempotency: hapus SEBELUM eksekusi (double-tap tak swap dobel)
-  swapInFlight.add(uid);
+  const flow = tswapFlows.get(uid);
+  if (!flow || flow.amountWei === undefined || !flow.base || !flow.token) {
+    return ctx.answerCbQuery('Kedaluwarsa, ulangi /buy atau /sell.');
+  }
+  if (tswapInFlight.has(uid)) return ctx.answerCbQuery('Sedang diproses…');
+  tswapInFlight.add(uid);
+  const { chainKey, buy, base, token, tokenSym, tokenDec, amountWei, amountInLabel } = flow;
+  tswapFlows.delete(uid); // idempotency: hapus SEBELUM eksekusi (double-tap tak swap dobel)
+  const cc = CHAINS[chainKey]!;
   await ctx.answerCbQuery('Diproses…');
-  const inLabel =
-    dir === 'e2u' ? `${ethers.formatEther(amountWei)} ETH` : `${ethers.formatUnits(amountWei, 6)} USDG`;
   try {
     if (config.safety.dryRun) {
       await ctx.editMessageText(
-        msg.msgSwapDone({ dir, amountInLabel: inLabel, outLabel: '(estimasi)', dryRun: true }),
+        msg.msgTSwapDone({ buy, tokenSym: tokenSym!, amountInLabel: amountInLabel!, outLabel: flow.outLabel ?? '(estimasi)', dryRun: true }),
         html,
       );
       return;
     }
-    await ctx.editMessageText(msg.msgProgress('menukar…'), html);
-    const cc = swapChain();
-    const r = dir === 'e2u' ? await swapEthToUsdg(amountWei, cc) : await swapUsdgToEth(amountWei, cc);
-    const outLabel =
-      dir === 'e2u'
-        ? `${Number(ethers.formatUnits(r.outWei, 6)).toFixed(2)} USDG`
-        : `${Number(ethers.formatEther(r.outWei)).toFixed(6)} ETH`;
+    await ctx.editMessageText(msg.msgProgress('menukar via rute terbaik…'), html);
+    let outLabel: string;
+    let route: string;
+    if (buy) {
+      // base → token. Base ETH: wrap seperlunya dulu (Uniswap butuh WETH).
+      if (base!.wrappable) {
+        const have: bigint = await cc.weth.balanceOf(cc.wallet.address);
+        if (have < amountWei) {
+          const wtx = await cc.weth.deposit({ value: amountWei - have });
+          await wtx.wait();
+        }
+      }
+      const r = await swapExactInBest(base!.address, token!, amountWei, cc, 5);
+      outLabel = `${Number(ethers.formatUnits(r.outWei, tokenDec!)).toLocaleString('en-US', { maximumFractionDigits: 6 })} ${tokenSym}`;
+      route = r.route;
+    } else if (base!.wrappable) {
+      const r = await swapTokenToEthRobust(token!, amountWei, cc);
+      outLabel = `${Number(ethers.formatEther(r.outEthWei)).toFixed(6)} ETH`;
+      route = r.route;
+    } else {
+      const r = await swapTokenToUsdgRobust(token!, amountWei, base!.address, cc);
+      outLabel = `${Number(ethers.formatUnits(r.outWei, base!.decimals)).toFixed(2)} ${base!.symbol}`;
+      route = r.route;
+    }
     await ctx.editMessageText(
-      msg.msgSwapDone({ dir, amountInLabel: inLabel, outLabel, route: r.route, dryRun: false }),
+      msg.msgTSwapDone({ buy, tokenSym: tokenSym!, amountInLabel: amountInLabel!, outLabel, route, dryRun: false }),
       html,
     );
   } catch (e) {
     await ctx.reply(msg.msgError('swap', (e as Error).message), html);
   } finally {
-    swapInFlight.delete(uid);
+    tswapInFlight.delete(uid);
   }
 });
 
@@ -1946,51 +2450,77 @@ bot.action(/^addv4go:(\d+):([\d.]+)$/, async (ctx) => {
 // Batal berlaku untuk semua alur (wizard /add maupun konfirmasi tutup).
 bot.action('cancel', async (ctx) => {
   flows.delete(ctx.from!.id);
-  swapFlows.delete(ctx.from!.id);
   fundFlows.delete(ctx.from!.id);
+  tswapFlows.delete(ctx.from!.id);
   await ctx.answerCbQuery('Dibatalkan');
   await ctx.editMessageText(msg.msgCancelled(), html);
 });
 
 // Penangkap ketikan nominal (didaftarkan TERAKHIR agar tak menelan command).
 // ---------- /setsize : kelola preset nominal ETH (tersimpan permanen) ----------
-const sizeEdit = new Map<number, 'add' | number>(); // userId -> slot yang sedang diubah
+// ---------- /size — kelola preset nominal per-aset (ETH & Stablecoin) ----------
+type SizeKind = store.SizeKind; // 'eth' | 'stable'
+const sizeEdit = new Map<number, { kind: SizeKind; slot: 'add' | number }>();
+const sizeUnit = (k: SizeKind) => (k === 'eth' ? 'ETH' : '$');
 
-function sizeKeyboard() {
-  const rows = store.getSizes().map((s, i) => [
-    Markup.button.callback(`✏️ ${s} ETH`, `size:edit:${i}`),
-    Markup.button.callback('🗑 Hapus', `size:del:${i}`),
+const assetKb = () =>
+  Markup.inlineKeyboard([[Markup.button.callback('ETH', 'sizekind:eth'), Markup.button.callback('Stablecoin (USDG/USDT)', 'sizekind:stable')]]);
+
+function cmdSize(ctx: any) {
+  return ctx.reply(msg.msgSizePickAsset(), { ...html, ...assetKb() });
+}
+bot.command(['size', 'setsize'], cmdSize);
+
+/** Kartu editor daftar preset satu aset (list + edit/hapus/tambah + kembali). */
+function sizeEditor(kind: SizeKind): { text: string; kb: ReturnType<typeof Markup.inlineKeyboard> } {
+  const unit = sizeUnit(kind);
+  const rows = store.getSizes(kind).map((s, i) => [
+    Markup.button.callback(`✏️ ${s} ${unit}`, `size:edit:${kind}:${i}`),
+    Markup.button.callback('🗑', `size:del:${kind}:${i}`),
   ]);
-  rows.push([Markup.button.callback('➕ Tambah preset', 'size:add')]);
-  return Markup.inlineKeyboard(rows);
+  rows.push([Markup.button.callback('➕ Tambah', `size:add:${kind}`)]);
+  rows.push([Markup.button.callback('‹ Aset', 'size:back')]);
+  return { text: msg.msgSizeList(kind === 'eth' ? 'ETH' : 'Stablecoin', unit, store.getSizes(kind)), kb: Markup.inlineKeyboard(rows) };
 }
 
-const sizeText = () => msg.msgSetSize();
+async function showSizeEditor(ctx: any, kind: SizeKind) {
+  const e = sizeEditor(kind);
+  try {
+    await ctx.editMessageText(e.text, { ...html, ...e.kb });
+  } catch (err) {
+    if (!/not modified/i.test((err as Error).message)) await ctx.reply(e.text, { ...html, ...e.kb });
+  }
+}
 
-bot.command('setsize', (ctx) => ctx.reply(sizeText(), { ...html, ...sizeKeyboard() }));
+bot.action(/^sizekind:(eth|stable)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  await showSizeEditor(ctx, ctx.match[1] as SizeKind);
+});
 
-bot.action(/^size:edit:(\d+)$/, async (ctx) => {
-  sizeEdit.set(ctx.from!.id, Number(ctx.match[1]));
+bot.action('size:back', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(msg.msgSizePickAsset(), { ...html, ...assetKb() });
+});
+
+bot.action(/^size:edit:(eth|stable):(\d+)$/, async (ctx) => {
+  sizeEdit.set(ctx.from!.id, { kind: ctx.match[1] as SizeKind, slot: Number(ctx.match[2]) });
   await ctx.answerCbQuery();
   await ctx.reply(msg.msgSetSizePrompt('edit'), html);
 });
 
-bot.action('size:add', async (ctx) => {
-  sizeEdit.set(ctx.from!.id, 'add');
+bot.action(/^size:add:(eth|stable)$/, async (ctx) => {
+  sizeEdit.set(ctx.from!.id, { kind: ctx.match[1] as SizeKind, slot: 'add' });
   await ctx.answerCbQuery();
   await ctx.reply(msg.msgSetSizePrompt('add'), html);
 });
 
-bot.action(/^size:del:(\d+)$/, async (ctx) => {
-  const sizes = store.getSizes();
-  const removed = sizes.splice(Number(ctx.match[1]), 1);
-  store.setSizes(sizes);
-  await ctx.answerCbQuery(removed.length ? `${removed[0]} ETH dihapus` : 'Sudah terhapus');
-  try {
-    await ctx.editMessageText(sizeText(), { ...html, ...sizeKeyboard() });
-  } catch (e) {
-    if (!/not modified/i.test((e as Error).message)) throw e;
-  }
+bot.action(/^size:del:(eth|stable):(\d+)$/, async (ctx) => {
+  const kind = ctx.match[1] as SizeKind;
+  const sizes = store.getSizes(kind);
+  const removed = sizes.splice(Number(ctx.match[2]), 1);
+  store.setSizes(kind, sizes);
+  await ctx.answerCbQuery(removed.length ? `${removed[0]} ${sizeUnit(kind)} dihapus` : 'Sudah terhapus');
+  await showSizeEditor(ctx, kind);
 });
 
 bot.on(message('text'), async (ctx) => {
@@ -2007,8 +2537,8 @@ bot.on(message('text'), async (ctx) => {
       case '/pnl': return cmdPnl(ctx);
       case '/history': return cmdHistory(ctx);
       case '/stop': return cmdStop(ctx);
-      case '/swap': return cmdSwap(ctx);
-      case '/setsize': return ctx.reply(sizeText(), { ...html, ...sizeKeyboard() });
+      case '/swap': return cmdBuy(ctx);
+      case '/setsize': return cmdSize(ctx);
       case '/help': return ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, ...helpKeyboard() });
       case '/add': return ctx.reply(msg.msgAddPrompt(), html);
     }
@@ -2019,12 +2549,13 @@ bot.on(message('text'), async (ctx) => {
   if (pend !== undefined) {
     const num = Number(raw);
     if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
-    const sizes = store.getSizes();
-    if (pend === 'add') sizes.push(num);
-    else sizes[pend] = num;
-    store.setSizes(sizes);
+    const sizes = store.getSizes(pend.kind);
+    if (pend.slot === 'add') sizes.push(num);
+    else sizes[pend.slot] = num;
+    store.setSizes(pend.kind, sizes);
     sizeEdit.delete(ctx.from.id);
-    return ctx.reply(sizeText(), { ...html, ...sizeKeyboard() });
+    const e = sizeEditor(pend.kind);
+    return ctx.reply(e.text, { ...html, ...e.kb });
   }
 
   // /fund menunggu ketikan jumlah → minta quote Relay → kartu konfirmasi.
@@ -2088,7 +2619,8 @@ bot.on(message('text'), async (ctx) => {
       await editProgress(ctx, prog, msg.msgFundConfirm(quote, config.safety.dryRun), {
         ...html,
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('🟢 Konfirmasi', 'fundok'), Markup.button.callback('Batal', 'cancel')],
+          [Markup.button.callback('🟢 Konfirmasi', 'fundok')],
+          [Markup.button.callback('Kembali', 'fundback:amount'), Markup.button.callback('Batal', 'cancel')],
         ]),
       });
     } catch (e) {
@@ -2098,45 +2630,74 @@ bot.on(message('text'), async (ctx) => {
     return;
   }
 
-  // Swap menunggu ketikan jumlah.
-  const sflow = swapFlows.get(ctx.from.id);
-  if (sflow?.awaitingAmount && isStaleFlow(sflow.startedAt)) {
-    swapFlows.delete(ctx.from.id);
+  // /buy /sell token: menunggu alamat kontrak, lalu jumlah → quote rute terbaik → konfirmasi.
+  const tflow = tswapFlows.get(ctx.from.id);
+  if (tflow && (tflow.awaitingCA || tflow.awaitingToken || tflow.awaitingAmount) && isStaleFlow(tflow.startedAt)) {
+    tswapFlows.delete(ctx.from.id);
     return ctx.reply(msg.msgSessionExpired(), html);
   }
-  if (sflow?.awaitingAmount) {
-    const num = Number(raw);
-    if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
-    const cc = swapChain();
+  if (tflow?.awaitingCA) {
+    // /buy alur CA-dulu: user tempel CA → deteksi chain → safety.
+    tflow.awaitingCA = false;
+    const prog = await ctx.reply(msg.msgProgress('mendeteksi chain…'), html);
+    return buyStartFromCA(ctx, raw.trim(), { message_id: prog.message_id });
+  }
+  if (tflow?.awaitingAmount && tflow.sellList) {
+    // /sell alur holdings: user ketik jumlah token (absolut) atau "semua".
+    const bal = tflow.tokenBalWei ?? 0n;
+    let amountWei: bigint;
+    if (/^(semua|all|max)$/i.test(raw)) {
+      amountWei = bal;
+    } else {
+      const num = Number(raw);
+      if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
+      try {
+        amountWei = ethers.parseUnits(raw, tflow.tokenDec!);
+      } catch {
+        return ctx.reply(msg.msgInvalidAmount(), html);
+      }
+    }
+    if (amountWei <= 0n || amountWei > bal) {
+      return ctx.reply(msg.msgError('jual', `Jumlah melebihi saldo (${fmt4(tflow.tokenBalNum ?? 0)} ${tflow.tokenSym}).`), html);
+    }
+    const amtLabel = `${fmt4(Number(ethers.formatUnits(amountWei, tflow.tokenDec!)))} ${tflow.tokenSym}`;
+    return sellPreview(ctx, tflow, amountWei, amtLabel);
+  }
+  if (tflow?.awaitingAmount) {
+    const cc = CHAINS[tflow.chainKey]!;
+    const base = tflow.base!;
     try {
-      const ethUsd = await getEthUsd(cc.wethAddress, cc);
       let amountWei: bigint;
       let amountInLabel: string;
-      let estOutLabel: string;
-      if (sflow.dir === 'e2u') {
-        if (num > maxEth) return ctx.reply(msg.msgOverLimit(maxEthLabel), html);
-        amountWei = ethers.parseEther(raw);
-        amountInLabel = `${raw} ETH`;
-        estOutLabel = ethUsd !== null ? `${(num * ethUsd).toFixed(2)} USDG` : '? USDG (harga ETH tak terbaca)';
+      let fromAddr: string;
+      let toAddr: string;
+      if (tflow.buy) {
+        const num = Number(raw);
+        if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
+        amountWei = base.wrappable ? ethers.parseEther(raw) : ethers.parseUnits(raw, base.decimals);
+        amountInLabel = `${raw} ${base.symbol}`;
+        fromAddr = base.address;
+        toAddr = tflow.token!;
       } else {
-        amountWei = ethers.parseUnits(raw, 6);
-        amountInLabel = `${raw} USDG`;
-        estOutLabel =
-          ethUsd !== null && ethUsd > 0 ? `${(num / ethUsd).toFixed(6)} ETH` : '? ETH (harga ETH tak terbaca)';
+        const tc = new ethers.Contract(tflow.token!, ['function balanceOf(address) view returns (uint256)'], cc.provider);
+        const balTok: bigint = await tc.balanceOf(cc.wallet.address);
+        if (/^(semua|all|max)$/i.test(raw)) {
+          amountWei = balTok;
+        } else {
+          const num = Number(raw);
+          if (!(num > 0)) return ctx.reply(msg.msgInvalidAmount(), html);
+          amountWei = ethers.parseUnits(raw, tflow.tokenDec!);
+        }
+        if (amountWei <= 0n || amountWei > balTok) {
+          return ctx.reply(msg.msgError('swap', `Saldo token kurang (ada ${ethers.formatUnits(balTok, tflow.tokenDec!)}).`), html);
+        }
+        amountInLabel = `${Number(ethers.formatUnits(amountWei, tflow.tokenDec!)).toLocaleString('en-US', { maximumFractionDigits: 4 })} ${tflow.tokenSym}`;
+        fromAddr = tflow.token!;
+        toAddr = base.address;
       }
-      sflow.amountWei = amountWei;
-      sflow.awaitingAmount = false;
-      return ctx.reply(
-        msg.msgSwapConfirm({ dir: sflow.dir, amountInLabel, estOutLabel, dryRun: config.safety.dryRun }),
-        {
-          ...html,
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('🟢 Konfirmasi', 'swapok'), Markup.button.callback('Batal', 'cancel')],
-          ]),
-        },
-      );
+      return tswapQuoteConfirm(ctx, tflow, cc, fromAddr, toAddr, amountWei, amountInLabel);
     } catch (e) {
-      swapFlows.delete(ctx.from.id);
+      tswapFlows.delete(ctx.from.id);
       return ctx.reply(msg.msgError('swap', (e as Error).message), html);
     }
   }
@@ -2192,8 +2753,10 @@ const BOT_COMMANDS = [
   { command: 'add', description: 'Tambah LP: /add <CA>' },
   { command: 'stop', description: 'Tutup posisi LP' },
   { command: 'closeall', description: 'Darurat: tutup semua posisi (konfirmasi per posisi)' },
-  { command: 'swap', description: 'Tukar ETH ↔ USDG' },
-  { command: 'setsize', description: 'Kelola preset nominal ETH' },
+  { command: 'buy', description: 'Beli token (rute terbaik)' },
+  { command: 'sell', description: 'Jual token (rute terbaik)' },
+  { command: 'bridge', description: 'Antar-chain → USDT @Stable' },
+  { command: 'size', description: 'Preset nominal (ETH & Stablecoin)' },
 ] as const;
 
 /**

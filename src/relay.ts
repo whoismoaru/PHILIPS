@@ -185,11 +185,16 @@ export async function executeBridge(quote: BridgeQuote, originCtx: ChainCtx): Pr
   return { txHashes };
 }
 
-export async function swapTokenToEthViaRelay(
+/**
+ * Swap same-chain via Relay dgn tujuan bebas (NATIVE ETH atau alamat token, mis. USDG).
+ * Approval token input ditangani via `quote.steps` (Relay sisipkan langkah approve).
+ */
+export async function swapTokenViaRelay(
   tokenAddress: string,
   amountWei: bigint,
+  destinationCurrency: string,
   ctx: ChainCtx = getChain(),
-): Promise<{ txHashes: string[]; outEthWei: bigint }> {
+): Promise<{ txHashes: string[]; outWei: bigint }> {
   const wallet = ctx.wallet;
   const body = {
     user: wallet.address,
@@ -197,7 +202,7 @@ export async function swapTokenToEthViaRelay(
     originChainId: ctx.chainId,
     destinationChainId: ctx.chainId,
     originCurrency: ethers.getAddress(tokenAddress),
-    destinationCurrency: NATIVE,
+    destinationCurrency,
     amount: amountWei.toString(),
     tradeType: 'EXACT_INPUT',
   };
@@ -227,16 +232,56 @@ export async function swapTokenToEthViaRelay(
     }
   }
 
-  // Estimasi ETH keluar dari quote (kalau tersedia).
-  let outEthWei = 0n;
+  // Estimasi jumlah keluar dari quote (kalau tersedia).
+  let outWei = 0n;
   try {
     const raw = quote?.details?.currencyOut?.amount;
-    if (raw) outEthWei = BigInt(raw);
+    if (raw) outWei = BigInt(raw);
   } catch {
     /* abaikan */
   }
 
-  return { txHashes, outEthWei };
+  return { txHashes, outWei };
+}
+
+export async function swapTokenToEthViaRelay(
+  tokenAddress: string,
+  amountWei: bigint,
+  ctx: ChainCtx = getChain(),
+): Promise<{ txHashes: string[]; outEthWei: bigint }> {
+  const r = await swapTokenViaRelay(tokenAddress, amountWei, NATIVE, ctx);
+  return { txHashes: r.txHashes, outEthWei: r.outWei };
+}
+
+/** Quote-only Relay same-chain from→to (TIDAK eksekusi). null bila tak ada rute. */
+export async function relayQuoteOut(
+  fromCurrency: string,
+  toCurrency: string,
+  amountWei: bigint,
+  ctx: ChainCtx = getChain(),
+): Promise<bigint | null> {
+  try {
+    const res = await fetch(RELAY_API, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        user: ctx.wallet.address,
+        recipient: ctx.wallet.address,
+        originChainId: ctx.chainId,
+        destinationChainId: ctx.chainId,
+        originCurrency: fromCurrency === NATIVE ? NATIVE : ethers.getAddress(fromCurrency),
+        destinationCurrency: toCurrency === NATIVE ? NATIVE : ethers.getAddress(toCurrency),
+        amount: amountWei.toString(),
+        tradeType: 'EXACT_INPUT',
+      }),
+    });
+    if (!res.ok) return null;
+    const q: any = await res.json();
+    const raw = q?.details?.currencyOut?.amount;
+    return raw ? BigInt(raw) : null;
+  } catch {
+    return null;
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -376,7 +421,25 @@ export async function swapTokenToEthRobust(
     }
   }
 
-  // Jalur 3: Relay sekali lagi (siapa tahu gangguan tadi transien).
+  // Jalur 3: 2-hop token → USDG → ETH. Wajib utk token yang likuiditasnya HANYA di
+  // pool USDG (mis. GME/USDG) — tak punya pool WETH, jadi jalur 1 & 2 selalu gagal &
+  // token nyangkut. Guard: hanya bila USDG dikenal & token BUKAN USDG (hindari rekursi).
+  const usdgAddr = ctx.usdgAddress;
+  if (usdgAddr && tokenAddress.toLowerCase() !== usdgAddr.toLowerCase()) {
+    try {
+      const u = await swapTokenToUsdgRobust(tokenAddress, amountWei, usdgAddr, ctx);
+      const eth = await swapTokenToEthRobust(usdgAddr, u.outWei, ctx); // USDG→ETH (relay/uniswap)
+      return {
+        txHashes: [...u.txHashes, ...eth.txHashes],
+        outEthWei: eth.outEthWei,
+        route: `usdg-hop(${u.route}→${eth.route})`,
+      };
+    } catch (e) {
+      errors.push(`usdg-hop: ${(e as Error).message.slice(0, 80)}`);
+    }
+  }
+
+  // Jalur 4: Relay sekali lagi (siapa tahu gangguan tadi transien).
   await sleep(2000);
   try {
     const r = await relayVerified(tokenAddress, amountWei, ctx);
@@ -469,5 +532,24 @@ export async function swapTokenToUsdgRobust(
       lastErr = (e as Error).message.slice(0, 80);
     }
   }
+
+  // Fallback: Relay token→USDG (agregator; rute lewat WETH dll bila pool USDG langsung
+  // tipis/impact tinggi). Verifikasi saldo token TURUN ≥90% (Relay kadang "sukses"
+  // tanpa swap) & ukur USDG masuk dari delta saldo. Menyamakan ketahanan dgn jalur ETH
+  // → posisi pasangan USDG tak lagi sering nyangkut tanpa auto-swap.
+  try {
+    const beforeTok = await tokenBalance(tokenAddress, ctx);
+    const beforeUsdg: bigint = await usdg.balanceOf(wallet.address);
+    const r = await swapTokenViaRelay(tokenAddress, amountWei, usdgAddress, ctx);
+    const afterTok = await tokenBalance(tokenAddress, ctx);
+    if (beforeTok - afterTok < (amountWei * 9n) / 10n) {
+      throw new Error('relay tak mengurangi saldo token');
+    }
+    const outWei = (await usdg.balanceOf(wallet.address)) - beforeUsdg;
+    return { txHashes: r.txHashes, outWei, route: 'relay-usdg' };
+  } catch (e) {
+    lastErr = `${lastErr} | relay: ${(e as Error).message.slice(0, 60)}`;
+  }
+
   throw new Error(`swap token→USDG gagal: ${lastErr}`);
 }

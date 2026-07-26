@@ -93,23 +93,41 @@ export function remove(tokenId: string) {
   if (records.length !== before) persist();
 }
 
-// ---------- pengaturan (preset nominal ETH, dst) ----------
+// ---------- pengaturan (preset nominal per-aset: ETH & Stablecoin) ----------
+// 'stable' dipakai bersama USDG+USDT (dua-duanya $1, 6-desimal).
 
 const SETTINGS_FILE = join(process.cwd(), 'data', 'settings.json');
-const DEFAULT_SIZES = [0.01, 0.05, 0.1, 0.5];
+export type SizeKind = 'eth' | 'stable';
+const DEFAULT_SIZES: Record<SizeKind, number[]> = {
+  eth: [0.01, 0.05, 0.1, 0.5],
+  stable: [10, 50, 100, 250],
+};
 
-type Settings = { sizes: number[] };
+type Settings = { sizes: Record<SizeKind, number[]> };
+
+const cleanList = (a: unknown, kind: SizeKind): number[] => {
+  const arr = Array.isArray(a) ? a.filter((x): x is number => typeof x === 'number' && x > 0) : [];
+  const uniq = [...new Set(arr)].sort((x, y) => x - y);
+  return uniq.length ? uniq : [...DEFAULT_SIZES[kind]];
+};
 
 let settings: Settings = loadSettings();
 
 function loadSettings(): Settings {
   try {
-    const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')) as Settings;
-    if (Array.isArray(s.sizes) && s.sizes.every((x) => typeof x === 'number' && x > 0)) return s;
+    const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')) as { sizes?: unknown };
+    // Migrasi format lama (sizes = array ETH) → { eth, stable }.
+    if (Array.isArray(s.sizes)) {
+      return { sizes: { eth: cleanList(s.sizes, 'eth'), stable: [...DEFAULT_SIZES.stable] } };
+    }
+    if (s.sizes && typeof s.sizes === 'object') {
+      const o = s.sizes as Record<string, unknown>;
+      return { sizes: { eth: cleanList(o.eth, 'eth'), stable: cleanList(o.stable, 'stable') } };
+    }
   } catch {
     /* pakai default */
   }
-  return { sizes: [...DEFAULT_SIZES] };
+  return { sizes: { eth: [...DEFAULT_SIZES.eth], stable: [...DEFAULT_SIZES.stable] } };
 }
 
 function persistSettings() {
@@ -117,10 +135,9 @@ function persistSettings() {
   writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
-export const getSizes = (): number[] => [...settings.sizes];
+export const getSizes = (kind: SizeKind): number[] => [...settings.sizes[kind]];
 
-export function setSizes(sizes: number[]) {
-  settings.sizes = [...new Set(sizes.filter((x) => x > 0))].sort((a, b) => a - b);
-  if (settings.sizes.length === 0) settings.sizes = [...DEFAULT_SIZES];
+export function setSizes(kind: SizeKind, sizes: number[]) {
+  settings.sizes[kind] = cleanList(sizes, kind);
   persistSettings();
 }
