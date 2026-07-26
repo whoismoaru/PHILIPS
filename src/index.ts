@@ -334,6 +334,10 @@ bot.action('portfolio', async (ctx) => {
   await ctx.answerCbQuery();
   return renderStatus(ctx, false); // /portfolio dilebur ke kartu uang /status
 });
+bot.action('pnl', async (ctx) => {
+  await ctx.answerCbQuery();
+  return cmdPnl(ctx);
+});
 bot.action('positions', async (ctx) => {
   await ctx.answerCbQuery();
   return cmdPositions(ctx);
@@ -431,7 +435,13 @@ async function renderStatus(ctx: any, edit: boolean) {
     });
     const extra = {
       ...html,
-      ...Markup.inlineKeyboard([[Markup.button.callback('🔄 Refresh', 'refresh:status')]]),
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback('🔄 Refresh', 'refresh:status'),
+          Markup.button.callback('📋 Posisi', 'positions'),
+          Markup.button.callback('🧾 PnL', 'pnl'),
+        ],
+      ]),
     };
     await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
   } catch (err) {
@@ -481,8 +491,8 @@ async function positionPnlText(
   const pct = initF > 0 ? (pnlF / initF) * 100 : 0;
   const usd = await baseToUsd(d.baseKind, pnlF, cc);
   return usd !== null
-    ? `${msg.usdSigned(usd)} (${msg.pctSigned(pct)})`
-    : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol} (${msg.pctSigned(pct)})`;
+    ? `${msg.usdSigned(usd)} (${msg.fmtPct(pct)})`
+    : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol} (${msg.fmtPct(pct)})`;
 }
 
 /** Bangun teks+keyboard kartu posisi (RPC). Side-effect: finalizeClose bila NFT gone. */
@@ -531,10 +541,10 @@ async function buildPositionCard(
     ...html,
     ...Markup.inlineKeyboard([
       [
-        Markup.button.callback('Tutup', `stop:${rec.tokenId}`),
         Markup.button.callback('Detail', `detail:${rec.tokenId}`),
-        Markup.button.callback('Refresh', `back:card:${rec.tokenId}`),
+        Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`),
       ],
+      [Markup.button.callback('⛔ Tutup', `stop:${rec.tokenId}`)], // aksi uang: baris sendiri
     ]),
   };
   return { text, extra };
@@ -637,8 +647,8 @@ function buildV4Card(p: V4Position, ethUsdV4: number | null): { text: string; ex
     const pct = entF > 0 ? (pnlF / entF) * 100 : 0;
     pnlText =
       p.base === 'ETH' && ethUsdV4 !== null
-        ? `${msg.usdSigned(pnlF * ethUsdV4)} (${msg.pctSigned(pct)})`
-        : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${p.base} (${msg.pctSigned(pct)})`;
+        ? `${msg.usdSigned(pnlF * ethUsdV4)} (${msg.fmtPct(pct)})`
+        : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${p.base} (${msg.fmtPct(pct)})`;
   }
   const text = msg.msgV4Position({
     tokenId: p.tokenId,
@@ -771,13 +781,14 @@ async function cmdPositions(ctx: any, edit = false) {
     rows,
   });
 
-  const idBtns = rows.map((r) => Markup.button.callback(`#${r.id}`, `pos_detail_${r.id}`));
+  // Maks 6 tombol id (posisi ke-7+ tetap tercantum di tabel & bisa lewat /stop).
+  const idBtns = rows
+    .slice(0, 6)
+    .map((r) => Markup.button.callback(`${r.pair.split('/')[1] ?? r.pair} #${r.id}`, `pos_detail_${r.id}`));
   const kbRows: ReturnType<typeof Markup.button.callback>[][] = [];
   for (let i = 0; i < idBtns.length; i += 2) kbRows.push(idBtns.slice(i, i + 2));
-  kbRows.push([
-    Markup.button.callback('🔄 Refresh', 'positions_refresh'),
-    Markup.button.callback('⛔ Tutup Semua', 'closeall_confirm'),
-  ]);
+  kbRows.push([Markup.button.callback('🔄 Refresh', 'positions_refresh')]);
+  kbRows.push([Markup.button.callback('⛔ Tutup Semua', 'closeall_confirm')]);
   const extra = { ...html, ...Markup.inlineKeyboard(kbRows) };
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
@@ -821,7 +832,8 @@ bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
 
 // /history — riwayat trade tertutup, dari file jurnal khusus (tak muncul di /positions).
 function cmdHistory(ctx: any) {
-  const items = journal.read(20).map((e) => ({
+  const total = journal.lifetimeStats().count;
+  const items = journal.read(8).map((e) => ({
     tokenId: e.tokenId,
     symbol: e.symbol,
     pnlPct: e.pnlPct,
@@ -831,7 +843,10 @@ function cmdHistory(ctx: any) {
     chain: e.chain,
     closedAt: e.closedAt,
   }));
-  return ctx.reply(msg.msgJournal(items), html);
+  return ctx.reply(msg.msgJournal(items, total), {
+    ...html,
+    ...Markup.inlineKeyboard([[Markup.button.callback('🧾 Rekap PnL', 'pnl'), Markup.button.callback('📋 Posisi', 'positions')]]),
+  });
 }
 bot.command('history', cmdHistory);
 
@@ -850,30 +865,48 @@ function cmdPnl(ctx: any) {
       grossLoss: s.grossLoss,
       best: s.best,
       worst: s.worst,
+      count: s.count,
     }),
-    html,
+    {
+      ...html,
+      ...Markup.inlineKeyboard([[Markup.button.callback('📜 Riwayat', 'history'), Markup.button.callback('📋 Posisi', 'positions')]]),
+    },
   );
 }
 bot.command('pnl', cmdPnl);
 
 
 // /explore — top 5 pool by APR (single-sided ETH/USDG), sinkron REAL-TIME Uniswap.
-const exploreKb = () =>
-  Markup.inlineKeyboard([[Markup.button.callback('🔄 Refresh', 'explore:refresh')]]);
+// Kartu EXPLORE dulu buntu: hanya Refresh, sementara CA-nya tak dibawa ke mana pun.
+const exploreKb = (pools: explore.ExplorePool[]) =>
+  Markup.inlineKeyboard([
+    ...pools
+      .filter((p) => p.otherAddr)
+      .slice(0, 3)
+      .map((p) => [Markup.button.callback(`➕ LP ${p.pair.split('/')[0]}`, `x:${p.otherAddr}`)]),
+    [Markup.button.callback('🔄 Refresh', 'explore:refresh')],
+  ]);
 
-async function loadExplore(): Promise<string> {
+async function loadExplore(): Promise<{ text: string; pools: explore.ExplorePool[] }> {
   const cc = getChain();
   const pools = await explore.fetchTopPools(cc, 5);
-  return explore.renderExplore(pools, cc.label);
+  return { text: explore.renderExplore(pools, cc.label), pools };
 }
+
+// Tombol pool → wizard /add penuh (screening & preview tetap jalan).
+bot.action(/^x:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  resetFlows(ctx.from!.id);
+  return continueAddlp(ctx, ctx.match[1], getChain().key, null);
+});
 
 async function cmdExplore(ctx: any) {
   const loading = await ctx.reply('📈 memuat pool teratas dari Uniswap…');
   try {
-    const text = await loadExplore();
+    const { text, pools } = await loadExplore();
     await ctx.telegram.editMessageText(loading.chat.id, loading.message_id, undefined, text, {
       ...html,
-      ...exploreKb(),
+      ...exploreKb(pools),
     });
   } catch (e) {
     await ctx.telegram.editMessageText(
@@ -890,8 +923,8 @@ bot.command('explore', cmdExplore);
 bot.action('explore:refresh', async (ctx) => {
   await ctx.answerCbQuery('Memuat…');
   try {
-    const text = await loadExplore();
-    await ctx.editMessageText(text, { ...html, ...exploreKb() });
+    const { text, pools } = await loadExplore();
+    await ctx.editMessageText(text, { ...html, ...exploreKb(pools) });
   } catch (e) {
     if (/not modified/i.test((e as Error).message)) return; // data sama — bukan error
     await ctx.reply(msg.msgError('explore', (e as Error).message), html);
@@ -1561,26 +1594,19 @@ async function fundBalanceLabel(dir: FundDir, asset: 'eth' | 'usdg'): Promise<st
 }
 
 // Tiap langkah /fund = renderer sendiri + tombol "Kembali" ke langkah sebelumnya.
-function fundDirStep(ctx: any, edit: boolean) {
-  const extra = {
-    ...html,
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback('⬆️ Isi Stable (→ USDT)', 'funddir:topup')],
-      [Markup.button.callback('⬇️ Tarik dari Stable (USDT →)', 'funddir:withdraw')],
-      [Markup.button.callback('Batal', 'cancel')],
-    ]),
-  };
-  return edit ? ctx.editMessageText(msg.msgFundStart(), extra) : ctx.reply(msg.msgFundStart(), extra);
-}
-function fundAssetStep(ctx: any, dir: FundDir, edit: boolean) {
+/**
+ * Arah + aset dalam SATU langkah: hanya 2×2 kombinasi, muat di satu papan tombol.
+ * callback_data lama (`fundasset:<dir>:<asset>`) dipertahankan → handler tak berubah.
+ */
+function fundStep(ctx: any, edit: boolean) {
   const origin = getChain();
-  const row = [Markup.button.callback('ETH', `fundasset:${dir}:eth`)];
-  if (origin.usdgAddress) row.push(Markup.button.callback('USDG', `fundasset:${dir}:usdg`));
-  const extra = {
-    ...html,
-    ...Markup.inlineKeyboard([row, [Markup.button.callback('Kembali', 'fundback:dir'), Markup.button.callback('Batal', 'cancel')]]),
-  };
-  return edit ? ctx.editMessageText(msg.msgFundAssetPick(dir), extra) : ctx.reply(msg.msgFundAssetPick(dir), extra);
+  const rows = [[Markup.button.callback('⬆️ ETH → USDT', 'fundasset:topup:eth')]];
+  if (origin.usdgAddress) rows.push([Markup.button.callback('⬆️ USDG → USDT', 'fundasset:topup:usdg')]);
+  rows.push([Markup.button.callback('⬇️ USDT → ETH', 'fundasset:withdraw:eth')]);
+  if (origin.usdgAddress) rows.push([Markup.button.callback('⬇️ USDT → USDG', 'fundasset:withdraw:usdg')]);
+  rows.push([Markup.button.callback('Batal', 'cancel')]);
+  const extra = { ...html, ...Markup.inlineKeyboard(rows) };
+  return edit ? ctx.editMessageText(msg.msgFundStart(), extra) : ctx.reply(msg.msgFundStart(), extra);
 }
 async function fundAmountPrompt(ctx: any, flow: FundFlow, edit: boolean) {
   flow.awaitingAmount = true;
@@ -1594,15 +1620,9 @@ async function fundAmountPrompt(ctx: any, flow: FundFlow, edit: boolean) {
 function cmdFund(ctx: any) {
   resetFlows(ctx.from.id);
   if (!CHAINS.stable) return ctx.reply(msg.msgFundNoStable(), html);
-  return fundDirStep(ctx, false);
+  return fundStep(ctx, false);
 }
 bot.command(['fund', 'bridge'], cmdFund);
-
-// Arah dipilih → pilih aset non-USDT (sumber saat topup, tujuan saat withdraw).
-bot.action(/^funddir:(topup|withdraw)$/, async (ctx) => {
-  await ctx.answerCbQuery();
-  await fundAssetStep(ctx, ctx.match[1] as FundDir, true);
-});
 
 bot.action(/^fundasset:(topup|withdraw):(eth|usdg)$/, async (ctx) => {
   const dir = ctx.match[1] as FundDir;
@@ -1613,20 +1633,15 @@ bot.action(/^fundasset:(topup|withdraw):(eth|usdg)$/, async (ctx) => {
   await fundAmountPrompt(ctx, flow, true);
 });
 
-// Tombol Kembali /fund.
-bot.action('fundback:dir', async (ctx) => {
+// Tombol Kembali /bridge. Kartu lama (callback funddir:) tetap dijawab ramah.
+bot.action(/^funddir:/, (ctx) => ctx.answerCbQuery('Kartu lama — ulangi /bridge.'));
+bot.action(['fundback:dir', 'fundback:asset'], async (ctx) => {
   await ctx.answerCbQuery();
-  await fundDirStep(ctx, true);
-});
-bot.action('fundback:asset', async (ctx) => {
-  const flow = fundFlows.get(ctx.from!.id);
-  if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /fund.');
-  await ctx.answerCbQuery();
-  await fundAssetStep(ctx, flow.dir, true);
+  await fundStep(ctx, true);
 });
 bot.action('fundback:amount', async (ctx) => {
   const flow = fundFlows.get(ctx.from!.id);
-  if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /fund.');
+  if (!flow) return ctx.answerCbQuery('Kedaluwarsa, ulangi /bridge.');
   await ctx.answerCbQuery();
   await fundAmountPrompt(ctx, flow, true);
 });
@@ -2160,17 +2175,49 @@ async function tswapQuoteConfirm(
   tflow.outLabel = estOutLabel;
   tflow.route = q.route;
   tflow.awaitingAmount = false;
+
+  // Saldo yang DIPERTARUHKAN ikut di kartu. Untuk beli dengan base wrappable,
+  // yang membiayai adalah ETH native (jalur eksekusi mem-wrap), bukan saldo WETH —
+  // memakai saldo WETH di sini melahirkan false-green.
+  let balanceLabel: string | undefined;
+  let shortLabel: string | null = null;
+  try {
+    if (tflow.buy) {
+      const bal: bigint = base.wrappable
+        ? await cc.provider.getBalance(cc.wallet.address)
+        : await new ethers.Contract(base.address, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address);
+      const sym = base.wrappable ? cc.nativeSymbol : base.symbol;
+      balanceLabel = `${msg.cleanUnits(bal, base.decimals)} ${sym}`;
+      if (bal < amountWei) shortLabel = `${msg.cleanUnits(amountWei - bal, base.decimals)} ${sym}`;
+    } else {
+      balanceLabel = `${msg.cleanUnits(tflow.tokenBalWei ?? 0n, tflow.tokenDec ?? 18)} ${tflow.tokenSym}`;
+    }
+  } catch {
+    /* saldo tak terbaca → baris saldo disembunyikan, jangan blokir */
+  }
+  const kb = shortLabel
+    ? [[Markup.button.callback('Kembali', tflow.previewBack ?? 'buyback:size'), Markup.button.callback('Batal', 'cancel')]]
+    : [
+        [Markup.button.callback(`🟢 Konfirmasi · ${amountInLabel}`, 'tswapok')],
+        [Markup.button.callback('Kembali', tflow.previewBack ?? 'buyback:size'), Markup.button.callback('Batal', 'cancel')],
+      ];
   return editProgress(
     ctx,
     prog,
-    msg.msgTSwapConfirm({ buy: tflow.buy, chainLabel: cc.label, tokenSym: tflow.tokenSym!, amountInLabel, estOutLabel, route: q.route, dryRun: config.safety.dryRun }),
-    {
-      ...html,
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback('🟢 Konfirmasi', 'tswapok')],
-        [Markup.button.callback('Kembali', tflow.previewBack ?? 'tsback:amount'), Markup.button.callback('Batal', 'cancel')],
-      ]),
-    },
+    msg.msgTSwapConfirm({
+      buy: tflow.buy,
+      chainLabel: cc.label,
+      tokenSym: tflow.tokenSym!,
+      amountInLabel,
+      estOutLabel,
+      route: q.route,
+      dryRun: config.safety.dryRun,
+      danger: tflow.screenBahaya,
+      screenFailed: !tflow.screenBahaya && /GAGAL/.test(tflow.screenText ?? ''),
+      balanceLabel,
+      shortLabel,
+    }),
+    { ...html, ...Markup.inlineKeyboard(kb) },
   );
 }
 
@@ -2306,7 +2353,7 @@ async function sendProfitCard(
     pair: `${baseSym} / ${rec.symbol}`,
     positive,
     pnlBig: usd !== null ? msg.usdSigned(usd) : `${positive ? '+' : ''}${pnl.toFixed(dec >= 18 ? 5 : 2)} ${baseSym}`,
-    pnlPct: msg.pctSigned(pnlPct),
+    pnlPct: msg.fmtPct(pnlPct),
     stats: [
       { label: 'deposit', value: `${fmt(baseIn)} ${baseSym}` },
       { label: 'received', value: `${fmt(baseOut)} ${baseSym}` },
@@ -2458,10 +2505,8 @@ bot.action(/^closev4:(\d+)$/, async (ctx) => {
   await ctx.reply(msg.msgV4CloseConfirm(tokenId), {
     ...html,
     ...Markup.inlineKeyboard([
-      [
-        Markup.button.callback('⛔ Ya, tutup v4', `closev4go:${tokenId}`),
-        Markup.button.callback('Batal', 'cancel'),
-      ],
+      [Markup.button.callback('⛔ Tutup Posisi v4', `closev4go:${tokenId}`)], // aksi uang: baris sendiri
+      [Markup.button.callback('Batal', 'cancel')],
     ]),
   });
 });
@@ -2727,10 +2772,12 @@ bot.on(message('text'), async (ctx) => {
     }
     return;
   }
-  return ctx.reply(msg.msgUnknown(raw), html);
+  return ctx.reply(msg.msgUnknown(raw, ethers.isAddress(raw)), html);
 });
 
 bot.catch((err, ctx) => {
+  // Tombol berputar sampai timeout kalau error terjadi sebelum answerCbQuery.
+  if (ctx.callbackQuery) ctx.answerCbQuery('Gagal — lihat pesan.').catch(() => {});
   console.error('Bot error:', err);
   ctx.reply?.(msg.msgError('bot', (err as Error).message), html).catch(() => {});
 });

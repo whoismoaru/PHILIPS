@@ -95,6 +95,17 @@ export function quoteHtml(innerHtml: string): string {
   return `<blockquote>${innerHtml}</blockquote>`;
 }
 
+/**
+ * Tabel monospace rata kolom (dipakai di dalam <pre>). right[i] = rata kanan (angka).
+ * padEnd di luar <pre> TIDAK pernah sejajar: font Telegram proporsional.
+ */
+export function alignTable(header: string[], rows: string[][], right: boolean[]): string {
+  const w = header.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
+  const line = (cells: string[]) =>
+    cells.map((c, i) => (right[i] ? c.padStart(w[i]) : c.padEnd(w[i]))).join('  ');
+  return [line(header), ...rows.map(line)].join('\n');
+}
+
 export function pre(text: string): string {
   return `<pre>${esc(text)}</pre>`;
 }
@@ -139,10 +150,7 @@ export function usdCompact(n: number): string {
   return '$' + Math.round(n);
 }
 
-export function pctSigned(n: number): string {
-  return (n >= 0 ? '+' : '') + Number(n.toFixed(1)) + '%';
-}
-
+/** Persen bertanda, SATU format untuk seluruh bot: '+13.3%' / '-0.7%'. */
 export function fmtPct(n: number): string {
   return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
 }
@@ -330,7 +338,7 @@ export function msgV4Added(o: {
     `🟢 ${bold('posisi v4 baru dibuka')} — monitor aktif`,
     '',
     ...hrows([
-      ['Deposit', `${o.sizeEth} ETH`],
+      ['Deposit', o.sizeEth],
       ['Range', o.rangeLabel],
     ]),
   ];
@@ -347,20 +355,6 @@ export function msgV4CloseConfirm(tokenId: string): string {
   ]);
 }
 
-/** Konfirmasi tambah likuiditas ke posisi/pool v4 (single-sided ETH). */
-export function msgV4AddConfirm(tokenId: string, sizeEth: string): string {
-  return card(`➕ ${title('TAMBAH v4', `#${tokenId}`)}`, [
-    ...hrows([
-      ['Deposit', `${sizeEth} ETH`],
-      ['Mode', 'single-sided (ETH saja)'],
-    ]),
-    '',
-    note('mint posisi BARU di pool yang sama; range otomatis di sisi ETH.'),
-    '',
-    bold('Lanjut tambah?'),
-  ]);
-}
-
 /** Alert monitor: posisi v4 (dikelola bot) masuk/keluar range. */
 export function msgV4Range(tokenId: string, inRange: boolean): string {
   return inRange
@@ -371,14 +365,15 @@ export function msgV4Range(tokenId: string, inRange: boolean): string {
 /** /help = kartu yang sama dengan /start (dulu dua builder yang saling menyalin). */
 export const msgHelp = msgStart;
 
-export function msgUnknown(txt: string): string {
+export function msgUnknown(txt: string, isAddress = false): string {
   const shown = (txt || '').trim().slice(0, 40) || '…';
   return card(
     title('UNKNOWN'),
     [
       fieldBlock([['input', shown]]),
       '',
-      note('ketik /help untuk daftar perintah'),
+      // Gerakan paling sering: tempel CA dari DexScreener. Jangan kirim ke /help.
+      note(isAddress ? 'tempel CA? pakai /add <CA> untuk LP atau /buy <CA> untuk beli' : 'ketik /help untuk daftar perintah'),
     ],
   );
 }
@@ -445,6 +440,7 @@ export function msgPnl(opts: {
   dryRun: boolean;
   known: number;
   excluded?: number;
+  count?: number; // total entri jurnal (untuk baris 'tak terukur')
   wins: number;
   losses: number;
   netEth: number;
@@ -460,6 +456,11 @@ export function msgPnl(opts: {
   const rows: Array<[string, string]> = [
     ['trade', `${opts.known} (${opts.wins}W · ${opts.losses}L)`],
     ['winrate', `${winrate.toFixed(1)}%`],
+    ...(opts.count && opts.count - opts.known - (opts.excluded ?? 0) > 0
+      ? ([
+          ['tak terukur', `${opts.count - opts.known - (opts.excluded ?? 0)} (posisi hilang/burned)`],
+        ] as Array<[string, string]>)
+      : []),
     ['menang', sgEth(opts.grossWin)],
     ['kalah', sgEth(opts.grossLoss)],
   ];
@@ -480,7 +481,7 @@ export function msgPnl(opts: {
 /** Alert harga token anjlok ≥ambang dari harga entry (auto-monitor). */
 export function msgPriceDrop(tokenId: string, symbol: string, dropPct: number, baseSymbol = 'WETH'): string {
   return card(`⚠️ ${title('ANJLOK', esc(symbol))}`, [
-    `🔴 turun ${bold(pctSigned(-dropPct))} dari entry`,
+    `🔴 turun ${bold(fmtPct(-dropPct))} dari entry`,
     '',
     fieldBlock([
       ['token', symbol],
@@ -508,7 +509,9 @@ export function msgBuyAskCA(dryRun: boolean): string {
   ], footerMode(dryRun));
 }
 export function msgBuySafetyHint(sym: string): string {
-  return note(`Cek detail & keamanan ${bold(sym)} di atas. Lanjut untuk pilih aset & size.`);
+  // note() → italic() → esc(): apa pun HTML di dalamnya ikut ter-escape (user melihat
+  // '<b>PONS</b>' mentah). Rakit di sini, jangan bikin primitif baru.
+  return `${italic('Cek detail & keamanan ')}${bold(sym)}${italic(' di atas. Lanjut untuk pilih aset & size.')}`;
 }
 export function msgSellList(n: number): string {
   return card(`🔴 ${title('JUAL TOKEN')}`, [note(`${n} token dipegang — pilih yang mau dijual.`)]);
@@ -517,8 +520,8 @@ export function msgSellNoHoldings(): string {
   return card(`🔴 ${title('JUAL TOKEN')}`, [note('tak ada token dgn saldo di wallet (selain base).')]);
 }
 export function msgSellAmount(sym: string, balLabel: string): string {
-  return card(`🔴 ${title('JUAL', sym)}`, [
-    note(`saldo: ${bold(balLabel)}`),
+  return card(`📉 ${title('JUAL', sym)}`, [
+    `💰 saldo ${bold(balLabel)}`,
     'Pilih porsi yang dijual (base terima dipilih otomatis, rute terbaik).',
   ]);
 }
@@ -544,20 +547,38 @@ export function msgTSwapConfirm(o: {
   estOutLabel: string;
   route: string;
   dryRun: boolean;
+  danger?: boolean; // verdikt screening BAHAYA (ikut sampai kartu pengirim tx)
+  screenFailed?: boolean;
+  balanceLabel?: string;
+  shortLabel?: string | null; // kurang berapa (bila kurang → tombol Konfirmasi tak dirender)
 }): string {
-  const body = [
-    `🟢 ≈ dapat ${bold(o.estOutLabel)}`,
-    '',
-    ...hrows([
-      [o.buy ? 'Beli' : 'Jual', `${o.tokenSym} @ ${o.chainLabel}`],
-      ['Bayar', o.amountInLabel],
-      ['Rute terbaik', o.route],
-      ['Toleransi harga', 'maks 5% (naik 15% bila gagal)'],
-    ]),
-    '',
-    note('estimasi; jumlah pasti dilindungi quoter saat eksekusi.'),
+  const rows: Array<[string, string]> = [
+    ['terima ≈', o.estOutLabel],
+    ['bayar', o.amountInLabel],
+    ['rute est.', o.route],
+    // 5%→15% hanya berlaku untuk rute Uniswap; rute relay dilindungi quoter penyedia.
+    ['slippage', o.route.startsWith('uniswap') ? '5% → 15%' : `${o.route} (auto)`],
   ];
-  return card(`🔄 ${title('KONFIRMASI SWAP', o.tokenSym)}`, body, footerMode(o.dryRun));
+  if (o.balanceLabel) rows.push(['saldo', o.balanceLabel]);
+  const body = [
+    `💰 ${bold(o.amountInLabel)}${o.buy ? '' : ` → ${o.tokenSym}`}`,
+    '',
+    ...hrows(rows),
+  ];
+  if (o.shortLabel) {
+    body.push('', `🔴 ${bold(`KURANG ${o.shortLabel}`)} — isi dulu lewat /bridge, lalu ulangi.`);
+  }
+  if (o.danger) {
+    body.push('', `⚠️ ${bold('SCREEN: BAHAYA')}`, quoteHtml('token ini bisa tak bisa dijual lagi. Batal kalau ragu.'));
+  } else if (o.screenFailed) {
+    body.push('', `🟡 ${bold('SCREEN: GAGAL')} — token tak terverifikasi.`);
+  } else {
+    body.push('', note('estimasi; jumlah pasti dilindungi quoter saat eksekusi.'));
+  }
+  // Header meng-encode arah (kamus: 🔄 = refresh, jangan dipakai untuk beli/jual).
+  const head = o.buy ? '📈' : '📉';
+  const what = o.buy ? 'BELI' : 'JUAL';
+  return card(`${head} ${title(what, `${o.tokenSym} · ${o.chainLabel}`)}`, body, footerMode(o.dryRun));
 }
 export function msgTSwapDone(o: {
   buy: boolean;
@@ -594,16 +615,10 @@ export function msgFundNoStable(): string {
 
 export function msgFundStart(): string {
   return card(`🌉 ${title('BRIDGE', 'Robinhood ⇄ Stable')}`, [
-    'Pindah dana lintas-chain via Relay.',
+    'Pindah dana lintas-chain (Relay, fallback LiFi).',
     '',
-    note('pilih arah:'),
+    note('pilih arah & aset:'),
   ]);
-}
-
-export function msgFundAssetPick(dir: 'topup' | 'withdraw'): string {
-  return dir === 'topup'
-    ? card(`🌉 ${title('ISI STABLE', 'Robinhood → USDT')}`, [note('pilih sumber dana di Robinhood:')])
-    : card(`🌉 ${title('TARIK DARI STABLE', 'USDT → Robinhood')}`, [note('pilih aset tujuan di Robinhood:')]);
 }
 
 export function msgFundAmountPrompt(symbol: string, balanceLabel: string): string {
@@ -627,17 +642,17 @@ export function msgFundConfirm(q: {
     q.etaSec == null ? '—' : q.etaSec < 60 ? `~${Math.max(1, Math.round(q.etaSec))} detik` : `~${Math.round(q.etaSec / 60)} menit`;
   // Estimasi PnL transfer = nilai diterima − nilai dikirim (rugi ke biaya+impact).
   const net = q.inUsd != null && q.outUsd != null ? Number(q.outUsd) - Number(q.inUsd) : null;
-  const netLabel = net != null ? `${usdSigned(net)}${q.inUsd && Number(q.inUsd) > 0 ? ` (${pctSigned((net / Number(q.inUsd)) * 100)})` : ''}` : '—';
+  const netLabel = net != null ? `${usdSigned(net)}${q.inUsd && Number(q.inUsd) > 0 ? ` (${fmtPct((net / Number(q.inUsd)) * 100)})` : ''}` : '—';
   const body = [
     `🟢 ≈ terima ${bold(q.outLabel)}${q.outUsd ? ` (${'$' + q.outUsd})` : ''}`,
     '',
     ...hrows([
       ['Kirim', q.inLabel],
       ['≈ Terima', q.outLabel],
-      ['Biaya', q.feeUsd ? `$${q.feeUsd}` : '—'],
-      ['Impact', q.impactPct ? `${q.impactPct}%` : '—'],
-      ['Est. PnL', netLabel],
-      ['Estimasi', eta],
+      ['Biaya', q.feeUsd ? `$${q.feeUsd}` : 'tak terbaca'],
+      ['Impact', q.impactPct ? `${q.impactPct}%` : 'tak terbaca'],
+      ['Selisih', netLabel],
+      ['Tunggu', eta],
     ]),
     '',
     note(`via ${q.provider === 'lifi' ? 'LiFi' : 'Relay'} · dana tiba di wallet yang sama di chain tujuan.`),
@@ -652,16 +667,19 @@ export function msgFundDone(txHashes: string[], outLabel: string, dryRun: boolea
   return card(`✅ ${title('BRIDGE TERKIRIM')}`, [
     `🟢 ≈ ${bold(outLabel)} sedang menuju chain tujuan`,
     '',
-    hrow('Tx', String(txHashes.length)),
+    hrow('Tx', txHashes.length ? shortAddr(txHashes[txHashes.length - 1]) : '—'),
     '',
-    note('cek /status beberapa detik lagi — saldo di chain tujuan akan muncul.'),
+    note('saldo tujuan muncul di /status setelah bridge sampai.'),
   ], footerMode(dryRun));
 }
 
 export function msgError(where: string, err: string): string {
+  // Revert ethers = blok multi-baris (reason/code/transaction) yang menutupi baris
+  // "lakukan ini". Ambil baris pertama saja; detail lengkap tetap ada di log service.
+  const first = String(err).split('\n')[0].trim().slice(0, 200) || 'error tak dikenal';
   return card(
     `❌ ${title('ERROR', where)}`,
-    [pre(err.slice(0, 400)), '', note('coba ulangi — bila berulang, cek log service.')],
+    [note(first), '', note('coba ulangi — detail lengkap ada di log service.')],
     nowUtc(),
   );
 }
@@ -797,30 +815,28 @@ export function msgPositionsList(opts: {
   }>;
 }): string {
   const dot = opts.dryRun ? '⚪' : '🟢';
-  const HR = '━━━━━━━━━━━━━━━━━━━━━━';
-  const dollar = (n: number) => `$${n >= 0 ? '+' : ''}${n.toFixed(2)}`;
-  const lines: string[] = [
-    `${dot} <b>POSITIONS</b> · Active ${opts.activeCount}`,
-    HR,
-    `💵 Total Invest   ${esc(opts.totalInvestLabel)}`,
-    `📊 Total PnL     <b>${opts.totalPnlUsd === null ? '—' : dollar(opts.totalPnlUsd)}</b>`,
-    `🔴 Out of Range   ${opts.outOfRange} dari ${opts.activeCount}`,
+  // Satu tabel <pre> (kolom benar-benar sejajar) + satu highlight, bukan pohon
+  // ┌│└ 4-baris/posisi yang menggantung di item terakhir.
+  const header = ['id', 'pair', 'modal', 'pnl', 'umur'];
+  const rows = opts.rows.map((r) => [
+    r.id,
+    r.pair.length > 13 ? r.pair.slice(0, 12) + '…' : r.pair,
+    r.investLabel,
+    r.pnlUsd === null ? '—' : usdSigned(r.pnlUsd),
+    r.age,
+  ]);
+  const out = opts.rows.filter((r) => !r.inRange);
+  const body: string[] = [
+    pre(alignTable(header, rows, [false, false, true, true, true])),
     '',
+    `💰 ${bold(`net ${opts.totalPnlUsd === null ? '—' : usdSigned(opts.totalPnlUsd)}`)} · modal ${esc(opts.totalInvestLabel)}`,
   ];
-  const last = opts.rows.length - 1;
-  opts.rows.forEach((r, i) => {
-    const prefix = i === 0 ? '┌' : i === last ? '└' : '├';
-    const status = r.inRange ? '🟢 In Range' : '🔴 Out';
-    lines.push(`${prefix} <b>#${esc(r.id)}</b>  ${esc(r.pair)}`);
-    lines.push(`│ ${esc(r.investLabel)} · ${esc(r.age)}`);
-    if (r.pnlUsd === null || r.pnlPct === null) {
-      lines.push(`│ PnL <b>—</b>  ${status}`);
-    } else {
-      lines.push(`│ PnL <b>${dollar(r.pnlUsd)}</b> (${fmtPct(r.pnlPct)})  ${status}`);
-    }
-    if (i < last) lines.push('│');
-  });
-  return lines.join('\n');
+  if (out.length) {
+    body.push(
+      `🔴 ${bold(out.map((r) => '#' + r.id).join(' · '))} di luar rentang — fee berhenti`,
+    );
+  }
+  return card(`${dot} ${title('POSISI', `${opts.activeCount} aktif`)}`, body, footerMode(opts.dryRun));
 }
 
 export function msgNoPositions(): string {
@@ -835,7 +851,7 @@ export function msgNoPositions(): string {
   );
 }
 
-/** Riwayat trade — hybrid, max 10 entry, multi-baris per trade. */
+/** Riwayat trade — satu tabel sejajar; jumlah di header = yang benar-benar tampil. */
 export function msgJournal(
   items: Array<{
     tokenId: string;
@@ -847,39 +863,34 @@ export function msgJournal(
     chain?: string;
     closedAt?: number;
   }>,
+  totalInJournal?: number,
 ): string {
   if (items.length === 0) {
-    return card(title('JOURNAL'), [note('belum ada trade tertutup.')]);
+    return card(`🧾 ${title('RIWAYAT')}`, [note('belum ada trade tertutup.')]);
   }
-
-  const shown = items.slice(0, 10);
-  const body: string[] = [];
-  for (const r of shown) {
-    if (body.length) body.push('');
-    body.push(`${bold(`#${r.tokenId}`)}  ${esc(r.symbol)}`);
-    if (r.reason === 'cashed') {
-      const eth = (r.pnlEth >= 0 ? '+' : '') + r.pnlEth.toFixed(5);
-      body.push(`${code(eth + ' ETH')}  ·  ${code(pctSigned(r.pnlPct))}`);
-    } else if (r.reason === 'gone') {
-      body.push(note('NFT hilang on-chain'));
-    } else {
-      body.push(note(r.reason));
-    }
-    const meta: string[] = [];
-    if (r.chain) meta.push(r.chain);
-    if (r.ca) meta.push(shortAddr(r.ca));
-    if (r.closedAt) meta.push(fmtAge(Date.now() - r.closedAt) + ' ago');
-    if (meta.length) body.push(italic(meta.join(' · ')));
+  const reasonId: Record<string, string> = {
+    cashed: 'cair',
+    gone: 'hilang',
+    burned: 'ditutup luar',
+  };
+  const header = ['id', 'token', 'pnl eth', 'pnl %', 'umur'];
+  const rows = items.map((r) => [
+    r.tokenId,
+    r.symbol.length > 10 ? r.symbol.slice(0, 9) + '…' : r.symbol,
+    r.reason === 'cashed' ? (r.pnlEth >= 0 ? '+' : '') + r.pnlEth.toFixed(5) : reasonId[r.reason] ?? r.reason,
+    r.reason === 'cashed' ? fmtPct(r.pnlPct) : '—',
+    r.closedAt ? fmtAge(Date.now() - r.closedAt) : '—',
+  ]);
+  const net = items.filter((r) => r.reason === 'cashed').reduce((a, r) => a + r.pnlEth, 0);
+  const body = [
+    pre(alignTable(header, rows, [false, false, true, true, true])),
+    '',
+    `💰 ${bold(`${net >= 0 ? '+' : ''}${net.toFixed(5)} ETH`)} dari ${items.length} trade tampil`,
+  ];
+  if (totalInJournal && totalInJournal > items.length) {
+    body.push(note(`jurnal menyimpan ${totalInJournal} trade — rekap penuh di /pnl.`));
   }
-  if (items.length > 10) {
-    body.push('', note(`+${items.length - 10} trade lain di jurnal.`));
-  }
-
-  return card(
-    `🧾 ${title('JOURNAL', `${items.length} trade`)}`,
-    body,
-    nowUtc(),
-  );
+  return card(`🧾 ${title('RIWAYAT', `${items.length} terakhir`)}`, body, nowUtc());
 }
 
 // ─── wizard steps ──────────────────────────────────────────────────

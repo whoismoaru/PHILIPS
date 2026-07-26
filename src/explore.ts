@@ -38,6 +38,7 @@ export type ExplorePool = {
   tvlUsd: number;
   vol1dUsd: number;
   apr: number; // persen
+  otherAddr?: string; // CA sisi non-base → tombol "➕ LP <TOKEN>"
 };
 
 type ApiPool = {
@@ -127,6 +128,7 @@ export async function fetchTopPools(
     const s0 = t0.symbol ?? '?',
       s1 = t1.symbol ?? '?';
     const pair = base0 && !base1 ? `${s1}/${s0}` : `${s0}/${s1}`;
+    const otherAddr = base0 && !base1 ? t1.address : base1 && !base0 ? t0.address : undefined;
 
     out.push({
       ver: (p.protocolVersion ?? 'V4').toLowerCase(),
@@ -135,6 +137,7 @@ export async function fetchTopPools(
       tvlUsd: tvl,
       vol1dUsd: vol,
       apr,
+      otherAddr: otherAddr ?? undefined,
     });
   }
   out.sort((a, b) => b.apr - a.apr);
@@ -259,14 +262,6 @@ function aprLabel(n: number): string {
   return n.toFixed(1) + '%';
 }
 
-/** Tabel monospace rata kolom. cols[i].right = rata kanan (angka). */
-function alignTable(header: string[], rows: string[][], right: boolean[]): string {
-  const w = header.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
-  const line = (cells: string[]) =>
-    cells.map((c, i) => (right[i] ? c.padStart(w[i]) : c.padEnd(w[i]))).join('  ');
-  return [line(header), ...rows.map(line)].join('\n');
-}
-
 /** Kartu EXPLORE (tg-ui): header identitas → tabel → highlight #1 APR → footer sinkron. */
 export function renderExplore(pools: ExplorePool[], chainLabel: string): string {
   if (pools.length === 0) {
@@ -291,11 +286,11 @@ export function renderExplore(pools: ExplorePool[], chainLabel: string): string 
 
   const top = pools[0];
   const body = [
-    m.pre(alignTable(header, rows, right)),
+    m.pre(m.alignTable(header, rows, right)),
     '',
     `📈 ${m.bold(`#1 ${top.pair} · ${aprLabel(top.apr)} APR`)}`,
     '',
-    m.note('top 5 by APR · single-sided ETH/USDG · APR = fee 1D disetahunkan'),
+    m.note(`top 5 by APR · single-sided ETH/USDG · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · APR = fee 1D disetahunkan`),
     m.italic(`Uniswap · sinkron · ${m.nowUtc()}`),
   ];
   return m.card(`📈 ${m.title('EXPLORE', chainLabel)}`, body);
