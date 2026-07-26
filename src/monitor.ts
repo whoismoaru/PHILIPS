@@ -9,7 +9,7 @@ import * as journal from './journal.js';
 import * as v4store from './v4store.js';
 import { checkV4Status } from './uniswapV4.js';
 import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgV4Range } from './messages.js';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -22,6 +22,7 @@ const DROP_ALERT_PCT = 25; // alert bila harga token turun ≥25% dari entry
 const DROP_REARM_PCT = 20; // pulih di atas -20% → boleh alert lagi (histeresis anti-spam)
 const SWEEP_EVERY_MS = 30 * 60_000; // sapu sisa token tiap 30 menit
 const SWEEP_COOLDOWN_MS = 6 * 3_600_000; // per token max 1 percobaan / 6 jam
+const SWEEP_RECENT_MS = 24 * 3_600_000; // sisa cash-out selalu muncul di jam-jam pertama
 const DUST_COOLDOWN_MS = 7 * 24 * 3_600_000; // token "terlalu kecil" → mundur 7 hari
 const SWEEP_FILE = join(process.cwd(), 'data', 'sweep.json');
 const html = { parse_mode: 'HTML' as const };
@@ -40,8 +41,7 @@ function loadSweep(): Map<string, number> {
 
 function saveSweep() {
   try {
-    mkdirSync(join(process.cwd(), 'data'), { recursive: true });
-    writeFileSync(SWEEP_FILE, JSON.stringify(Object.fromEntries(nextSweep)));
+    store.writeJson(SWEEP_FILE, Object.fromEntries(nextSweep));
   } catch {
     /* non-fatal */
   }
@@ -52,11 +52,18 @@ async function sweepLeftovers(bot: Telegraf) {
   if (Date.now() - lastSweepRun < SWEEP_EVERY_MS) return;
   lastSweepRun = Date.now();
   const seen = new Set<string>();
-  // Kandidat token: dari store live + jurnal (agar sisa token dari posisi lama
-  // yang sudah tak ada di store tetap bisa dipulihkan).
+  // Kandidat = SISA yang sesungguhnya saja: posisi STOPPED (definisi leftover, PRD §8.6)
+  // + token dari close < 24 jam (record-nya mungkin sudah terhapus).
+  // JANGAN pakai semua token yang pernah di-LP: bag spot hasil /buy ikut terjual.
   const candidates = [
-    ...store.all().map((r) => ({ ca: r.ca, chain: r.chain, symbol: r.symbol })),
-    ...journal.recentTokens(80),
+    ...store
+      .all()
+      .filter((r) => r.status === 'STOPPED')
+      .map((r) => ({ ca: r.ca, chain: r.chain, symbol: r.symbol })),
+    ...journal
+      .read(80)
+      .filter((e) => e.ca && Date.now() - e.closedAt < SWEEP_RECENT_MS)
+      .map((e) => ({ ca: e.ca as string, chain: e.chain, symbol: e.symbol })),
   ];
   for (const r of candidates) {
     if (!r.ca) continue;
@@ -119,58 +126,77 @@ async function sweepStuckWeth(bot: Telegraf) {
   }
 }
 
+let ticking = false;
+
 export function startMonitor(bot: Telegraf) {
   setInterval(async () => {
-    await sweepLeftovers(bot).catch(() => {});
-    for (const rec of store.active()) {
-      try {
-        const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
-        if (rec.lastInRange !== undefined && rec.lastInRange !== d.inRange) {
-          const text = d.inRange
-            ? msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol)
-            : msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below', d.baseSymbol);
-          await bot.telegram.sendMessage(config.telegram.allowedUserId, text, html);
-        }
-        // Alert anjlok: harga token vs entry. Sekali per crossing; re-arm saat pulih.
-        const entry = rec.entryPrice ? Number(rec.entryPrice) : 0;
-        const cur = Number(d.currentPrice);
-        if (entry > 0 && cur > 0) {
-          const dropPct = (1 - cur / entry) * 100;
-          if (dropPct >= DROP_ALERT_PCT && !rec.dropAlerted) {
-            await bot.telegram.sendMessage(
-              config.telegram.allowedUserId,
-              msgPriceDrop(rec.tokenId, rec.symbol, dropPct, d.baseSymbol),
-              html,
-            );
-            store.update(rec.tokenId, { dropAlerted: true });
-          } else if (rec.dropAlerted && dropPct < DROP_REARM_PCT) {
-            store.update(rec.tokenId, { dropAlerted: false });
-          }
-        }
-        store.update(rec.tokenId, { lastInRange: d.inRange });
-      } catch (e) {
-        // Posisi sudah di-burn (NFT hilang) → catat ke jurnal & keluarkan dari store.
-        if (/invalid token id/i.test(String((e as Error)?.message ?? e))) {
-          journal.recordClose(rec, { reason: 'burned' });
-          store.remove(rec.tokenId);
-        }
-        /* error lain: lewati ronde ini */
-      }
-    }
-    // Monitor posisi v4 yang DIKELOLA bot (alert in/out-range; bersihkan bila tertutup).
-    for (const rec of v4store.allV4()) {
-      try {
-        const st = await checkV4Status(getChain(rec.chain), rec.tokenId);
-        if (!st.exists) {
-          v4store.removeV4(rec.tokenId); // ditutup di luar bot
-          continue;
-        }
-        if (v4store.setV4InRange(rec.tokenId, st.inRange)) {
-          await bot.telegram.sendMessage(config.telegram.allowedUserId, msgV4Range(rec.tokenId, st.inRange), html);
-        }
-      } catch {
-        /* lewati ronde ini */
-      }
+    if (ticking) return; // tick sebelumnya masih menunggu tx — jangan bertumpuk
+    ticking = true;
+    try {
+      await tick(bot);
+    } finally {
+      ticking = false;
     }
   }, INTERVAL_MS);
+}
+
+async function tick(bot: Telegraf) {
+  // Sweep hanya saat tak ada tx uang berjalan (nonce & WETH perantara).
+  if (!store.isBusy()) await sweepLeftovers(bot).catch(() => {});
+  for (const rec of store.active()) {
+    try {
+      const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+      if (rec.lastInRange !== undefined && rec.lastInRange !== d.inRange) {
+        const text = d.inRange
+          ? msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol)
+          : msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below', d.baseSymbol);
+        await bot.telegram.sendMessage(config.telegram.allowedUserId, text, html);
+      }
+      // Alert anjlok: harga token vs entry. Sekali per crossing; re-arm saat pulih.
+      const entry = rec.entryPrice ? Number(rec.entryPrice) : 0;
+      const cur = Number(d.currentPrice);
+      if (entry > 0 && cur > 0) {
+        const dropPct = (1 - cur / entry) * 100;
+        if (dropPct >= DROP_ALERT_PCT && !rec.dropAlerted) {
+          await bot.telegram.sendMessage(
+            config.telegram.allowedUserId,
+            msgPriceDrop(rec.tokenId, rec.symbol, dropPct, d.baseSymbol),
+            html,
+          );
+          store.update(rec.tokenId, { dropAlerted: true });
+        } else if (rec.dropAlerted && dropPct < DROP_REARM_PCT) {
+          store.update(rec.tokenId, { dropAlerted: false });
+        }
+      }
+      store.update(rec.tokenId, { lastInRange: d.inRange });
+    } catch (e) {
+      // Posisi sudah di-burn (NFT hilang) → catat ke jurnal & keluarkan dari store.
+      // TAPI jangan sentuh yang sedang ditutup jalur manual: dia yang punya angka
+      // hasil cash-out; menjurnalkan 'burned' di sini = entri ganda / PnL hilang.
+      if (
+        /invalid token id/i.test(String((e as Error)?.message ?? e)) &&
+        !store.closing.has(rec.tokenId) &&
+        store.get(rec.tokenId)?.status === 'ACTIVE'
+      ) {
+        journal.recordClose(rec, { reason: 'burned' });
+        store.remove(rec.tokenId);
+      }
+      /* error lain: lewati ronde ini */
+    }
+  }
+  // Monitor posisi v4 yang DIKELOLA bot (alert in/out-range; bersihkan bila tertutup).
+  for (const rec of v4store.allV4()) {
+    try {
+      const st = await checkV4Status(getChain(rec.chain), rec.tokenId);
+      if (!st.exists) {
+        v4store.removeV4(rec.tokenId); // ditutup di luar bot
+        continue;
+      }
+      if (v4store.setV4InRange(rec.tokenId, st.inRange)) {
+        await bot.telegram.sendMessage(config.telegram.allowedUserId, msgV4Range(rec.tokenId, st.inRange), html);
+      }
+    } catch {
+      /* lewati ronde ini */
+    }
+  }
 }

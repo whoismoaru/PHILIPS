@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeJson } from './store.js';
 
 /**
  * Pelacakan RINGAN posisi Uniswap v4 yang DIBUKA oleh bot (terpisah dari store v3
@@ -30,18 +31,15 @@ function load(): V4Record[] {
   try {
     const r = JSON.parse(readFileSync(FILE, 'utf8'));
     return Array.isArray(r) ? r : [];
-  } catch {
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code !== 'ENOENT') console.error('[v4store] v4positions.json tak terbaca — mulai KOSONG:', err.message);
     return [];
   }
 }
 
 function persist(): void {
-  try {
-    mkdirSync(join(process.cwd(), 'data'), { recursive: true });
-  } catch {
-    /* ada */
-  }
-  writeFileSync(FILE, JSON.stringify(records, null, 2));
+  writeJson(FILE, records);
 }
 
 export const allV4 = (): V4Record[] => records;

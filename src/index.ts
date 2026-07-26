@@ -621,6 +621,10 @@ function finalizeClose(
   tokenId: string,
   opts: { resultEthWei?: bigint; reason: journal.JournalEntry['reason']; keep?: boolean },
 ) {
+  // Posisi yang sedang ditutup jalur manual: hanya jalur itu ('cashed') yang boleh
+  // menjurnalkan — dia yang memegang angka hasil. Render/sync yang kebetulan
+  // melihat NFT sudah hilang ('gone') tak boleh mendahuluinya (PnL jadi 0 permanen).
+  if (opts.reason !== 'cashed' && closingInFlight.has(tokenId)) return;
   const rec = store.get(tokenId);
   // Jurnalkan sekali saja (saat transisi dari ACTIVE) — hindari duplikat bila
   // tombol tutup ditekan ulang pada posisi yang sudah tertutup.
@@ -1148,6 +1152,7 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
     needLabel: cost?.needLabel ?? '?',
     balanceLabel: cost?.balanceLabel ?? '?',
     shortLabel: cost?.shortLabel ?? null,
+    costFailed: cost === null,
     dryRun: config.safety.dryRun,
   });
   const extra = {
@@ -1413,6 +1418,7 @@ bot.action('addok', async (ctx) => {
     flows.delete(ctx.from!.id); // idempotency: double-tap tak buka dobel
     await ctx.answerCbQuery('Diproses…');
     if (config.safety.dryRun) return void (await ctx.editMessageText(msg.msgDryRunAddDone(), html));
+    store.beginMoneyOp();
     try {
       await ctx.editMessageText(msg.msgOpeningLp(), html);
       const cc = getChain(chain);
@@ -1447,6 +1453,8 @@ bot.action('addok', async (ctx) => {
       );
     } catch (err) {
       await ctx.reply(msg.msgError('addlp v4', (err as Error).message), html);
+    } finally {
+      store.endMoneyOp();
     }
     return;
   }
@@ -1461,6 +1469,7 @@ bot.action('addok', async (ctx) => {
     await ctx.editMessageText(msg.msgDryRunAddDone(), html);
     return;
   }
+  store.beginMoneyOp();
   try {
     await ctx.editMessageText(msg.msgOpeningLp(), html);
     const { tokenId, notes } = await executeAdd(flow.plan, flow.token, flow.fee, getChain(flow.chain));
@@ -1492,6 +1501,8 @@ bot.action('addok', async (ctx) => {
     }
   } catch (err) {
     await ctx.reply(msg.msgError('addlp', (err as Error).message), html);
+  } finally {
+    store.endMoneyOp();
   }
 });
 
@@ -1666,6 +1677,7 @@ bot.action('fundok', async (ctx) => {
   if (!fflow?.quote) return ctx.answerCbQuery('Kedaluwarsa, ulangi /fund.');
   if (fundInFlight.has(uid)) return ctx.answerCbQuery('Sedang diproses…');
   fundInFlight.add(uid);
+  store.beginMoneyOp();
   const { quote, dir } = fflow;
   fundFlows.delete(uid); // idempotency: hapus sebelum eksekusi
   try {
@@ -1681,6 +1693,7 @@ bot.action('fundok', async (ctx) => {
     await ctx.reply(msg.msgError('fund', (e as Error).message), html);
   } finally {
     fundInFlight.delete(uid);
+    store.endMoneyOp();
   }
 });
 
@@ -2154,6 +2167,7 @@ bot.action('tswapok', async (ctx) => {
   }
   if (tswapInFlight.has(uid)) return ctx.answerCbQuery('Sedang diproses…');
   tswapInFlight.add(uid);
+  store.beginMoneyOp();
   const { chainKey, buy, base, token, tokenSym, tokenDec, amountWei, amountInLabel } = flow;
   tswapFlows.delete(uid); // idempotency: hapus SEBELUM eksekusi (double-tap tak swap dobel)
   const cc = CHAINS[chainKey]!;
@@ -2198,6 +2212,7 @@ bot.action('tswapok', async (ctx) => {
     await ctx.reply(msg.msgError('swap', (e as Error).message), html);
   } finally {
     tswapInFlight.delete(uid);
+    store.endMoneyOp();
   }
 });
 
@@ -2217,7 +2232,15 @@ bot.action(/^stop:(\d+)$/, async (ctx) => {
 
 // tokenId yang sedang ditutup — cegah double-tap "Tutup Posisi" (tx kedua revert
 // di burn & buang gas). Sinkron: has→add sebelum await pertama = atomik thd loop.
-const closingInFlight = new Set<string>();
+// Di store agar monitor ikut melihatnya (jangan jurnalkan yang sedang ditutup).
+// Nilai = epoch mulai: kunci kedaluwarsa 10 menit supaya tx yang menggantung
+// tak mengunci posisi selamanya (dulu satu-satunya jalan keluar = restart).
+const closingInFlight = store.closing;
+const CLOSING_LOCK_MS = 10 * 60_000;
+const closeLocked = (tokenId: string): boolean => {
+  const t = closingInFlight.get(tokenId);
+  return t !== undefined && Date.now() - t < CLOSING_LOCK_MS;
+};
 
 /** Kirim profit card PNG (momen kunci). Presentasi murni — dibungkus penuh,
  *  kegagalan render/kirim TAK boleh mengganggu close yang sudah sukses. */
@@ -2260,8 +2283,8 @@ async function sendProfitCard(
 
 bot.action(/^close:(\d+)$/, async (ctx) => {
   const tokenId = ctx.match[1];
-  if (closingInFlight.has(tokenId)) return ctx.answerCbQuery('Sedang diproses…');
-  closingInFlight.add(tokenId);
+  if (closeLocked(tokenId)) return ctx.answerCbQuery('Sedang diproses…');
+  closingInFlight.set(tokenId, Date.now());
   const closingRec = store.get(tokenId); // tangkap SEBELUM finalizeClose menghapus
   try {
     await ctx.answerCbQuery('Diproses…');
@@ -2367,8 +2390,8 @@ bot.action(/^closev4:(\d+)$/, async (ctx) => {
 bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   const tokenId = ctx.match[1];
   const key = `v4:${tokenId}`;
-  if (closingInFlight.has(key)) return ctx.answerCbQuery('Sedang diproses…');
-  closingInFlight.add(key);
+  if (closeLocked(key)) return ctx.answerCbQuery('Sedang diproses…');
+  closingInFlight.set(key, Date.now());
   try {
     await ctx.answerCbQuery('Diproses…');
     await ctx.editMessageText(msg.msgProgress('menutup posisi v4…'), html).catch(() => {});
@@ -2412,8 +2435,8 @@ bot.action(/^addv4go:(\d+):([\d.]+)$/, async (ctx) => {
   const tokenId = ctx.match[1];
   const size = ctx.match[2];
   const key = `addv4:${tokenId}:${size}`;
-  if (closingInFlight.has(key)) return ctx.answerCbQuery('Sedang diproses…');
-  closingInFlight.add(key);
+  if (closeLocked(key)) return ctx.answerCbQuery('Sedang diproses…');
+  closingInFlight.set(key, Date.now());
   try {
     await ctx.answerCbQuery('Diproses…');
     await ctx.editMessageText(msg.msgProgress('menambah likuiditas v4…'), html).catch(() => {});

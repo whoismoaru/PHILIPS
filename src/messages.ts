@@ -1061,6 +1061,7 @@ export function msgPlanStep(opts: {
   needLabel: string;
   balanceLabel: string;
   shortLabel: string | null;
+  costFailed?: boolean; // estimasi biaya gagal → JANGAN klaim saldo cukup
   dryRun: boolean;
 }): string {
   const body: string[] = [];
@@ -1090,7 +1091,9 @@ export function msgPlanStep(opts: {
       ['Saldo', opts.balanceLabel],
     ]),
   );
-  if (opts.shortLabel) {
+  if (opts.costFailed) {
+    body.push('', `🟡 ${bold('saldo belum terverifikasi')} — RPC biaya gagal. Cek /status dulu.`);
+  } else if (opts.shortLabel) {
     body.push(
       '',
       quoteHtml(`🔴 ${bold('KURANG')} ${esc(opts.shortLabel)} — top up dulu.`),

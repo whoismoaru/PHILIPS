@@ -1,5 +1,15 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+
+/**
+ * Tulis JSON atomik: file sementara → rename (atomik di POSIX).
+ * Mati/OOM saat write tak bisa lagi memotong file tujuan.
+ */
+export function writeJson(file: string, data: unknown): void {
+  mkdirSync(join(process.cwd(), 'data'), { recursive: true });
+  writeFileSync(file + '.tmp', JSON.stringify(data, null, 2));
+  renameSync(file + '.tmp', file);
+}
 
 /**
  * Penyimpanan posisi LP sederhana (file JSON).
@@ -35,15 +45,36 @@ function load(): PosRecord[] {
   try {
     if (!existsSync(FILE)) return [];
     return JSON.parse(readFileSync(FILE, 'utf8')) as PosRecord[];
-  } catch {
+  } catch (e) {
+    // JANGAN senyap: file rusak = basis PnL & kandidat sweep hilang.
+    console.error('[store] positions.json tak terbaca — mulai KOSONG:', (e as Error).message);
     return [];
   }
 }
 
 function persist() {
-  mkdirSync(join(process.cwd(), 'data'), { recursive: true });
-  writeFileSync(FILE, JSON.stringify(records, null, 2));
+  writeJson(FILE, records);
 }
+
+/**
+ * tokenId yang sedang ditutup (nilai = epoch mulai) — dibaca monitor & guard double-tap.
+ * Di sini (bukan index.ts) agar monitor.ts bisa ikut melihatnya.
+ */
+export const closing = new Map<string, number>();
+
+/**
+ * Operasi uang yang sedang berjalan (add/close/swap/bridge). Monitor tak boleh
+ * menyapu/unwrap saat >0: dua tx dari satu wallet = tabrakan nonce, dan
+ * sweepStuckWeth bisa menelan WETH yang baru di-wrap untuk mint.
+ */
+let moneyOps = 0;
+export const beginMoneyOp = (): void => {
+  moneyOps++;
+};
+export const endMoneyOp = (): void => {
+  moneyOps = Math.max(0, moneyOps - 1);
+};
+export const isBusy = (): boolean => moneyOps > 0 || closing.size > 0;
 
 export const all = (): PosRecord[] => records;
 export const active = (): PosRecord[] => records.filter((r) => r.status === 'ACTIVE');
@@ -131,8 +162,7 @@ function loadSettings(): Settings {
 }
 
 function persistSettings() {
-  mkdirSync(join(process.cwd(), 'data'), { recursive: true });
-  writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  writeJson(SETTINGS_FILE, settings);
 }
 
 export const getSizes = (kind: SizeKind): number[] => [...settings.sizes[kind]];
