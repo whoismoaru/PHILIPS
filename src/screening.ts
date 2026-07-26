@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { bold, card, code, esc, hrows, nowWib } from './messages.js';
+import { bold, code, esc, nowWib } from './messages.js';
 import { getChain, basesFor, type ChainCtx } from './chains.js';
 
 const QUOTER_ABI = [
@@ -108,7 +108,9 @@ export type ScreenResult = {
   buys24h: number | null;
   sells24h: number | null;
   priceUsd: string | null;
+  marketCapUsd: number | null; // dari DexScreener (marketCap, fallback fdv)
   pairAgeHours: number | null;
+  renounced: boolean | null; // null = tak bisa ditentukan (owner() tak ada / RPC gagal)
   sellPath: SellStatus; // simulasi jalur jual (exit-liquidity)
   flags: Flag[];
   verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA';
@@ -144,6 +146,25 @@ function worst(flags: Flag[]): ScreenResult['verdict'] {
   return 'AMAN';
 }
 
+/**
+ * Apakah kepemilikan kontrak sudah dilepas? Dibaca dari owner()/getOwner().
+ * null = TAK BISA DITENTUKAN (fungsinya tak ada, atau RPC gagal) — jangan pernah
+ * dianggap aman: kartu menampilkannya sebagai '?', bukan centang.
+ */
+async function readRenounced(addr: string, ctx: ChainCtx): Promise<boolean | null> {
+  const DEAD = new Set(['0x0000000000000000000000000000000000000000', '0x000000000000000000000000000000000000dead']);
+  for (const fn of ['owner', 'getOwner']) {
+    try {
+      const c = new ethers.Contract(addr, [`function ${fn}() view returns (address)`], ctx.provider);
+      const o: string = await c[fn]();
+      return DEAD.has(o.toLowerCase());
+    } catch {
+      /* coba nama berikutnya */
+    }
+  }
+  return null; // tak ada owner() yang bisa dibaca
+}
+
 export async function screenToken(
   tokenAddress: string,
   ctx: ChainCtx = getChain(),
@@ -153,12 +174,13 @@ export async function screenToken(
   const bs = ctx.blockscout; // null = explorer tak tersedia (mis. BSC)
 
   // Jalankan semua permintaan sekaligus (termasuk simulasi jalur jual on-chain).
-  const [tokenInfo, holders, contract, dex, sell] = await Promise.all([
+  const [tokenInfo, holders, contract, dex, sell, renounced] = await Promise.all([
     bs ? fetchJson(`${bs}/tokens/${addr}`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/tokens/${addr}/holders`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/smart-contracts/${addr}`) : Promise.resolve(null),
     fetchJson(`${DEXSCREENER}/${addr}`),
     simulateSellPath(addr, ctx),
+    readRenounced(addr, ctx),
   ]);
   if (sell.flag) flags.push(sell.flag);
 
@@ -219,6 +241,7 @@ export async function screenToken(
   let buys24h: number | null = null;
   let sells24h: number | null = null;
   let priceUsd: string | null = null;
+  let marketCapUsd: number | null = null;
   let pairAgeHours: number | null = null;
 
   // Hanya pair di chain yang sama (alamat token bisa eksis di banyak chain).
@@ -231,6 +254,7 @@ export async function screenToken(
     buys24h = p.txns?.h24?.buys ?? null;
     sells24h = p.txns?.h24?.sells ?? null;
     priceUsd = p.priceUsd ?? null;
+    marketCapUsd = p.marketCap ?? p.fdv ?? null;
     if (p.pairCreatedAt) pairAgeHours = (Date.now() - p.pairCreatedAt) / 3_600_000;
 
     if (liquidityUsd !== null && liquidityUsd < 2000)
@@ -265,7 +289,9 @@ export async function screenToken(
     buys24h,
     sells24h,
     priceUsd,
+    marketCapUsd,
     pairAgeHours,
+    renounced,
     sellPath: sell.status,
     flags,
     verdict: worst(flags),
@@ -306,68 +332,67 @@ export async function getEthUsd(
   return best;
 }
 
-/** Laporan screening hybrid: header verdict + metrik ringkas (bukan full pre). */
-export function formatScreen(s: ScreenResult): string {
-  const money = (n: number | null) =>
-    n === null ? '—' : '$' + Math.round(n).toLocaleString('en-US');
-  const pct = (n: number | null) => (n === null ? '—' : Number(n.toFixed(1)) + '%');
-  const age =
-    s.pairAgeHours === null
-      ? '—'
-      : s.pairAgeHours >= 48
-        ? `${Math.round(s.pairAgeHours / 24)}d`
-        : `${Math.round(s.pairAgeHours)}h`;
+/**
+ * Kartu DETAIL TOKEN setelah screening.
+ *
+ * ATURAN YANG TAK BOLEH DILANGGAR: field yang TIDAK PUNYA sumber data ditulis '?',
+ * bukan centang. Menampilkan "Renounced ✓" untuk sesuatu yang tak pernah diperiksa
+ * adalah klaim keamanan palsu — itu justru jenis kebohongan yang membuat orang
+ * masuk ke token yang salah.
+ *
+ * Sumber nyata saat ini: DexScreener (harga, MC, Liq, Vol, umur pool), Blockscout
+ * (holders, konsentrasi, verifikasi), on-chain (owner() untuk renounced, simulasi
+ * jalur jual untuk honeypot). Sisanya belum punya sumber di chain ini.
+ */
+export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?: string; heldLabel?: string | null; lpCount?: number }): string {
+  const UNK = '?';
+  const compact = (n: number | null): string => {
+    if (n === null) return UNK;
+    const a = Math.abs(n);
+    if (a >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+    if (a >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+    if (a >= 1e3) return `$${Math.round(n / 1e3)}K`;
+    return `$${n.toFixed(0)}`;
+  };
+  const pct = (n: number | null): string => (n === null ? UNK : `${Number(n.toFixed(2))}%`);
+  const mark = (v: boolean | null): string => (v === null ? UNK : v ? '✓' : '✗');
 
-  const verdictLabel =
-    s.verdict === 'BAHAYA' ? 'BAHAYA' : s.verdict === 'HATI-HATI' ? 'HATI-HATI' : 'AMAN';
-  const headEmoji =
-    s.verdict === 'BAHAYA' ? '🔴' : s.verdict === 'HATI-HATI' ? '⚠️' : '🛡';
+  const price = s.priceUsd ? `$${s.priceUsd}` : UNK;
+  const holders = s.holdersCount === null ? UNK : s.holdersCount.toLocaleString('en-US');
+  const pool = s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} jam`;
+  // Honeypot dibaca dari simulasi jalur jual: 'ok' = bisa dijual, 'blocked' = TIDAK bisa.
+  const noHoney = s.sellPath === 'ok' ? '✓' : s.sellPath === 'blocked' ? '✗' : UNK;
 
-  const kontrakVal =
-    (s.verified === null ? '?' : s.verified ? 'verified' : 'unverified') +
-    (s.isProxy ? ' · proxy' : '');
+  const head = `${bold('$' + esc(s.symbol.toUpperCase()))}${opts?.chainLabel ? ` | ${esc(opts.chainLabel)}` : ''}`;
 
-  const sellLabel =
-    s.sellPath === 'ok' ? 'ok'
-    : s.sellPath === 'blocked' ? 'BLOCKED'
-    : s.sellPath === 'costly' ? 'boros'
-    : '?';
-
-  // Compact: 5 metrik inti (+ contract)
-  const body = [
-    ...hrows([
-      ['Contract', kontrakVal],
-      ['Liq', money(s.liquidityUsd)],
-      ['Vol 24h', money(s.volume24h)],
-      ['Age', age],
-      ['Sell', sellLabel],
-      ['Top1', pct(s.top1Pct) + (s.top1IsContract ? ' (contract)' : '')],
-    ]),
+  const out = [
+    head,
+    '',
+    `${price} · MC ${compact(s.marketCapUsd)} · Liq ${compact(s.liquidityUsd)}`,
+    `Vol ${compact(s.volume24h)} · Holders ${holders} · Tax ${UNK}/${UNK}`,
+    `Top 10 ${pct(s.top10Pct)} · DEV ${UNK} · Insiders ${UNK}`,
+    `Sniper ${UNK} · Bundler ${UNK} · Dex Paid ${UNK}`,
+    `Pool ${pool} · LP Locked ${UNK} · Cluster ${UNK}`,
+    `NoHoneypot ${noHoney} · Phishing ${UNK} · Verified ${mark(s.verified)} · Renounced ${mark(s.renounced)} · Burnt ${UNK}`,
   ];
 
-  if (s.verdict === 'AMAN') {
-    body.push('', `🟢 ${bold('AMAN')} — lanjut pilih pool aman.`);
-  } else if (s.verdict === 'HATI-HATI') {
-    body.push('', `⚠️ ${bold('HATI-HATI')} — lanjut dengan waspada.`);
+  if (opts?.ca) out.push('', code(opts.ca));
+
+  const held = opts?.heldLabel ? `Dipegang ${esc(opts.heldLabel)}` : 'Belum dipegang';
+  const lp = opts?.lpCount ? `${opts.lpCount} LP aktif` : 'Belum ber-LP';
+  out.push('', `${held} & ${lp}`);
+  if (!opts?.heldLabel && !opts?.lpCount) out.push('→ Bisa mulai dari Buka LP / Beli');
+
+  // Verdict & flags TETAP ada: kartu ini menggantikan tampilan, bukan peringatannya.
+  const risk = s.flags.filter((f) => f.level === 'BAHAYA' || f.level === 'HATI-HATI');
+  if (s.verdict !== 'AMAN' || risk.length) {
+    out.push('', `${s.verdict === 'BAHAYA' ? '🔴' : '⚠️'} ${bold(s.verdict)}`);
+    for (const f of risk.slice(0, 4)) out.push(`• ${esc(f.msg)}`);
   } else {
-    body.push('', `🔴 ${bold('BAHAYA')} — lanjut hanya jika yakin.`);
+    out.push('', `🟢 ${bold('AMAN')}`);
   }
 
-  const riskNotes = s.flags.filter(
-    (f) =>
-      (f.level === 'BAHAYA' || f.level === 'HATI-HATI') &&
-      !/terverifikasi|proxy/i.test(f.msg),
-  );
-  if (riskNotes.length > 0) {
-    body.push('', bold('flags'));
-    for (const f of riskNotes.slice(0, 4)) {
-      body.push(`• ${esc(f.msg)}`);
-    }
-  }
-
-  return card(
-    `${headEmoji} ${bold('SCREEN · ' + verdictLabel)} · ${esc(s.symbol)}`,
-    body,
-    nowWib(),
-  );
+  out.push('', nowWib());
+  return out.join('\n');
 }
+

@@ -1280,7 +1280,7 @@ async function continueAddlp(
   if (!pre) {
     if (screened.status === 'fulfilled' && screened.value) {
       screenBahaya = screened.value.verdict === 'BAHAYA';
-      await ctx.reply(formatScreen(screened.value), html); // kartu screen = pesan terpisah
+      await ctx.reply(formatScreen(screened.value, { ca: token, chainLabel: cc.label }), html); // kartu screen = pesan terpisah
     } else {
       screenFailed = true; // gagal verifikasi → peringatan dibawa ke preview rencana
       await ctx.reply(msg.msgScreeningFailed(), html);
@@ -1835,7 +1835,7 @@ async function buySafetyStep(ctx: any, flow: TSwapFlow, prog: { message_id: numb
       flow.token = ethers.getAddress(flow.token!);
       flow.tokenSym = s.symbol && s.symbol !== '???' ? s.symbol : flow.tokenSym;
       flow.screenBahaya = s.verdict === 'BAHAYA';
-      flow.screenText = formatScreen(s);
+      flow.screenText = formatScreen(s, { ca: flow.token!, chainLabel: cc.label });
     } catch {
       flow.screenBahaya = false;
       flow.screenText = msg.msgScreeningFailed();
@@ -1993,7 +1993,14 @@ async function renderTokenHub(
     kb,
     sym,
     dec,
-    screenText: sc ? formatScreen(sc) : msg.msgScreeningFailed(),
+    screenText: sc
+      ? formatScreen(sc, {
+          ca,
+          chainLabel: cc.label,
+          heldLabel: bal > 0n ? `${ethers.formatUnits(bal, dec)} ${sym}` : null,
+          lpCount: v3.length + v4.length,
+        })
+      : msg.msgScreeningFailed(),
     bahaya: sc?.verdict === 'BAHAYA',
     failed: !sc,
   });
