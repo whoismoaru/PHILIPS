@@ -819,10 +819,23 @@ async function cmdPositions(ctx: any, edit = false) {
     rows,
   });
 
-  // Maks 6 tombol id (posisi ke-7+ tetap tercantum di tabel & bisa lewat /stop).
-  const idBtns = rows
-    .slice(0, 6)
-    .map((r) => Markup.button.callback(`${r.pair.split('/')[1] ?? r.pair} #${r.id}`, `pos_detail_${r.id}`));
+  // Maks 6 tombol id (posisi ke-7+ tetap tercantum di daftar & bisa lewat /stop).
+  // Label = NAMA TOKEN saja. pair berbentuk base/token, jadi yang dipakai adalah
+  // sisi yang BUKAN base; kalau dua-duanya base (mis. ETH/USDT) pakai sisi kiri.
+  const BASES = new Set(['WETH', 'ETH', 'USDG', 'USDT', 'USDC']);
+  const tokenOf = (pair: string): string => {
+    const [a, b] = pair.split('/').map((s) => s.trim());
+    if (!b) return a;
+    if (!BASES.has(b.toUpperCase())) return b;
+    return a;
+  };
+  const top = rows.slice(0, 6);
+  const names = top.map((r) => tokenOf(r.pair));
+  // Dua posisi token sama → tombolnya kembar dan tak bisa dibedakan. Yang kembar saja diberi #id.
+  const dup = new Set(names.filter((n, i) => names.indexOf(n) !== i));
+  const idBtns = top.map((r, i) =>
+    Markup.button.callback(dup.has(names[i]) ? `${names[i]} #${r.id}` : names[i], `pos_detail_${r.id}`),
+  );
   const kbRows: ReturnType<typeof Markup.button.callback>[][] = [];
   for (let i = 0; i < idBtns.length; i += 2) kbRows.push(idBtns.slice(i, i + 2));
   kbRows.push([
