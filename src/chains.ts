@@ -162,6 +162,17 @@ const DEFS: Record<string, Def> = {
   },
 };
 
+// --- Multichain (Ethereum / Base / BSC) DIMATIKAN SEMENTARA — 27 Jul 2026 ---
+// Definisinya sengaja DIPERTAHANKAN, bukan dihapus: menghidupkan kembali cukup
+// ENABLE_MULTICHAIN=true di .env, tanpa memulihkan ~50 baris alamat kontrak.
+// Saat dimatikan tak ada posisi di ketiganya (positions.json & v4positions.json kosong),
+// jadi tak ada dana yang berhenti dipantau monitor.
+if (process.env.ENABLE_MULTICHAIN !== 'true') {
+  delete DEFS.ethereum;
+  delete DEFS.base;
+  delete DEFS.bsc;
+}
+
 // --- StableChain (L1 stablecoin, gas USDT0). AKTIF hanya bila RPC_URL_STABLE diset ---
 // Uniswap v3 kanonik (docs.stable.xyz/reference/dexes). Base LP = USDT single-side
 // (6-desimal, non-wrappable, ≈$1 — pola sama dgn USDG). Tak ada WETH → hasWethBase=false.
