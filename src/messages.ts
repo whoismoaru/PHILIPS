@@ -388,15 +388,56 @@ export function msgV4Range(tokenId: string, inRange: boolean): string {
 }
 
 
-export function msgUnknown(txt: string, isAddress = false): string {
+/**
+ * Kartu HUB TOKEN — muncul saat CA ditempel telanjang (tanpa command).
+ * Satu identitas + satu screening melayani empat aksi; tiap tombol masuk ke alur
+ * yang sudah ada (guard & konfirmasi masing-masing tetap utuh).
+ */
+export function msgTokenHub(o: {
+  symbol: string;
+  chainLabel: string;
+  ca: string;
+  verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA' | null; // null = screening gagal
+  verdictNote?: string;
+  priceUsd?: string | null;
+  balanceLabel?: string; // hanya bila wallet memegang token ini
+  balanceUsd?: number | null;
+  lpCount?: number; // posisi LP aktif untuk token ini
+  lpIds?: string[];
+  dryRun: boolean;
+}): string {
+  const head =
+    o.verdict === 'BAHAYA' ? '⚠️' : o.verdict === 'HATI-HATI' ? '🟡' : o.verdict === 'AMAN' ? '🛡' : '🟡';
+  const body: string[] = [];
+  if (o.verdict === 'BAHAYA') {
+    body.push(`⚠️ ${bold('SCREEN: BAHAYA')}${o.verdictNote ? ` — ${esc(o.verdictNote)}` : ''}`);
+  } else if (o.verdict === 'HATI-HATI') {
+    body.push(`🟡 ${bold('SCREEN: HATI-HATI')}${o.verdictNote ? ` — ${esc(o.verdictNote)}` : ''}`);
+  } else if (o.verdict === 'AMAN') {
+    body.push(`🟢 ${bold('SCREEN: AMAN')}${o.verdictNote ? ` — ${esc(o.verdictNote)}` : ''}`);
+  } else {
+    body.push(`🟡 ${bold('SCREEN: GAGAL')} — token tak terverifikasi.`);
+  }
+  const rows: Array<[string, string]> = [];
+  if (o.priceUsd) rows.push(['harga', `$${o.priceUsd}`]);
+  if (o.balanceLabel) {
+    rows.push(['saldo', `${o.balanceLabel}${o.balanceUsd ? `  (${usdPlain(o.balanceUsd)})` : ''}`]);
+  }
+  if (o.lpCount) rows.push(['posisi', `${o.lpCount} LP aktif${o.lpIds?.length ? ` (#${o.lpIds.join(' #')})` : ''}`]);
+  rows.push(['ca', shortAddr(o.ca)]);
+  body.push('', pre(sheet(rows)));
+  if (!o.balanceLabel && !o.lpCount) body.push('', note('belum dipegang & belum ber-LP — bisa mulai dari Buka LP / Beli'));
+  return card(`${head} ${title(o.symbol, o.chainLabel)}`, body, footerMode(o.dryRun));
+}
+
+export function msgUnknown(txt: string): string {
   const shown = (txt || '').trim().slice(0, 40) || '…';
   return card(
     title('UNKNOWN'),
     [
       fieldBlock([['input', shown]]),
       '',
-      // Gerakan paling sering: tempel CA dari DexScreener. Jangan kirim ke /help.
-      note(isAddress ? 'tempel CA? pakai /add <CA> untuk LP atau /buy <CA> untuk beli' : 'ketik /help untuk daftar perintah'),
+      note('ketik /help untuk daftar perintah · tempel CA untuk kartu token'),
     ],
   );
 }

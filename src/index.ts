@@ -211,7 +211,16 @@ function resetFlows(uid: number): void {
   flows.delete(uid);
   fundFlows.delete(uid);
   tswapFlows.delete(uid);
+  hubs.delete(uid);
 }
+
+/**
+ * HUB TOKEN — tempel CA telanjang → satu kartu identitas + 4 aksi.
+ * Teks & keyboard disimpan supaya tombol "Kembali" dari alur mana pun bisa
+ * merender ulang TANPA screening ulang (0 RPC).
+ */
+type Hub = { ca: string; chainKey: string; text: string; kb: any; sym: string; dec: number; screenText: string; bahaya: boolean; failed: boolean };
+const hubs = new Map<number, Hub>();
 // Sesi wizard/swap kedaluwarsa: bila user tinggalkan lalu ketik angka lain jauh
 // kemudian, jangan sampai termakan flow basi. 15 menit.
 const FLOW_TTL_MS = 15 * 60_000;
@@ -1222,26 +1231,33 @@ async function continueAddlp(
   token: string,
   chainKey: string,
   prog?: { message_id: number } | null,
+  pre?: { bahaya: boolean; failed: boolean }, // screening sudah dilakukan hub → jangan ulang
 ) {
   const cc = getChain(chainKey);
 
   // 1+2) Screening & pencarian pool saling independen → jalankan PARALEL
   // (dulu serial: 4 HTTP + ~18 RPC, lalu GraphQL — worst case ~30 dtk sebelum kartu 1/4).
   // Urutan tampilan dipertahankan: kartu SCREEN dulu, baru kartu 1/4.
-  prog = await editProgress(ctx, prog, msg.msgProgress(`menyaring token & mencari pool di ${cc.label}…`));
+  prog = await editProgress(
+    ctx,
+    prog,
+    msg.msgProgress(pre ? 'mencari pool…' : `menyaring token & mencari pool di ${cc.label}…`),
+  );
   const [screened, found] = await Promise.allSettled([
-    screenToken(token, cc),
+    pre ? Promise.resolve(null) : screenToken(token, cc),
     explore.poolsForToken(cc, token),
   ]);
 
-  let screenBahaya = false;
-  let screenFailed = false;
-  if (screened.status === 'fulfilled') {
-    screenBahaya = screened.value.verdict === 'BAHAYA';
-    await ctx.reply(formatScreen(screened.value), html); // kartu screen = pesan terpisah
-  } else {
-    screenFailed = true; // gagal verifikasi → peringatan dibawa ke preview rencana
-    await ctx.reply(msg.msgScreeningFailed(), html);
+  let screenBahaya = pre?.bahaya ?? false;
+  let screenFailed = pre?.failed ?? false;
+  if (!pre) {
+    if (screened.status === 'fulfilled' && screened.value) {
+      screenBahaya = screened.value.verdict === 'BAHAYA';
+      await ctx.reply(formatScreen(screened.value), html); // kartu screen = pesan terpisah
+    } else {
+      screenFailed = true; // gagal verifikasi → peringatan dibawa ke preview rencana
+      await ctx.reply(msg.msgScreeningFailed(), html);
+    }
   }
 
   let pools: explore.TokenPool[];
@@ -1725,6 +1741,7 @@ type TSwapFlow = {
   previewBack?: string;          // action tombol Kembali di kartu Preview/Konfirmasi
   sellList?: SellHolding[];      // /sell: daftar token yg dipegang (index → tombol)
   sellMultiChain?: boolean;      // /sell: holdings tersebar >1 chain → tampilkan label chain
+  fromHub?: boolean;             // masuk dari kartu hub CA → tombol Kembali menuju hub
   tokenBalWei?: bigint;          // /sell: saldo token terpilih (raw) untuk hitung %
   tokenBalNum?: number;          // /sell: saldo token terpilih (angka) untuk label
   amountWei?: bigint;
@@ -1819,9 +1836,10 @@ function buyBaseStep(ctx: any, flow: TSwapFlow, edit: boolean) {
     return buySizeStep(ctx, flow, edit);
   }
   const row = bases.map((b) => Markup.button.callback(b.symbol, `buybase:${b.kind}`));
+  const back = flow.fromHub ? 'hub:back' : 'buyback:safety';
   const extra = {
     ...html,
-    ...Markup.inlineKeyboard([row, [Markup.button.callback('Kembali', 'buyback:safety'), Markup.button.callback('Batal', 'cancel')]]),
+    ...Markup.inlineKeyboard([row, [Markup.button.callback('Kembali', back), Markup.button.callback('Batal', 'cancel')]]),
   };
   const text = msg.msgTSwapBase(cc.label, true);
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
@@ -1853,13 +1871,238 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
     rows.push(presets.slice(i, i + 2).map((p) => Markup.button.callback(`${p} ${base.symbol}`, `tsamt:${p}`)));
   }
   const multiBase = basesFor(cc).length > 1;
-  rows.push([Markup.button.callback('Kembali', multiBase ? 'buyback:base' : 'buyback:safety'), Markup.button.callback('Batal', 'cancel')]);
+  const backSize = multiBase ? 'buyback:base' : flow.fromHub ? 'hub:back' : 'buyback:safety';
+  rows.push([Markup.button.callback('Kembali', backSize), Markup.button.callback('Batal', 'cancel')]);
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   const text = msg.msgTSwapAmountPrompt(true, base.symbol, balLine);
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
 // Mulai alur beli dari CA: deteksi chain → (pilih chain bila banyak) → safety.
+/** Posisi LP aktif (v3 + v4) untuk sebuah CA di chain tertentu. */
+async function lpForToken(ca: string, cc: ChainCtx): Promise<{ v3: store.PosRecord[]; v4: string[] }> {
+  const low = ca.toLowerCase();
+  const v3 = store.active().filter((r) => (r.chain ?? 'robinhood') === cc.key && r.ca?.toLowerCase() === low);
+  // v4store menyimpan currency0/currency1, BUKAN ca — cocokkan ke dua-duanya.
+  const v4 = v4store
+    .allV4()
+    .filter(
+      (r) =>
+        r.chain === cc.key && (r.currency0.toLowerCase() === low || r.currency1.toLowerCase() === low),
+    )
+    .map((r) => r.tokenId);
+  return { v3, v4 };
+}
+
+/**
+ * Render HUB TOKEN. Satu screening + satu baca saldo melayani 4 aksi.
+ * Tombol keluar (Tutup LP / Jual) hanya dirender bila memang ada yang bisa dikeluarkan —
+ * tombol mati = tap sia-sia + afordans palsu.
+ */
+async function renderTokenHub(
+  ctx: any,
+  ca: string,
+  chainKey: string,
+  prog: { message_id: number } | null,
+) {
+  const cc = getChain(chainKey);
+  prog = await editProgress(ctx, prog, msg.msgProgress(`menyaring token di ${cc.label}…`));
+
+  // Identitas token: symbol+decimals WAJIB (dipakai semua alur turunan). Gagal = batal,
+  // jangan tebak 18 (PRD §8.9).
+  let sym = '?';
+  let dec = 18;
+  try {
+    const t = new ethers.Contract(ca, ERC20_ABI, cc.provider);
+    const [sm, dc] = await Promise.all([t.symbol().catch(() => '?'), t.decimals()]);
+    sym = String(sm);
+    dec = Number(dc);
+  } catch {
+    return editProgress(ctx, prog, msg.msgError('token', 'Gagal baca decimals token — batal (angka bisa salah 10^12).'));
+  }
+
+  const [screened, balRes] = await Promise.allSettled([
+    screenToken(ca, cc),
+    new ethers.Contract(ca, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address) as Promise<bigint>,
+  ]);
+  const sc = screened.status === 'fulfilled' ? screened.value : null;
+  if (sc?.symbol && sc.symbol !== '???') sym = sc.symbol;
+  const bal = balRes.status === 'fulfilled' ? balRes.value : 0n;
+  const balNum = Number(ethers.formatUnits(bal, dec));
+  const { v3, v4 } = await lpForToken(ca, cc);
+
+  const priceUsd = sc?.priceUsd ?? null;
+  const note =
+    sc && sc.liquidityUsd != null
+      ? `likuiditas ${msg.usdCompact(sc.liquidityUsd)}${sc.pairAgeHours != null ? ` · pool ${Math.round(sc.pairAgeHours)} jam` : ''}`
+      : undefined;
+  const text = msg.msgTokenHub({
+    symbol: sym,
+    chainLabel: cc.label,
+    ca,
+    verdict: sc?.verdict ?? null,
+    verdictNote: note,
+    priceUsd,
+    balanceLabel: bal > 0n ? `${msg.cleanUnits(bal, dec)} ${sym}` : undefined,
+    balanceUsd: bal > 0n && priceUsd ? balNum * Number(priceUsd) : null,
+    lpCount: v3.length + v4.length,
+    lpIds: [...v3.map((r) => r.tokenId), ...v4],
+    dryRun: config.safety.dryRun,
+  });
+
+  // Beli/jual hanya di chain yang punya rute swap bot (Robinhood/Stable).
+  const swappable = swapTokenChains().some((c) => c.key === cc.key);
+  const enter = [Markup.button.callback('➕ Buka LP', `ca:add:${ca}`)];
+  if (swappable) enter.push(Markup.button.callback('📈 Beli', `ca:buy:${ca}`));
+  const exit: ReturnType<typeof Markup.button.callback>[] = [];
+  if (v3.length + v4.length > 0) exit.push(Markup.button.callback('⛔ Tutup LP', `ca:close:${ca}`));
+  if (swappable && bal > 0n) exit.push(Markup.button.callback('📉 Jual', `ca:sell:${ca}`));
+  const kb = Markup.inlineKeyboard([enter, ...(exit.length ? [exit] : []), [Markup.button.callback('Batal', 'cancel')]]);
+
+  hubs.set(ctx.from.id, {
+    ca,
+    chainKey: cc.key,
+    text,
+    kb,
+    sym,
+    dec,
+    screenText: sc ? formatScreen(sc) : msg.msgScreeningFailed(),
+    bahaya: sc?.verdict === 'BAHAYA',
+    failed: !sc,
+  });
+  return editProgress(ctx, prog, text, { ...html, ...kb });
+}
+
+/**
+ * Router 4 tombol hub → alur yang SUDAH ADA. Tak ada jalur uang baru:
+ * screening dioper (tak di-scan ulang), semua konfirmasi & guard tetap milik alur asal.
+ */
+bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
+  const [, what, ca] = ctx.match as unknown as [string, 'add' | 'buy' | 'close' | 'sell', string];
+  const h = hubs.get(ctx.from!.id);
+  if (!h || h.ca.toLowerCase() !== ca.toLowerCase()) return ctx.answerCbQuery('Kedaluwarsa, tempel CA lagi.');
+  const cc = getChain(h.chainKey);
+  await ctx.answerCbQuery();
+  const prog = ctx.callbackQuery?.message
+    ? { message_id: (ctx.callbackQuery.message as { message_id: number }).message_id }
+    : null;
+
+  if (what === 'add') {
+    // Wizard /add penuh; screening dari hub dioper → kartu SCREEN tak dikirim dua kali.
+    return continueAddlp(ctx, ca, h.chainKey, prog, { bahaya: h.bahaya, failed: h.failed });
+  }
+
+  if (what === 'buy') {
+    // Kartu SAFETY dilewati (verdikt sudah tampil di hub) → langsung pilih base/nominal.
+    tswapFlows.set(ctx.from!.id, {
+      chainKey: h.chainKey,
+      buy: true,
+      token: ethers.getAddress(ca),
+      tokenSym: h.sym,
+      tokenDec: h.dec,
+      screenText: h.screenText,
+      screenBahaya: h.bahaya,
+      fromHub: true,
+      startedAt: Date.now(),
+    });
+    return buyBaseStep(ctx, tswapFlows.get(ctx.from!.id)!, true);
+  }
+
+  if (what === 'sell') {
+    const bal: bigint = await new ethers.Contract(ca, ERC20_ABI, cc.provider)
+      .balanceOf(cc.wallet.address)
+      .catch(() => 0n);
+    if (bal <= 0n) return ctx.editMessageText(msg.msgError('jual', 'Saldo token ini 0 — tak ada yang bisa dijual.'), html);
+    const flow: TSwapFlow = {
+      chainKey: h.chainKey,
+      buy: false,
+      token: ethers.getAddress(ca),
+      tokenSym: h.sym,
+      tokenDec: h.dec,
+      tokenBalWei: bal,
+      tokenBalNum: Number(ethers.formatUnits(bal, h.dec)),
+      screenText: h.screenText,
+      screenBahaya: h.bahaya,
+      fromHub: true,
+      startedAt: Date.now(),
+    };
+    tswapFlows.set(ctx.from!.id, flow);
+    return sellAmountStep(ctx, flow, true);
+  }
+
+  // close: 1 posisi → langsung konfirmasi; >1 → kartu per posisi (pilih sendiri).
+  const { v3, v4 } = await lpForToken(ca, cc);
+  if (v3.length === 1 && v4.length === 0) return renderStopConfirm(ctx, v3[0].tokenId, true);
+  if (v3.length === 0 && v4.length === 1) {
+    return ctx.editMessageText(msg.msgV4CloseConfirm(v4[0]), {
+      ...html,
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('⛔ Tutup Posisi v4', `closev4go:${v4[0]}`)],
+        [Markup.button.callback('Kembali', 'hub:back'), Markup.button.callback('Batal', 'cancel')],
+      ]),
+    });
+  }
+  if (v3.length + v4.length === 0) {
+    return ctx.editMessageText(msg.msgError('tutup', 'Tak ada posisi LP aktif untuk token ini.'), html);
+  }
+  await ctx.editMessageText(msg.msgCloseAllPick(v3.length, v4.length), html);
+  for (const rec of v3) {
+    const c = await buildPositionCard(rec).catch(() => null);
+    if (c) await ctx.reply(c.text, c.extra);
+  }
+  if (v4.length) {
+    const list = await listPositionsV4(cc).catch(() => []);
+    const ethUsd = await getEthUsd(cc.wethAddress, cc).catch(() => null);
+    for (const id of v4) {
+      const p = list.find((x) => x.tokenId === id);
+      if (p) {
+        const c = buildV4Card(p, ethUsd);
+        await ctx.reply(c.text, c.extra);
+      }
+    }
+  }
+});
+
+/** Pintu masuk hub dari CA telanjang: deteksi chain dulu (pemilih bila >1). */
+async function startTokenHub(ctx: any, ca: string) {
+  resetFlows(ctx.from.id);
+  const prog = await ctx.reply(msg.msgProgress('mendeteksi chain…'), html);
+  const found = await detectChains(ca);
+  if (found.length === 0) {
+    return editProgress(
+      ctx,
+      prog,
+      msg.msgError('token', `Token tak ditemukan di chain mana pun (${Object.values(CHAINS).map((c) => c.label).join('/')}).`),
+    );
+  }
+  if (found.length === 1) return renderTokenHub(ctx, ca, found[0].key, { message_id: prog.message_id });
+  return editProgress(ctx, prog, msg.msgChainPick(), {
+    ...html,
+    ...Markup.inlineKeyboard([
+      ...found.map((c) => [Markup.button.callback(c.label, `hubchn:${c.key}:${ca}`)]),
+      [Markup.button.callback('Batal', 'cancel')],
+    ]),
+  });
+}
+
+bot.action(/^hubchn:(\w+):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const prog = ctx.callbackQuery?.message
+    ? { message_id: (ctx.callbackQuery.message as { message_id: number }).message_id }
+    : null;
+  await renderTokenHub(ctx, ctx.match[2], ctx.match[1], prog);
+});
+
+/** Kembali ke hub dari alur mana pun — render ulang dari memori (0 RPC). */
+bot.action('hub:back', async (ctx) => {
+  const h = hubs.get(ctx.from!.id);
+  if (!h) return ctx.answerCbQuery('Kedaluwarsa, tempel CA lagi.');
+  flows.delete(ctx.from!.id);
+  tswapFlows.delete(ctx.from!.id);
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(h.text, { ...html, ...h.kb }).catch(() => {});
+});
+
 async function buyStartFromCA(ctx: any, ca: string, prog: { message_id: number } | null) {
   flows.delete(ctx.from.id); // sisa wizard /add jangan menelan ketikan nominal beli
   fundFlows.delete(ctx.from.id);
@@ -2052,10 +2295,12 @@ function sellListKb(list: SellHolding[], showChain = false) {
 function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   flow.awaitingAmount = true;
   flow.previewBack = 'sellback:amount'; // Kembali dari Preview → step %/jumlah
+  // Masuk dari hub = tak ada daftar holdings untuk dituju; pulangkan ke kartu token.
+  const back = flow.sellList ? 'sellback:list' : flow.fromHub ? 'hub:back' : 'cancel';
   const rows = [
     [25, 50, 75, 100].map((p) => Markup.button.callback(`${p}%`, `sellpct:${p}`)),
     [Markup.button.callback('Ketik jumlah', 'sellpct:custom')],
-    [Markup.button.callback('Kembali', 'sellback:list'), Markup.button.callback('Batal', 'cancel')],
+    [Markup.button.callback('Kembali', back), Markup.button.callback('Batal', 'cancel')],
   ];
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   const text = msg.msgSellAmount(flow.tokenSym!, `${fmt4(flow.tokenBalNum!)} ${flow.tokenSym}`);
@@ -2791,6 +3036,12 @@ bot.on(message('text'), async (ctx) => {
     return;
   }
 
+  // CA telanjang (tanpa command) → HUB TOKEN. Ini dicek SETELAH semua alur yang
+  // sedang menunggu ketikan, supaya tempel CA di tengah wizard tak membajaknya.
+  // (cast: isAddress adalah type-guard — tanpa ini TS menyempitkan `raw` jadi never di bawah)
+  const isCa = ethers.isAddress(raw) as boolean;
+  if (isCa) return startTokenHub(ctx, ethers.getAddress(raw));
+
   // Bukan command (command sudah ditangani handler lain) → unknown.
   // Abaikan string kosong / pure number di luar konteks.
   if (!raw || raw.startsWith('/')) {
@@ -2801,7 +3052,7 @@ bot.on(message('text'), async (ctx) => {
     }
     return;
   }
-  return ctx.reply(msg.msgUnknown(raw, ethers.isAddress(raw)), html);
+  return ctx.reply(msg.msgUnknown(raw), html);
 });
 
 bot.catch((err, ctx) => {
