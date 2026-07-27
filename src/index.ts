@@ -1974,19 +1974,19 @@ async function renderTokenHub(
       })
     : msg.msgScreeningFailed();
 
-  // Tombol KELUAR muncul hanya bila ada yang bisa dikeluarkan: Jual LP saat ada
-  // posisi, Jual Token saat saldo > 0. Tak ada = cuma jalur masuk yang tampil.
-  // Beli/Jual Token juga butuh chain dengan rute swap bot.
+  // Tombol KELUAR muncul hanya bila ada yang bisa dikeluarkan: Close LP saat ada
+  // posisi, Sell Token saat saldo > 0. Tak ada = cuma jalur masuk yang tampil.
+  // Buy/Sell Token juga butuh chain dengan rute swap bot.
   const swappable = swapTokenChains().some((c) => c.key === cc.key);
   const hasLp = v3.length + v4.length > 0;
 
-  const rowLp = [Markup.button.callback('➕ Tambah LP', `ca:add:${ca}`)];
-  if (hasLp) rowLp.push(Markup.button.callback('📤 Jual LP', `ca:close:${ca}`));
+  const rowLp = [Markup.button.callback('➕ Add LP', `ca:add:${ca}`)];
+  if (hasLp) rowLp.push(Markup.button.callback('📤 Close LP', `ca:close:${ca}`));
 
   const rowTok: ReturnType<typeof Markup.button.callback>[] = [];
   if (swappable) {
-    rowTok.push(Markup.button.callback('📈 Beli Token', `ca:buy:${ca}`));
-    if (bal > 0n) rowTok.push(Markup.button.callback('📉 Jual Token', `ca:sell:${ca}`));
+    rowTok.push(Markup.button.callback('📈 Buy Token', `ca:buy:${ca}`));
+    if (bal > 0n) rowTok.push(Markup.button.callback('📉 Sell Token', `ca:sell:${ca}`));
   }
 
   const kb = Markup.inlineKeyboard([
@@ -2032,7 +2032,7 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   // dari kartu lama masih bisa ditekan setelah keadaan berubah.
   if ((what === 'buy' || what === 'sell') && !swapTokenChains().some((c) => c.key === h.chainKey)) {
     return ctx.editMessageText(
-      msg.msgError(what === 'buy' ? 'beli' : 'jual', `${cc.label} belum punya rute swap bot — hanya Tambah/Jual LP di chain ini.`),
+      msg.msgError(what === 'buy' ? 'beli' : 'jual', `${cc.label} belum punya rute swap bot — hanya Add LP / Close LP di chain ini.`),
       html,
     );
   }

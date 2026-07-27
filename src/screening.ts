@@ -412,7 +412,7 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   const held = opts?.heldLabel ? `Dipegang ${esc(opts.heldLabel)}` : 'Belum dipegang';
   const lp = opts?.lpCount ? `${opts.lpCount} LP aktif` : 'Belum ber-LP';
   out.push('', `${held} & ${lp}`);
-  if (!opts?.heldLabel && !opts?.lpCount) out.push('→ Bisa mulai dari Tambah LP / Beli Token');
+  if (!opts?.heldLabel && !opts?.lpCount) out.push('→ Bisa mulai dari Add LP / Buy Token');
 
   // Verdict & flags TETAP ada: kartu ini menggantikan tampilan, bukan peringatannya.
   const risk = s.flags.filter((f) => f.level === 'BAHAYA' || f.level === 'HATI-HATI');

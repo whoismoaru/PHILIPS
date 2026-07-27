@@ -427,7 +427,7 @@ export function msgTokenHub(o: {
   if (o.lpCount) rows.push(['posisi', `${o.lpCount} LP aktif${o.lpIds?.length ? ` (#${o.lpIds.join(' #')})` : ''}`]);
   rows.push(['ca', shortAddr(o.ca)]);
   body.push('', pre(sheet(rows)));
-  if (!o.balanceLabel && !o.lpCount) body.push('', note('belum dipegang & belum ber-LP — bisa mulai dari Buka LP / Beli'));
+  if (!o.balanceLabel && !o.lpCount) body.push('', note('belum dipegang & belum ber-LP — bisa mulai dari Add LP / Buy Token'));
   return card(`${head} ${title(o.symbol, o.chainLabel)}`, body, footerMode(o.dryRun));
 }
 
