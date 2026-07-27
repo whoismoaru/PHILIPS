@@ -1160,10 +1160,12 @@ export function msgLpOpened(tokenId: string, notes: string[], pair?: string): st
   const head = `${bold('OPENED POSITION')} | #${esc(tokenId)}${pair ? ` · ${esc(pair)}` : ''}`;
   const out = [head, '', 'Monitor aktif, notifikasi in/out range otomatis :'];
 
+  // Daftar langkah RAPAT: tanpa baris kosong antar langkah maupun antara langkah
+  // dan hash-nya. Baris kosong hanya memisahkan judul dan footer.
   for (const n of notes) {
     const m = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
-    out.push('', `- ${esc(m ? m[1] : n)}`);
-    if (m) out.push('', code(m[2]));
+    out.push(`- ${esc(m ? m[1] : n)}`);
+    if (m) out.push(code(m[2]));
   }
 
   out.push('', nowWib());
