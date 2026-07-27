@@ -1148,17 +1148,26 @@ export function msgOpeningLp(): string {
   return msgProgress('membuka LP…');
 }
 
-export function msgLpOpened(tokenId: string, notes: string[]): string {
-  const body = [
-    fieldBlock([['position', `#${tokenId}`]]),
-    '',
-    `🟢 ${bold('monitor aktif')} — notifikasi in/out range otomatis`,
-  ];
-  if (notes.length) {
-    body.push('', section('notes'));
-    for (const n of notes) body.push(`  ${esc(n)}`);
+/**
+ * Kartu OPENED POSITION.
+ *
+ * `notes` datang dari executeAdd berbentuk "Bungkus 0.06 ETH (tx 0x…)". Hash
+ * dipisah ke barisnya sendiri di dalam <code> supaya bisa disentuh-copy di HP —
+ * di tengah kalimat, hash 66 karakter mustahil diseleksi dengan jempol.
+ * Catatan tanpa hash tetap tampil apa adanya (mis. peringatan retry).
+ */
+export function msgLpOpened(tokenId: string, notes: string[], pair?: string): string {
+  const head = `${bold('OPENED POSITION')} | #${esc(tokenId)}${pair ? ` · ${esc(pair)}` : ''}`;
+  const out = [head, '', 'Monitor aktif, notifikasi in/out range otomatis :'];
+
+  for (const n of notes) {
+    const m = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
+    out.push('', `- ${esc(m ? m[1] : n)}`);
+    if (m) out.push('', code(m[2]));
   }
-  return card(`✅ ${title('OPENED', `#${tokenId}`)}`, body, nowWib());
+
+  out.push('', nowWib());
+  return out.join('\n');
 }
 
 // ─── stop / close ──────────────────────────────────────────────────

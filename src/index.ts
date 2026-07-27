@@ -1541,7 +1541,7 @@ bot.action('addok', async (ctx) => {
       lastInRange: false,
     });
     // Ringkas OPENED di bubble yang sama, lalu kartu posisi live.
-    await ctx.editMessageText(msg.msgLpOpened(tokenId, notes), html);
+    await ctx.editMessageText(msg.msgLpOpened(tokenId, notes, `${plan.baseSymbol}/${plan.otherSymbol}`), html);
     const rec = store.get(tokenId);
     if (rec) {
       try {
