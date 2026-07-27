@@ -957,7 +957,7 @@ export function msgPoolStep(): string {
     title('ADD LP', '1/4'),
     [
       section('pilih pool'),
-      note('v3 & v4 dari Uniswap · pair · fee · TVL — terdalam di atas'),
+      note('3 pool terdalam (v3 & v4) · pair · fee · TVL · isi≤ — TVL terbesar di atas'),
     ],
   );
 }

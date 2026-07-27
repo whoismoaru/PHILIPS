@@ -1023,7 +1023,7 @@ bot.action(/^back:card:(\d+)$/, async (ctx) => {
 // ---------- Fase 3: tulis (wizard /add bertahap) ----------
 
 /** Keyboard pilih pool: pasangan (WETH/USDG) · fee · kedalaman. Callback bawa base. */
-const POOL_PICK_MAX = 8; // batas tombol keyboard (sisanya debu)
+const POOL_PICK_MAX = 3; // TOP 3 by TVL — sisanya tak ditawarkan
 
 // tickSpacing pool: v4 langsung; v3 dipetakan dari fee tier standar.
 function poolSpacing(p: explore.TokenPool): number {
@@ -1036,17 +1036,15 @@ function poolSpacing(p: explore.TokenPool): number {
 function fillTightnessPct(p: explore.TokenPool): number {
   return (Math.pow(1.0001, poolSpacing(p)) - 1) * 100;
 }
-// Ranking utk single-side fill: dahulukan likuiditas se-orde (tier log10 TVL) —
-// biar tak nyangkut ke pool debu — lalu pilih spacing PALING HALUS (isi paling rapat).
+// Urutan pool: TVL TERBESAR dulu, titik. Spacing hanya jadi pemutus saat TVL sama.
+//
+// Sebelumnya urutannya memakai tier log10 TVL lalu spacing terhalus, sehingga pool
+// ber-TVL lebih kecil bisa naik ke atas selama masih se-orde. Sekarang murni TVL:
+// yang tampil benar-benar tiga terdalam. Konsekuensinya, pool teratas bisa punya
+// spacing kasar (isi single-side lebih lambat) — karena itu angka 'isi≤x%' tetap
+// dicetak di tombolnya supaya kompromi itu kelihatan sebelum ditekan.
 function rankPoolsForFill(pools: explore.TokenPool[]): explore.TokenPool[] {
-  const tier = (tvl: number) => (tvl > 0 ? Math.floor(Math.log10(tvl)) : -1);
-  return [...pools].sort((a, b) => {
-    const t = tier(b.tvlUsd) - tier(a.tvlUsd);
-    if (t) return t;
-    const s = poolSpacing(a) - poolSpacing(b); // spacing halus dulu
-    if (s) return s;
-    return b.tvlUsd - a.tvlUsd;
-  });
+  return [...pools].sort((a, b) => b.tvlUsd - a.tvlUsd || poolSpacing(a) - poolSpacing(b));
 }
 
 function poolKeyboard(pools: explore.TokenPool[]) {
