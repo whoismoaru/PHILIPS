@@ -785,28 +785,24 @@ export function msgPositionCard(opts: {
   baseSymbol?: string; // WETH (default, posisi lama) | USDG
 }): string {
   const base = opts.baseSymbol ?? 'WETH';
-  const statusEmoji = opts.inRange ? '🟢' : '🔴';
-  const statusLine = opts.inRange
-    ? `${statusEmoji} ${bold('IN RANGE')} — fee mengalir`
-    : `${statusEmoji} ${bold('OUT OF RANGE')}`;
-  const body = [
-    code(`${base} / ${opts.symbol} · ${feeLabel(opts.fee)}`),
-    ...(opts.chain ? [code(opts.chain)] : []),
+  const pair = `${base} / ${esc(opts.symbol)}`;
+  // Status HANYA di barisnya sendiri, tidak juga di judul: satu fakta satu tempat,
+  // jadi tak ada peluang keduanya berbeda saat ada perubahan.
+  const status = opts.inRange ? `🟢 ${bold('IN RANGE')}` : `🔴 ${bold('OUT OF RANGE')}`;
+
+  return [
+    `${bold('POSITION')} | #${esc(opts.tokenId)} · ${base}/${esc(opts.symbol)}`,
     '',
-    ...hrows([
-      ['Invest', `${opts.invest} ${base}`],
-      ['Range', opts.range],
-      ['Umur', opts.age],
-    ]),
+    `${pair} · ${feeLabel(opts.fee)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
     '',
-    bold(`PnL  ${opts.pnlText}`),
-    statusLine,
-  ];
-  return card(
-    `${statusEmoji} ${title('POSITION', `#${opts.tokenId}`)}`,
-    body,
+    `Invest ${esc(opts.invest)} ${base} · Range ${esc(opts.range)}`,
+    '',
+    `Umur ${esc(opts.age)} · PnL ${esc(opts.pnlText)}`,
+    '',
+    status,
+    '',
     footerMode(opts.dryRun),
-  );
+  ].join('\n');
 }
 
 export function msgPositionGone(tokenId: string, symbol: string, baseSymbol = 'WETH'): string {

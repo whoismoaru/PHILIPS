@@ -558,7 +558,7 @@ async function buildPositionCard(
   const sgn = d.baseIsToken0 ? -1 : 1;
   const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
   const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
-  const range = `${msg.fmtPct(pcts[0])} / ${msg.fmtPct(pcts[1])}`;
+  const range = `${msg.fmtPct(pcts[0])} ⇄ ${msg.fmtPct(pcts[1])}`;
   const invest = rec.imported
     ? '—'
     : (rec.nominalEth ?? msg.cleanUnits(BigInt(rec.initialWethWei), isStableBase(rec.baseKind ?? 'weth') ? 6 : 18));
