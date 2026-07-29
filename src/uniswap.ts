@@ -534,6 +534,8 @@ export type PositionDetail = {
   baseSymbol: string;
   baseDecimals: number;
   currentPrice: string; // harga token sekarang dalam base (formula sama dgn AddPlan.currentPrice → basis alert anjlok)
+  priceLower: string; // batas bawah rentang (harga token dalam base)
+  priceUpper: string; // batas atas rentang
   valueBaseWei: bigint; // nilai pokok posisi (dalam base: WETH/USDG)
   feesBaseWei: bigint; // fee belum diklaim (dalam base)
   side: 'above' | 'in' | 'below'; // harga token vs rentang (above=belum mulai, below=terkonversi penuh)
@@ -632,6 +634,9 @@ export async function getPositionDetail(
     baseSymbol: base.symbol,
     baseDecimals: base.decimals,
     currentPrice: priceOther.toSignificant(8),
+    // Batas rentang dalam harga token (kartu /positions menampilkan target range).
+    priceLower: tickToPrice(tokenOther, baseIsToken0 ? sdkToken0 : sdkToken1, tickLower).toSignificant(6),
+    priceUpper: tickToPrice(tokenOther, baseIsToken0 ? sdkToken0 : sdkToken1, tickUpper).toSignificant(6),
     valueBaseWei,
     feesBaseWei,
     baseAmountWei,

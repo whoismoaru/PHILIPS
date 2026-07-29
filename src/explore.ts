@@ -262,36 +262,37 @@ function aprLabel(n: number): string {
   return n.toFixed(1) + '%';
 }
 
-/** Kartu EXPLORE (tg-ui): header identitas → tabel → highlight #1 APR → footer sinkron. */
+/** Kartu /pools — peringkat pool paling menguntungkan (naskah §4). */
 export function renderExplore(pools: ExplorePool[], chainLabel: string): string {
   if (pools.length === 0) {
-    return m.card(`📈 ${m.title('EXPLORE', chainLabel)}`, [
-      m.note('Belum ada pool ETH/USDG yang memenuhi syarat. Coba lagi nanti.'),
+    return [
+      `📊 ${m.bold(`Top Uniswap Pools · ${chainLabel}`)}`,
       '',
+      m.note('Belum ada pool ETH/USDG yang memenuhi syarat. Coba lagi nanti.'),
       m.italic(`Uniswap · ${m.nowWib()}`),
-    ]);
+    ].join('\n');
   }
 
-  const header = ['#', 'pair', 'ver', 'fee', 'apr', 'tvl', '1d vol'];
-  const rows = pools.map((p, i) => [
-    String(i + 1),
-    p.pair.length > 16 ? p.pair.slice(0, 15) + '…' : p.pair,
-    p.ver,
-    m.feeLabel(p.feeTier),
-    aprLabel(p.apr),
-    usdCompact(p.tvlUsd),
-    usdCompact(p.vol1dUsd),
-  ]);
-  const right = [true, false, false, true, true, true, true];
+  const medal = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
+  const blocks = pools.map((p, i) => {
+    // Peringatan risiko: APR tinggi di Uniswap v3 hampir selalu dibayar volatilitas.
+    const risk = p.apr >= 100 ? ' ⚠️ (volatilitas tinggi)' : p.apr >= 40 ? ' ⚠️ (risiko IL)' : '';
+    return [
+      `${medal[i] ?? `${i + 1}.`} ${m.bold(p.pair)} (${p.ver.toUpperCase()}, ${m.feeLabel(p.feeTier)})`,
+      `💧 TVL: ${usdCompact(p.tvlUsd)} | 📈 APR: ${aprLabel(p.apr)}${risk}`,
+    ].join('\n');
+  });
 
-  const top = pools[0];
-  const body = [
-    m.pre(m.alignTable(header, rows, right)),
+  return [
+    `📊 ${m.bold('Top Uniswap Pools (24J)')}`,
     '',
-    `📈 ${m.bold(`#1 ${top.pair} · ${aprLabel(top.apr)} APR`)}`,
+    'Pool paling menguntungkan saat ini:',
     '',
-    m.note(`top 5 by APR · single-sided ETH/USDG · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · APR = fee 1D disetahunkan`),
-    m.italic(`Uniswap · sinkron · ${m.nowWib()}`),
-  ];
-  return m.card(`📈 ${m.title('EXPLORE', chainLabel)}`, body);
+    blocks.join('\n\n'),
+    '',
+    'Pilih pool untuk melihat rincian atau langsung membuka LP.',
+    '',
+    m.note(`top ${pools.length} by APR · single-sided ETH/USDG · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · APR = fee 1H disetahunkan`),
+    m.italic(`Uniswap · ${chainLabel} · ${m.nowWib()}`),
+  ].join('\n');
 }

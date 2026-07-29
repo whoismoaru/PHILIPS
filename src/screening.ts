@@ -359,71 +359,77 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     return `$${n.toFixed(0)}`;
   };
   const pct = (n: number | null): string => (n === null ? UNK : `${Number(n.toFixed(2))}%`);
-  const mark = (v: boolean | null): string => (v === null ? UNK : v ? '✓' : '✗');
+  // Jawaban ya/tidak: '?' bila datanya memang tak terbaca — JANGAN mengarang '✅'.
+  const yes = (v: boolean | null): string => (v === null ? `${UNK} tak terbaca` : v ? '✅ Ya' : '❌ Tidak');
+  const no = (v: boolean | null): string => (v === null ? `${UNK} tak terbaca` : v ? '⚠️ Ya' : '✅ Tidak');
 
-  const price = s.priceUsd ? `$${s.priceUsd}` : UNK;
-  const holders = s.holdersCount === null ? UNK : s.holdersCount.toLocaleString('en-US');
-  const pool = s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)}j`;
   const g = s.gmgn;
+  const symUp = s.symbol.toUpperCase().replace(/^\$+/, '');
 
   // NoHoneypot: simulasi jalur jual PHILIPS lebih dipercaya (on-chain, live) —
   // GMGN dipakai hanya bila simulasi tak memberi jawaban.
-  const noHoney =
-    s.sellPath === 'ok' ? '✓'
-    : s.sellPath === 'blocked' ? '✗'
-    : g?.honeypot === null || g?.honeypot === undefined ? UNK
-    : g.honeypot ? '✗' : '✓';
-
-  // Tax: dua angka jadi satu kolom. Nol pun ditulis '0', bukan '?'.
-  const tax =
-    g && (g.buyTaxPct !== null || g.sellTaxPct !== null)
-      ? `${g.buyTaxPct === null ? UNK : Number(g.buyTaxPct.toFixed(1))}/${g.sellTaxPct === null ? UNK : Number(g.sellTaxPct.toFixed(1))}%`
-      : `${UNK}/${UNK}`;
+  const sellable =
+    s.sellPath === 'ok' ? true : s.sellPath === 'blocked' ? false : g?.honeypot == null ? null : !g.honeypot;
 
   // Top 10: UTAMAKAN GMGN. Angka Blockscout menghitung kontrak pool sebagai
-  // 'holder' sehingga melambung (terukur 41.27% vs 16.72% pada CA yang sama) —
-  // itu membaca seperti konsentrasi bahaya padahal likuiditasnya sendiri.
-  const top10 = g?.top10Pct != null ? pct(g.top10Pct) : pct(s.top10Pct);
-  const verified = s.verified !== null ? mark(s.verified) : mark(g?.openSource ?? null);
-  const renouncedMark = s.renounced !== null ? mark(s.renounced) : mark(g?.renounced ?? null);
+  // 'holder' sehingga melambung (terukur 41.27% vs 16.72% pada CA yang sama).
+  const top10 = g?.top10Pct != null ? g.top10Pct : s.top10Pct;
+  const top10Line =
+    top10 === null ? UNK : `${pct(top10)} ${top10 >= 50 ? '🔴 (risiko whale tinggi)' : top10 >= 20 ? '⚠️ (whale sedang)' : '✅'}`;
+  const verified = s.verified !== null ? s.verified : (g?.openSource ?? null);
+  const renounced = s.renounced !== null ? s.renounced : (g?.renounced ?? null);
+  const taxLine = (n: number | null): string => (n === null ? UNK : `${Number(n.toFixed(1))}% ${n <= 5 ? '✅' : n <= 10 ? '⚠️' : '🔴'}`);
+  const lpLocked = g?.lpLockedPct ?? null;
+  const burnt = g?.burntPct ?? null;
 
-  // Simbol seperti '$1' sudah berawalan $ — jangan jadi '$$1'.
-  const symUp = s.symbol.toUpperCase().replace(/^\$+/, '');
-  const head = `${bold('$' + esc(symUp))}${opts?.chainLabel ? ` | ${esc(opts.chainLabel)}` : ''}`;
-
-  const sniper = g?.sniperCount === null || g?.sniperCount === undefined ? UNK : String(g.sniperCount);
-
-  // Dikelompokkan menurut MAKNA, maks 4 item per baris supaya tak melipat di HP.
-  // Angka penentu keputusan (Top 10, LP Locked, Tax) di-bold.
-  // Cluster / Dex Paid / Phishing TIDAK ditampilkan sama sekali: tak ada sumber
-  // datanya, dan slot '?' hanya jadi derau di antara angka yang nyata.
-  const out = [
-    head,
+  const out: string[] = [
+    `🔍 ${bold('Audit Keamanan Token')}`,
     '',
-    `${bold(price)} · MC ${compact(s.marketCapUsd)} · Liq ${compact(s.liquidityUsd)} · Vol ${compact(s.volume24h)}`,
-    `Holders ${holders} · Top 10 ${bold(top10)} · DEV ${pct(g?.devPct ?? null)} · Insiders ${pct(g?.insidersPct ?? null)}`,
-    `Sniper ${sniper} · Bundler ${pct(g?.bundlerPct ?? null)}`,
-    `Pool ${pool} · LP Locked ${bold(pct(g?.lpLockedPct ?? null))} · Burnt ${pct(g?.burntPct ?? null)} · Tax ${bold(tax)}`,
-    `NoHoneypot ${noHoney} · Verified ${verified} · Renounced ${renouncedMark}`,
+    `📊 ${bold('Info Dasar')}`,
+    `• Nama: ${esc(s.name)} (${esc(symUp)})`,
+    `• Jaringan: ${esc(opts?.chainLabel ?? '?')}`,
+    `• Harga: ${bold(s.priceUsd ? `$${s.priceUsd}` : UNK)} · MC ${compact(s.marketCapUsd)}`,
+    `• Umur pool: ${s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} jam`}`,
+    '',
+    `🛡️ ${bold('Keamanan Kontrak')}`,
+    `• Ownership dilepas: ${yes(renounced)}`,
+    `• Kontrak terverifikasi: ${yes(verified)}`,
+    `• Kontrak proxy: ${no(s.isProxy)}`,
+    `• Bisa dijual (anti-honeypot): ${yes(sellable)}`,
+    '',
+    `💧 ${bold('Likuiditas & Pasar')}`,
+    `• Likuiditas: ${bold(compact(s.liquidityUsd))}`,
+    `• LP terkunci: ${lpLocked === null ? UNK : `${pct(lpLocked)} ${lpLocked >= 50 ? '✅' : '⚠️'}`}${burnt ? ` · burnt ${pct(burnt)}` : ''}`,
+    `• Volume 24J: ${compact(s.volume24h)} (${s.buys24h ?? UNK} beli / ${s.sells24h ?? UNK} jual)`,
+    `• Holder: ${s.holdersCount === null ? UNK : s.holdersCount.toLocaleString('en-US')}`,
+    `• Top 10 holder: ${top10Line}`,
   ];
+
+  if (g && (g.devPct !== null || g.insidersPct !== null || g.sniperCount !== null)) {
+    out.push(`• Dev ${pct(g.devPct)} · Insider ${pct(g.insidersPct)} · Sniper ${g.sniperCount ?? UNK}`);
+  }
+
+  out.push(
+    '',
+    `💸 ${bold('Pajak / Fee')}`,
+    `• Pajak beli: ${taxLine(g?.buyTaxPct ?? null)}`,
+    `• Pajak jual: ${taxLine(g?.sellTaxPct ?? null)}`,
+  );
+
+  // Verdict & flags TETAP ada: kartu ini mengganti tampilan, bukan peringatannya.
+  const risk = s.flags.filter((f) => f.level === 'BAHAYA' || f.level === 'HATI-HATI');
+  const icon = s.verdict === 'BAHAYA' ? '🚫' : s.verdict === 'HATI-HATI' ? '⚠️' : '✅';
+  const verdictText =
+    s.verdict === 'BAHAYA' ? 'JANGAN LP' : s.verdict === 'HATI-HATI' ? 'BOLEH LP (risiko sedang)' : 'AMAN UNTUK LP';
+  out.push('', `${icon} ${bold('Vonis PHILIPS:')} ${bold(verdictText)}`);
+  for (const f of risk.slice(0, 4)) out.push(`• ${esc(f.msg)}`);
+  if (s.verdict === 'HATI-HATI' && !risk.length) out.push('• Pakai rentang lebih sempit bila tetap ingin LP.');
 
   if (opts?.ca) out.push('', code(opts.ca));
 
   const held = opts?.heldLabel ? `Dipegang ${esc(opts.heldLabel)}` : 'Belum dipegang';
   const lp = opts?.lpCount ? `${opts.lpCount} LP aktif` : 'Belum ber-LP';
-  out.push('', `${held} & ${lp}`);
-  if (!opts?.heldLabel && !opts?.lpCount) out.push('→ Bisa mulai dari Add LP / Buy Token');
-
-  // Verdict & flags TETAP ada: kartu ini menggantikan tampilan, bukan peringatannya.
-  const risk = s.flags.filter((f) => f.level === 'BAHAYA' || f.level === 'HATI-HATI');
-  if (s.verdict !== 'AMAN' || risk.length) {
-    out.push('', `${s.verdict === 'BAHAYA' ? '🔴' : '⚠️'} ${bold(s.verdict)}`);
-    for (const f of risk.slice(0, 4)) out.push(`• ${esc(f.msg)}`);
-  } else {
-    out.push('', `🟢 ${bold('AMAN')}`);
-  }
-
-  out.push('', nowWib());
+  out.push('', `${held} & ${lp}`, nowWib());
   return out.join('\n');
 }
 

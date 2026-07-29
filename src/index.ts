@@ -317,8 +317,9 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
 // Action 'portfolio' tetap hidup untuk tombol di pesan-pesan lama.
 const startKeyboard = () =>
   Markup.inlineKeyboard([
+    [Markup.button.callback('💧 Buka LP', 'howto:add'), Markup.button.callback('📊 Top Pool', 'explore')],
     [Markup.button.callback('💰 Uang', 'status'), Markup.button.callback('📋 Posisi', 'positions')],
-    [Markup.button.callback('📖 Daftar Perintah', 'help')],
+    [Markup.button.callback('📖 How it Works', 'howitworks')],
   ]);
 
 bot.start(async (ctx) => {
@@ -332,16 +333,26 @@ bot.start(async (ctx) => {
       positions: store.active().length,
       imported,
       gone,
+      walletShort: msg.shortAddr(cc.wallet.address),
     }),
     { ...html, ...startKeyboard() },
   );
 });
+bot.action('howitworks', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(msg.msgHowItWorks(), html);
+});
+bot.action('howto:add', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(msg.msgAddHowTo(), html);
+});
+
 // Keyboard inline aksi cepat pada kartu /help (di samping reply-keyboard persisten).
 // Grid 2 kolom (thumb-friendly, perbaikan.md §1.3); aksi uang di baris sendiri.
 const helpKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('💰 Status & Uang', 'status'), Markup.button.callback('📋 LP Aktif', 'positions')],
-    [Markup.button.callback('🧾 PnL & Jurnal', 'pnl'), Markup.button.callback('📊 Explore Pool', 'explore')],
+    [Markup.button.callback('🧾 PnL & Jurnal', 'pnl'), Markup.button.callback('📊 Top Pool', 'explore')],
     [Markup.button.callback('⛔ Emergency Close All', 'closeall_confirm')],
   ]);
 
@@ -720,6 +731,9 @@ type PosRow = {
   pnlPct: number | null;
   inRange: boolean;
   wethEq: number; // setara-WETH utk total invest (USDG→WETH via ethUsd)
+  rangeLabel?: string | null;
+  feesLabel?: string | null;
+  feesBase?: number; // fee belum diklaim dalam base, utk total di footer
 };
 
 // /positions — SATU pesan konsolidasi: ringkasan + pohon per-posisi (v3 + v4).
@@ -757,6 +771,15 @@ async function cmdPositions(ctx: any, edit = false) {
         pnlPct,
         inRange: d.inRange,
         wethEq: d.baseKind === 'weth' ? investNum : ethUsd ? investNum / ethUsd : 0,
+        // tickLower/Upper dalam istilah TICK; dalam istilah HARGA TOKEN urutannya
+        // bisa terbalik (tergantung sisi base di pool) → urutkan menaik dulu.
+        rangeLabel: (() => {
+          const a = Number(d.priceLower), b = Number(d.priceUpper);
+          const [lo, hi] = a <= b ? [d.priceLower, d.priceUpper] : [d.priceUpper, d.priceLower];
+          return `${lo} — ${hi} ${d.baseSymbol} per ${rec.symbol}`;
+        })(),
+        feesLabel: `${Number(ethers.formatUnits(d.feesBaseWei, dec)).toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`,
+        feesBase: Number(ethers.formatUnits(d.feesBaseWei, dec)),
       };
     } catch (e) {
       if (isGoneErr(e)) {
@@ -817,6 +840,12 @@ async function cmdPositions(ctx: any, edit = false) {
     totalInvestLabel: `≈ ${totalWethEq.toFixed(4)} WETH`,
     totalPnlUsd,
     outOfRange: rows.filter((r) => !r.inRange).length,
+    totalFeesLabel: (() => {
+      // Fee total hanya bisa dijumlah bila semua posisi memakai base yang sama;
+      // sekarang base tunggal (WETH), tapi tetap jaga-jaga: lewati bila tak ada data.
+      const vals = rows.map((r) => r.feesBase).filter((v): v is number => typeof v === 'number');
+      return vals.length ? `≈ ${vals.reduce((a, b) => a + b, 0).toFixed(5)} WETH` : null;
+    })(),
     rows,
   });
 
@@ -984,7 +1013,17 @@ async function cmdExplore(ctx: any) {
     );
   }
 }
-bot.command('explore', cmdExplore);
+bot.command('pools', cmdExplore);
+
+// /token_info <CA> — audit keamanan token. Jalurnya sama persis dengan menempel
+// CA di chat (openHub), jadi tak ada logika audit kedua yang bisa menyimpang.
+bot.command('token_info', async (ctx: any) => {
+  const ca = (ctx.message?.text || '').split(/\s+/)[1];
+  if (!ca || !/^0x[a-fA-F0-9]{40}$/.test(ca))
+    return ctx.reply(msg.msgTokenInfoUsage(), html);
+  return startTokenHub(ctx, ca);
+});
+bot.command('explore', cmdExplore); // alias lama
 // Tombol '📊 Explore Pool' di kartu /help.
 bot.action('explore', async (ctx) => {
   await ctx.answerCbQuery();
@@ -2926,7 +2965,8 @@ const BOT_COMMANDS = [
   { command: 'help', description: 'Menu, mode bot & daftar perintah' },
   { command: 'status', description: 'Koneksi jaringan & saldo dompet' },
   { command: 'positions', description: 'Posisi LP yang aktif (live)' },
-  { command: 'explore', description: 'Top pool by APR (ETH/USDG) — sinkron Uniswap' },
+  { command: 'token_info', description: 'Audit keamanan token: /token_info <CA>' },
+  { command: 'pools', description: 'Top pool by APR (ETH/USDG) — sinkron Uniswap' },
   { command: 'history', description: 'Riwayat trade tertutup (jurnal)' },
   { command: 'pnl', description: 'Rekap PnL seumur hidup' },
   { command: 'add', description: 'Tambah LP: /add <CA>' },

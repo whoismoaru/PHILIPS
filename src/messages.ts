@@ -223,7 +223,7 @@ function cockpitLines(dryRun: boolean): string[] {
       ['/positions', 'Pemantauan LP aktif real-time'],
       ['/history', 'Jurnal transaksi tertutup'],
       ['/pnl', 'Rekapitulasi PnL seumur hidup'],
-      ['/explore', 'Pool APR tertinggi saat ini'],
+      ['/pools', 'Pool APR tertinggi saat ini'],
     ]).map((l, i) => (i === 0 ? `📊 <b>VIEW &amp; ANALYTICS</b>\n${l}` : l)),
     '',
     ...grp([
@@ -266,33 +266,82 @@ export function msgStarted(o: {
   positions: number;
   imported: number;
   gone: number;
+  walletShort?: string | null;
 }): string {
-  const rows: Array<[string, string]> = [
-    ['⚙️ Mode', bold(o.dryRun ? '⚪ DRY RUN' : '🟢 LIVE')],
-    ['🔗 Chain', `${esc(o.chainLabel)} (ID: ${esc(String(o.chainId))})`],
-    ['📊 Posisi', bold(`${o.positions} aktif`)],
-  ];
-  if (o.imported || o.gone) {
-    rows.push([
-      '🔄 Sync',
-      [o.imported ? `+${o.imported} posisi diimpor` : '', o.gone ? `${o.gone} selesai di luar bot` : '']
-        .filter(Boolean)
-        .join(' · '),
-    ]);
-  }
+  const sync =
+    o.imported || o.gone
+      ? [o.imported ? `+${o.imported} posisi diimpor` : '', o.gone ? `${o.gone} selesai di luar bot` : '']
+          .filter(Boolean)
+          .join(' · ')
+      : '';
   return [
-    hdr(`${o.dryRun ? '⚪' : '🟢'} PHILIPS COCKPIT`),
+    `🤖 ${bold('Selamat datang di PHILIPS Bot!')} 🚀`,
     '',
-    `🤖 ${bold(o.dryRun ? 'Bot Aktif — Mode Simulasi' : 'Bot Aktif — Standby & Ready')}`,
+    `Saya PHILIPS, asisten pribadimu untuk mengelola ${bold('Single-Side Liquidity Pool')} di ${bold('Uniswap V3')} lewat dompet ${bold('Robinhood Web3')}.`,
     '',
-    ...tree(rows, 9),
+    'Tujuan saya sederhana: bikin DeFi gampang, aman, dan efisien — mau beli saat turun, ambil untung saat naik, atau sekadar memantau fee yang terkumpul.',
     '',
-    note('ketik /help untuk daftar perintah lengkap'),
+    `🛠️ ${bold('Fitur Inti')}`,
+    '🔗 Hubungkan dompet Robinhood (impor manual)',
+    '💧 Single-Side LP — setor cukup satu token',
+    '🛡️ Audit keamanan token & cek rug pull otomatis',
+    '📊 Pantau posisi LP aktif, APR, dan fee terkumpul',
+    '',
+    `⚠️ ${bold('Catatan Keamanan')}`,
+    `PHILIPS ${bold('tidak akan pernah')} meminta seed phrase di luar alur resmi /connect. DeFi berisiko, termasuk Impermanent Loss (IL). Selalu DYOR.`,
+    '',
+    `📟 ${bold('Status')}`,
+    `• Mode · ${bold(o.dryRun ? '⚪ DRY RUN (simulasi)' : '🟢 LIVE')}`,
+    `• Chain · ${esc(o.chainLabel)} (ID ${esc(String(o.chainId))})`,
+    `• Dompet · ${o.walletShort ? code(o.walletShort) : italic('belum terhubung')}`,
+    `• Posisi LP · ${bold(`${o.positions} aktif`)}`,
+    ...(sync ? [`• Sinkron · ${esc(sync)}`] : []),
+    '',
+    '👉 Tekan tombol di bawah untuk mulai.',
     note(nowWib()),
   ].join('\n');
 }
 
-/** Kartu posisi Uniswap v4 (baca-saja — PHILIPS mengelola v3). */
+/** Cara memulai LP — dipakai tombol "Buka LP" di /start (belum ada wizard tanpa CA). */
+export function msgAddHowTo(): string {
+  return [
+    `💧 ${bold('Buka Single-Side LP')}`,
+    '',
+    'Dua cara memulai:',
+    `• Tempel ${bold('alamat kontrak (CA)')} token langsung di chat — PHILIPS mengaudit lalu menawarkan LP.`,
+    `• Ketik ${code('/add_lp <CA>')} untuk langsung masuk wizard.`,
+    '',
+    `Belum punya kandidat? Buka ${code('/pools')} untuk melihat pool ber-APR tertinggi.`,
+  ].join('\n');
+}
+
+/** Kartu "How it Works" — penjelasan statis, dipanggil dari tombol di /start. */
+export function msgTokenInfoUsage(): string {
+  return [
+    `🔍 ${bold('Audit Keamanan Token')}`,
+    '',
+    `Kirim alamat kontraknya: ${code('/token_info 0x…')}`,
+    '',
+    note('atau tempel CA-nya langsung di chat — hasilnya sama.'),
+  ].join('\n');
+}
+
+export function msgHowItWorks(): string {
+  return [
+    `📖 ${bold('Cara Kerja PHILIPS')}`,
+    '',
+    `1️⃣ ${bold('Hubungkan dompet')} — impor lewat /connect. Kunci disimpan terenkripsi di server bot ini supaya PHILIPS bisa menandatangani transaksi untukmu.`,
+    '',
+    `2️⃣ ${bold('Pilih token')} — /pools untuk pool ber-APR tertinggi, atau tempel alamat kontrak (CA) langsung di chat. Setiap token diaudit dulu: honeypot, pajak beli/jual, LP terkunci, sebaran holder.`,
+    '',
+    `3️⃣ ${bold('Buka LP satu sisi')} — /add_lp. Kamu setor satu token saja; posisimu bekerja seperti limit order pasif yang tetap memanen fee sambil menunggu harga.`,
+    '',
+    `4️⃣ ${bold('Pantau & panen')} — /positions untuk melihat status in/out of range, /claim_fees untuk memanen, /remove_lp untuk menarik.`,
+    '',
+    `⚠️ ${bold('Risiko')}: harga bisa bergerak melewati rentangmu (impermanent loss), dan token baru bisa rug. PHILIPS memblokir token yang jelas berbahaya, tapi keputusan akhir tetap milikmu.`,
+  ].join('\n');
+}
+
 export function msgV4Position(p: {
   tokenId: string;
   pair: string;
@@ -848,6 +897,7 @@ export function msgPositionsList(opts: {
   totalInvestLabel: string;
   totalPnlUsd: number | null;
   outOfRange: number;
+  totalFeesLabel?: string | null;
   rows: Array<{
     id: string;
     pair: string;
@@ -856,10 +906,11 @@ export function msgPositionsList(opts: {
     pnlUsd: number | null;
     pnlPct: number | null;
     inRange: boolean;
+    rangeLabel?: string | null;
+    feesLabel?: string | null;
+    strategy?: string | null;
   }>;
 }): string {
-  // Satu posisi = satu blok pohon (perbaikan.md §4A): status & PnL punya baris
-  // sendiri dengan emoji dinamis, jadi keadaan terbaca tanpa membandingkan kolom.
   const MAX_ROWS = 12;
   const shown = opts.rows.slice(0, MAX_ROWS);
   const blocks = shown.map((r) => {
@@ -867,21 +918,29 @@ export function msgPositionsList(opts: {
       r.pnlUsd === null
         ? '—'
         : `${dot(r.pnlUsd)} ${bold(usdSigned(r.pnlUsd))}${r.pnlPct === null ? '' : ` (${fmtPct(r.pnlPct)})`}`;
-    return [
-      `${r.inRange ? '🟢' : '🔴'} ${bold(`#${esc(r.id)}`)} | ${esc(r.pair)}`,
-      `• Deposit · ${r.investLabel}`,
-      `• Status · ${r.inRange ? '🟢 IN RANGE' : '🔴 OUT OF RANGE'} (${esc(r.age)})`,
-      `• PnL · ${pnl}`,
-    ].join('\n');
+    const lines = [
+      `${r.inRange ? '🟢' : '🔴'} ${bold(esc(r.pair))} · ${italic(`#${esc(r.id)}`)}`,
+      `🎯 Strategi: ${bold(esc(r.strategy ?? 'Sisi Base (beli saat turun)'))}`,
+      `💰 Setoran: ${esc(r.investLabel)}`,
+    ];
+    if (r.rangeLabel) lines.push(`📉 Rentang: ${esc(r.rangeLabel)}`);
+    lines.push(
+      `⏳ Status: ${r.inRange ? `${bold('Aktif')} (in range, sedang memanen fee)` : `${bold('Menunggu')} (out of range)`} · ${esc(r.age)}`,
+      `📈 Fee belum diklaim: ${esc(r.feesLabel ?? '—')}`,
+      `💵 PnL: ${pnl}`,
+    );
+    return lines.join('\n');
   });
 
   const out = [
-    hdr('📋 LP POSITIONS LIST'),
+    `📊 ${bold('Posisi LP Aktif')}`,
     '',
     blocks.join('\n\n'),
     '',
+    `💼 ${bold('Total setoran')}: ${esc(opts.totalInvestLabel)}`,
     `💵 ${bold('Net PnL')}: ${opts.totalPnlUsd === null ? '—' : `${dot(opts.totalPnlUsd)} ${bold(usdSigned(opts.totalPnlUsd))}`}`,
   ];
+  if (opts.totalFeesLabel) out.push(`📈 ${bold('Fee belum diklaim')}: ${esc(opts.totalFeesLabel)}`);
   if (opts.rows.length > MAX_ROWS) out.push(note(`+${opts.rows.length - MAX_ROWS} posisi lain — tutup dulu untuk melihatnya`));
   out.push('', note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
   return out.join('\n');
