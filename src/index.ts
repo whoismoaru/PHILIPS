@@ -218,7 +218,7 @@ function resetFlows(uid: number): void {
  * Teks & keyboard disimpan supaya tombol "Kembali" dari alur mana pun bisa
  * merender ulang TANPA screening ulang (0 RPC).
  */
-type Hub = { ca: string; chainKey: string; text: string; kb: any; sym: string; dec: number; screenText: string; bahaya: boolean; failed: boolean };
+type Hub = { ca: string; chainKey: string; text: string; kb: any; sym: string; dec: number; screenText: string; bahaya: boolean; reasons: string[]; failed: boolean };
 const hubs = new Map<number, Hub>();
 // Sesi wizard/swap kedaluwarsa: bila user tinggalkan lalu ketik angka lain jauh
 // kemudian, jangan sampai termakan flow basi. 15 menit.
@@ -1301,7 +1301,7 @@ async function continueAddlp(
   token: string,
   chainKey: string,
   prog?: { message_id: number } | null,
-  pre?: { bahaya: boolean; failed: boolean }, // screening sudah dilakukan hub → jangan ulang
+  pre?: { bahaya: boolean; failed: boolean; reasons?: string[] }, // screening sudah dilakukan hub → jangan ulang
 ) {
   const cc = getChain(chainKey);
 
@@ -1320,14 +1320,23 @@ async function continueAddlp(
 
   let screenBahaya = pre?.bahaya ?? false;
   let screenFailed = pre?.failed ?? false;
+  let bahayaReasons: string[] = pre?.reasons ?? [];
   if (!pre) {
     if (screened.status === 'fulfilled' && screened.value) {
       screenBahaya = screened.value.verdict === 'BAHAYA';
+      bahayaReasons = screened.value.flags.filter((f) => f.level === 'BAHAYA').map((f) => f.msg);
       await ctx.reply(formatScreen(screened.value, { ca: token, chainLabel: cc.label }), html); // kartu screen = pesan terpisah
     } else {
       screenFailed = true; // gagal verifikasi → peringatan dibawa ke preview rencana
       await ctx.reply(msg.msgScreeningFailed(), html);
     }
+  }
+
+  // Item 20 — token ber-vonis BAHAYA: LP diblokir, bukan sekadar diperingatkan.
+  // Peringatan di langkah 4 gampang dilewati satu tap; di sini alurnya berhenti.
+  if (screenBahaya) {
+    await editProgress(ctx, prog, msg.msgHighRiskBlocked(bahayaReasons));
+    return;
   }
 
   let pools: explore.TokenPool[];
@@ -1940,6 +1949,7 @@ async function renderTokenHub(
     dec,
     screenText: text,
     bahaya: sc?.verdict === 'BAHAYA',
+    reasons: (sc?.flags ?? []).filter((f) => f.level === 'BAHAYA').map((f) => f.msg),
     failed: !sc,
   });
   return editProgress(ctx, prog, text, { ...html, ...kb });
@@ -1961,7 +1971,7 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
 
   if (what === 'add') {
     // Wizard /add penuh; screening dari hub dioper → kartu SCREEN tak dikirim dua kali.
-    return continueAddlp(ctx, ca, h.chainKey, prog, { bahaya: h.bahaya, failed: h.failed });
+    return continueAddlp(ctx, ca, h.chainKey, prog, { bahaya: h.bahaya, failed: h.failed, reasons: h.reasons });
   }
 
   // Guard tetap ada walau tombolnya kondisional: hub disimpan di memori, jadi tombol
@@ -2837,8 +2847,35 @@ bot.action('cancel', async (ctx) => {
 // CRUD tombol dulu memakai Map state + 5 handler; satu baris ketikan cukup dan
 // menutup bug "ketikanku ditelan editor preset".
 
+// Rahasia dompet yang salah kirim ke chat. Dicek PALING AWAL, sebelum handler
+// alur mana pun, supaya kunci tak pernah singgah di flow/log. Pesannya juga
+// dihapus — menyuruh user menghapus sendiri berarti kuncinya nongkrong di chat
+// sampai dia sempat. Deteksi: private key hex 64 karakter, atau 12/24 kata BIP-39.
+// Seed dicek dengan validator BIP-39 asli (checksum + wordlist), BUKAN pola
+// "12 kata huruf kecil": kalimat biasa 12 kata akan lolos pola itu dan pesan
+// user yang tak bersalah ikut terhapus.
+const PRIVKEY_RE = /^(0x)?[a-fA-F0-9]{64}$/;
+function looksLikeSecret(t: string): boolean {
+  const one = t.replace(/\s+/g, ' ').trim();
+  if (PRIVKEY_RE.test(one.replace(/\s/g, ''))) return true;
+  const n = one.split(' ').length;
+  if (n !== 12 && n !== 15 && n !== 18 && n !== 21 && n !== 24) return false;
+  try {
+    return ethers.Mnemonic.isValidMnemonic(one.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 bot.on(message('text'), async (ctx) => {
   const raw = (ctx.message.text || '').trim();
+
+  // Item 19 — rahasia dompet di luar alur /connect: abaikan, hapus, peringatkan.
+  // (Alur /connect belum ada; saat Tahap 5 masuk, pengecualiannya disisipkan di sini.)
+  if (looksLikeSecret(raw)) {
+    await ctx.deleteMessage().catch(() => {}); // butuh hak admin di grup; di chat pribadi selalu boleh
+    return ctx.reply(msg.msgSecretLeakWarning(), html);
+  }
 
   // /buy /sell token: menunggu alamat kontrak, lalu jumlah → quote rute terbaik → konfirmasi.
   const tflow = tswapFlows.get(ctx.from.id);

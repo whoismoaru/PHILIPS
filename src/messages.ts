@@ -316,6 +316,38 @@ export function msgAddHowTo(): string {
 }
 
 /** Kartu "How it Works" — penjelasan statis, dipanggil dari tombol di /start. */
+export function msgHighRiskBlocked(reasons: string[]): string {
+  const out = [
+    `🚫 ${bold('Transaksi Diblokir: Token Berisiko Tinggi')}`,
+    '',
+    'PHILIPS menemukan masalah keamanan serius pada token ini:',
+  ];
+  for (const r of reasons.slice(0, 5)) out.push(`• ${esc(r)}`);
+  if (!reasons.length) out.push('• vonis audit: BAHAYA');
+  out.push(
+    '',
+    'Demi melindungi danamu, Single-Side LP dimatikan untuk kontrak ini. Pilih token lain.',
+    '',
+    note('audit lengkapnya ada di kartu di atas.'),
+  );
+  return out.join('\n');
+}
+
+export function msgSecretLeakWarning(): string {
+  return [
+    `🚨 ${bold('PERINGATAN KEAMANAN')} 🚨`,
+    '',
+    'Sepertinya kamu mengirim data sensitif (private key / seed phrase) di luar alur koneksi resmi.',
+    '',
+    `❌ ${bold('Pesanmu diabaikan dan sudah dihapus.')}`,
+    '',
+    `Kalau memang mau menghubungkan dompet, ketik ${code('/connect')} dan ikuti langkahnya. Jangan pernah menempel kunci sembarangan di chat.`,
+    '',
+    note('kunci yang sudah pernah terkirim ke chat sebaiknya dianggap bocor — pindahkan dananya.'),
+    note('kalau tadi itu cuma tx hash (0x + 64 karakter), abaikan pesan ini — bot tak memakai tx hash sebagai masukan.'),
+  ].join('\n');
+}
+
 export function msgTokenInfoUsage(): string {
   return [
     `🔍 ${bold('Audit Keamanan Token')}`,
