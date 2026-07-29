@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { config } from './config.js';
+import * as walletStore from './walletStore.js';
 import {
   ERC20_ABI,
   WETH_ABI,
@@ -21,7 +22,8 @@ export type ChainCtx = {
   dexKey: string; // chainId versi DexScreener
   blockscout: string | null; // base URL API explorer (null = tak tersedia)
   provider: ethers.JsonRpcProvider;
-  wallet: ethers.Wallet;
+  /** Signer aktif. VoidSigner (alamat 0x0) bila belum ada dompet terhubung. */
+  wallet: ethers.Wallet | ethers.VoidSigner;
   factory: ethers.Contract;
   positionManager: ethers.Contract;
   weth: ethers.Contract;
@@ -118,7 +120,10 @@ const DEFS: Record<string, Def> = {
 
 function build(key: string, d: Def): ChainCtx {
   const provider = new ethers.JsonRpcProvider(d.rpc, d.chainId);
-  const wallet = new ethers.Wallet(config.wallet.privateKey, provider);
+  // Belum ada dompet terhubung → VoidSigner: BACA tetap jalan (saldo, posisi,
+  // audit token), TULIS gagal terang-terangan alih-alih memakai kunci hantu.
+  const wallet: ethers.Wallet | ethers.VoidSigner =
+    walletStore.signerFor(provider) ?? new ethers.VoidSigner(ethers.ZeroAddress, provider);
   return {
     key,
     label: d.label,
@@ -141,9 +146,30 @@ function build(key: string, d: Def): ChainCtx {
   };
 }
 
-export const CHAINS: Record<string, ChainCtx> = Object.fromEntries(
-  Object.entries(DEFS).map(([k, d]) => [k, build(k, d)]),
-);
+// Dibangun MALAS dan bisa dibangun ulang: dompet baru ada setelah /connect,
+// dan kontrak menyimpan signer-nya di dalam. Proxy dipakai supaya ~100 titik
+// pemakaian `CHAINS[...]` / `Object.values(CHAINS)` tak perlu diubah sama sekali.
+let ctxCache: Record<string, ChainCtx> | null = null;
+function chains(): Record<string, ChainCtx> {
+  if (!ctxCache) ctxCache = Object.fromEntries(Object.entries(DEFS).map(([k, d]) => [k, build(k, d)]));
+  return ctxCache;
+}
+
+/** Panggil setelah connect/disconnect: kontrak lama masih memegang signer lama. */
+export function rebuildChains(): void {
+  ctxCache = null;
+}
+
+export const CHAINS: Record<string, ChainCtx> = new Proxy({} as Record<string, ChainCtx>, {
+  get: (_t, k: string) => chains()[k],
+  has: (_t, k: string) => k in chains(),
+  ownKeys: () => Reflect.ownKeys(chains()),
+  getOwnPropertyDescriptor: (_t, k: string) => ({
+    value: chains()[k],
+    enumerable: true,
+    configurable: true,
+  }),
+});
 
 export const DEFAULT_CHAIN = 'robinhood';
 export const getChain = (key?: string): ChainCtx => CHAINS[key ?? DEFAULT_CHAIN] ?? CHAINS[DEFAULT_CHAIN];

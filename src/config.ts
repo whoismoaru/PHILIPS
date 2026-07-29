@@ -29,7 +29,9 @@ export const config = {
     chainId: Number(required('CHAIN_ID')),
   },
   wallet: {
-    privateKey: required('PRIVATE_KEY'),
+    // Opsional sejak /connect ada: dipakai sekali untuk mengadopsi pemasangan
+    // lama jadi keystore terenkripsi (walletStore.ts), lalu boleh dihapus.
+    privateKey: optional('PRIVATE_KEY', ''),
   },
   uniswap: {
     factory: optional('UNISWAP_V3_FACTORY', ''),

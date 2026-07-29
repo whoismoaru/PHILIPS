@@ -1295,6 +1295,120 @@ export function msgLpOpened(tokenId: string, notes: string[], pair?: string, ran
   return out.join('\n');
 }
 
+// ─── dompet: /connect /settings /disconnect ────────────────────────
+
+export function msgNeedWallet(): string {
+  return [
+    `🔗 ${bold('Dompet Belum Terhubung')}`,
+    '',
+    'Perintah ini menggerakkan dana, jadi PHILIPS butuh dompet dulu.',
+    '',
+    `Ketik ${code('/connect')} untuk menghubungkan dompet Robinhood-mu.`,
+  ].join('\n');
+}
+
+export function msgConnectPrompt(): string {
+  return [
+    `🔗 ${bold('Hubungkan Dompet Robinhood')}`,
+    '',
+    `Kirim ${bold('Private Key')} atau ${bold('Seed Phrase')} kamu ke chat ini. PHILIPS memakainya untuk menandatangani transaksi Uniswap atas namamu.`,
+    '',
+    `⚠️ ${bold('YANG PERLU KAMU TAHU:')}`,
+    '1. Kunci itu melewati server Telegram sebelum sampai ke sini. Pesanmu akan PHILIPS hapus otomatis begitu diterima, tapi yang sudah terkirim tidak bisa ditarik kembali.',
+    '2. Di server ini kunci disimpan terenkripsi (keystore JSON, scrypt+AES) — bukan teks polos.',
+    '3. Pastikan ini chat pribadi. Jangan pernah memakai bot ini di grup.',
+    '4. Hubungkan hanya dompet berisi dana yang siap kamu risikokan di DeFi.',
+    '',
+    `📥 ${bold('Tempel private key (0x…) atau seed 12/24 kata di bawah:')}`,
+  ].join('\n');
+}
+
+export function msgConnectImporting(): string {
+  return [`⏳ ${bold('Mengimpor dompet…')}`, '', 'Mengenkripsi kunci & memeriksa akses jaringan.'].join('\n');
+}
+
+export function msgConnectFailed(reason: string): string {
+  return [
+    `❌ ${bold('Gagal Menghubungkan')}`,
+    '',
+    esc(reason),
+    '',
+    note('ulangi /connect lalu tempel private key (0x + 64 karakter) atau seed 12/24 kata.'),
+  ].join('\n');
+}
+
+export function msgConnected(addr: string): string {
+  return [
+    `✅ ${bold('Dompet Terhubung!')}`,
+    '',
+    `Halo, ${code(shortAddr(addr))} 🎉`,
+    'Dompet Robinhood-mu sudah tertaut ke PHILIPS.',
+    '',
+    `🛡️ ${bold('Sudah diamankan:')} pesan berisi kuncimu sudah PHILIPS hapus dari chat ini, dan kuncinya disimpan terenkripsi.`,
+    '',
+    'Mau lanjut ke mana?',
+  ].join('\n');
+}
+
+export function msgAlreadyConnected(addr: string): string {
+  return [
+    `🔗 ${bold('Dompet Sudah Terhubung')}`,
+    '',
+    `Alamat: ${code(shortAddr(addr))}`,
+    '',
+    `Mau ganti? Putuskan dulu lewat ${code('/disconnect')}.`,
+  ].join('\n');
+}
+
+export function msgSettings(
+  addr: string | null,
+  balance: string | null,
+  chainLabel: string,
+  dryRun: boolean,
+  maxPerTx: string,
+): string {
+  return [
+    `⚙️ ${bold('Pengaturan PHILIPS')}`,
+    '',
+    `🔗 Dompet · ${addr ? code(shortAddr(addr)) : italic('belum terhubung')}`,
+    ...(balance ? [`💰 Saldo · ${bold(esc(balance))}`] : []),
+    `⛓️ Chain · ${esc(chainLabel)}`,
+    `⚡ Mode · ${bold(dryRun ? '⚪ DRY RUN (simulasi)' : '🟢 LIVE')}`,
+    `⚠️ Batas per tx · ${esc(maxPerTx)}`,
+    '',
+    note('gas dihitung otomatis dari jaringan (L2) — tak ada pilihan cepat/lambat.'),
+    note('slippage swap otomatis 5% lalu 15% bila tertolak.'),
+  ].join('\n');
+}
+
+export function msgDisconnectConfirm(addr: string, openLp: number): string {
+  const out = [
+    `🔴 ${bold('Putuskan Dompet')}`,
+    '',
+    `Yakin memutuskan ${code(shortAddr(addr))} dari PHILIPS?`,
+    '',
+    `⚠️ ${bold('Peringatan:')}`,
+    '• Kunci terenkripsimu akan DIHAPUS permanen dari server ini.',
+    '• Danamu tidak hilang — tapi posisi LP harus kamu kelola sendiri lewat aplikasi Robinhood/Uniswap.',
+  ];
+  if (openLp) {
+    out.push(
+      `• ${bold(`Kamu masih punya ${openLp} posisi LP terbuka.`)} PHILIPS akan berhenti memantaunya, dan fee yang belum diklaim tak bisa dipanen dari sini.`,
+    );
+  }
+  return out.join('\n');
+}
+
+export function msgDisconnected(): string {
+  return [
+    `✅ ${bold('Dompet Diputuskan')}`,
+    '',
+    'Kunci terenkripsimu sudah dihapus dari server ini.',
+    '',
+    `Mau memakai PHILIPS lagi nanti? Ketik ${code('/connect')}. Jaga dirimu!`,
+  ].join('\n');
+}
+
 // ─── /claim_fees & /remove_lp ──────────────────────────────────────
 
 export function msgNoFees(): string {

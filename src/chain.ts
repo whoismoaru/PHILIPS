@@ -7,7 +7,8 @@ import { config } from './config.js';
  */
 
 export const provider = new ethers.JsonRpcProvider(config.chain.rpcUrl, config.chain.chainId);
-export const wallet = new ethers.Wallet(config.wallet.privateKey, provider);
+// Dompet TIDAK lagi dibuat di sini: sumbernya walletStore (lihat chains.ts).
+// Modul ini tinggal provider + kumpulan ABI.
 
 export const ERC20_ABI = [
   'function symbol() view returns (string)',
