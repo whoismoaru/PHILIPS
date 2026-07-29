@@ -13,6 +13,21 @@ import { config } from './config.js';
 
 export const bot = new Telegraf(config.telegram.botToken);
 
+/**
+ * Nama tiap command yang benar-benar didaftarkan. Telegraf tak menyimpan daftar
+ * ini, padahal tanpa daftar tak ada cara memeriksa menu Telegram sudah lengkap —
+ * dan perintah yang hidup tapi absen dari menu praktis tak terlihat user.
+ * bot.start() ditambahkan manual: ia bukan bot.command().
+ */
+export const registeredCommands = new Set<string>(['start']);
+const originalCommand = bot.command.bind(bot);
+(bot as any).command = (cmd: unknown, ...rest: unknown[]) => {
+  for (const c of Array.isArray(cmd) ? cmd : [cmd]) {
+    if (typeof c === 'string') registeredCommands.add(c);
+  }
+  return (originalCommand as any)(cmd, ...rest);
+};
+
 export const html = { parse_mode: 'HTML' as const };
 
 /** Batas ETH/tx: nilai <= 0 atau kosong berarti TANPA batas. */

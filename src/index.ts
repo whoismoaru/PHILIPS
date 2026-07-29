@@ -13,6 +13,7 @@ import {
   resetFlows,
   registerFlowReset,
   POS_CARD_CONCURRENCY,
+  registeredCommands,
 } from './core.js';
 import { renderProfitCard } from './card.js';
 import { message } from 'telegraf/filters';
@@ -3050,29 +3051,51 @@ bot.catch((err, ctx) => {
   ctx.reply?.(msg.msgError('bot', (err as Error).message), html).catch(() => {});
 });
 
-/** Daftar command menu Telegram (tombol "/" / Menu). */
+/**
+ * Daftar command menu Telegram (tombol "/" / Menu).
+ * ISINYA HARUS = semua bot.command() yang terdaftar — diperiksa saat boot oleh
+ * assertMenuComplete() di bawah, supaya perintah baru tak pernah lagi hidup
+ * diam-diam tanpa muncul di menu.
+ */
 const BOT_COMMANDS = [
-  // '/start' sengaja TIDAK didaftarkan: Telegram mengirimnya sendiri saat chat dibuka
-  // & tombol Start ditekan. Kartunya = penanda bot hidup + hasil sinkron on-chain;
-  // daftar perintah ada di /help.
+  // Mulai & bantuan
+  { command: 'start', description: 'Kartu sambutan & status bot' },
   { command: 'help', description: 'Menu, mode bot & daftar perintah' },
+  // Pantau
   { command: 'status', description: 'Koneksi jaringan & saldo dompet' },
   { command: 'positions', description: 'Posisi LP yang aktif (live)' },
-  { command: 'connect', description: 'Hubungkan dompet Robinhood' },
-  { command: 'alerts', description: 'Setelan notifikasi (range, anjlok, rugi)' },
-  { command: 'settings', description: 'Dompet & preferensi transaksi' },
-  { command: 'token_info', description: 'Audit keamanan token: /token_info <CA>' },
-  { command: 'pools', description: 'Top pool by APR (ETH/USDG) — sinkron Uniswap' },
   { command: 'history', description: 'Riwayat trade tertutup (jurnal)' },
   { command: 'pnl', description: 'Rekap PnL seumur hidup' },
+  // Riset
+  { command: 'pools', description: 'Top pool by APR (ETH/USDG) — sinkron Uniswap' },
+  { command: 'explore', description: 'Alias lama /pools' },
+  { command: 'token_info', description: 'Audit keamanan token: /token_info <CA>' },
+  // LP
   { command: 'add_lp', description: 'Buka LP single-side (pilih pair atau /add_lp <CA>)' },
+  { command: 'add', description: 'Alias lama /add_lp' },
   { command: 'claim_fees', description: 'Panen fee tanpa menutup posisi' },
   { command: 'remove_lp', description: 'Tarik likuiditas 25/50/75/100%' },
   { command: 'stop', description: 'Tutup posisi LP' },
   { command: 'closeall', description: 'Darurat: tutup semua posisi (konfirmasi per posisi)' },
+  // Swap
   { command: 'buy', description: 'Beli token (rute terbaik)' },
   { command: 'sell', description: 'Jual token (rute terbaik)' },
+  // Dompet & setelan
+  { command: 'connect', description: 'Hubungkan dompet Robinhood' },
+  { command: 'settings', description: 'Dompet & preferensi transaksi' },
+  { command: 'disconnect', description: 'Putuskan dompet & hapus kunci' },
+  { command: 'alerts', description: 'Setelan notifikasi (range, anjlok, rugi)' },
 ] as const;
+
+/** Menu vs command terdaftar. Selisihnya dilaporkan ke log, tidak mematikan bot. */
+function assertMenuComplete(): void {
+  const inMenu = new Set(BOT_COMMANDS.map((c) => c.command));
+  const missing = [...registeredCommands].filter((c) => !inMenu.has(c as never));
+  const stale = [...inMenu].filter((c) => !registeredCommands.has(c));
+  if (missing.length) console.error('[menu] command hidup tapi TIDAK ada di menu:', missing.join(', '));
+  if (stale.length) console.error('[menu] ada di menu tapi TIDAK terdaftar:', stale.join(', '));
+  if (!missing.length && !stale.length) console.log(`[menu] ${inMenu.size} command — menu & handler cocok`);
+}
 
 /**
  * Pasang menu command di scope yang dipakai chat private.
@@ -3086,6 +3109,7 @@ async function registerBotCommands() {
     { type: 'all_private_chats' },
     { type: 'chat', chat_id: config.telegram.allowedUserId },
   ];
+  assertMenuComplete();
   const cmds = [...BOT_COMMANDS];
 
   // Loop deleteMyCommands dulu mengirim 9 panggilan sia-sia (scope-nya di-set ulang
@@ -3138,17 +3162,21 @@ async function registerBotCommands() {
 // backoff, bukan langsung exit. 409 = instance lama masih polling; tunggu ia lepas.
 // Menyerah setelah maxTries → exit(1), systemd auto-restart.
 function launchWithRetry(attempt = 1, maxTries = 6) {
-  bot.launch().then(
-    async () => {
+  // onLaunch dipanggil saat polling MULAI. Promise-nya baru selesai saat bot
+  // BERHENTI (Telegraf v4) — dulu "online" & pemasangan menu tersangkut di sana,
+  // jadi menu "/" baru terkirim saat proses mati dan selalu tertinggal satu versi.
+  bot
+    .launch(() => {
       console.log(
         'PHILIPS online | wallet:',
         walletStore.address() ?? '(belum terhubung)',
         '| mode:',
         msg.modeLabel(config.safety.dryRun),
       );
-      // Setelah launch — pastikan menu "/" terisi (bukan fire-and-forget buta).
-      await registerBotCommands();
-    },
+      registerBotCommands().catch((e) => console.error('[menu]', (e as Error).message));
+    })
+    .then(
+      () => console.log('PHILIPS berhenti'),
     (err) => {
       const is409 =
         (err as any)?.response?.error_code === 409 ||
@@ -3161,9 +3189,9 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
         process.exit(1);
         return;
       }
-      setTimeout(() => launchWithRetry(attempt + 1, maxTries), is409 ? 5000 : 2000);
-    },
-  );
+        setTimeout(() => launchWithRetry(attempt + 1, maxTries), is409 ? 5000 : 2000);
+      },
+    );
 }
 launchWithRetry();
 startMonitor(bot); // auto-monitor posisi aktif
