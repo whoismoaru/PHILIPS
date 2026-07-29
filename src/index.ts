@@ -731,6 +731,7 @@ type PosRow = {
   strategy?: string | null;
   rangeLabel?: string | null;
   feesLabel?: string | null;
+  feesUsdLabel?: string | null;
   feesBase?: number; // fee belum diklaim dalam base, utk total di footer
 };
 
@@ -781,6 +782,11 @@ async function cmdPositions(ctx: any, edit = false) {
           return `${lo} — ${hi} ${d.baseSymbol} per ${rec.symbol}`;
         })(),
         feesLabel: `${Number(ethers.formatUnits(d.feesBaseWei, dec)).toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`,
+        // Fee dalam USD (design memakai satuan dolar). Harga tak terbaca → null,
+        // dan kartu jatuh ke satuan base; JANGAN tampilkan $0.00 palsu.
+        feesUsdLabel: await baseToUsd(d.baseKind, Number(ethers.formatUnits(d.feesBaseWei, dec)), cc)
+          .then((v) => (v === null ? null : `+${msg.usdPlain(v)}`))
+          .catch(() => null),
         feesBase: Number(ethers.formatUnits(d.feesBaseWei, dec)),
       };
     } catch (e) {
@@ -852,27 +858,16 @@ async function cmdPositions(ctx: any, edit = false) {
   });
 
   // Maks 6 tombol id (posisi ke-7+ tetap tercantum di daftar & bisa lewat /stop).
-  // Label memakai #id + pair: #id selalu unik, jadi dua posisi token sama tak
-  // pernah menghasilkan tombol kembar yang tak bisa dibedakan.
-  const labelOf = (pair: string): string => {
-    const s = pair
-      .split('/')
-      .map((p) => p.trim())
-      .join('/');
-    return s.length > 14 ? s.slice(0, 13) + '…' : s;
-  };
+  // Label = "#id Details": #id selalu unik, jadi dua posisi pada token yang sama
+  // tak pernah menghasilkan tombol kembar yang tak bisa dibedakan.
   const top = rows.slice(0, 6);
-  const idBtns = top.map((r) =>
-    Markup.button.callback(`🔍 #${r.id} ${labelOf(r.pair)}`, `pos_detail_${r.id}`),
-  );
-  // Satu tombol per baris: label "🔍 #id PAIR" terlalu panjang untuk dua kolom
-  // di layar HP — dua kolom membuatnya terpotong justru di bagian #id-nya.
+  const idBtns = top.map((r) => Markup.button.callback(`🔍 #${r.id} Details`, `pos_detail_${r.id}`));
+  // Satu tombol per baris, sesuai design.
   const kbRows: ReturnType<typeof Markup.button.callback>[][] = idBtns.map((b) => [b]);
   kbRows.push([
     Markup.button.callback('🔄 Refresh', 'positions_refresh'),
-    Markup.button.callback('🚫 Tutup Semua', 'closeall_confirm'),
+    Markup.button.callback('🚫 Close All', 'closeall_confirm'),
   ]);
-  kbRows.push([Markup.button.callback('‹ Kembali', 'positions_back')]);
   const extra = { ...html, ...Markup.inlineKeyboard(kbRows) };
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }

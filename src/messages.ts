@@ -971,49 +971,35 @@ export function msgPositionsList(opts: {
     inRange: boolean;
     rangeLabel?: string | null;
     feesLabel?: string | null;
+    feesUsdLabel?: string | null; // fee dalam USD; jatuh ke feesLabel bila harga tak terbaca
     strategy?: string | null;
   }>;
 }): string {
   const MAX_ROWS = 12;
   const shown = opts.rows.slice(0, MAX_ROWS);
   const blocks = shown.map((r) => {
-    const pnl =
-      r.pnlUsd === null
-        ? '—'
-        : `${dot(r.pnlUsd)} ${bold(usdSigned(r.pnlUsd))}${r.pnlPct === null ? '' : ` (${fmtPct(r.pnlPct)})`}`;
-    // Strategi diringkas jadi label pendek: baris ini berdampingan dengan #id,
-    // kalimat panjang membuatnya melipat di HP.
-    const side = (r.strategy ?? '').toLowerCase().includes('jual') ? 'Sisi Token' : 'Sisi Base';
-    const lines = [
-      `${r.inRange ? '🟢' : '🔴'} ${bold(esc(r.pair))}`,
-      `🆔 #${esc(r.id)} | 🎯 ${esc(side)} | ⏱️ ${esc(r.age)}`,
+    // Sisi ditulis dari sudut pandang aset yang DISETOR: "ETH Side" = setor base.
+    const side = (r.strategy ?? '').toLowerCase().includes('jual') ? 'Token Side' : 'ETH Side';
+    return [
+      `🟢 ${bold(esc(r.pair))}`,
+      `🆔 #${esc(r.id)} | 🎯 ${esc(side)}`,
       r.inRange
-        ? `✅ Status: ${bold('Aktif')} (in range, memanen fee)`
-        : `⏳ Status: ${bold('Menunggu')} (out of range)`,
+        ? `✅ Status: ${bold('Aktif (In Range)')}`
+        : `⏳ Status: ${bold('Menunggu (Out of Range)')}`,
       `💰 Modal: ${esc(r.investLabel)}`,
-      `📈 Fee: ${esc(r.feesLabel ?? '—')} · 💵 PnL: ${pnl}`,
-    ];
-    if (r.rangeLabel) lines.push(`🎯 Rentang: ${esc(r.rangeLabel)}`);
-    return lines.join('\n');
+      `📈 Fee: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
+    ].join('\n');
   });
 
   const out = [
-    `📊 ${bold(`Posisi LP Aktif (${opts.rows.length} aktif)`)}`,
+    `📊 ${bold(`Posisi LP Aktif (${opts.rows.length} Aktif)`)}`,
     '',
     'Posisi Uniswap-mu saat ini:',
     '',
     blocks.join('\n\n'),
-    '',
-    `💼 ${bold('Total modal')}: ${esc(opts.totalInvestLabel)}`,
-    `💵 ${bold('Net PnL')}: ${opts.totalPnlUsd === null ? '—' : `${dot(opts.totalPnlUsd)} ${bold(usdSigned(opts.totalPnlUsd))}`}`,
   ];
-  if (opts.totalFeesLabel) out.push(`📈 ${bold('Fee belum diklaim')}: ${esc(opts.totalFeesLabel)}`);
-  if (opts.rows.length > MAX_ROWS) out.push(note(`+${opts.rows.length - MAX_ROWS} posisi lain — tutup dulu untuk melihatnya`));
-  out.push(
-    '',
-    italic('Pilih posisi di bawah untuk melihat PnL rinci, rentang target, atau menariknya.'),
-    note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`),
-  );
+  if (opts.rows.length > MAX_ROWS) out.push('', note(`+${opts.rows.length - MAX_ROWS} posisi lain — tutup dulu untuk melihatnya`));
+  out.push('', italic('Pilih posisi di bawah untuk melihat PnL rinci, rentang target, atau menariknya.'));
   return out.join('\n');
 }
 
