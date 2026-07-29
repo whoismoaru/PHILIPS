@@ -1974,19 +1974,19 @@ async function renderTokenHub(
   const swappable = swapTokenChains().some((c) => c.key === cc.key);
   const hasLp = v3.length + v4.length > 0;
 
-  const rowLp = [Markup.button.callback('➕ Add LP', `ca:add:${ca}`)];
+  const rowLp = [Markup.button.callback('💧 Add LP', `ca:add:${ca}`)];
   if (hasLp) rowLp.push(Markup.button.callback('📤 Close LP', `ca:close:${ca}`));
 
   const rowTok: ReturnType<typeof Markup.button.callback>[] = [];
   if (swappable) {
-    rowTok.push(Markup.button.callback('📈 Buy Token', `ca:buy:${ca}`));
+    rowTok.push(Markup.button.callback('💱 Buy Token', `ca:buy:${ca}`));
     if (bal > 0n) rowTok.push(Markup.button.callback('📉 Sell Token', `ca:sell:${ca}`));
   }
 
   const kb = Markup.inlineKeyboard([
     rowLp,
     ...(rowTok.length ? [rowTok] : []),
-    [Markup.button.callback('Batal', 'cancel')],
+    [Markup.button.callback('❌ Cancel', 'cancel')],
   ]);
 
   hubs.set(ctx.from.id, {

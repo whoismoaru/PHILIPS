@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { bold, code, esc, nowWib } from './messages.js';
+import { bold, code, esc, italic, nowWib } from './messages.js';
 import { getChain, basesFor, type ChainCtx } from './chains.js';
 import { gmgnExtra, type GmgnExtra } from './gmgn.js';
 
@@ -360,8 +360,8 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   };
   const pct = (n: number | null): string => (n === null ? UNK : `${Number(n.toFixed(2))}%`);
   // Jawaban ya/tidak: '?' bila datanya memang tak terbaca — JANGAN mengarang '✅'.
-  const yes = (v: boolean | null): string => (v === null ? `${UNK} tak terbaca` : v ? '✅ Ya' : '❌ Tidak');
-  const no = (v: boolean | null): string => (v === null ? `${UNK} tak terbaca` : v ? '⚠️ Ya' : '✅ Tidak');
+  const yes = (v: boolean | null): string => (v === null ? `${UNK} unreadable` : v ? '✅ Yes' : '❌ No');
+  const no = (v: boolean | null): string => (v === null ? `${UNK} unreadable` : v ? '⚠️ Yes' : '✅ No');
 
   const g = s.gmgn;
   const symUp = s.symbol.toUpperCase().replace(/^\$+/, '');
@@ -375,61 +375,74 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   // 'holder' sehingga melambung (terukur 41.27% vs 16.72% pada CA yang sama).
   const top10 = g?.top10Pct != null ? g.top10Pct : s.top10Pct;
   const top10Line =
-    top10 === null ? UNK : `${pct(top10)} ${top10 >= 50 ? '🔴 (risiko whale tinggi)' : top10 >= 20 ? '⚠️ (whale sedang)' : '✅'}`;
+    top10 === null ? UNK : `${pct(top10)} ${top10 >= 50 ? '🔴 (high whale risk)' : top10 >= 20 ? '⚠️ (moderate whale risk)' : '✅'}`;
   const verified = s.verified !== null ? s.verified : (g?.openSource ?? null);
   const renounced = s.renounced !== null ? s.renounced : (g?.renounced ?? null);
   const taxLine = (n: number | null): string => (n === null ? UNK : `${Number(n.toFixed(1))}% ${n <= 5 ? '✅' : n <= 10 ? '⚠️' : '🔴'}`);
   const lpLocked = g?.lpLockedPct ?? null;
   const burnt = g?.burntPct ?? null;
 
+  const num = (n: number | null): string => (n === null ? UNK : n.toLocaleString('en-US'));
+
   const out: string[] = [
-    `🔍 ${bold('Audit Keamanan Token')}`,
+    `🔍 ${bold('Token Security Audit')}`,
     '',
-    `📊 ${bold('Info Dasar')}`,
-    `• Nama: ${esc(s.name)} (${esc(symUp)})`,
-    `• Jaringan: ${esc(opts?.chainLabel ?? '?')}`,
-    `• Harga: ${bold(s.priceUsd ? `$${s.priceUsd}` : UNK)} · MC ${compact(s.marketCapUsd)}`,
-    `• Umur pool: ${s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} jam`}`,
+    `📊 ${bold('Basic Info')}`,
+    `• Name: ${esc(s.name)} (${esc(symUp)})`,
+    `• Network: ${esc(opts?.chainLabel ?? UNK)}`,
+    `• Price: ${bold(s.priceUsd ? `$${s.priceUsd}` : UNK)} · MC: ${compact(s.marketCapUsd)}`,
+    `• Pool Age: ${s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} hours`}`,
     '',
-    `🛡️ ${bold('Keamanan Kontrak')}`,
-    `• Ownership dilepas: ${yes(renounced)}`,
-    `• Kontrak terverifikasi: ${yes(verified)}`,
-    `• Kontrak proxy: ${no(s.isProxy)}`,
-    `• Bisa dijual (anti-honeypot): ${yes(sellable)}`,
+    `🛡️ ${bold('Contract Security')}`,
+    `• Ownership Renounced: ${yes(renounced)}`,
+    `• Contract Verified: ${yes(verified)}`,
+    `• Proxy Contract: ${no(s.isProxy)}`,
+    `• Honeypot Risk (Can sell?): ${sellable === null ? `${UNK} unreadable` : sellable ? '✅ Safe' : '🚫 Cannot sell'}`,
     '',
-    `💧 ${bold('Likuiditas & Pasar')}`,
-    `• Likuiditas: ${bold(compact(s.liquidityUsd))}`,
-    `• LP terkunci: ${lpLocked === null ? UNK : `${pct(lpLocked)} ${lpLocked >= 50 ? '✅' : '⚠️'}`}${burnt ? ` · burnt ${pct(burnt)}` : ''}`,
-    `• Volume 24J: ${compact(s.volume24h)} (${s.buys24h ?? UNK} beli / ${s.sells24h ?? UNK} jual)`,
-    `• Holder: ${s.holdersCount === null ? UNK : s.holdersCount.toLocaleString('en-US')}`,
-    `• Top 10 holder: ${top10Line}`,
+    `💧 ${bold('Liquidity & Market')}`,
+    `• Total Liquidity: ${bold(compact(s.liquidityUsd))}`,
+    `• Liquidity Locked: ${lpLocked === null ? UNK : `${pct(lpLocked)} ${lpLocked >= 50 ? '✅' : '⚠️'}`}${burnt ? ` · burnt ${pct(burnt)}` : ''}`,
+    `• 24H Volume: ${compact(s.volume24h)} (${num(s.buys24h)} Buys / ${num(s.sells24h)} Sells)`,
+    `• Holders: ${num(s.holdersCount)}`,
+    `• Top 10 Holders: ${top10Line}`,
   ];
 
   if (g && (g.devPct !== null || g.insidersPct !== null || g.sniperCount !== null)) {
-    out.push(`• Dev ${pct(g.devPct)} · Insider ${pct(g.insidersPct)} · Sniper ${g.sniperCount ?? UNK}`);
+    out.push(`• Dev: ${pct(g.devPct)} | Insider: ${pct(g.insidersPct)} | Sniper: ${g.sniperCount ?? UNK}`);
   }
 
   out.push(
     '',
-    `💸 ${bold('Pajak / Fee')}`,
-    `• Pajak beli: ${taxLine(g?.buyTaxPct ?? null)}`,
-    `• Pajak jual: ${taxLine(g?.sellTaxPct ?? null)}`,
+    `💸 ${bold('Taxes / Fees')}`,
+    `• Buy Tax: ${taxLine(g?.buyTaxPct ?? null)}`,
+    `• Sell Tax: ${taxLine(g?.sellTaxPct ?? null)}`,
   );
 
   // Verdict & flags TETAP ada: kartu ini mengganti tampilan, bukan peringatannya.
   const risk = s.flags.filter((f) => f.level === 'BAHAYA' || f.level === 'HATI-HATI');
   const icon = s.verdict === 'BAHAYA' ? '🚫' : s.verdict === 'HATI-HATI' ? '⚠️' : '✅';
   const verdictText =
-    s.verdict === 'BAHAYA' ? 'JANGAN LP' : s.verdict === 'HATI-HATI' ? 'BOLEH LP (risiko sedang)' : 'AMAN UNTUK LP';
-  out.push('', `${icon} ${bold('Vonis PHILIPS:')} ${bold(verdictText)}`);
+    s.verdict === 'BAHAYA'
+      ? 'DO NOT LP (High Risk)'
+      : s.verdict === 'HATI-HATI'
+        ? 'SAFE TO LP (Moderate Risk)'
+        : 'SAFE TO LP';
+  out.push('', `${icon} ${bold('PHILIPS Verdict:')} ${bold(verdictText)}`);
   for (const f of risk.slice(0, 4)) out.push(`• ${esc(f.msg)}`);
-  if (s.verdict === 'HATI-HATI' && !risk.length) out.push('• Pakai rentang lebih sempit bila tetap ingin LP.');
+  if (s.verdict === 'HATI-HATI' && !risk.length) out.push('• Use a tighter range if you still want to LP.');
 
-  if (opts?.ca) out.push('', code(opts.ca));
+  if (opts?.ca) out.push('', `📎 ${code(opts.ca)}`);
 
-  const held = opts?.heldLabel ? `Dipegang ${esc(opts.heldLabel)}` : 'Belum dipegang';
-  const lp = opts?.lpCount ? `${opts.lpCount} LP aktif` : 'Belum ber-LP';
-  out.push('', `${held} & ${lp}`, nowWib());
+  out.push(
+    '',
+    '—————————————————',
+    `📋 ${bold('Your Wallet Status')}`,
+    `🕒 ${nowWib()}`,
+    `• Holding Token: ${bold(opts?.heldLabel ? esc(opts.heldLabel) : 'No')}`,
+    `• Active LP: ${bold(opts?.lpCount ? `${opts.lpCount} position(s)` : 'No')}`,
+    '',
+    italic('What would you like to do with this token?'),
+  );
   return out.join('\n');
 }
 
