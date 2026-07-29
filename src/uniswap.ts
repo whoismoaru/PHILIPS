@@ -419,6 +419,68 @@ export async function listPositions(ctx: ChainCtx = getChain()): Promise<Positio
   return out;
 }
 
+/**
+ * Panen fee TANPA menutup posisi: `collect` saja, tanpa decreaseLiquidity dan
+ * tanpa burn. Nilai yang tertarik = fee yang belum diklaim (pokok tetap di pool).
+ * Kembalian dalam satuan token0/token1 mentah + hash tx.
+ */
+export async function collectFeesOnly(
+  tokenId: string,
+  ctx: ChainCtx = getChain(),
+): Promise<{ txHash: string; amount0: bigint; amount1: bigint }> {
+  const { positionManager, wallet } = ctx;
+  const params = {
+    tokenId,
+    recipient: wallet.address,
+    amount0Max: MAX_UINT128,
+    amount1Max: MAX_UINT128,
+  };
+  // staticCall dulu: angka yang dilaporkan ke user harus angka yang benar-benar
+  // akan tertarik, bukan tebakan dari kartu sebelumnya.
+  const owed = await positionManager.collect.staticCall(params);
+  const tx = await positionManager.collect(params);
+  const receipt = await tx.wait();
+  return { txHash: receipt.hash, amount0: BigInt(owed[0]), amount1: BigInt(owed[1]) };
+}
+
+/**
+ * Tarik SEBAGIAN likuiditas (1–99%) lalu collect. Posisi TIDAK di-burn dan tetap
+ * hidup — dipakai /remove_lp 25/50/75%. Untuk 100% pakai executeRemove (burn +
+ * jurnal + cashout), supaya tak ada dua jalur penutupan yang bisa menyimpang.
+ */
+export async function removeLiquidityPct(
+  tokenId: string,
+  pct: number,
+  ctx: ChainCtx = getChain(),
+): Promise<{ notes: string[]; txHash: string }> {
+  if (!(pct > 0 && pct < 100)) throw new Error(`persen tarik harus 1–99 (dapat ${pct})`);
+  const { positionManager, wallet } = ctx;
+  const p = await positionManager.positions(tokenId);
+  const liquidity: bigint = BigInt(p.liquidity);
+  if (liquidity === 0n) throw new Error('posisi tak punya likuiditas untuk ditarik');
+
+  // Pembagian bilangan bulat: sisa pembagian tertinggal di pool (bukan hilang).
+  const part = (liquidity * BigInt(Math.round(pct))) / 100n;
+  if (part === 0n) throw new Error('porsi tarik membulat jadi 0 — pakai 100%');
+
+  const iface = positionManager.interface;
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const calls = [
+    iface.encodeFunctionData('decreaseLiquidity', [
+      { tokenId, liquidity: part, amount0Min: 0n, amount1Min: 0n, deadline },
+    ]),
+    iface.encodeFunctionData('collect', [
+      { tokenId, recipient: wallet.address, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 },
+    ]),
+  ];
+  const tx = await positionManager.multicall(calls);
+  const receipt = await tx.wait();
+  return {
+    txHash: receipt.hash,
+    notes: [`Tarik ${pct}% likuiditas posisi #${tokenId} + panen fee (tx ${receipt.hash})`],
+  };
+}
+
 /** Tarik SELURUH likuiditas, kumpulkan token, lalu burn NFT-nya.
  *  Menangani posisi kosong (likuiditas 0): skip decrease, langsung collect+burn. */
 export async function executeRemove(

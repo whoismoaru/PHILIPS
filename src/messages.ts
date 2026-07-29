@@ -228,6 +228,8 @@ function cockpitLines(dryRun: boolean): string[] {
     '',
     ...grp([
       ['/add_lp', 'Buka posisi LP baru'],
+      ['/claim_fees', 'Panen fee tanpa menutup posisi'],
+      ['/remove_lp', 'Tarik likuiditas 25/50/75/100%'],
       ['/stop', 'Tutup posisi LP spesifik'],
       ['/buy', 'Beli token (Best Route)'],
       ['/sell', 'Jual token di dompet'],
@@ -238,7 +240,7 @@ function cockpitLines(dryRun: boolean): string[] {
     '',
     note('Tip: tempel CA token langsung di chat untuk membuka Token Hub.'),
     '',
-    `⚠️ <i>${esc('/add /stop /buy /sell /closeall menggerakkan dana on-chain')}</i>`,
+    `⚠️ <i>${esc('/add_lp /remove_lp /stop /buy /sell /closeall menggerakkan dana on-chain')}</i>`,
   ];
 }
 
@@ -1291,6 +1293,79 @@ export function msgLpOpened(tokenId: string, notes: string[], pair?: string, ran
     nowWib(),
   );
   return out.join('\n');
+}
+
+// ─── /claim_fees & /remove_lp ──────────────────────────────────────
+
+export function msgNoFees(): string {
+  return [
+    `💵 ${bold('Panen Fee')}`,
+    '',
+    note('belum ada fee yang bisa dipanen dari posisi aktifmu.'),
+  ].join('\n');
+}
+
+export function msgClaimPick(rows: Array<{ symbol: string; id: string; label: string }>): string {
+  const out = [`💵 ${bold('Panen Fee Belum Diklaim')}`, '', 'Fee dari posisi aktifmu:'];
+  rows.forEach((r, i) => out.push(`${i + 1}️⃣ ${bold(esc(r.symbol))} · #${esc(r.id)} — ${bold(esc(r.label))}`));
+  out.push(
+    '',
+    '⚠️ Fee dikirim langsung ke dompetmu. Posisi LP tetap terbuka; hanya butuh sedikit gas.',
+  );
+  return out.join('\n');
+}
+
+export function msgClaimDone(id: string, label: string, txHash: string | null): string {
+  return [
+    `✅ ${bold('Fee Berhasil Dipanen!')}`,
+    '',
+    `Posisi ${bold(`#${esc(id)}`)} → ${bold(esc(label))} masuk ke dompetmu.`,
+    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — tidak ada transaksi dikirim.')]),
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
+
+export function msgRemovePick(rows: Array<{ symbol: string; id: string }>): string {
+  const out = [`🗑️ ${bold('Tarik Likuiditas')}`, '', 'Pilih posisi yang mau ditarik:'];
+  rows.forEach((r, i) => out.push(`${i + 1}️⃣ ${bold(esc(r.symbol))} · #${esc(r.id)}`));
+  return out.join('\n');
+}
+
+export function msgRemovePct(id: string): string {
+  return [
+    `🗑️ ${bold('Tarik Likuiditas')} · #${esc(id)}`,
+    '',
+    'Berapa banyak yang mau ditarik?',
+    '',
+    note('25/50/75% menarik sebagian — posisi tetap hidup dan tetap memanen fee.'),
+    note('100% menutup posisi sepenuhnya (burn NFT + tukar hasilnya ke ETH).'),
+  ].join('\n');
+}
+
+export function msgRemoveConfirm(id: string, symbol: string, pct: number, est: string, dryRun: boolean): string {
+  return [
+    `📝 ${bold('Konfirmasi Penarikan')}`,
+    '',
+    `Menarik ${bold(`${pct}%`)} dari posisi ${bold(esc(symbol))} · #${esc(id)}.`,
+    `Perkiraan keluar: ${bold(esc(est))} + fee yang belum diklaim.`,
+    '',
+    `Posisi ${bold('tetap terbuka')} dengan sisa ${100 - pct}% likuiditas.`,
+    '',
+    note(dryRun ? 'DRY RUN — tidak kirim tx' : 'LIVE · konfirmasi = kirim tx, butuh gas'),
+  ].join('\n');
+}
+
+export function msgRemoveDone(id: string, pct: number, txHash: string | null): string {
+  return [
+    `✅ ${bold('Penarikan Berhasil')}`,
+    '',
+    `${bold(`${pct}%`)} likuiditas posisi ${bold(`#${esc(id)}`)} sudah ditarik ke dompetmu, berikut fee yang belum diklaim.`,
+    `Sisa ${100 - pct}% masih bekerja di pool.`,
+    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — tidak ada transaksi dikirim.')]),
+    '',
+    note(nowWib()),
+  ].join('\n');
 }
 
 // ─── stop / close ──────────────────────────────────────────────────

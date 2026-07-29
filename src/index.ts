@@ -10,6 +10,8 @@ import {
   VALID_FEES,
   executeAdd,
   executeRemove,
+  collectFeesOnly,
+  removeLiquidityPct,
   getPositionDetail,
   discoverAllPools,
   listPositions,
@@ -594,6 +596,10 @@ async function buildPositionCard(
       [
         Markup.button.callback('Detail', `detail:${rec.tokenId}`),
         Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`),
+      ],
+      [
+        Markup.button.callback('💵 Panen Fee', `claim:${rec.tokenId}`),
+        Markup.button.callback('🗑️ Tarik', `rm:${rec.tokenId}`),
       ],
       [Markup.button.callback('⛔ Tutup', `stop:${rec.tokenId}`)], // aksi uang: baris sendiri
     ]),
@@ -1742,6 +1748,139 @@ async function cmdCloseAll(ctx: any) {
   }
 }
 bot.command('closeall', cmdCloseAll);
+
+// ---------- /claim_fees — panen fee tanpa menutup posisi ----------
+/** Ringkas fee belum diklaim per posisi (dibaca on-chain via collect.staticCall). */
+async function unclaimedList(): Promise<Array<{ rec: store.PosRecord; label: string; base: number }>> {
+  const out = await mapLimit(store.active(), POS_CARD_CONCURRENCY, async (rec) => {
+    try {
+      const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+      const amt = Number(ethers.formatUnits(d.feesBaseWei, d.baseDecimals));
+      return { rec, label: `${amt.toFixed(d.baseDecimals >= 18 ? 5 : 2)} ${d.baseSymbol}`, base: amt };
+    } catch {
+      return null;
+    }
+  });
+  return out.filter((x): x is { rec: store.PosRecord; label: string; base: number } => x !== null && x.base > 0);
+}
+
+async function cmdClaimFees(ctx: any) {
+  const prog = await ctx.reply(msg.msgProgress('membaca fee belum diklaim…'), html);
+  const list = await unclaimedList();
+  if (!list.length) return editProgress(ctx, prog, msg.msgNoFees());
+  const rows = list.map((x) => [
+    Markup.button.callback(`💵 ${x.rec.symbol} · ${x.label}`, `claim:${x.rec.tokenId}`),
+  ]);
+  rows.push([Markup.button.callback('Batal', 'cancel')]);
+  await editProgress(
+    ctx,
+    prog,
+    msg.msgClaimPick(list.map((x) => ({ symbol: x.rec.symbol, id: x.rec.tokenId, label: x.label }))),
+    { ...html, ...Markup.inlineKeyboard(rows) },
+  );
+}
+bot.command('claim_fees', cmdClaimFees);
+
+const claiming = new Set<string>(); // anti double-tap: tx kedua menarik 0 & buang gas
+bot.action(/^claim:(\d+)$/, async (ctx) => {
+  const id = ctx.match[1];
+  if (claiming.has(id)) return ctx.answerCbQuery('Sedang diproses…');
+  const rec = store.active().find((r) => r.tokenId === id);
+  if (!rec) return ctx.answerCbQuery('Posisi tak aktif lagi.');
+  claiming.add(id);
+  await ctx.answerCbQuery();
+  try {
+    const cc = getChain(rec.chain);
+    if (config.safety.dryRun) {
+      await ctx.editMessageText(msg.msgClaimDone(id, '(dry run)', null), html);
+      return;
+    }
+    const d = await getPositionDetail(id, cc);
+    const res = await collectFeesOnly(id, cc);
+    const baseRaw = d.baseIsToken0 ? res.amount0 : res.amount1;
+    const otherRaw = d.baseIsToken0 ? res.amount1 : res.amount0;
+    const label =
+      `${Number(ethers.formatUnits(baseRaw, d.baseDecimals)).toFixed(d.baseDecimals >= 18 ? 5 : 2)} ${d.baseSymbol}` +
+      (otherRaw > 0n ? ` + ${Number(ethers.formatUnits(otherRaw, d.otherDecimals)).toFixed(4)} ${d.otherSymbol}` : '');
+    await ctx.editMessageText(msg.msgClaimDone(id, label, res.txHash), html);
+  } catch (e) {
+    await ctx.reply(msg.msgError('claim', (e as Error).message), html);
+  } finally {
+    claiming.delete(id);
+  }
+});
+
+// ---------- /remove_lp — tarik sebagian / seluruh likuiditas ----------
+async function cmdRemoveLp(ctx: any) {
+  const active = store.active();
+  if (!active.length) return ctx.reply(msg.msgNoActiveToStop(), html);
+  const rows = active.map((r) => [
+    Markup.button.callback(`${r.symbol} · #${r.tokenId}`, `rm:${r.tokenId}`),
+  ]);
+  rows.push([Markup.button.callback('Batal', 'cancel')]);
+  await ctx.reply(msg.msgRemovePick(active.map((r) => ({ symbol: r.symbol, id: r.tokenId }))), {
+    ...html,
+    ...Markup.inlineKeyboard(rows),
+  });
+}
+bot.command('remove_lp', cmdRemoveLp);
+
+bot.action(/^rm:(\d+)$/, async (ctx) => {
+  const id = ctx.match[1];
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(msg.msgRemovePct(id), {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [25, 50, 75].map((p) => Markup.button.callback(`${p}%`, `rmpct:${id}:${p}`)),
+      [Markup.button.callback('100% (tutup posisi)', `stop:${id}`)],
+      [Markup.button.callback('Batal', 'cancel')],
+    ]),
+  });
+});
+
+bot.action(/^rmpct:(\d+):(\d+)$/, async (ctx) => {
+  const [id, pct] = [ctx.match[1], Number(ctx.match[2])];
+  await ctx.answerCbQuery();
+  const rec = store.active().find((r) => r.tokenId === id);
+  if (!rec) return ctx.editMessageText(msg.msgAlreadyClosed(id), html);
+  let est = '—';
+  try {
+    const d = await getPositionDetail(id, getChain(rec.chain));
+    const v = Number(ethers.formatUnits(d.valueBaseWei, d.baseDecimals)) * (pct / 100);
+    est = `≈ ${v.toFixed(d.baseDecimals >= 18 ? 5 : 2)} ${d.baseSymbol}`;
+  } catch {
+    /* estimasi opsional — jangan blokir penarikan hanya karena RPC baca gagal */
+  }
+  await ctx.editMessageText(msg.msgRemoveConfirm(id, rec.symbol, pct, est, config.safety.dryRun), {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('✅ Konfirmasi & Tarik', `rmok:${id}:${pct}`)],
+      [Markup.button.callback('Kembali', `rm:${id}`), Markup.button.callback('Batal', 'cancel')],
+    ]),
+  });
+});
+
+const removing = new Set<string>();
+bot.action(/^rmok:(\d+):(\d+)$/, async (ctx) => {
+  const [id, pct] = [ctx.match[1], Number(ctx.match[2])];
+  if (removing.has(id)) return ctx.answerCbQuery('Sedang diproses…');
+  const rec = store.active().find((r) => r.tokenId === id);
+  if (!rec) return ctx.answerCbQuery('Posisi tak aktif lagi.');
+  removing.add(id);
+  await ctx.answerCbQuery();
+  try {
+    if (config.safety.dryRun) {
+      await ctx.editMessageText(msg.msgRemoveDone(id, pct, null), html);
+      return;
+    }
+    const { txHash } = await removeLiquidityPct(id, pct, getChain(rec.chain));
+    await ctx.editMessageText(msg.msgRemoveDone(id, pct, txHash), html);
+  } catch (e) {
+    await ctx.reply(msg.msgError('remove', (e as Error).message), html);
+  } finally {
+    removing.delete(id);
+  }
+});
 
 type TSwapFlow = {
   chainKey: string;
@@ -3045,6 +3184,8 @@ const BOT_COMMANDS = [
   { command: 'history', description: 'Riwayat trade tertutup (jurnal)' },
   { command: 'pnl', description: 'Rekap PnL seumur hidup' },
   { command: 'add_lp', description: 'Buka LP single-side (pilih pair atau /add_lp <CA>)' },
+  { command: 'claim_fees', description: 'Panen fee tanpa menutup posisi' },
+  { command: 'remove_lp', description: 'Tarik likuiditas 25/50/75/100%' },
   { command: 'stop', description: 'Tutup posisi LP' },
   { command: 'closeall', description: 'Darurat: tutup semua posisi (konfirmasi per posisi)' },
   { command: 'buy', description: 'Beli token (rute terbaik)' },
