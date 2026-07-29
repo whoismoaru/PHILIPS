@@ -653,6 +653,27 @@ export function msgPnl(opts: {
 }
 
 /** Alert harga token anjlok ≥ambang dari harga entry (auto-monitor). */
+/**
+ * Posisi terkonversi penuh. `tokenSide` menentukan arah: sisi base berubah jadi
+ * token saat harga JATUH, sisi token berubah jadi base saat harga NAIK — jadi
+ * saran pemulihannya juga berlawanan.
+ */
+export function msgConverted(tokenId: string, baseSym: string, tokenSym: string, tokenSide: boolean): string {
+  const from = tokenSide ? tokenSym : baseSym;
+  const into = tokenSide ? baseSym : tokenSym;
+  return [
+    `🔴 ${bold('Alert: Position Converted')} ${tokenSide ? '⬆️' : '⬇️'}`,
+    '',
+    `🆔 ${bold('Position ID:')} #${esc(tokenId)}`,
+    `🔗 ${bold('Pair:')} ${esc(baseSym)} / ${esc(tokenSym)}`,
+    '',
+    `⚠️ ${bold('RISK NOTICE:')} Your ${esc(from)} has been 100% converted to ${esc(into)}.`,
+    `💡 ${bold('Suggestion:')} Your principal will only recover if the ${esc(tokenSym)} price ${tokenSide ? 'falls' : 'rises'} again. Consider /remove_lp to withdraw, or /stop to close and cash out.`,
+    '',
+    `⏱️ <i>Triggered at: ${nowWib()}</i>`,
+  ].join('\n');
+}
+
 export function msgIlAlert(tokenId: string, symbol: string, lossPct: number, limit: number): string {
   return [
     `⚠️ ${bold('ALERT: RUGI BERSIH MELEWATI AMBANG')}`,

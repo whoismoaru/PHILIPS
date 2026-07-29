@@ -330,6 +330,13 @@ bot.start(async (ctx) => {
     { ...html, ...startKeyboard() },
   );
 });
+// Tutup kartu alert. Hapus pesannya; bila Telegram menolak (pesan >48 jam),
+// jatuh ke edit teks supaya tombolnya tetap hilang.
+bot.action('dismiss', async (ctx) => {
+  await ctx.answerCbQuery('Dismissed');
+  await ctx.deleteMessage().catch(() => ctx.editMessageReplyMarkup(undefined).catch(() => {}));
+});
+
 bot.action('howitworks', async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.reply(msg.msgHowItWorks(), html);

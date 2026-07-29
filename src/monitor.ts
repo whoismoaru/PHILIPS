@@ -9,7 +9,7 @@ import * as alerts from './alerts.js';
 import * as journal from './journal.js';
 import * as v4store from './v4store.js';
 import { checkV4Status } from './uniswapV4.js';
-import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgIlAlert, msgV4Range } from './messages.js';
+import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgIlAlert, msgConverted, msgV4Range } from './messages.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -165,6 +165,32 @@ async function tick(bot: Telegraf) {
           : msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below', d.baseSymbol);
         await bot.telegram.sendMessage(config.telegram.allowedUserId, text, html);
       }
+      // Alert TERKONVERSI PENUH: harga menembus SELURUH rentang ke arah tujuan,
+      // jadi modal sudah 100% berubah jadi aset seberang dan posisi berhenti
+      // memanen fee. Ini kejadian yang berbeda dari sekadar keluar rentang —
+      // dan yang paling perlu ditindak, karena modal tak bisa pulih sendiri
+      // sebelum harga balik. Sekali per crossing; re-arm saat kembali in range.
+      const converted = !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below');
+      if (cfg.rangeNotify && converted && !rec.convertedAlerted) {
+        await bot.telegram.sendMessage(
+          config.telegram.allowedUserId,
+          msgConverted(rec.tokenId, d.baseSymbol, rec.symbol, rec.side === 'token'),
+          {
+            ...html,
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🗑️ Withdraw Position', callback_data: `rm:${rec.tokenId}` }],
+                [{ text: '📊 View Position Details', callback_data: `back:card:${rec.tokenId}` }],
+                [{ text: '❌ Dismiss Alert', callback_data: 'dismiss' }],
+              ],
+            },
+          },
+        );
+        store.update(rec.tokenId, { convertedAlerted: true });
+      } else if (rec.convertedAlerted && d.inRange) {
+        store.update(rec.tokenId, { convertedAlerted: false });
+      }
+
       // Alert anjlok: harga token vs entry. Sekali per crossing; re-arm saat pulih.
       const entry = rec.entryPrice ? Number(rec.entryPrice) : 0;
       const cur = Number(d.currentPrice);
