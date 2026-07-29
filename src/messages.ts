@@ -1682,15 +1682,26 @@ export function msgCashOut(opts: {
 
 // ─── monitor ───────────────────────────────────────────────────────
 
-export function msgRangeEnter(tokenId: string, symbol: string, baseSymbol = 'WETH'): string {
-  return card(
-    `🟢 ${title('IN RANGE', `#${tokenId}`)}`,
-    [
-      fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
-      `🟢 ${bold('fee mulai mengalir')} — ${esc(baseSymbol)} konversi ke ${esc(symbol)}.`,
-    ],
-    nowWib(),
-  );
+/** Masuk rentang: fee mulai mengalir. `tokenSide` membalik arah konversinya. */
+export function msgRangeEnter(
+  tokenId: string,
+  symbol: string,
+  baseSymbol = 'WETH',
+  tokenSide = false,
+): string {
+  const from = tokenSide ? symbol : baseSymbol;
+  const into = tokenSide ? baseSymbol : symbol;
+  return [
+    `🟢 ${bold('Alert: Position In Range')}`,
+    '',
+    `🆔 ${bold('Position ID:')} #${esc(tokenId)}`,
+    `🔗 ${bold('Pair:')} ${esc(baseSymbol)} / ${esc(symbol)}`,
+    '',
+    `💧 ${bold('Fees are now flowing!')}`,
+    `Your liquidity is active. Your ${esc(from)} is currently converting to ${esc(into)} as the price ${tokenSide ? 'rises' : 'drops'} through your target range.`,
+    '',
+    `⏱️ <i>Triggered at: ${nowWib()}</i>`,
+  ].join('\n');
 }
 
 export function msgRangeExit(

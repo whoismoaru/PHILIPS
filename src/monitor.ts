@@ -160,10 +160,28 @@ async function tick(bot: Telegraf) {
       const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
       const cfg = alerts.get();
       if (cfg.rangeNotify && rec.lastInRange !== undefined && rec.lastInRange !== d.inRange) {
-        const text = d.inRange
-          ? msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol)
-          : msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below', d.baseSymbol);
-        await bot.telegram.sendMessage(config.telegram.allowedUserId, text, html);
+        if (d.inRange) {
+          await bot.telegram.sendMessage(
+            config.telegram.allowedUserId,
+            msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol, rec.side === 'token'),
+            {
+              ...html,
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: '📊 View Position Details', callback_data: `back:card:${rec.tokenId}` }],
+                  [{ text: '💵 Harvest Fees', callback_data: `claim:${rec.tokenId}` }],
+                  [{ text: '❌ Dismiss Alert', callback_data: 'dismiss' }],
+                ],
+              },
+            },
+          );
+        } else {
+          await bot.telegram.sendMessage(
+            config.telegram.allowedUserId,
+            msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below', d.baseSymbol),
+            html,
+          );
+        }
       }
       // Alert TERKONVERSI PENUH: harga menembus SELURUH rentang ke arah tujuan,
       // jadi modal sudah 100% berubah jadi aset seberang dan posisi berhenti
