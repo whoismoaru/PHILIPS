@@ -230,10 +230,10 @@ export async function screenToken(
     const sum10 = items.slice(0, 10).reduce((a, h) => a + val(h), 0n);
     top10Pct = Number((sum10 * 10000n) / totalSupply) / 100;
 
+    // Konsentrasi 10 teratas ditangani di bawah (butuh angka GMGN yang lebih
+    // bersih); di sini hanya dompet TUNGGAL yang menguasai mayoritas.
     if (top1Pct > 50 && !top1IsContract)
       flags.push({ level: 'BAHAYA', msg: `1 dompet menguasai ${top1Pct.toFixed(1)}% supply` });
-    else if (top10Pct > 90)
-      flags.push({ level: 'HATI-HATI', msg: `10 dompet teratas menguasai ${top10Pct.toFixed(1)}% supply` });
   }
   if (holdersCount !== null && holdersCount < 30)
     flags.push({ level: 'HATI-HATI', msg: `Holder sangat sedikit (${holdersCount})` });
@@ -275,6 +275,20 @@ export async function screenToken(
       flags.push({ level: 'HATI-HATI', msg: 'Nyaris tanpa transaksi 24 jam' });
   } else {
     flags.push({ level: 'HATI-HATI', msg: 'Tidak ada data pasar/likuiditas di DexScreener' });
+  }
+
+  // Konsentrasi 10 dompet teratas. Diperiksa DI SINI (bukan di blok holders
+  // Blockscout) karena angka GMGN baru tersedia setelah await di atas — dan
+  // angka GMGN-lah yang dipakai kartu: Blockscout menghitung kontrak pool
+  // sebagai 'holder' sehingga persennya melambung (41,27% vs 16,72% pada CA
+  // yang sama). Ambang 50% = HATI-HATI: LP tetap boleh, vonis turun jadi
+  // "SAFE TO LP (Moderate Risk)" supaya keputusannya tetap di tangan user.
+  const top10Concentration = gmgn?.top10Pct ?? top10Pct;
+  if (top10Concentration !== null && top10Concentration >= 50) {
+    flags.push({
+      level: 'HATI-HATI',
+      msg: `10 dompet teratas menguasai ${top10Concentration.toFixed(1)}% supply`,
+    });
   }
 
   return {
