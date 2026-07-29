@@ -852,29 +852,27 @@ async function cmdPositions(ctx: any, edit = false) {
   });
 
   // Maks 6 tombol id (posisi ke-7+ tetap tercantum di daftar & bisa lewat /stop).
-  // Label = pair LENGKAP. v4 menulis 'WETH / PONS' (berspasi) — dirapatkan supaya
-  // tombol tak melebar, dan dipotong bila simbol tokennya panjang.
+  // Label memakai #id + pair: #id selalu unik, jadi dua posisi token sama tak
+  // pernah menghasilkan tombol kembar yang tak bisa dibedakan.
   const labelOf = (pair: string): string => {
     const s = pair
       .split('/')
       .map((p) => p.trim())
       .join('/');
-    return s.length > 20 ? s.slice(0, 19) + '…' : s;
+    return s.length > 14 ? s.slice(0, 13) + '…' : s;
   };
   const top = rows.slice(0, 6);
-  const names = top.map((r) => labelOf(r.pair));
-  // Dua posisi token sama → tombolnya kembar dan tak bisa dibedakan. Yang kembar saja diberi #id.
-  const dup = new Set(names.filter((n, i) => names.indexOf(n) !== i));
-  const idBtns = top.map((r, i) =>
-    Markup.button.callback(dup.has(names[i]) ? `${names[i]} #${r.id}` : names[i], `pos_detail_${r.id}`),
+  const idBtns = top.map((r) =>
+    Markup.button.callback(`🔍 #${r.id} ${labelOf(r.pair)}`, `pos_detail_${r.id}`),
   );
-  const kbRows: ReturnType<typeof Markup.button.callback>[][] = [];
-  for (let i = 0; i < idBtns.length; i += 2) kbRows.push(idBtns.slice(i, i + 2));
+  // Satu tombol per baris: label "🔍 #id PAIR" terlalu panjang untuk dua kolom
+  // di layar HP — dua kolom membuatnya terpotong justru di bagian #id-nya.
+  const kbRows: ReturnType<typeof Markup.button.callback>[][] = idBtns.map((b) => [b]);
   kbRows.push([
-    Markup.button.callback('‹ Kembali', 'positions_back'),
     Markup.button.callback('🔄 Refresh', 'positions_refresh'),
+    Markup.button.callback('🚫 Tutup Semua', 'closeall_confirm'),
   ]);
-  kbRows.push([Markup.button.callback('⛔ Tutup Semua', 'closeall_confirm')]);
+  kbRows.push([Markup.button.callback('‹ Kembali', 'positions_back')]);
   const extra = { ...html, ...Markup.inlineKeyboard(kbRows) };
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }

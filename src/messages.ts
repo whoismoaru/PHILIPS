@@ -981,31 +981,39 @@ export function msgPositionsList(opts: {
       r.pnlUsd === null
         ? '—'
         : `${dot(r.pnlUsd)} ${bold(usdSigned(r.pnlUsd))}${r.pnlPct === null ? '' : ` (${fmtPct(r.pnlPct)})`}`;
+    // Strategi diringkas jadi label pendek: baris ini berdampingan dengan #id,
+    // kalimat panjang membuatnya melipat di HP.
+    const side = (r.strategy ?? '').toLowerCase().includes('jual') ? 'Sisi Token' : 'Sisi Base';
     const lines = [
-      `${r.inRange ? '🟢' : '🔴'} ${bold(esc(r.pair))} · ${italic(`#${esc(r.id)}`)}`,
-      `🎯 Strategi: ${bold(esc(r.strategy ?? 'Sisi Base (beli saat turun)'))}`,
-      `💰 Setoran: ${esc(r.investLabel)}`,
+      `${r.inRange ? '🟢' : '🔴'} ${bold(esc(r.pair))}`,
+      `🆔 #${esc(r.id)} | 🎯 ${esc(side)} | ⏱️ ${esc(r.age)}`,
+      r.inRange
+        ? `✅ Status: ${bold('Aktif')} (in range, memanen fee)`
+        : `⏳ Status: ${bold('Menunggu')} (out of range)`,
+      `💰 Modal: ${esc(r.investLabel)}`,
+      `📈 Fee: ${esc(r.feesLabel ?? '—')} · 💵 PnL: ${pnl}`,
     ];
-    if (r.rangeLabel) lines.push(`📉 Rentang: ${esc(r.rangeLabel)}`);
-    lines.push(
-      `⏳ Status: ${r.inRange ? `${bold('Aktif')} (in range, sedang memanen fee)` : `${bold('Menunggu')} (out of range)`} · ${esc(r.age)}`,
-      `📈 Fee belum diklaim: ${esc(r.feesLabel ?? '—')}`,
-      `💵 PnL: ${pnl}`,
-    );
+    if (r.rangeLabel) lines.push(`🎯 Rentang: ${esc(r.rangeLabel)}`);
     return lines.join('\n');
   });
 
   const out = [
-    `📊 ${bold('Posisi LP Aktif')}`,
+    `📊 ${bold(`Posisi LP Aktif (${opts.rows.length} aktif)`)}`,
+    '',
+    'Posisi Uniswap-mu saat ini:',
     '',
     blocks.join('\n\n'),
     '',
-    `💼 ${bold('Total setoran')}: ${esc(opts.totalInvestLabel)}`,
+    `💼 ${bold('Total modal')}: ${esc(opts.totalInvestLabel)}`,
     `💵 ${bold('Net PnL')}: ${opts.totalPnlUsd === null ? '—' : `${dot(opts.totalPnlUsd)} ${bold(usdSigned(opts.totalPnlUsd))}`}`,
   ];
   if (opts.totalFeesLabel) out.push(`📈 ${bold('Fee belum diklaim')}: ${esc(opts.totalFeesLabel)}`);
   if (opts.rows.length > MAX_ROWS) out.push(note(`+${opts.rows.length - MAX_ROWS} posisi lain — tutup dulu untuk melihatnya`));
-  out.push('', note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
+  out.push(
+    '',
+    italic('Pilih posisi di bawah untuk melihat PnL rinci, rentang target, atau menariknya.'),
+    note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`),
+  );
   return out.join('\n');
 }
 
