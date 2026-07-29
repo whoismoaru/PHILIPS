@@ -1608,20 +1608,40 @@ export function msgCashOut(opts: {
   ethOut: string;
   txHashes: string[];
 }): string {
-  const rows: Array<[string, string]> = [['position', `#${opts.tokenId}`]];
-  for (let i = 0; i < opts.txHashes.length; i++) {
-    rows.push([i === 0 ? 'tx' : '', shortAddr(opts.txHashes[i])]);
-  }
-  const body: string[] = [
-    fieldBlock(rows.filter(([l, v]) => l || v)),
+  const out = [
+    `✅ ${bold('Posisi Ditutup & Dicairkan')}`,
     '',
-    `💰 ${bold(`diterima  ${opts.ethOut}`)}`,
+    `🎉 ${bold('ID Posisi:')} #${esc(opts.tokenId)}`,
+    `💰 ${bold('Diterima:')} ${bold(esc(opts.ethOut))}`,
   ];
+
+  // Langkah yang BENAR-BENAR dijalankan, apa adanya dari executor. Hash-nya
+  // dipisah ke barisnya sendiri: di tengah kalimat, 66 karakter mustahil
+  // diseleksi dengan jempol.
   if (opts.notes.length) {
-    body.push('', section('notes'));
-    for (const n of opts.notes) body.push(`  ${esc(n)}`);
+    out.push('', `📝 ${bold('Langkah yang dijalankan:')}`);
+    for (const n of opts.notes) {
+      const m = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
+      out.push(`• ${esc(m ? m[1] : n)}`);
+      if (m) out.push(code(m[2]));
+    }
   }
-  return card(`✅ ${title('CASHED OUT', `#${opts.tokenId}`)}`, body, nowWib());
+
+  // Hash yang belum sempat tercantum di notes (mis. swap tanpa catatan).
+  const inNotes = opts.notes.join(' ');
+  const extraTx = opts.txHashes.filter((h) => !inNotes.includes(h));
+  if (extraTx.length) {
+    out.push('', `🔗 ${bold('Tx Hash:')}`);
+    for (const h of extraTx) out.push(code(h));
+  }
+
+  out.push(
+    '',
+    `⏱️ <i>Selesai ${nowWib()}</i>`,
+    '',
+    `<i>Posisi LP-mu sudah ditarik. Seluruh token pasangannya otomatis ditukar dan di-unwrap kembali jadi ${bold('ETH murni')}, dan kini aman di dompetmu.</i>`,
+  );
+  return out.join('\n');
 }
 
 // ─── monitor ───────────────────────────────────────────────────────

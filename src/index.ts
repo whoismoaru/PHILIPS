@@ -2700,7 +2700,13 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       reason: 'cashed',
       keep: summary.leftover,
     });
-    await ctx.reply(summary.text, html);
+    await ctx.reply(summary.text, {
+      ...html,
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('📊 Lihat Posisi Lain', 'positions')],
+        [Markup.button.callback('💧 Buka LP Baru', 'howto:add')],
+      ]),
+    });
     await sendProfitCard(ctx, tokenId, closingRec, summary.baseOutWei).catch((e) =>
       console.log('[profit-card] gagal:', (e as Error).message.slice(0, 120)),
     );
