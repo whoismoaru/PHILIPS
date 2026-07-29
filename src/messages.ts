@@ -864,34 +864,35 @@ export function msgPositionCard(opts: {
   baseSymbol?: string; // WETH (default, posisi lama) | USDG
   side?: 'base' | 'token'; // sisi setoran; kosong = base (posisi lama)
 }): string {
-  const base = opts.baseSymbol ?? 'WETH';
+  const base = esc(opts.baseSymbol ?? 'WETH');
   const sym = esc(opts.symbol);
   const tokenSide = opts.side === 'token';
   // Status HANYA di barisnya sendiri, tidak juga di judul: satu fakta satu tempat,
   // jadi tak ada peluang keduanya berbeda saat ada perubahan.
   const status = opts.inRange ? bold('IN RANGE') : bold('OUT OF RANGE');
-  const strategy = tokenSide ? `Sisi ${sym} (jual ${sym})` : `Sisi ${esc(base)} (beli ${sym})`;
-  const investUnit = tokenSide ? sym : esc(base);
+  const strategy = tokenSide ? `Token Side (Sell the rip)` : `${base} Side (Buy the dip)`;
+  const investUnit = tokenSide ? sym : base;
+  const range = esc(opts.range);
 
   // Kalimat penutup menjelaskan APA yang sedang terjadi pada uangnya — beda
   // untuk tiap status & sisi, jadi jangan disatukan jadi satu kalimat generik.
   const explain = opts.inRange
-    ? `Likuiditasmu ${bold('aktif')} dan sedang memanen fee. Selama harga ${sym} bertahan di rentang ini, fee terus bertambah.`
+    ? `Your liquidity is ${bold('active')} and earning fees right now. As long as ${sym} stays inside this range, fees keep accruing.`
     : tokenSide
-      ? `Likuiditasmu belum aktif. ${sym} akan berubah jadi ${esc(base)} dan mulai memanen fee begitu harganya ${bold('naik')} masuk rentang targetmu (${esc(opts.range)}).`
-      : `Likuiditasmu belum aktif. ${esc(base)} akan berubah jadi ${sym} dan mulai memanen fee begitu harga ${sym} ${bold('turun')} masuk rentang targetmu (${esc(opts.range)}).`;
+      ? `Your liquidity is currently inactive. It will automatically convert to ${base} and start earning fees once the ${sym} price ${bold('rises')} into your target range (${range}).`
+      : `Your liquidity is currently inactive. It will automatically convert to ${sym} and start earning fees once the token price ${bold('drops')} into your target range (${range}).`;
 
   return [
-    `📊 ${bold(`Rincian Posisi: #${esc(opts.tokenId)}`)}`,
+    `📊 ${bold(`Position Details: #${esc(opts.tokenId)}`)}`,
     '',
-    `🔗 ${bold('Pair:')} ${esc(base)} / ${sym} · ${feeLabel(opts.fee)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
-    `🎯 ${bold('Strategi:')} ${strategy}`,
-    `💰 ${bold('Modal:')} ${esc(opts.invest)} ${investUnit}`,
-    `${tokenSide ? '📈' : '📉'} ${bold('Rentang target:')} ${esc(opts.range)} dari harga pasar`,
-    `📈 ${bold('PnL sekarang:')} ${esc(opts.pnlText)}`,
+    `🔗 ${bold('Pair:')} ${base} / ${sym} ${italic(`(${feeLabel(opts.fee)} Fee)`)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
+    `🎯 ${bold('Strategy:')} ${strategy}`,
+    `💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`,
+    `${tokenSide ? '📈' : '📉'} ${bold('Target Range:')} ${range}`,
+    `📈 ${bold('Current PnL:')} ${esc(opts.pnlText)}`,
     `${opts.inRange ? '🟢' : '🔴'} ${bold('Status:')} ${status}`,
     '',
-    `⏱️ <i>Umur ${esc(opts.age)} · diperbarui ${nowWib()}</i>`,
+    `⏱️ <i>Age ${esc(opts.age)} · Updated Live: ${nowWib()}</i>`,
     '',
     // explain sudah berisi tag <b> & teks ter-escape → JANGAN lewat italic()
     // (yang meng-escape lagi dan menampilkan "&lt;b&gt;" mentah ke user).

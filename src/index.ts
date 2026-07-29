@@ -580,19 +580,27 @@ async function buildPositionCard(
     baseSymbol: d.baseSymbol,
     side: rec.side,
   });
+  // Tautan explorer menunjuk NFT posisinya (Blockscout: /token/<pm>/instance/<id>),
+  // bukan sekadar alamat dompet — itu yang benar-benar dimaksud "lihat posisi ini".
+  const explorer = cc.blockscout?.replace(/\/api\/v2\/?$/, '') ?? null;
+  const rowTop = [
+    Markup.button.callback('📄 Full Details', `detail:${rec.tokenId}`),
+    Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`),
+  ];
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
+      explorer
+        ? [Markup.button.url('🔗 View on Explorer', `${explorer}/token/${cc.pmAddress}/instance/${rec.tokenId}`)]
+        : [],
+      rowTop,
       [
-        Markup.button.callback('📄 Rincian Penuh', `detail:${rec.tokenId}`),
-        Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`),
+        Markup.button.callback('💵 Harvest Fees', `claim:${rec.tokenId}`),
+        Markup.button.callback('🗑️ Withdraw', `rm:${rec.tokenId}`),
       ],
-      [
-        Markup.button.callback('💵 Panen Fee', `claim:${rec.tokenId}`),
-        Markup.button.callback('🗑️ Tarik', `rm:${rec.tokenId}`),
-      ],
-      [Markup.button.callback('❌ Tutup Posisi', `stop:${rec.tokenId}`)], // aksi uang: baris sendiri
-    ]),
+      [Markup.button.callback('❌ Close Position', `stop:${rec.tokenId}`)], // aksi uang: baris sendiri
+      [Markup.button.callback('⬅️ Back to Positions', 'positions')],
+    ].filter((r) => r.length)),
   };
   return { text, extra };
 }
