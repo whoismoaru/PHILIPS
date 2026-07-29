@@ -863,13 +863,18 @@ export function msgPositionCard(opts: {
   chain?: string;
   baseSymbol?: string; // WETH (default, posisi lama) | USDG
   side?: 'base' | 'token'; // sisi setoran; kosong = base (posisi lama)
+  converted?: boolean; // harga menembus seluruh rentang → posisi 100% aset seberang
 }): string {
   const base = esc(opts.baseSymbol ?? 'WETH');
   const sym = esc(opts.symbol);
   const tokenSide = opts.side === 'token';
   // Status HANYA di barisnya sendiri, tidak juga di judul: satu fakta satu tempat,
   // jadi tak ada peluang keduanya berbeda saat ada perubahan.
-  const status = opts.inRange ? bold('IN RANGE') : bold('OUT OF RANGE');
+  const status = opts.inRange
+    ? bold('IN RANGE')
+    : opts.converted
+      ? bold('TARGET HIT (fully converted)')
+      : bold('OUT OF RANGE (waiting)');
   const strategy = tokenSide ? `Token Side (Sell the rip)` : `${base} Side (Buy the dip)`;
   const investUnit = tokenSide ? sym : base;
   const range = esc(opts.range);
@@ -878,7 +883,9 @@ export function msgPositionCard(opts: {
   // untuk tiap status & sisi, jadi jangan disatukan jadi satu kalimat generik.
   const explain = opts.inRange
     ? `Your liquidity is ${bold('active')} and earning fees right now. As long as ${sym} stays inside this range, fees keep accruing.`
-    : tokenSide
+    : opts.converted
+      ? `Price moved through your entire range, so this position is now ${bold(`100% ${tokenSide ? base : sym}`)} and no longer earning fees. Your target is done — withdraw, or leave it and wait for price to come back into range.`
+      : tokenSide
       ? `Your liquidity is currently inactive. It will automatically convert to ${base} and start earning fees once the ${sym} price ${bold('rises')} into your target range (${range}).`
       : `Your liquidity is currently inactive. It will automatically convert to ${sym} and start earning fees once the token price ${bold('drops')} into your target range (${range}).`;
 
@@ -974,6 +981,8 @@ export function msgPositionsList(opts: {
     feesLabel?: string | null;
     feesUsdLabel?: string | null; // fee dalam USD; jatuh ke feesLabel bila harga tak terbaca
     strategy?: string | null;
+    converted?: boolean; // harga sudah melewati SELURUH rentang → posisi 100% jadi aset seberang
+    convertedInto?: string | null; // simbol aset hasil konversi
   }>;
 }): string {
   const MAX_ROWS = 12;
@@ -981,14 +990,24 @@ export function msgPositionsList(opts: {
   const blocks = shown.map((r) => {
     // Sisi ditulis dari sudut pandang aset yang DISETOR: "ETH Side" = setor base.
     const side = (r.strategy ?? '').toLowerCase().includes('jual') ? 'Token Side' : 'ETH Side';
+    // TIGA keadaan, bukan dua. "Out of range" punya dua arti yang berlawanan:
+    // harga belum sampai (menunggu) ATAU harga sudah melewati seluruh rentang
+    // sehingga posisi 100% terkonversi (target tercapai). Menyebut keduanya
+    // "Menunggu" membuat posisi yang sudah selesai terbaca seperti belum mulai.
+    const statusLine = r.inRange
+      ? `✅ Status: ${bold('Aktif (In Range)')}`
+      : r.converted
+        ? `🎯 Status: ${bold('Target tercapai')} — 100% jadi ${esc(r.convertedInto ?? 'token')}`
+        : `⏳ Status: ${bold('Menunggu (Out of Range)')}`;
     return [
-      `🟢 ${bold(esc(r.pair))}`,
+      `${r.inRange ? '🟢' : r.converted ? '🔵' : '🟡'} ${bold(esc(r.pair))}`,
       `🆔 #${esc(r.id)} | 🎯 ${esc(side)}`,
-      r.inRange
-        ? `✅ Status: ${bold('Aktif (In Range)')}`
-        : `⏳ Status: ${bold('Menunggu (Out of Range)')}`,
+      statusLine,
       `💰 Modal: ${esc(r.investLabel)}`,
       `📈 Fee: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
+      ...(r.converted && r.pnlUsd !== null
+        ? [`💵 Nilai kini: ${dot(r.pnlUsd)} ${bold(usdSigned(r.pnlUsd))}${r.pnlPct === null ? '' : ` (${fmtPct(r.pnlPct)})`}`]
+        : []),
     ].join('\n');
   });
 

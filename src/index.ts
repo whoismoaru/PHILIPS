@@ -580,6 +580,7 @@ async function buildPositionCard(
     chain: cc.label,
     baseSymbol: d.baseSymbol,
     side: rec.side,
+    converted: !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below'),
   });
   // Tautan explorer menunjuk NFT posisinya (Blockscout: /token/<pm>/instance/<id>),
   // bukan sekadar alamat dompet — itu yang benar-benar dimaksud "lihat posisi ini".
@@ -741,6 +742,8 @@ type PosRow = {
   rangeLabel?: string | null;
   feesLabel?: string | null;
   feesUsdLabel?: string | null;
+  converted?: boolean;
+  convertedInto?: string | null;
   feesBase?: number; // fee belum diklaim dalam base, utk total di footer
 };
 
@@ -785,6 +788,11 @@ async function cmdPositions(ctx: any, edit = false) {
           rec.side === 'token'
             ? `Sisi ${rec.symbol} (jual saat naik)`
             : `Sisi ${d.baseSymbol} (beli saat turun)`,
+        // Terkonversi penuh = harga menembus SELURUH rentang ke arah tujuan:
+        // sisi base menunggu harga TURUN (selesai saat 'below'), sisi token
+        // menunggu harga NAIK (selesai saat 'above').
+        converted: !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below'),
+        convertedInto: rec.side === 'token' ? d.baseSymbol : rec.symbol,
         rangeLabel: (() => {
           const a = Number(d.priceLower), b = Number(d.priceUpper);
           const [lo, hi] = a <= b ? [d.priceLower, d.priceUpper] : [d.priceUpper, d.priceLower];
