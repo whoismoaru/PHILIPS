@@ -7,6 +7,7 @@ import { provider, ERC20_ABI } from './chain.js';
 import * as walletStore from './walletStore.js';
 import {
   planAddSingleSided,
+  planAddTokenSide,
   ADD_GAS_UNITS,
   VALID_FEES,
   executeAdd,
@@ -28,6 +29,7 @@ import * as store from './store.js';
 import * as journal from './journal.js';
 import * as msg from './messages.js';
 import * as explore from './explore.js';
+import * as alerts from './alerts.js';
 import {
   CHAINS,
   getChain,
@@ -197,6 +199,7 @@ type AddFlow = {
   selected?: explore.TokenPool; // pool yang dipilih user
   base?: BaseKind; // pasangan pool terpilih (weth | usdg)
   fee?: number;
+  tokenDec?: number; // desimal token (sisi token)
   strategy?: 'base' | 'token'; // sisi setoran: base (beli saat turun) | token (jual saat naik, Tahap 6)
   rangePct?: number; // v3: lebar rentang %. v4: -1 = default single-sided
   ethAmount?: string;
@@ -751,6 +754,7 @@ type PosRow = {
   pnlPct: number | null;
   inRange: boolean;
   wethEq: number; // setara-WETH utk total invest (USDG→WETH via ethUsd)
+  strategy?: string | null;
   rangeLabel?: string | null;
   feesLabel?: string | null;
   feesBase?: number; // fee belum diklaim dalam base, utk total di footer
@@ -793,6 +797,10 @@ async function cmdPositions(ctx: any, edit = false) {
         wethEq: d.baseKind === 'weth' ? investNum : ethUsd ? investNum / ethUsd : 0,
         // tickLower/Upper dalam istilah TICK; dalam istilah HARGA TOKEN urutannya
         // bisa terbalik (tergantung sisi base di pool) → urutkan menaik dulu.
+        strategy:
+          rec.side === 'token'
+            ? `Sisi ${rec.symbol} (jual saat naik)`
+            : `Sisi ${d.baseSymbol} (beli saat turun)`,
         rangeLabel: (() => {
           const a = Number(d.priceLower), b = Number(d.priceUpper);
           const [lo, hi] = a <= b ? [d.priceLower, d.priceUpper] : [d.priceUpper, d.priceLower];
@@ -1135,6 +1143,33 @@ bot.action('disconnect:ok', async (ctx) => {
   await ctx.editMessageText(msg.msgDisconnected(), html);
 });
 
+// ---------- /alerts — setelan notifikasi ----------
+const DROP_OPTIONS: Array<number | null> = [10, 15, 25, 40, null];
+const IL_OPTIONS: Array<number | null> = [null, 5, 10, 20, 30];
+
+function alertsKeyboard() {
+  const a = alerts.get();
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(`${a.rangeNotify ? '🔔' : '🔕'} In/out range: ${a.rangeNotify ? 'ON' : 'OFF'}`, 'al:range')],
+    [Markup.button.callback(`📉 Harga anjlok: ${a.dropPct === null ? 'OFF' : `-${a.dropPct}%`}`, 'al:drop')],
+    [Markup.button.callback(`⚠️ Rugi bersih: ${a.ilPct === null ? 'OFF' : `-${a.ilPct}%`}`, 'al:il')],
+  ]);
+}
+
+async function cmdAlerts(ctx: any) {
+  return ctx.reply(msg.msgAlerts(alerts.get()), { ...html, ...alertsKeyboard() });
+}
+bot.command('alerts', cmdAlerts);
+
+bot.action(/^al:(range|drop|il)$/, async (ctx) => {
+  const a = alerts.get();
+  if (ctx.match[1] === 'range') alerts.set({ rangeNotify: !a.rangeNotify });
+  else if (ctx.match[1] === 'drop') alerts.set({ dropPct: alerts.cycle(a.dropPct, DROP_OPTIONS) });
+  else alerts.set({ ilPct: alerts.cycle(a.ilPct, IL_OPTIONS) });
+  await ctx.answerCbQuery('Tersimpan');
+  await ctx.editMessageText(msg.msgAlerts(alerts.get()), { ...html, ...alertsKeyboard() }).catch(() => {});
+});
+
 bot.command('pools', cmdExplore);
 
 // /token_info <CA> — audit keamanan token. Jalurnya sama persis dengan menempel
@@ -1270,6 +1305,7 @@ async function renderStrategyStep(ctx: any, flow: AddFlow, edit: boolean) {
     ...html,
     ...Markup.inlineKeyboard([
       [Markup.button.callback(`🟢 Sisi ${base.symbol} — beli saat harga turun`, 'strat:base')],
+      [Markup.button.callback(`🔵 Sisi ${sel?.otherSymbol ?? 'Token'} — jual saat harga naik`, 'strat:token')],
       [Markup.button.callback('Kembali', 'back:pool'), Markup.button.callback('Batal', 'cancel')],
     ]),
   };
@@ -1278,8 +1314,9 @@ async function renderStrategyStep(ctx: any, flow: AddFlow, edit: boolean) {
 
 /** Langkah 4/5 — pilih lebar rentang (%). */
 async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
+  const up = flow.strategy === 'token';
   const rows = RANGE_OPTIONS.map((o) => [
-    Markup.button.callback(`${o.pct}%  ·  ${o.label}`, `rng:${o.pct}`),
+    Markup.button.callback(`${up ? '📈 +' : '📉 -'}${o.pct}%  ·  ${o.label}`, `rng:${o.pct}`),
   ]);
   rows.push([
     Markup.button.callback('Kembali', 'back:amount'),
@@ -1289,6 +1326,7 @@ async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
   const text = msg.msgRangeStep(
     flow.fee!,
     sel ? `${sel.baseSymbol}/${sel.otherSymbol} (${msg.feeLabel(sel.fee)} · ${sel.protocol})` : undefined,
+    flow.strategy === 'token',
   );
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
@@ -1302,6 +1340,16 @@ const wizardBase = (flow: AddFlow): BaseAsset => baseOf(getChain(flow.chain), fl
 function amountCtx(flow: AddFlow) {
   const base = wizardBase(flow);
   const stable = isStableBase(base.kind);
+  // Sisi token: satuannya token itu sendiri — batas MAX_ETH_PER_TX tak berlaku
+  // (batas itu menjaga ETH yang keluar, sementara sisi token tak menyetor ETH).
+  if (flow.strategy === 'token') {
+    return {
+      symbol: flow.selected?.otherSymbol ?? 'TOKEN',
+      cap: Infinity,
+      capLabel: 'sebanyak saldomu',
+      example: '1000',
+    };
+  }
   return {
     symbol: base.symbol,
     cap: stable ? Infinity : maxEth, // batas ETH hanya berlaku utk base WETH
@@ -1324,6 +1372,17 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   // Saldo base (1 RPC, gagal → '?': jangan pernah memblokir langkah ini).
   const cc = getChain(flow.chain);
   const base = wizardBase(flow);
+  if (flow.strategy === 'token') {
+    const dec = flow.tokenDec ?? 18;
+    const bal = await new ethers.Contract(flow.token, ERC20_ABI, cc.provider)
+      .balanceOf(cc.wallet.address)
+      .then((b: bigint) => `${msg.cleanUnits(b, dec)} ${a.symbol}`)
+      .catch(() => '?');
+    const textT = msg.msgAmountStep(a.symbol, a.capLabel, bal);
+    const extraT = { ...html, ...Markup.inlineKeyboard(rows) };
+    await (edit ? ctx.editMessageText(textT, extraT) : ctx.reply(textT, extraT));
+    return;
+  }
   const balLabel = await (base.wrappable
     ? cc.provider.getBalance(cc.wallet.address).then((b) => `${msg.cleanUnits(b, 18)} ${cc.nativeSymbol}`)
     : new ethers.Contract(base.address, ERC20_ABI, cc.provider)
@@ -1341,9 +1400,13 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   const cc = getChain(flow.chain);
   const base = baseOf(cc, flow.base ?? 'weth');
   // plan + estimasi biaya paralel (saling independen).
+  const tokenSide = flow.strategy === 'token';
   const [planSettled, costSettled] = await Promise.allSettled([
-    planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc),
-    estimateAddCost(cc, base, flow.ethAmount!),
+    tokenSide
+      ? planAddTokenSide(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc)
+      : planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc),
+    // Sisi token tak menyetor base: yang perlu dicek cuma gas, bukan saldo base.
+    estimateAddCost(cc, base, tokenSide ? '0' : flow.ethAmount!),
   ]);
   if (planSettled.status === 'rejected') throw planSettled.reason;
   const plan = planSettled.value;
@@ -1351,8 +1414,10 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   let cost: Awaited<ReturnType<typeof estimateAddCost>> | null = null;
   if (costSettled.status === 'fulfilled') cost = costSettled.value;
   else console.log('[estimateAddCost] gagal:', String(costSettled.reason).slice(0, 120));
-  const depositUsd = (await baseToUsd(base.kind, Number(flow.ethAmount!), cc)) ?? undefined;
+  const depositUsd = tokenSide ? undefined : (await baseToUsd(base.kind, Number(flow.ethAmount!), cc)) ?? undefined;
   const text = msg.msgPlanStep({
+    side: plan.side,
+    depositSymbol: tokenSide ? plan.otherSymbol : plan.baseSymbol,
     screenDanger: flow.screenBahaya,
     screenFailed: flow.screenFailed,
     baseSymbol: plan.baseSymbol,
@@ -1597,10 +1662,19 @@ bot.action(/^pick:(\d+)$/, async (ctx) => {
   await renderStrategyStep(ctx, flow, true);
 });
 
-bot.action('strat:base', async (ctx) => {
+bot.action(/^strat:(base|token)$/, async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add_lp.');
-  flow.strategy = 'base';
+  if (flow.selected?.protocol === 'v4' && ctx.match[1] === 'token') {
+    return ctx.answerCbQuery('Sisi token belum didukung di pool v4 — pilih pool v3.');
+  }
+  flow.strategy = ctx.match[1] as 'base' | 'token';
+  if (flow.strategy === 'token' && flow.tokenDec === undefined) {
+    const cc = getChain(flow.chain);
+    flow.tokenDec = Number(
+      await new ethers.Contract(flow.token, ERC20_ABI, cc.provider).decimals().catch(() => 18),
+    );
+  }
   await ctx.answerCbQuery();
   await renderAmountStep(ctx, flow, true);
 });
@@ -1744,8 +1818,19 @@ bot.action('addok', async (ctx) => {
       fee: flow.fee,
       symbol: plan.otherSymbol,
       baseKind: plan.baseKind,
-      initialWethWei: plan.baseAmountWei.toString(), // jumlah base (unit base) saat buka
-      nominalEth: flow.ethAmount,
+      // Sisi token tak menyetor base sama sekali (baseAmountWei = 0). Modal awal
+      // dicatat sebagai SETARA base pada harga saat buka — tanpa itu PnL tak punya
+      // titik nol dan posisi selamanya tampil "—".
+      initialWethWei: (plan.side === 'token'
+        ? ethers.parseUnits(
+            (Number(flow.ethAmount) * Number(plan.currentPrice)).toFixed(plan.baseDecimals),
+            plan.baseDecimals,
+          )
+        : plan.baseAmountWei
+      ).toString(),
+      nominalEth: plan.side === 'token' ? undefined : flow.ethAmount,
+      nominalToken: plan.side === 'token' ? flow.ethAmount : undefined,
+      side: plan.side,
       rangeLowPct: plan.pctLow,
       rangeHighPct: plan.pctHigh,
       entryPrice: plan.currentPrice, // harga token saat buka → basis alert anjlok
@@ -3233,7 +3318,10 @@ bot.on(message('text'), async (ctx) => {
   }
   if (flow?.awaitingAmount && flow.strategy !== undefined) {
     const a = amountCtx(flow);
-    const dec = baseOf(getChain(flow.chain), flow.base ?? 'weth').decimals;
+    const dec =
+      flow.strategy === 'token'
+        ? (flow.tokenDec ?? 18)
+        : baseOf(getChain(flow.chain), flow.base ?? 'weth').decimals;
     const w = parseAmt(raw, dec);
     if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
     const num = Number(ethers.formatUnits(w, dec));
@@ -3279,6 +3367,7 @@ const BOT_COMMANDS = [
   { command: 'status', description: 'Koneksi jaringan & saldo dompet' },
   { command: 'positions', description: 'Posisi LP yang aktif (live)' },
   { command: 'connect', description: 'Hubungkan dompet Robinhood' },
+  { command: 'alerts', description: 'Setelan notifikasi (range, anjlok, rugi)' },
   { command: 'settings', description: 'Dompet & preferensi transaksi' },
   { command: 'token_info', description: 'Audit keamanan token: /token_info <CA>' },
   { command: 'pools', description: 'Top pool by APR (ETH/USDG) — sinkron Uniswap' },

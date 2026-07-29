@@ -31,10 +31,13 @@ export type PosRecord = {
   status: 'ACTIVE' | 'STOPPED';
   lastInRange?: boolean; // untuk notifikasi auto-monitor
   entryPrice?: string; // harga token dalam base saat buka (untuk alert anjlok); kosong = posisi lama
+  ilAlerted?: boolean; // sudah kirim alert rugi bersih? (reset saat pulih)
   dropAlerted?: boolean; // sudah kirim alert anjlok? (reset saat harga pulih — anti-spam)
   stoppedAt?: number;
   resultEthWei?: string; // ETH diterima saat stop (untuk PnL final)
   imported?: boolean; // ditemukan on-chain (bukan dibuka via bot) → entry tak diketahui
+  side?: 'base' | 'token'; // sisi setoran saat buka; kosong = base (posisi lama)
+  nominalToken?: string; // nominal token yang disetor (sisi token)
 };
 
 const FILE = join(process.cwd(), 'data', 'positions.json');

@@ -117,6 +117,13 @@ function widthInTicks(rangePercent: number, spacing: number): number {
   return Math.max(spacing, Math.ceil(raw / spacing) * spacing);
 }
 
+/** Lebar rentang untuk KENAIKAN harga X%: width = ln(1+X/100)/ln(1.0001). */
+function widthInTicksUp(rangePercent: number, spacing: number): number {
+  const frac = Math.min(Math.max(rangePercent, 0.1), 1000) / 100;
+  const raw = Math.log(1 + frac) / Math.log(1.0001);
+  return Math.max(spacing, Math.ceil(raw / spacing) * spacing);
+}
+
 export type AddPlan = {
   baseKind: BaseKind;
   baseSymbol: string;
@@ -132,6 +139,9 @@ export type AddPlan = {
   currentPrice: string; // harga token sekarang dalam base
   pctLow: number; // % ujung terjauh dari harga sekarang (paling negatif)
   pctHigh: number; // % ujung terdekat dari harga sekarang
+  side: 'base' | 'token'; // aset yang disetor
+  tokenAmountWei: bigint; // setoran sisi token (0 pada sisi base)
+  tokenDecimals: number;
   position: TPosition;
 };
 
@@ -220,6 +230,95 @@ export async function planAddSingleSided(
     currentPrice,
     pctLow,
     pctHigh,
+    side: 'base',
+    tokenAmountWei: 0n,
+    tokenDecimals: st.tokenOther.decimals,
+    position,
+  };
+}
+
+/**
+ * Rencana SINGLE-SIDED sisi TOKEN: setor tokennya saja, rentang DI ATAS harga
+ * sekarang. Posisi bekerja seperti limit-sell pasif — token perlahan berubah
+ * jadi base saat harga naik melewati rentang, sambil memanen fee.
+ *
+ * Cermin dari planAddSingleSided: sisi tick yang dipakai kebalikannya, karena
+ * posisi berisi 100% token0 saat harga DI BAWAH rentang, dan 100% token1 saat
+ * harga DI ATAS rentang.
+ */
+export async function planAddTokenSide(
+  tokenAddress: string,
+  fee: number,
+  amountToken: string,
+  rangePercentUp: number,
+  base: BaseAsset,
+  ctx: ChainCtx = getChain(),
+): Promise<AddPlan> {
+  const st = await loadPool(tokenAddress, fee, base, ctx);
+  const spacing = TICK_SPACINGS[fee as FeeAmount];
+  const width = widthInTicksUp(rangePercentUp, spacing);
+  const tokenWei = ethers.parseUnits(amountToken, st.tokenOther.decimals);
+
+  let tickLower: number;
+  let tickUpper: number;
+  let position: TPosition;
+
+  if (st.baseIsToken0) {
+    // Token = token1 → posisi harus berisi token1 saja → rentang DI BAWAH tick.
+    let upper = Math.floor(st.currentTick / spacing) * spacing;
+    if (upper >= st.currentTick) upper -= spacing;
+    tickUpper = upper;
+    tickLower = upper - width;
+    position = Position.fromAmount1({ pool: st.sdkPool, tickLower, tickUpper, amount1: tokenWei.toString() });
+  } else {
+    // Token = token0 → posisi harus berisi token0 saja → rentang DI ATAS tick.
+    let lower = Math.ceil(st.currentTick / spacing) * spacing;
+    if (lower <= st.currentTick) lower += spacing;
+    tickLower = lower;
+    tickUpper = lower + width;
+    position = Position.fromAmount0({
+      pool: st.sdkPool,
+      tickLower,
+      tickUpper,
+      amount0: tokenWei.toString(),
+      useFullPrecision: true,
+    });
+  }
+
+  const mint = position.mintAmounts;
+  const amount0 = BigInt(mint.amount0.toString());
+  const amount1 = BigInt(mint.amount1.toString());
+  const baseAmountWei = st.baseIsToken0 ? amount0 : amount1;
+  const tokenAmountWei = st.baseIsToken0 ? amount1 : amount0;
+
+  const pLower = tickToPrice(st.tokenOther, st.sdkBase, tickLower).toSignificant(6);
+  const pUpper = tickToPrice(st.tokenOther, st.sdkBase, tickUpper).toSignificant(6);
+  const [priceLower, priceUpper] =
+    Number(pLower) <= Number(pUpper) ? [pLower, pUpper] : [pUpper, pLower];
+
+  const currentPrice = st.sdkPool.priceOf(st.tokenOther).toSignificant(8);
+  const cur = Number(currentPrice);
+  const pctLow = cur > 0 ? (Number(priceLower) / cur - 1) * 100 : 0;
+  const pctHigh = cur > 0 ? (Number(priceUpper) / cur - 1) * 100 : 0;
+
+  return {
+    baseKind: base.kind,
+    baseSymbol: base.symbol,
+    baseDecimals: base.decimals,
+    baseIsToken0: st.baseIsToken0,
+    tickLower,
+    tickUpper,
+    priceLower,
+    priceUpper,
+    baseAmountWei,
+    otherAmountWei: tokenAmountWei,
+    otherSymbol: st.tokenOther.symbol!,
+    currentPrice,
+    pctLow,
+    pctHigh,
+    side: 'token',
+    tokenAmountWei,
+    tokenDecimals: st.tokenOther.decimals,
     position,
   };
 }
@@ -297,6 +396,34 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
   return notes;
 }
 
+/** Pastikan saldo ERC20 (token biasa) cukup & sudah di-approve ke Position Manager.
+ *  Tak ada wrap di sini: token biasa harus memang sudah dipegang. */
+async function ensureErc20Ready(
+  address: string,
+  amountWei: bigint,
+  symbol: string,
+  decimals: number,
+  ctx: ChainCtx,
+): Promise<string[]> {
+  const { wallet } = ctx;
+  const notes: string[] = [];
+  const c = new ethers.Contract(address, ERC20_ABI, wallet);
+  const bal: bigint = await c.balanceOf(wallet.address);
+  if (bal < amountWei) {
+    throw new Error(
+      `Saldo ${symbol} kurang: butuh ${ethers.formatUnits(amountWei, decimals)}, ` +
+        `tersedia ${ethers.formatUnits(bal, decimals)}. Beli dulu lewat /buy atau kecilkan nominal.`,
+    );
+  }
+  const allowance: bigint = await c.allowance(wallet.address, ctx.pmAddress);
+  if (allowance < amountWei) {
+    const tx = await c.approve(ctx.pmAddress, ethers.MaxUint256);
+    await tx.wait();
+    notes.push(`Setujui ${symbol} untuk Position Manager (tx ${tx.hash})`);
+  }
+  return notes;
+}
+
 /** Eksekusi penambahan LP single-sided. Mengembalikan tokenId posisi baru + catatan. */
 export async function executeAdd(
   plan: AddPlan,
@@ -306,7 +433,11 @@ export async function executeAdd(
 ): Promise<{ tokenId: string; notes: string[] }> {
   const { positionManager, wallet } = ctx;
   const base = baseOf(ctx, plan.baseKind);
-  const notes = await ensureBaseReady(base, plan.baseAmountWei, ctx);
+  // Sisi token: yang perlu disiapkan tokennya, bukan base (tak ada yang di-wrap).
+  const notes =
+    plan.side === 'token'
+      ? await ensureErc20Ready(tokenAddress, plan.tokenAmountWei, plan.otherSymbol, plan.tokenDecimals, ctx)
+      : await ensureBaseReady(base, plan.baseAmountWei, ctx);
 
   const withSlip = plan.position.mintAmountsWithSlippage(SLIPPAGE);
   const params = {
@@ -330,8 +461,12 @@ export async function executeAdd(
   } catch (e) {
     // STF = transfer base gagal (saldo/allowance). Pulihkan sekali lalu retry.
     if (/STF/i.test((e as Error).message)) {
-      notes.push(`Mint kena STF — verifikasi ulang ${base.symbol} & retry...`);
-      notes.push(...(await ensureBaseReady(base, plan.baseAmountWei, ctx)));
+      notes.push(`Mint kena STF — verifikasi ulang aset & retry...`);
+      notes.push(
+        ...(plan.side === 'token'
+          ? await ensureErc20Ready(tokenAddress, plan.tokenAmountWei, plan.otherSymbol, plan.tokenDecimals, ctx)
+          : await ensureBaseReady(base, plan.baseAmountWei, ctx)),
+      );
       const tx = await positionManager.mint({ ...params, deadline: Math.floor(Date.now() / 1000) + 600 });
       receipt = await tx.wait();
     } else {

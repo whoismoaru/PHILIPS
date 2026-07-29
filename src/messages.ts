@@ -224,6 +224,7 @@ function cockpitLines(dryRun: boolean): string[] {
       ['/history', 'Jurnal transaksi tertutup'],
       ['/pnl', 'Rekapitulasi PnL seumur hidup'],
       ['/pools', 'Pool APR tertinggi saat ini'],
+      ['/alerts', 'Setelan notifikasi posisi'],
     ]).map((l, i) => (i === 0 ? `📊 <b>VIEW &amp; ANALYTICS</b>\n${l}` : l)),
     '',
     ...grp([
@@ -652,6 +653,18 @@ export function msgPnl(opts: {
 }
 
 /** Alert harga token anjlok ≥ambang dari harga entry (auto-monitor). */
+export function msgIlAlert(tokenId: string, symbol: string, lossPct: number, limit: number): string {
+  return [
+    `⚠️ ${bold('ALERT: RUGI BERSIH MELEWATI AMBANG')}`,
+    '',
+    `Posisi ${bold(`#${esc(tokenId)}`)} · ${bold(esc(symbol))}`,
+    `Nilai posisi + fee kini ${bold(`${lossPct.toFixed(1)}% di bawah modal`)} (ambangmu ${limit}%).`,
+    '',
+    note('angka ini sudah memperhitungkan fee yang terkumpul — bukan IL teoretis.'),
+    note(nowWib()),
+  ].join('\n');
+}
+
 export function msgPriceDrop(tokenId: string, symbol: string, dropPct: number, baseSymbol = 'WETH'): string {
   return [
     hdr('⚠️ ALERT: HARGA ANJLOK'),
@@ -1059,18 +1072,26 @@ export function msgStrategyStep(pair: string, baseSym: string, tokenSym: string,
     ...(price ? [`Harga pasar: 1 ${esc(tokenSym)} = ${bold(esc(price))} ${esc(baseSym)}`, ''] : []),
     `Setoran satu sisi berarti kamu hanya menaruh ${bold(esc(baseSym))}. Posisimu bekerja seperti limit order pasif: memanen fee sambil menunggu harga ${esc(tokenSym)} turun ke rentangmu, lalu perlahan berubah jadi ${esc(tokenSym)}.`,
     '',
-    note('sisi token (jual saat harga naik) menyusul — belum aktif'),
+    note('sisi token butuh tokennya sudah ada di dompet — beli dulu lewat /buy bila belum'),
   ].join('\n');
 }
 
-export function msgRangeStep(fee: number, poolLabel?: string): string {
+export function msgRangeStep(fee: number, poolLabel?: string, tokenSide = false): string {
   return [
-    hdr('📉 BUKA LP · LANGKAH [4/5] — RENTANG'),
+    hdr(`${tokenSide ? '📈' : '📉'} BUKA LP · LANGKAH [4/5] — RENTANG`),
     '',
     `Pool: ${bold(poolLabel ? esc(poolLabel) : feeLabel(fee))} ✓`,
     '',
-    bold('Seberapa jauh di bawah harga sekarang batas belimu?'),
-    note('makin lebar rentang, makin lambat berubah jadi token tapi makin lama memanen fee'),
+    bold(
+      tokenSide
+        ? 'Seberapa jauh di ATAS harga sekarang target jualmu?'
+        : 'Seberapa jauh di BAWAH harga sekarang batas belimu?',
+    ),
+    note(
+      tokenSide
+        ? 'makin lebar rentang, makin lambat token terjual habis tapi makin lama memanen fee'
+        : 'makin lebar rentang, makin lambat berubah jadi token tapi makin lama memanen fee',
+    ),
   ].join('\n');
 }
 
@@ -1114,19 +1135,27 @@ export function msgPlanStep(opts: {
   costFailed?: boolean; // estimasi biaya gagal → JANGAN klaim saldo cukup
   priceLower?: string;
   priceUpper?: string;
+  side?: 'base' | 'token';
+  depositSymbol?: string;
   dryRun: boolean;
 }): string {
   const body: string[] = [hdr('📝 TINJAU POSISI LP · LANGKAH [5/5]'), ''];
   if (opts.screenDanger) body.push(`⚠️ ${bold('SCREEN: BAHAYA')} — pertimbangkan batal.`, '');
   else if (opts.screenFailed) body.push(`🟡 ${bold('SCREEN: GAGAL')} — token tak terverifikasi.`, '');
   body.push(
-    `🎯 Strategi · ${bold(`Single-Side ${esc(opts.baseSymbol)} (beli saat turun)`)}`,
+    `🎯 Strategi · ${bold(
+      opts.side === 'token'
+        ? `Single-Side ${esc(opts.symbol)} (jual saat naik)`
+        : `Single-Side ${esc(opts.baseSymbol)} (beli saat turun)`,
+    )}`,
     `📌 Pair · ${bold(`${esc(opts.baseSymbol)} / ${esc(opts.symbol)}`)} (${feeLabel(opts.fee)})`,
     `🏛️ Protokol · Uniswap v3`,
-    `💵 Deposit · ${bold(`${esc(opts.depositAmount)} ${esc(opts.baseSymbol)}`)}${opts.depositUsd ? ` (≈ ${usdPlain(opts.depositUsd)})` : ''}`,
+    `💵 Deposit · ${bold(`${esc(opts.depositAmount)} ${esc(opts.depositSymbol ?? opts.baseSymbol)}`)}${opts.depositUsd ? ` (≈ ${usdPlain(opts.depositUsd)})` : ''}`,
     `🎯 Range · ${bold(`${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`)}${opts.priceLower && opts.priceUpper ? ` (${esc(opts.priceLower)} — ${esc(opts.priceUpper)})` : ''}`,
     `📊 Rate · 1 ${esc(opts.symbol)} = ${esc(opts.currentPrice)} ${esc(opts.baseSymbol)}`,
-    `⏳ Status awal · ${italic(`out of range — aktif saat harga ${esc(opts.symbol)} turun ke rentang`)}`,
+    `⏳ Status awal · ${italic(
+      `out of range — aktif saat harga ${esc(opts.symbol)} ${opts.side === 'token' ? 'naik' : 'turun'} ke rentang`,
+    )}`,
     '',
     `⚓ Estimasi gas · ~${esc(opts.gasEth)} ETH`,
     `💰 Total perlu · ${bold(esc(String(opts.needLabel)))} (saldo: ${esc(String(opts.balanceLabel))})`,
@@ -1296,6 +1325,20 @@ export function msgLpOpened(tokenId: string, notes: string[], pair?: string, ran
 }
 
 // ─── dompet: /connect /settings /disconnect ────────────────────────
+
+export function msgAlerts(a: { rangeNotify: boolean; dropPct: number | null; ilPct: number | null }): string {
+  return [
+    `🔔 ${bold('Notifikasi Posisi')}`,
+    '',
+    'PHILIPS mengabarimu bila:',
+    `${a.rangeNotify ? '✅' : '⬜'} Posisi masuk / keluar rentang (mulai atau berhenti memanen fee)`,
+    `${a.dropPct === null ? '⬜' : '✅'} Harga token anjlok ${a.dropPct === null ? '—' : bold(`${a.dropPct}%`)} dari harga saat buka`,
+    `${a.ilPct === null ? '⬜' : '✅'} Nilai posisi + fee turun ${a.ilPct === null ? '—' : bold(`${a.ilPct}%`)} di bawah modal`,
+    '',
+    note('tombol di bawah memutar nilainya; OFF = notifikasi itu dimatikan.'),
+    note('"rugi bersih" sudah menghitung fee yang terkumpul — bukan IL teoretis yang mengabaikan fee.'),
+  ].join('\n');
+}
 
 export function msgNeedWallet(): string {
   return [

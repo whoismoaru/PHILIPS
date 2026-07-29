@@ -5,10 +5,11 @@ import { getChain, CHAINS, ERC20_ABI } from './chains.js';
 import { swapTokenToEthRobust } from './relay.js';
 import { ethers } from 'ethers';
 import * as store from './store.js';
+import * as alerts from './alerts.js';
 import * as journal from './journal.js';
 import * as v4store from './v4store.js';
 import { checkV4Status } from './uniswapV4.js';
-import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgV4Range } from './messages.js';
+import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgIlAlert, msgV4Range } from './messages.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -157,7 +158,8 @@ async function tick(bot: Telegraf) {
   for (const rec of store.active()) {
     try {
       const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
-      if (rec.lastInRange !== undefined && rec.lastInRange !== d.inRange) {
+      const cfg = alerts.get();
+      if (cfg.rangeNotify && rec.lastInRange !== undefined && rec.lastInRange !== d.inRange) {
         const text = d.inRange
           ? msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol)
           : msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below', d.baseSymbol);
@@ -166,9 +168,10 @@ async function tick(bot: Telegraf) {
       // Alert anjlok: harga token vs entry. Sekali per crossing; re-arm saat pulih.
       const entry = rec.entryPrice ? Number(rec.entryPrice) : 0;
       const cur = Number(d.currentPrice);
-      if (entry > 0 && cur > 0) {
+      const dropLimit = cfg.dropPct ?? DROP_ALERT_PCT;
+      if (cfg.dropPct !== null && entry > 0 && cur > 0) {
         const dropPct = (1 - cur / entry) * 100;
-        if (dropPct >= DROP_ALERT_PCT && !rec.dropAlerted) {
+        if (dropPct >= dropLimit && !rec.dropAlerted) {
           // Tombol menuju kartu KONFIRMASI tutup (stop:), bukan kirim tx — invariant
           // §8.5 utuh, tapi user tak perlu mengetik command saat harga jatuh.
           await bot.telegram.sendMessage(
@@ -182,8 +185,32 @@ async function tick(bot: Telegraf) {
             },
           );
           store.update(rec.tokenId, { dropAlerted: true });
-        } else if (rec.dropAlerted && dropPct < DROP_REARM_PCT) {
+        } else if (rec.dropAlerted && dropPct < dropLimit - (DROP_ALERT_PCT - DROP_REARM_PCT)) {
           store.update(rec.tokenId, { dropAlerted: false });
+        }
+      }
+      // Alert rugi bersih (IL setelah fee): nilai posisi + fee vs modal saat buka.
+      // Sekali per crossing, dipulihkan lewat penanda yang sama seperti alert anjlok.
+      if (cfg.ilPct !== null && !rec.imported) {
+        const init = Number(ethers.formatUnits(BigInt(rec.initialWethWei || '0'), d.baseDecimals));
+        const now = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
+        if (init > 0) {
+          const lossPct = (1 - now / init) * 100;
+          if (lossPct >= cfg.ilPct && !rec.ilAlerted) {
+            await bot.telegram.sendMessage(
+              config.telegram.allowedUserId,
+              msgIlAlert(rec.tokenId, rec.symbol, lossPct, cfg.ilPct),
+              {
+                ...html,
+                reply_markup: {
+                  inline_keyboard: [[{ text: '⛔ Tutup Sekarang', callback_data: `stop:${rec.tokenId}` }]],
+                },
+              },
+            );
+            store.update(rec.tokenId, { ilAlerted: true });
+          } else if (rec.ilAlerted && lossPct < cfg.ilPct - 5) {
+            store.update(rec.tokenId, { ilAlerted: false });
+          }
         }
       }
       store.update(rec.tokenId, { lastInRange: d.inRange });
