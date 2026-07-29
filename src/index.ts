@@ -578,19 +578,20 @@ async function buildPositionCard(
     dryRun: config.safety.dryRun,
     chain: cc.label,
     baseSymbol: d.baseSymbol,
+    side: rec.side,
   });
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
       [
-        Markup.button.callback('Detail', `detail:${rec.tokenId}`),
+        Markup.button.callback('📄 Rincian Penuh', `detail:${rec.tokenId}`),
         Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`),
       ],
       [
         Markup.button.callback('💵 Panen Fee', `claim:${rec.tokenId}`),
         Markup.button.callback('🗑️ Tarik', `rm:${rec.tokenId}`),
       ],
-      [Markup.button.callback('⛔ Tutup', `stop:${rec.tokenId}`)], // aksi uang: baris sendiri
+      [Markup.button.callback('❌ Tutup Posisi', `stop:${rec.tokenId}`)], // aksi uang: baris sendiri
     ]),
   };
   return { text, extra };

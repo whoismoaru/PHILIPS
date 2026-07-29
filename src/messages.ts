@@ -862,24 +862,40 @@ export function msgPositionCard(opts: {
   dryRun: boolean;
   chain?: string;
   baseSymbol?: string; // WETH (default, posisi lama) | USDG
+  side?: 'base' | 'token'; // sisi setoran; kosong = base (posisi lama)
 }): string {
   const base = opts.baseSymbol ?? 'WETH';
-  const pair = `${base} / ${esc(opts.symbol)}`;
+  const sym = esc(opts.symbol);
+  const tokenSide = opts.side === 'token';
   // Status HANYA di barisnya sendiri, tidak juga di judul: satu fakta satu tempat,
   // jadi tak ada peluang keduanya berbeda saat ada perubahan.
-  const status = opts.inRange ? `🟢 ${bold('IN RANGE')}` : `🔴 ${bold('OUT OF RANGE')}`;
+  const status = opts.inRange ? bold('IN RANGE') : bold('OUT OF RANGE');
+  const strategy = tokenSide ? `Sisi ${sym} (jual ${sym})` : `Sisi ${esc(base)} (beli ${sym})`;
+  const investUnit = tokenSide ? sym : esc(base);
+
+  // Kalimat penutup menjelaskan APA yang sedang terjadi pada uangnya — beda
+  // untuk tiap status & sisi, jadi jangan disatukan jadi satu kalimat generik.
+  const explain = opts.inRange
+    ? `Likuiditasmu ${bold('aktif')} dan sedang memanen fee. Selama harga ${sym} bertahan di rentang ini, fee terus bertambah.`
+    : tokenSide
+      ? `Likuiditasmu belum aktif. ${sym} akan berubah jadi ${esc(base)} dan mulai memanen fee begitu harganya ${bold('naik')} masuk rentang targetmu (${esc(opts.range)}).`
+      : `Likuiditasmu belum aktif. ${esc(base)} akan berubah jadi ${sym} dan mulai memanen fee begitu harga ${sym} ${bold('turun')} masuk rentang targetmu (${esc(opts.range)}).`;
 
   return [
-    `${bold('POSITION')} | #${esc(opts.tokenId)} · ${base}/${esc(opts.symbol)}`,
+    `📊 ${bold(`Rincian Posisi: #${esc(opts.tokenId)}`)}`,
     '',
-    `${pair} · ${feeLabel(opts.fee)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
+    `🔗 ${bold('Pair:')} ${esc(base)} / ${sym} · ${feeLabel(opts.fee)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
+    `🎯 ${bold('Strategi:')} ${strategy}`,
+    `💰 ${bold('Modal:')} ${esc(opts.invest)} ${investUnit}`,
+    `${tokenSide ? '📈' : '📉'} ${bold('Rentang target:')} ${esc(opts.range)} dari harga pasar`,
+    `📈 ${bold('PnL sekarang:')} ${esc(opts.pnlText)}`,
+    `${opts.inRange ? '🟢' : '🔴'} ${bold('Status:')} ${status}`,
     '',
-    `Invest ${esc(opts.invest)} ${base} · Range ${esc(opts.range)}`,
+    `⏱️ <i>Umur ${esc(opts.age)} · diperbarui ${nowWib()}</i>`,
     '',
-    `Umur ${esc(opts.age)} · PnL ${esc(opts.pnlText)}`,
-    '',
-    status,
-    '',
+    // explain sudah berisi tag <b> & teks ter-escape → JANGAN lewat italic()
+    // (yang meng-escape lagi dan menampilkan "&lt;b&gt;" mentah ke user).
+    `<i>${explain}</i>`,
     footerMode(opts.dryRun),
   ].join('\n');
 }
