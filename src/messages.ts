@@ -873,8 +873,8 @@ export function msgPositionCard(opts: {
   const status = opts.inRange
     ? bold('IN RANGE')
     : opts.converted
-      ? bold('TARGET HIT (fully converted)')
-      : bold('OUT OF RANGE (waiting)');
+      ? `${bold('OUT OF RANGE')} — fully converted`
+      : `${bold('OUT OF RANGE')} — waiting`;
   const strategy = tokenSide ? `Token Side (Sell the rip)` : `${base} Side (Buy the dip)`;
   const investUnit = tokenSide ? sym : base;
   const range = esc(opts.range);
@@ -990,36 +990,37 @@ export function msgPositionsList(opts: {
   const blocks = shown.map((r) => {
     // Sisi ditulis dari sudut pandang aset yang DISETOR: "ETH Side" = setor base.
     const side = (r.strategy ?? '').toLowerCase().includes('jual') ? 'Token Side' : 'ETH Side';
-    // TIGA keadaan, bukan dua. "Out of range" punya dua arti yang berlawanan:
-    // harga belum sampai (menunggu) ATAU harga sudah melewati seluruh rentang
-    // sehingga posisi 100% terkonversi (target tercapai). Menyebut keduanya
-    // "Menunggu" membuat posisi yang sudah selesai terbaca seperti belum mulai.
+    // Dua-duanya "Out of Range" (permintaan user), tapi keterangannya beda:
+    // harga belum sampai vs harga sudah menembus seluruh rentang sehingga posisi
+    // 100% terkonversi. Tanpa keterangan itu, posisi yang belinya sudah SELESAI
+    // terbaca sama persis dengan yang belum mulai sama sekali.
     const statusLine = r.inRange
-      ? `✅ Status: ${bold('Aktif (In Range)')}`
+      ? `✅ Status: ${bold('Active (In Range)')}`
       : r.converted
-        ? `🎯 Status: ${bold('Target tercapai')} — 100% jadi ${esc(r.convertedInto ?? 'token')}`
-        : `⏳ Status: ${bold('Menunggu (Out of Range)')}`;
+        ? `⏳ Status: ${bold('Out of Range')} — fully converted to ${esc(r.convertedInto ?? 'token')}`
+        : `⏳ Status: ${bold('Out of Range')} — waiting`;
     return [
-      `${r.inRange ? '🟢' : r.converted ? '🔵' : '🟡'} ${bold(esc(r.pair))}`,
+      `${r.inRange ? '🟢' : '🔴'} ${bold(esc(r.pair))}`,
       `🆔 #${esc(r.id)} | 🎯 ${esc(side)}`,
       statusLine,
-      `💰 Modal: ${esc(r.investLabel)}`,
-      `📈 Fee: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
+      `💰 Invested: ${esc(r.investLabel)}`,
+      `📈 Fees: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
       ...(r.converted && r.pnlUsd !== null
-        ? [`💵 Nilai kini: ${dot(r.pnlUsd)} ${bold(usdSigned(r.pnlUsd))}${r.pnlPct === null ? '' : ` (${fmtPct(r.pnlPct)})`}`]
+        ? [`💵 Current Value: ${dot(r.pnlUsd)} ${bold(usdSigned(r.pnlUsd))}${r.pnlPct === null ? '' : ` (${fmtPct(r.pnlPct)})`}`]
         : []),
     ].join('\n');
   });
 
   const out = [
-    `📊 ${bold(`Posisi LP Aktif (${opts.rows.length} Aktif)`)}`,
+    `📊 ${bold(`Active LP Positions (${opts.rows.length} Active)`)}`,
     '',
-    'Posisi Uniswap-mu saat ini:',
+    'Here are your current Uniswap positions:',
     '',
     blocks.join('\n\n'),
   ];
-  if (opts.rows.length > MAX_ROWS) out.push('', note(`+${opts.rows.length - MAX_ROWS} posisi lain — tutup dulu untuk melihatnya`));
-  out.push('', italic('Pilih posisi di bawah untuk melihat PnL rinci, rentang target, atau menariknya.'));
+  if (opts.rows.length > MAX_ROWS)
+    out.push('', note(`+${opts.rows.length - MAX_ROWS} more positions — close some to see them`));
+  out.push('', italic('Select a position below to view detailed PnL, target range, or to withdraw.'));
   return out.join('\n');
 }
 
