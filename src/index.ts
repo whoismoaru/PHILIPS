@@ -193,6 +193,7 @@ type AddFlow = {
   selected?: explore.TokenPool; // pool yang dipilih user
   base?: BaseKind; // pasangan pool terpilih (weth | usdg)
   fee?: number;
+  strategy?: 'base' | 'token'; // sisi setoran: base (beli saat turun) | token (jual saat naik, Tahap 6)
   rangePct?: number; // v3: lebar rentang %. v4: -1 = default single-sided
   ethAmount?: string;
   awaitingAmount?: boolean; // menunggu user mengetik nominal
@@ -1013,6 +1014,24 @@ async function cmdExplore(ctx: any) {
     );
   }
 }
+/** Langkah 1 /add_lp tanpa CA — pair dari pool ber-APR teratas + opsi cari sendiri. */
+async function pairPicker(ctx: any) {
+  const prog = await ctx.reply(msg.msgProgress('memuat pool teratas…'), html);
+  const pools = await explore.fetchTopPools(getChain(), 5).catch(() => []);
+  const withCa = pools.filter((p) => p.otherAddr);
+  const rows = withCa.map((p) => [
+    Markup.button.callback(`${p.pair} · ${msg.feeLabel(p.feeTier)}`, `x:${p.otherAddr}`),
+  ]);
+  rows.push([Markup.button.callback('🔍 Cari Pair Sendiri', 'pair:custom')]);
+  rows.push([Markup.button.callback('Batal', 'cancel')]);
+  await editProgress(ctx, prog, msg.msgPairPicker(withCa.length), { ...html, ...Markup.inlineKeyboard(rows) });
+}
+
+bot.action('pair:custom', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(msg.msgPairCustom(), html);
+});
+
 bot.command('pools', cmdExplore);
 
 // /token_info <CA> — audit keamanan token. Jalurnya sama persis dengan menempel
@@ -1134,13 +1153,33 @@ async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-/** Langkah 2/4 — pilih lebar rentang (%). */
+/** Langkah 2/5 — pilih sisi setoran (strategi). */
+async function renderStrategyStep(ctx: any, flow: AddFlow, edit: boolean) {
+  const sel = flow.selected;
+  const base = wizardBase(flow);
+  const text = msg.msgStrategyStep(
+    sel ? `${sel.baseSymbol}/${sel.otherSymbol}` : '?',
+    base.symbol,
+    sel?.otherSymbol ?? 'token',
+    flow.plan?.currentPrice ? String(flow.plan.currentPrice) : null,
+  );
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback(`🟢 Sisi ${base.symbol} — beli saat harga turun`, 'strat:base')],
+      [Markup.button.callback('Kembali', 'back:pool'), Markup.button.callback('Batal', 'cancel')],
+    ]),
+  };
+  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+}
+
+/** Langkah 4/5 — pilih lebar rentang (%). */
 async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
   const rows = RANGE_OPTIONS.map((o) => [
     Markup.button.callback(`${o.pct}%  ·  ${o.label}`, `rng:${o.pct}`),
   ]);
   rows.push([
-    Markup.button.callback('Kembali', 'back:pool'),
+    Markup.button.callback('Kembali', 'back:amount'),
     Markup.button.callback('Batal', 'cancel'),
   ]);
   const sel = flow.selected;
@@ -1174,7 +1213,7 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   const a = amountCtx(flow);
   const rows: any[] = [];
   // v4 lewati step rentang → "Kembali" ke pemilihan pool; v3 kembali ke rentang.
-  const backTo = 'back:range'; // v3 & v4 sama-sama lewat step range
+  const backTo = 'back:strategy';
   rows.push([
     Markup.button.callback('Kembali', backTo),
     Markup.button.callback('Batal', 'cancel'),
@@ -1226,6 +1265,8 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
     balanceLabel: cost?.balanceLabel ?? '?',
     shortLabel: cost?.shortLabel ?? null,
     costFailed: cost === null,
+    priceLower: plan.priceLower,
+    priceUpper: plan.priceUpper,
     dryRun: config.safety.dryRun,
   });
   const extra = {
@@ -1377,10 +1418,11 @@ async function continueAddlp(
 
 // Simpan token yang menunggu pilihan chain.
 
-bot.command('add', async (ctx) => {
+bot.command(['add_lp', 'add'], async (ctx: any) => {
   resetFlows(ctx.from!.id); // alur baru = buang sisa alur lama (anti-hijack ketikan)
   const [, token] = ctx.message.text.trim().split(/\s+/);
-  if (!token) return ctx.reply(msg.msgAddlpUsage(), html);
+  // Tanpa CA → langkah 1 naskah: pilih pair dari pool teratas, atau cari sendiri.
+  if (!token) return pairPicker(ctx);
   if (!ethers.isAddress(token)) return ctx.reply(msg.msgInvalidAddress(), html);
 
   // 0) Deteksi chain — 1 bubble progress (di-edit di langkah berikutnya).
@@ -1447,35 +1489,35 @@ bot.action(/^pick:(\d+)$/, async (ctx) => {
   flow.ethAmount = undefined;
   flow.rangePct = undefined;
   await ctx.answerCbQuery();
-  // v3 & v4 sama-sama pilih range dulu (v4: % dipetakan ke lebar tick).
-  await renderRangeStep(ctx, flow, true);
+  flow.strategy = undefined;
+  // Urutan naskah: pair → strategi → nominal → rentang → konfirmasi.
+  await renderStrategyStep(ctx, flow, true);
+});
+
+bot.action('strat:base', async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add_lp.');
+  flow.strategy = 'base';
+  await ctx.answerCbQuery();
+  await renderAmountStep(ctx, flow, true);
+});
+
+bot.action('back:strategy', async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add_lp.');
+  flow.strategy = undefined;
+  flow.ethAmount = undefined;
+  flow.rangePct = undefined;
+  flow.plan = undefined;
+  await ctx.answerCbQuery();
+  await renderStrategyStep(ctx, flow, true);
 });
 
 bot.action(/^rng:(\d+)$/, async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
   flow.rangePct = Number(ctx.match[1]);
-  flow.ethAmount = undefined;
   flow.plan = undefined;
-  await ctx.answerCbQuery();
-  await renderAmountStep(ctx, flow, true);
-});
-
-bot.action(/^amt:(.+)$/, async (ctx) => {
-  const flow = getFlow(ctx);
-  if (!flow || flow.fee === undefined || flow.rangePct === undefined)
-    return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
-  const a = amountCtx(flow);
-  const v = ctx.match[1];
-  if (v === 'custom') {
-    flow.awaitingAmount = true;
-    await ctx.answerCbQuery();
-    await ctx.editMessageText(msg.msgAmountCustom(a.symbol, a.capLabel, a.example), html);
-    return;
-  }
-  const num = Number(v);
-  if (!(num > 0) || num > a.cap) return ctx.answerCbQuery('Nominal tidak valid.');
-  flow.ethAmount = v;
   await ctx.answerCbQuery('Menghitung preview…');
   try {
     await renderPlanStep(ctx, flow, true);
@@ -1498,9 +1540,8 @@ bot.action('back:pool', async (ctx) => {
 
 bot.action('back:range', async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add_lp.');
   flow.rangePct = undefined;
-  flow.ethAmount = undefined;
   flow.plan = undefined;
   await ctx.answerCbQuery();
   await renderRangeStep(ctx, flow, true);
@@ -1508,8 +1549,9 @@ bot.action('back:range', async (ctx) => {
 
 bot.action('back:amount', async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add.');
+  if (!flow || flow.strategy === undefined) return ctx.answerCbQuery('Kedaluwarsa, ulangi /add_lp.');
   flow.ethAmount = undefined;
+  flow.rangePct = undefined;
   flow.plan = undefined;
   await ctx.answerCbQuery();
   await renderAmountStep(ctx, flow, true);
@@ -1609,7 +1651,7 @@ bot.action('addok', async (ctx) => {
       lastInRange: false,
     });
     // Ringkas OPENED di bubble yang sama, lalu kartu posisi live.
-    await ctx.editMessageText(msg.msgLpOpened(tokenId, notes, `${plan.baseSymbol}/${plan.otherSymbol}`), html);
+    await ctx.editMessageText(msg.msgLpOpened(tokenId, notes, `${plan.baseSymbol}/${plan.otherSymbol}`, `${plan.priceLower} — ${plan.priceUpper}`), html);
     const rec = store.get(tokenId);
     if (rec) {
       try {
@@ -2951,7 +2993,7 @@ bot.on(message('text'), async (ctx) => {
     flows.delete(ctx.from.id);
     return ctx.reply(msg.msgSessionExpired(), html);
   }
-  if (flow?.awaitingAmount && flow.rangePct !== undefined) {
+  if (flow?.awaitingAmount && flow.strategy !== undefined) {
     const a = amountCtx(flow);
     const dec = baseOf(getChain(flow.chain), flow.base ?? 'weth').decimals;
     const w = parseAmt(raw, dec);
@@ -2960,11 +3002,7 @@ bot.on(message('text'), async (ctx) => {
     if (num > a.cap) return ctx.reply(msg.msgOverLimit(a.capLabel), html);
     flow.awaitingAmount = false;
     flow.ethAmount = ethers.formatUnits(w, dec); // sudah dinormalisasi (desimal dipotong)
-    try {
-      await renderPlanStep(ctx, flow, false);
-    } catch (err) {
-      await ctx.reply(msg.msgError('plan', (err as Error).message), html);
-    }
+    await renderRangeStep(ctx, flow, false);
     return;
   }
 
@@ -3006,7 +3044,7 @@ const BOT_COMMANDS = [
   { command: 'pools', description: 'Top pool by APR (ETH/USDG) — sinkron Uniswap' },
   { command: 'history', description: 'Riwayat trade tertutup (jurnal)' },
   { command: 'pnl', description: 'Rekap PnL seumur hidup' },
-  { command: 'add', description: 'Tambah LP: /add <CA>' },
+  { command: 'add_lp', description: 'Buka LP single-side (pilih pair atau /add_lp <CA>)' },
   { command: 'stop', description: 'Tutup posisi LP' },
   { command: 'closeall', description: 'Darurat: tutup semua posisi (konfirmasi per posisi)' },
   { command: 'buy', description: 'Beli token (rute terbaik)' },

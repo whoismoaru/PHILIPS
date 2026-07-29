@@ -227,7 +227,7 @@ function cockpitLines(dryRun: boolean): string[] {
     ]).map((l, i) => (i === 0 ? `📊 <b>VIEW &amp; ANALYTICS</b>\n${l}` : l)),
     '',
     ...grp([
-      ['/add <CA>', 'Buka posisi LP baru'],
+      ['/add_lp', 'Buka posisi LP baru'],
       ['/stop', 'Tutup posisi LP spesifik'],
       ['/buy', 'Beli token (Best Route)'],
       ['/sell', 'Jual token di dompet'],
@@ -985,7 +985,7 @@ export function msgNoPositions(): string {
       note('belum ada posisi LP tercatat.'),
       '',
       note('buka dengan'),
-      code('/add <CA>'),
+      code('/add_lp <CA>'),
     ],
   );
 }
@@ -1041,7 +1041,7 @@ export function msgJournal(
 
 export function msgPoolStep(tokenLabel?: string): string {
   return [
-    hdr('➕ BUKA LP · LANGKAH [1/4]'),
+    hdr('💧 BUKA LP · LANGKAH [1/5] — PILIH POOL'),
     '',
     ...(tokenLabel ? [`Token target: ${bold(esc(tokenLabel))}`, ''] : []),
     bold('Pilih pool terdalam (v3 & v4):'),
@@ -1049,20 +1049,32 @@ export function msgPoolStep(tokenLabel?: string): string {
   ].join('\n');
 }
 
+/** Langkah 2/5 — pilih sisi setoran. */
+export function msgStrategyStep(pair: string, baseSym: string, tokenSym: string, price: string | null): string {
+  return [
+    hdr(`⚙️ PILIH STRATEGI · ${esc(pair)}`),
+    '',
+    ...(price ? [`Harga pasar: 1 ${esc(tokenSym)} = ${bold(esc(price))} ${esc(baseSym)}`, ''] : []),
+    `Setoran satu sisi berarti kamu hanya menaruh ${bold(esc(baseSym))}. Posisimu bekerja seperti limit order pasif: memanen fee sambil menunggu harga ${esc(tokenSym)} turun ke rentangmu, lalu perlahan berubah jadi ${esc(tokenSym)}.`,
+    '',
+    note('sisi token (jual saat harga naik) menyusul — belum aktif'),
+  ].join('\n');
+}
+
 export function msgRangeStep(fee: number, poolLabel?: string): string {
   return [
-    hdr('➕ BUKA LP · LANGKAH [2/4]'),
+    hdr('📉 BUKA LP · LANGKAH [4/5] — RENTANG'),
     '',
-    `Pool dipilih: ${bold(poolLabel ? esc(poolLabel) : feeLabel(fee))} ✓`,
+    `Pool: ${bold(poolLabel ? esc(poolLabel) : feeLabel(fee))} ✓`,
     '',
-    bold('Tentukan seberapa jauh batas penurunan harga:'),
-    note('makin lebar rentang, makin lama ETH bertahan sebelum penuh jadi token'),
+    bold('Seberapa jauh di bawah harga sekarang batas belimu?'),
+    note('makin lebar rentang, makin lambat berubah jadi token tapi makin lama memanen fee'),
   ].join('\n');
 }
 
 export function msgAmountStep(symbol: string, maxLabel: string, balanceLabel?: string): string {
   return [
-    hdr('➕ BUKA LP · LANGKAH [3/4]'),
+    hdr('💵 BUKA LP · LANGKAH [3/5] — NOMINAL'),
     '',
     // Saldo ikut ditampilkan: dulu user memilih buta lalu baru ditolak "KURANG"
     // di kartu 4/4 (satu langkah + satu round-trip terbuang).
@@ -1075,7 +1087,7 @@ export function msgAmountStep(symbol: string, maxLabel: string, balanceLabel?: s
 
 export function msgAmountCustom(symbol: string, maxLabel: string, example: string): string {
   return [
-    hdr('➕ BUKA LP · NOMINAL'),
+    hdr('💵 BUKA LP · NOMINAL'),
     '',
     `💬 Ketik jumlah ${bold(esc(symbol))} (maks ${bold(esc(maxLabel))}).`,
     `contoh · ${code(example)}`,
@@ -1098,17 +1110,21 @@ export function msgPlanStep(opts: {
   balanceLabel: string;
   shortLabel: string | null;
   costFailed?: boolean; // estimasi biaya gagal → JANGAN klaim saldo cukup
+  priceLower?: string;
+  priceUpper?: string;
   dryRun: boolean;
 }): string {
-  const body: string[] = [hdr('⚠️ PREVIEW & KONFIRMASI LP [4/4]'), ''];
+  const body: string[] = [hdr('📝 TINJAU POSISI LP · LANGKAH [5/5]'), ''];
   if (opts.screenDanger) body.push(`⚠️ ${bold('SCREEN: BAHAYA')} — pertimbangkan batal.`, '');
   else if (opts.screenFailed) body.push(`🟡 ${bold('SCREEN: GAGAL')} — token tak terverifikasi.`, '');
   body.push(
+    `🎯 Strategi · ${bold(`Single-Side ${esc(opts.baseSymbol)} (beli saat turun)`)}`,
     `📌 Pair · ${bold(`${esc(opts.baseSymbol)} / ${esc(opts.symbol)}`)} (${feeLabel(opts.fee)})`,
     `🏛️ Protokol · Uniswap v3`,
     `💵 Deposit · ${bold(`${esc(opts.depositAmount)} ${esc(opts.baseSymbol)}`)}${opts.depositUsd ? ` (≈ ${usdPlain(opts.depositUsd)})` : ''}`,
-    `🎯 Range · ${bold(`${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`)}`,
+    `🎯 Range · ${bold(`${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`)}${opts.priceLower && opts.priceUpper ? ` (${esc(opts.priceLower)} — ${esc(opts.priceUpper)})` : ''}`,
     `📊 Rate · 1 ${esc(opts.symbol)} = ${esc(opts.currentPrice)} ${esc(opts.baseSymbol)}`,
+    `⏳ Status awal · ${italic(`out of range — aktif saat harga ${esc(opts.symbol)} turun ke rentang`)}`,
     '',
     `⚓ Estimasi gas · ~${esc(opts.gasEth)} ETH`,
     `💰 Total perlu · ${bold(esc(String(opts.needLabel)))} (saldo: ${esc(String(opts.balanceLabel))})`,
@@ -1142,7 +1158,7 @@ export function msgPlanStepV4(opts: {
   rangePctLow: number;
   dryRun: boolean;
 }): string {
-  const body: string[] = [hdr('⚠️ PREVIEW & KONFIRMASI LP [4/4]'), ''];
+  const body: string[] = [hdr('📝 TINJAU POSISI LP · LANGKAH [5/5]'), ''];
   if (opts.screenDanger) {
     body.push(`⚠️ ${bold('SCREEN: BAHAYA')} — token berisiko. Lanjut hanya jika yakin.`, '');
   } else if (opts.screenFailed) {
@@ -1173,14 +1189,34 @@ export function msgV4BaseUnsupported(): string {
   ]);
 }
 
+export function msgPairPicker(n: number): string {
+  return [
+    `💧 ${bold('Buka Single-Side Liquidity')}`,
+    '',
+    'PHILIPS memungkinkanmu menyediakan likuiditas hanya dengan satu token. Posisinya bekerja seperti limit order pasif: kamu memanen fee sambil menunggu harga sampai ke targetmu.',
+    '',
+    n ? bold('Pilih pasangan yang mau kamu tuju:') : italic('Pool teratas gagal dimuat — pakai "Cari Pair Sendiri".'),
+  ].join('\n');
+}
+
+export function msgPairCustom(): string {
+  return [
+    `🔍 ${bold('Cari Pair Sendiri')}`,
+    '',
+    'Tempel alamat kontrak (CA) token yang kamu incar di chat ini.',
+    '',
+    note('PHILIPS akan mengauditnya dulu sebelum menawarkan LP.'),
+  ].join('\n');
+}
+
 export function msgAddlpUsage(): string {
   return card(
     title('USAGE'),
     [
-      code('/add <CA>'),
+      code('/add_lp <CA>'),
       '',
       note('contoh (EVM address 0x…)'),
-      code('/add 0x020bfc65…1018b4'),
+      code('/add_lp 0x020bfc65…1018b4'),
     ],
   );
 }
@@ -1231,9 +1267,15 @@ export function msgOpeningLp(): string {
  * di tengah kalimat, hash 66 karakter mustahil diseleksi dengan jempol.
  * Catatan tanpa hash tetap tampil apa adanya (mis. peringatan retry).
  */
-export function msgLpOpened(tokenId: string, notes: string[], pair?: string): string {
-  const head = `${bold('OPENED POSITION')} | #${esc(tokenId)}${pair ? ` · ${esc(pair)}` : ''}`;
-  const out = [head, '', 'Monitor aktif, notifikasi in/out range otomatis :'];
+export function msgLpOpened(tokenId: string, notes: string[], pair?: string, rangeLabel?: string | null): string {
+  const out = [
+    `✅ ${bold('Single-Side LP Berhasil Dibuat!')}`,
+    '',
+    `Posisi ${bold(`#${esc(tokenId)}`)}${pair ? ` · ${bold(esc(pair))}` : ''} sudah aktif.`,
+    ...(rangeLabel ? [`Fee mulai terkumpul saat harga masuk rentang ${bold(esc(rangeLabel))}.`] : []),
+    '',
+    '🔗 Langkah transaksi:',
+  ];
 
   // Daftar langkah RAPAT: tanpa baris kosong antar langkah maupun antara langkah
   // dan hash-nya. Baris kosong hanya memisahkan judul dan footer.
@@ -1243,7 +1285,11 @@ export function msgLpOpened(tokenId: string, notes: string[], pair?: string): st
     if (m) out.push(code(m[2]));
   }
 
-  out.push('', nowWib());
+  out.push(
+    '',
+    `💡 ${bold('Tip')}: PHILIPS memantau posisi ini dan mengabari saat masuk/keluar rentang. Pantau kapan saja lewat /positions.`,
+    nowWib(),
+  );
   return out.join('\n');
 }
 
