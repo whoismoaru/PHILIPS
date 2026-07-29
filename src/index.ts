@@ -309,8 +309,8 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
 // Action 'portfolio' tetap hidup untuk tombol di pesan-pesan lama.
 const startKeyboard = () =>
   Markup.inlineKeyboard([
-    [Markup.button.callback('💧 Buka LP', 'howto:add'), Markup.button.callback('📊 Top Pool', 'explore')],
-    [Markup.button.callback('💰 Uang', 'status'), Markup.button.callback('📋 Posisi', 'positions')],
+    [Markup.button.callback('💧 Add Liquidity', 'howto:add'), Markup.button.callback('📊 Top Pools', 'explore')],
+    [Markup.button.callback('💰 Balance', 'status'), Markup.button.callback('📋 Positions', 'positions')],
     [Markup.button.callback('📖 How it Works', 'howitworks')],
   ]);
 

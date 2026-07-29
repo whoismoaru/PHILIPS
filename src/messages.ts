@@ -273,34 +273,34 @@ export function msgStarted(o: {
 }): string {
   const sync =
     o.imported || o.gone
-      ? [o.imported ? `+${o.imported} posisi diimpor` : '', o.gone ? `${o.gone} selesai di luar bot` : '']
+      ? [o.imported ? `+${o.imported} imported` : '', o.gone ? `${o.gone} closed outside the bot` : '']
           .filter(Boolean)
           .join(' · ')
       : '';
   return [
-    `🤖 ${bold('Selamat datang di PHILIPS Bot!')} 🚀`,
+    `🤖 ${bold('Welcome to PHILIPS Bot!')} 🚀`,
     '',
-    `Saya PHILIPS, asisten pribadimu untuk mengelola ${bold('Single-Side Liquidity Pool')} di ${bold('Uniswap V3')} lewat dompet ${bold('Robinhood Web3')}.`,
+    `Hello! I am PHILIPS, your personal assistant for managing ${bold('Single-Side Liquidity Pools')} on ${bold('Uniswap V3')} through your ${bold('Robinhood Web3 Wallet')}.`,
     '',
-    'Tujuan saya sederhana: bikin DeFi gampang, aman, dan efisien — mau beli saat turun, ambil untung saat naik, atau sekadar memantau fee yang terkumpul.',
+    'My goal is to make DeFi simple, secure, and efficient — whether you are buying the dip, taking profit on the rip, or just tracking your fees.',
     '',
-    `🛠️ ${bold('Fitur Inti')}`,
-    '🔗 Hubungkan dompet Robinhood (impor manual)',
-    '💧 Single-Side LP — setor cukup satu token',
-    '🛡️ Audit keamanan token & cek rug pull otomatis',
-    '📊 Pantau posisi LP aktif, APR, dan fee terkumpul',
+    `🛠️ ${bold('Core Features')}`,
+    '🔗 Connect your Robinhood Wallet (manual import)',
+    '💧 Single-Side LP — provide liquidity with only 1 token',
+    '🛡️ Automated token security audit & rug pull check',
+    '📊 Track active LP positions, APR, and earned fees',
     '',
-    `⚠️ ${bold('Catatan Keamanan')}`,
-    `PHILIPS ${bold('tidak akan pernah')} meminta seed phrase di luar alur resmi /connect. DeFi berisiko, termasuk Impermanent Loss (IL). Selalu DYOR.`,
+    `⚠️ ${bold('Security Notice')}`,
+    `PHILIPS will ${bold('never')} ask for your seed phrase outside the official /connect flow. DeFi involves risk, including Impermanent Loss (IL). Always DYOR.`,
     '',
     `📟 ${bold('Status')}`,
-    `• Mode · ${bold(o.dryRun ? '⚪ DRY RUN (simulasi)' : '🟢 LIVE')}`,
+    `• Mode · ${bold(o.dryRun ? '⚪ DRY RUN (simulation)' : '🟢 LIVE')}`,
     `• Chain · ${esc(o.chainLabel)} (ID ${esc(String(o.chainId))})`,
-    `• Dompet · ${o.walletShort ? code(o.walletShort) : italic('belum terhubung')}`,
-    `• Posisi LP · ${bold(`${o.positions} aktif`)}`,
-    ...(sync ? [`• Sinkron · ${esc(sync)}`] : []),
+    `• Wallet · ${o.walletShort ? code(o.walletShort) : italic('not connected')}`,
+    `• LP Positions · ${bold(`${o.positions} active`)}`,
+    ...(sync ? [`• Sync · ${esc(sync)}`] : []),
     '',
-    '👉 Tekan tombol di bawah untuk mulai.',
+    '👉 Tap a button below to get started.',
     note(nowWib()),
   ].join('\n');
 }
@@ -308,13 +308,13 @@ export function msgStarted(o: {
 /** Cara memulai LP — dipakai tombol "Buka LP" di /start (belum ada wizard tanpa CA). */
 export function msgAddHowTo(): string {
   return [
-    `💧 ${bold('Buka Single-Side LP')}`,
+    `💧 ${bold('Open a Single-Side LP')}`,
     '',
-    'Dua cara memulai:',
-    `• Tempel ${bold('alamat kontrak (CA)')} token langsung di chat — PHILIPS mengaudit lalu menawarkan LP.`,
-    `• Ketik ${code('/add_lp <CA>')} untuk langsung masuk wizard.`,
+    'Two ways to start:',
+    `• Paste a token ${bold('contract address (CA)')} straight into this chat — PHILIPS audits it first, then offers to LP.`,
+    `• Type ${code('/add_lp <CA>')} to jump into the wizard.`,
     '',
-    `Belum punya kandidat? Buka ${code('/pools')} untuk melihat pool ber-APR tertinggi.`,
+    `No candidate yet? Open ${code('/pools')} to see the highest-APR pools.`,
   ].join('\n');
 }
 
@@ -363,17 +363,17 @@ export function msgTokenInfoUsage(): string {
 
 export function msgHowItWorks(): string {
   return [
-    `📖 ${bold('Cara Kerja PHILIPS')}`,
+    `📖 ${bold('How PHILIPS Works')}`,
     '',
-    `1️⃣ ${bold('Hubungkan dompet')} — impor lewat /connect. Kunci disimpan terenkripsi di server bot ini supaya PHILIPS bisa menandatangani transaksi untukmu.`,
+    `1️⃣ ${bold('Connect your wallet')} — import it via /connect. The key is stored encrypted on this bot's server so PHILIPS can sign transactions for you.`,
     '',
-    `2️⃣ ${bold('Pilih token')} — /pools untuk pool ber-APR tertinggi, atau tempel alamat kontrak (CA) langsung di chat. Setiap token diaudit dulu: honeypot, pajak beli/jual, LP terkunci, sebaran holder.`,
+    `2️⃣ ${bold('Pick a token')} — /pools for the highest-APR pools, or paste a contract address (CA) straight into the chat. Every token is audited first: honeypot, buy/sell tax, locked liquidity, holder spread.`,
     '',
-    `3️⃣ ${bold('Buka LP satu sisi')} — /add_lp. Kamu setor satu token saja; posisimu bekerja seperti limit order pasif yang tetap memanen fee sambil menunggu harga.`,
+    `3️⃣ ${bold('Open a single-side LP')} — /add_lp. You deposit only one token; the position works like a passive limit order that keeps earning fees while it waits for your price.`,
     '',
-    `4️⃣ ${bold('Pantau & panen')} — /positions untuk melihat status in/out of range, /claim_fees untuk memanen, /remove_lp untuk menarik.`,
+    `4️⃣ ${bold('Monitor & harvest')} — /positions for in/out of range status, /claim_fees to harvest, /remove_lp to withdraw.`,
     '',
-    `⚠️ ${bold('Risiko')}: harga bisa bergerak melewati rentangmu (impermanent loss), dan token baru bisa rug. PHILIPS memblokir token yang jelas berbahaya, tapi keputusan akhir tetap milikmu.`,
+    `⚠️ ${bold('Risk')}: price can move through your range (impermanent loss), and new tokens can rug. PHILIPS blocks the clearly dangerous ones, but the final call is always yours.`,
   ].join('\n');
 }
 
