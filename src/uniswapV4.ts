@@ -283,6 +283,31 @@ function liqForAmount1(a: bigint, b: bigint, amt1: bigint): bigint {
 
 export type PoolKeyV4 = { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string };
 
+/**
+ * PoolKey gateway sering meleset: currency belum terurut, dan pool ETH-native
+ * dilaporkan memakai alamat WETH. poolId keccak → salah → modifyLiquidities
+ * revert PoolNotInitialized di langkah terakhir (dead-end 4 tap). Coba varian
+ * yang masuk akal, kembalikan yang slot0-nya HIDUP; null = pool tak ada.
+ */
+export async function resolvePoolKeyV4(
+  cc: ChainCtx,
+  pk: PoolKeyV4,
+  baseIsCurrency0: boolean,
+): Promise<{ poolKey: PoolKeyV4; baseIsCurrency0: boolean } | null> {
+  if (!V4_POOL_MANAGER[cc.key]) return null;
+  const baseAddr = baseIsCurrency0 ? pk.currency0 : pk.currency1;
+  const otherAddr = baseIsCurrency0 ? pk.currency1 : pk.currency0;
+  const isWeth = baseAddr.toLowerCase() === cc.wethAddress.toLowerCase();
+  const bases = isWeth ? [baseAddr, ethers.ZeroAddress] : [baseAddr];
+  for (const b of bases) {
+    const [c0, c1] = b.toLowerCase() < otherAddr.toLowerCase() ? [b, otherAddr] : [otherAddr, b];
+    const cand: PoolKeyV4 = { ...pk, currency0: c0, currency1: c1 };
+    const { sqrtPriceX96 } = await readPoolState(cc, cand).catch(() => ({ sqrtPriceX96: 0n }));
+    if (sqrtPriceX96 > 0n) return { poolKey: cand, baseIsCurrency0: c0 === b };
+  }
+  return null;
+}
+
 async function ensurePermit2(cc: ChainCtx, token: string, spender: string, amount: bigint): Promise<void> {
   const erc = new ethers.Contract(token, ['function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'], cc.wallet);
   if ((await erc.allowance(cc.wallet.address, PERMIT2)) < amount) {
@@ -315,7 +340,11 @@ export async function openPositionV4(
   // gap default 0 → tepi-dekat MENEMPEL harga sekarang supaya posisi mulai terisi
   // sejak pergerakan pertama ke arah kita (bukan menunggu turun berspasi dulu).
   const gap = (opts.gapSpacings ?? 0) * spacing;
-  const current = (await readPoolState(cc, poolKey)).tick;
+  const state = await readPoolState(cc, poolKey);
+  // slot0 kosong = poolKey tak cocok pool mana pun. Tanpa cek ini, revert-nya baru
+  // muncul sebagai 'unknown custom error' (PoolNotInitialized) di preview rencana.
+  if (state.sqrtPriceX96 === 0n) throw new Error('Pool v4 tak terinisialisasi (poolKey tak cocok) — pilih pool lain.');
+  const current = state.tick;
   const aligned = nearestUsableTick(current, spacing);
   let tickLower: number;
   let tickUpper: number;

@@ -14,7 +14,7 @@ import {
  */
 
 export type ChainCtx = {
-  key: string; // id internal ('robinhood' | 'ethereum' | 'base' | 'bsc')
+  key: string; // id internal — hanya 'robinhood'
   label: string; // tampilan
   chainId: number;
   nativeSymbol: string; // ETH / BNB
@@ -79,10 +79,7 @@ export function detectBase(ctx: ChainCtx, token0: string, token1: string): BaseA
   }
   return null;
 }
-
 // Ambil API key Alchemy dari RPC robinhood yang sudah dikonfigurasi.
-const alchemyKey = /alchemy\.com\/v2\/([A-Za-z0-9_-]+)/.exec(config.chain.rpcUrl)?.[1] ?? '';
-
 type Def = {
   label: string;
   chainId: number;
@@ -115,84 +112,9 @@ const DEFS: Record<string, Def> = {
     weth: config.uniswap.weth,
     usdg: '0x5fc5360d0400a0fd4f2af552add042d716f1d168', // Global Dollar (USDG), 6 desimal — terverifikasi on-chain
   },
-  ethereum: {
-    label: 'Ethereum',
-    chainId: 1,
-    nativeSymbol: 'ETH',
-    dexKey: 'ethereum',
-    blockscout: 'https://eth.blockscout.com/api/v2',
-    rpc:
-      process.env.RPC_URL_ETHEREUM ||
-      (alchemyKey ? `https://eth-mainnet.g.alchemy.com/v2/${alchemyKey}` : 'https://eth.llamarpc.com'),
-    factory: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-    pm: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
-    router: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
-    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
-    weth: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-  },
-  base: {
-    label: 'Base',
-    chainId: 8453,
-    nativeSymbol: 'ETH',
-    dexKey: 'base',
-    blockscout: 'https://base.blockscout.com/api/v2',
-    rpc:
-      process.env.RPC_URL_BASE ||
-      (alchemyKey ? `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}` : 'https://mainnet.base.org'),
-    factory: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
-    pm: '0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1',
-    router: '0x2626664c2603336E57B271c5C0b26F421741e481',
-    quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
-    weth: '0x4200000000000000000000000000000000000006',
-  },
-  bsc: {
-    label: 'BSC',
-    chainId: 56,
-    nativeSymbol: 'BNB',
-    dexKey: 'bsc',
-    blockscout: null, // tidak ada Blockscout resmi — screening pakai DexScreener saja
-    rpc:
-      process.env.RPC_URL_BSC ||
-      (alchemyKey ? `https://bnb-mainnet.g.alchemy.com/v2/${alchemyKey}` : 'https://bsc-dataseed.binance.org'),
-    factory: '0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7',
-    pm: '0x7b8A01B39D58278b5DE7e48c8449c9f4F5170613',
-    router: '0xB971eF87ede563556b2ED4b1C0b0019111Dd85d2',
-    quoter: '0x78D78E420Da98ad378D7799bE8f4AF69033EB077',
-    weth: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // WBNB
-  },
 };
 
-// --- Multichain (Ethereum / Base / BSC) DIMATIKAN SEMENTARA — 27 Jul 2026 ---
-// Definisinya sengaja DIPERTAHANKAN, bukan dihapus: menghidupkan kembali cukup
-// ENABLE_MULTICHAIN=true di .env, tanpa memulihkan ~50 baris alamat kontrak.
-// Saat dimatikan tak ada posisi di ketiganya (positions.json & v4positions.json kosong),
-// jadi tak ada dana yang berhenti dipantau monitor.
-if (process.env.ENABLE_MULTICHAIN !== 'true') {
-  delete DEFS.ethereum;
-  delete DEFS.base;
-  delete DEFS.bsc;
-}
-
-// --- StableChain (L1 stablecoin, gas USDT0). AKTIF hanya bila RPC_URL_STABLE diset ---
-// Uniswap v3 kanonik (docs.stable.xyz/reference/dexes). Base LP = USDT single-side
-// (6-desimal, non-wrappable, ≈$1 — pola sama dgn USDG). Tak ada WETH → hasWethBase=false.
-if (process.env.RPC_URL_STABLE) {
-  DEFS.stable = {
-    label: 'Stable',
-    chainId: Number(process.env.STABLE_CHAIN_ID ?? 988),
-    nativeSymbol: 'USDT0',
-    dexKey: 'stable', // DexScreener key (fail-open bila belum didukung)
-    blockscout: null, // stablescan.xyz bukan Blockscout — screening fallback DexScreener/on-chain
-    rpc: process.env.RPC_URL_STABLE,
-    factory: '0x88F0a512eF09175D456bc9547f914f48C013E4aA',
-    pm: '0x3BdC3437405f7D801b6036532713fc1F179136a6',
-    router: '0x32eaf9B5d5F2CD7361c5012890C943D7de84C22a',
-    quoter: '0xb070179E7032CdA868b53e6C1742F80c9e940d1A',
-    weth: ethers.ZeroAddress, // tak ada WETH di Stable
-    usdt: process.env.STABLE_USDT ?? '0x779Ded0c9e1022225f8E0630b35a9b54bE713736', // USDT 6-desimal
-    hasWethBase: false, // base LP = USDT saja
-  };
-}
+// Hanya Robinhood. Antar-chain ke depan = Robinhood <-> Solana (belum diimplementasi).
 
 function build(key: string, d: Def): ChainCtx {
   const provider = new ethers.JsonRpcProvider(d.rpc, d.chainId);

@@ -18,12 +18,7 @@ const BIN = '/home/ubuntu/.npm-global/bin/gmgn-cli';
 const TIMEOUT_MS = 12_000;
 
 /** PHILIPS key → nama chain GMGN. Tak ada di peta = GMGN tak mendukung chain itu. */
-const CHAIN: Record<string, string> = {
-  robinhood: 'robinhood',
-  ethereum: 'eth',
-  base: 'base',
-  bsc: 'bsc',
-};
+const CHAIN: Record<string, string> = { robinhood: 'robinhood' };
 
 export type GmgnExtra = {
   buyTaxPct: number | null;
