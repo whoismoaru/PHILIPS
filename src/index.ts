@@ -471,7 +471,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       dryRun: config.safety.dryRun,
       chainId: network.chainId,
       positions: store.active().length,
-      limitLabel: maxEthLabel === 'tanpa batas' ? '∞' : maxEthLabel,
+      limitLabel: maxEthLabel === 'unlimited' ? '∞' : maxEthLabel,
       wallet: getChain().wallet.address,
       chains,
       usdg,
@@ -488,9 +488,12 @@ async function renderStatus(ctx: any, edit: boolean) {
       ...Markup.inlineKeyboard([
         [
           Markup.button.callback('🔄 Refresh Data', 'refresh:status'),
-          Markup.button.callback('📋 Detail Posisi', 'positions'),
+          Markup.button.callback('📊 View LP Positions', 'positions'),
         ],
-        [Markup.button.callback('🧾 Rekapitulasi PnL', 'pnl')],
+        // "Quick Swap/Sell" → /sell: menjual sisa token itu tindakan yang
+        // dimaksud kartu ini; /buy tak menyelesaikan apa pun di sini.
+        [Markup.button.callback('💱 Quick Sell', 'sell:start'), Markup.button.callback('🧾 PnL Recap', 'pnl')],
+        [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
       ]),
     };
     await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
@@ -1188,7 +1191,7 @@ function amountCtx(flow: AddFlow) {
   return {
     symbol: base.symbol,
     cap: stable ? Infinity : maxEth, // batas ETH hanya berlaku utk base WETH
-    capLabel: stable ? 'tanpa batas' : maxEthLabel,
+    capLabel: stable ? 'unlimited' : maxEthLabel,
     example: stable ? '50' : '0.02',
   };
 }
@@ -2416,6 +2419,11 @@ async function cmdSell(ctx: any) {
   return editProgress(ctx, prog, msg.msgSellList(list.length), { ...html, ...sellListKb(list, multiChain) });
 }
 bot.command('sell', cmdSell);
+// Tombol "💱 Quick Sell" di kartu /status.
+bot.action('sell:start', async (ctx) => {
+  await ctx.answerCbQuery();
+  return cmdSell(ctx);
+});
 
 bot.action(/^sellpick:(\d+)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);

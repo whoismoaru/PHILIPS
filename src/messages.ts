@@ -564,43 +564,58 @@ export function msgStatus(opts: {
   const usdCol = (u: number | null | undefined) => (u === null || u === undefined ? '—' : usdPlain(u));
   const equity = opts.totalUsd === null ? '—' : usdPlain(opts.totalUsd + (opts.lpUsd ?? 0));
 
-  const parts: string[] = [
-    hdr('📊 STATUS & EKUITAS'),
-    '',
-    `💵 ${bold('Total Ekuitas')} : ${bold(equity)}`,
-    '',
-    `💰 ${bold('SALDO UNSTAKED')}: ${bold(usdCol(opts.totalUsd))}`,
+  // Rincian aset unstaked jadi keterangan dalam kurung — kartu ini soal ANGKA
+  // besar; daftar per-aset yang panjang justru menenggelamkannya.
+  const assetNames = [
+    ...opts.chains.filter((c) => Number(c.amount) > 0).map((c) => c.symbol),
+    ...(opts.usdg ? ['USDG'] : []),
   ];
 
-  // Chain bersaldo 0 disembunyikan: baris '0.0000' tak membawa keputusan apa pun.
+  const parts: string[] = [
+    `💼 ${bold('Portfolio Status & Equity')}`,
+    '',
+    `💰 ${bold('Total Equity:')} ${bold(equity)}`,
+    `🏦 ${bold('Unstaked Balance:')} ${bold(usdCol(opts.totalUsd))}${assetNames.length ? ` ${italic(`(${esc(assetNames.join(', '))})`)}` : ''}`,
+  ];
+  if (opts.lpUsd !== undefined) {
+    parts.push(
+      `🔒 ${bold('Active in LP:')} ${bold(usdCol(opts.lpUsd))} ${italic(`(${opts.positions} Active Position${opts.positions === 1 ? '' : 's'})`)}`,
+    );
+  }
+  if (opts.realizedEth !== undefined) {
+    parts.push(
+      `📈 ${bold('Realized PnL:')} ${dot(opts.realizedEth)} ${bold(`${opts.realizedEth >= 0 ? '+' : ''}${opts.realizedEth.toFixed(5)} ETH`)}`,
+    );
+  }
+
+  // Rincian per-aset tetap tersedia, tapi di bawah angka besar.
   const assets: Array<[string, string]> = opts.chains
     .filter((c) => Number(c.amount) > 0)
     .map((c) => [c.label, `${bold(`${esc(c.amount)} ${esc(c.symbol)}`)}${c.usd === null ? '' : ` (${usdPlain(c.usd)})`}`]);
   if (opts.usdg) assets.push(['USDG', `${bold(`${esc(opts.usdg.amount)} USDG`)} (${usdPlain(opts.usdg.usd)})`]);
-  if (assets.length) parts.push(...tree(assets, 11));
+  if (assets.length) parts.push('', ...tree(assets, 11));
 
-  parts.push('');
-  if (opts.lpUsd !== undefined) {
-    parts.push(`🌊 ${bold('LIKUIDITAS AKTIF')}: ${bold(usdCol(opts.lpUsd))} (${opts.positions} posisi)`);
-  }
-  if (opts.realizedEth !== undefined) {
+  if (opts.lpFailed) parts.push('', `⚠️ ${note(`${opts.lpFailed} position(s) failed to read — total is incomplete`)}`);
+  if (opts.holdingsCount === null) {
+    parts.push('', `⚠️ ${note('token read failed — try Refresh')}`);
+  } else if (opts.holdingsCount > 0) {
     parts.push(
-      `📈 ${bold('REALIZED PnL')}   : ${dot(opts.realizedEth)} ${bold(`${opts.realizedEth >= 0 ? '+' : ''}${opts.realizedEth.toFixed(5)} ETH`)}`,
+      '',
+      `⚠️ ${bold('Action Required:')}`,
+      `You have ${bold(`${opts.holdingsCount} token${opts.holdingsCount === 1 ? '' : 's'}`)} sitting in your wallet earning nothing.`,
+      'Use /sell to convert them back to WETH/USDG.',
     );
   }
-  parts.push('');
-
-  if (opts.lpFailed) parts.push(`⚠️ ${note(`${opts.lpFailed} posisi gagal dibaca — total belum lengkap`)}`);
-  if (opts.holdingsCount === null) parts.push(`⚠️ ${note('baca token gagal — coba Refresh')}`);
-  else if (opts.holdingsCount > 0) parts.push(`⚠️ ${opts.holdingsCount} token belum terjual di wallet — gunakan /sell`);
 
   const short = esc(shortAddr(opts.wallet));
   const link = opts.explorerUrl
     ? `<a href="${esc(opts.explorerUrl)}/address/${esc(opts.wallet)}">${short}</a>`
     : `<code>${short}</code>`;
   parts.push(
-    `👛 ${link} | ${opts.dryRun ? '⚪ DRY RUN' : '🟢 LIVE'} (chain ${esc(String(opts.chainId))})`,
-    note(`limit ${opts.limitLabel} · ${nowWib()}`),
+    '',
+    `🔗 ${bold('Connected Wallet:')} ${link}`,
+    `⚡ ${bold('Mode:')} ${opts.dryRun ? '⚪ DRY RUN' : '🟢 LIVE'} · chain ${esc(String(opts.chainId))} · max/tx ${esc(opts.limitLabel)}`,
+    `⏱️ <i>Last Updated: ${nowWib()}</i>`,
   );
 
   return parts.join('\n');

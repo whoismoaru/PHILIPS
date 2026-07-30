@@ -33,7 +33,7 @@ export const html = { parse_mode: 'HTML' as const };
 /** Batas ETH/tx: nilai <= 0 atau kosong berarti TANPA batas. */
 const rawMax = Number(config.safety.maxEthPerTx);
 export const maxEth = rawMax > 0 ? rawMax : Infinity;
-export const maxEthLabel = maxEth === Infinity ? 'tanpa batas' : `${maxEth} ETH`;
+export const maxEthLabel = maxEth === Infinity ? 'unlimited' : `${maxEth} ETH`;
 
 /** Posisi sudah di-burn/tak ada di chain (NFT hilang). */
 export const isGoneErr = (e: unknown) => /invalid token id/i.test(String((e as Error)?.message ?? e));
