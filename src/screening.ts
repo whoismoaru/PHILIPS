@@ -7,7 +7,7 @@ const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
 ];
 const BAL_ABI = ['function balanceOf(address) view returns (uint256)'];
-const FEE_TIERS = [100, 500, 3000, 10000];
+const FEE_TIERS = [100, 500, 2500, 3000, 10000]; // gabungan Uniswap + PancakeSwap; pool yang tak ada dilewati
 type SellStatus = 'ok' | 'blocked' | 'costly' | 'unknown';
 
 /**
@@ -65,17 +65,17 @@ async function simulateSellPath(
       });
       baseBack = BigInt(q[0]);
     } catch {
-      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Simulasi JUAL gagal (revert) — token mungkin tak bisa dijual' } };
+      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Sell simulation reverted — this token may be unsellable' } };
     }
     if (baseBack === 0n)
-      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Simulasi jual hasil 0 — tak ada jalur keluar' } };
+      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Sell simulation returned 0 — no exit route' } };
 
     const loss = 1 - Number(baseBack) / Number(baseIn);
     const feeRoundtrip = (2 * best.fee) / 1_000_000; // 3000 → 0.006
     if (loss > Math.max(0.2, feeRoundtrip * 4))
       return {
         status: 'costly',
-        flag: { level: 'HATI-HATI', msg: `Jual boros ~${(loss * 100).toFixed(0)}% (round-trip) — likuiditas tipis` },
+        flag: { level: 'HATI-HATI', msg: `Round-trip loss ~${(loss * 100).toFixed(0)}% — thin liquidity` },
       };
     return { status: 'ok', flag: null };
   } catch {
@@ -209,8 +209,8 @@ export async function screenToken(
     // Tanpa explorer (BSC) verifikasi tak bisa dicek → null, jangan flag palsu.
     verified = bs ? false : null;
   }
-  if (verified === false) flags.push({ level: 'HATI-HATI', msg: 'Kontrak TIDAK terverifikasi (tak bisa audit kode)' });
-  if (isProxy) flags.push({ level: 'INFO', msg: 'Kontrak upgradeable (proxy) — dev bisa ubah logika' });
+  if (verified === false) flags.push({ level: 'HATI-HATI', msg: 'Contract is NOT verified (source code unavailable)' });
+  if (isProxy) flags.push({ level: 'INFO', msg: 'Upgradeable contract (proxy) — the dev can change its logic' });
 
   // --- Konsentrasi holder ---
   let top1Pct: number | null = null;
@@ -233,10 +233,10 @@ export async function screenToken(
     // Konsentrasi 10 teratas ditangani di bawah (butuh angka GMGN yang lebih
     // bersih); di sini hanya dompet TUNGGAL yang menguasai mayoritas.
     if (top1Pct > 50 && !top1IsContract)
-      flags.push({ level: 'BAHAYA', msg: `1 dompet menguasai ${top1Pct.toFixed(1)}% supply` });
+      flags.push({ level: 'BAHAYA', msg: `One wallet holds ${top1Pct.toFixed(1)}% of supply` });
   }
   if (holdersCount !== null && holdersCount < 30)
-    flags.push({ level: 'HATI-HATI', msg: `Holder sangat sedikit (${holdersCount})` });
+    flags.push({ level: 'HATI-HATI', msg: `Very few holders (${holdersCount})` });
 
   // --- Data pasar (DexScreener) ---
   let liquidityUsd: number | null = null;
@@ -261,20 +261,20 @@ export async function screenToken(
     if (p.pairCreatedAt) pairAgeHours = (Date.now() - p.pairCreatedAt) / 3_600_000;
 
     if (liquidityUsd !== null && liquidityUsd < 2000)
-      flags.push({ level: 'BAHAYA', msg: `Likuiditas sangat tipis ($${Math.round(liquidityUsd)})` });
+      flags.push({ level: 'BAHAYA', msg: `Very thin liquidity ($${Math.round(liquidityUsd)})` });
     else if (liquidityUsd !== null && liquidityUsd < 20000)
-      flags.push({ level: 'HATI-HATI', msg: `Likuiditas rendah ($${Math.round(liquidityUsd)})` });
+      flags.push({ level: 'HATI-HATI', msg: `Low liquidity ($${Math.round(liquidityUsd)})` });
 
     if (pairAgeHours !== null && pairAgeHours < 24)
-      flags.push({ level: 'HATI-HATI', msg: `Pool sangat baru (${pairAgeHours.toFixed(0)} jam)` });
+      flags.push({ level: 'HATI-HATI', msg: `Pool is very new (${pairAgeHours.toFixed(0)}h old)` });
 
     if (buys24h !== null && sells24h !== null && buys24h > 20 && sells24h === 0)
-      flags.push({ level: 'BAHAYA', msg: 'Banyak beli tapi ~0 jual — indikasi honeypot' });
+      flags.push({ level: 'BAHAYA', msg: 'Many buys but almost no sells — possible honeypot' });
 
     if (volume24h !== null && volume24h < 1000)
-      flags.push({ level: 'HATI-HATI', msg: 'Nyaris tanpa transaksi 24 jam' });
+      flags.push({ level: 'HATI-HATI', msg: 'Almost no trades in the last 24h' });
   } else {
-    flags.push({ level: 'HATI-HATI', msg: 'Tidak ada data pasar/likuiditas di DexScreener' });
+    flags.push({ level: 'HATI-HATI', msg: 'No market or liquidity data on DexScreener' });
   }
 
   // Konsentrasi 10 dompet teratas. Diperiksa DI SINI (bukan di blok holders
@@ -287,7 +287,7 @@ export async function screenToken(
   if (top10Concentration !== null && top10Concentration >= 50) {
     flags.push({
       level: 'HATI-HATI',
-      msg: `10 dompet teratas menguasai ${top10Concentration.toFixed(1)}% supply`,
+      msg: `Top 10 wallets hold ${top10Concentration.toFixed(1)}% of supply`,
     });
   }
 
@@ -398,38 +398,49 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
 
   const num = (n: number | null): string => (n === null ? UNK : n.toLocaleString('en-US'));
 
+  // Pausable / cooldown: GMGN mengirim daftar privilege owner. Daftar KOSONG =
+  // jawaban 'tak ada', bukan 'tak tahu'; payload tak terbaca (null) tetap '?'.
+  const privHas = (re: RegExp): boolean | null =>
+    g?.privileges == null ? null : g.privileges.some((p) => re.test(p));
+
   const out: string[] = [
-    `🔍 ${bold('Token Security Audit')}`,
+    `🔍 ${bold('TOKEN SECURITY AUDIT')}`,
     '',
-    `📊 ${bold('Basic Info')}`,
+    `📊 ${bold('Basic Info :')}`,
     `• Name: ${esc(s.name)} (${esc(symUp)})`,
     `• Network: ${esc(opts?.chainLabel ?? UNK)}`,
     `• Price: ${bold(s.priceUsd ? `$${s.priceUsd}` : UNK)} · MC: ${compact(s.marketCapUsd)}`,
     `• Pool Age: ${s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} hours`}`,
     '',
-    `🛡️ ${bold('Contract Security')}`,
+    `🛡️ ${bold('Contract Security :')}`,
     `• Ownership Renounced: ${yes(renounced)}`,
     `• Contract Verified: ${yes(verified)}`,
     `• Proxy Contract: ${no(s.isProxy)}`,
     `• Honeypot Risk (Can sell?): ${sellable === null ? `${UNK} unreadable` : sellable ? '✅ Safe' : '🚫 Cannot sell'}`,
+    `• Transfer Pause: ${no(privHas(/paus|freeze/))}`,
+    `• Trading Cooldown: ${no(privHas(/cooldown/))}`,
     '',
-    `💧 ${bold('Liquidity & Market')}`,
+    `💧 ${bold('Liquidity & Market :')}`,
     `• Total Liquidity: ${bold(compact(s.liquidityUsd))}`,
     `• Liquidity Locked: ${lpLocked === null ? UNK : `${pct(lpLocked)} ${lpLocked >= 50 ? '✅' : '⚠️'}`}${burnt ? ` · burnt ${pct(burnt)}` : ''}`,
     `• 24H Volume: ${compact(s.volume24h)} (${num(s.buys24h)} Buys / ${num(s.sells24h)} Sells)`,
-    `• Holders: ${num(s.holdersCount)}`,
     `• Top 10 Holders: ${top10Line}`,
   ];
 
-  if (g && (g.devPct !== null || g.insidersPct !== null || g.sniperCount !== null)) {
-    out.push(`• Dev: ${pct(g.devPct)} | Insider: ${pct(g.insidersPct)} | Sniper: ${g.sniperCount ?? UNK}`);
+  // Dev & insider digabung satu baris (naskah). Jumlahnya TIDAK dijumlahkan —
+  // dompet dev bisa ikut terhitung sebagai insider, jadi menambahkannya melebihkan.
+  if (g && (g.devPct !== null || g.insidersPct !== null)) {
+    const worst = Math.max(g.devPct ?? 0, g.insidersPct ?? 0);
+    out.push(
+      `• Dev &amp; Insiders: dev ${pct(g.devPct)} · insiders ${pct(g.insidersPct)} ${worst >= 20 ? '🔴' : worst >= 5 ? '⚠️' : '✅'}`,
+    );
   }
 
   out.push(
     '',
-    `💸 ${bold('Taxes / Fees')}`,
-    `• Buy Tax: ${taxLine(g?.buyTaxPct ?? null)}`,
-    `• Sell Tax: ${taxLine(g?.sellTaxPct ?? null)}`,
+    `💸 ${bold('Taxes / Fees :')}`,
+    `• Buy Tax -> ${taxLine(g?.buyTaxPct ?? null)}`,
+    `• Sell Tax -> ${taxLine(g?.sellTaxPct ?? null)}`,
   );
 
   // Verdict & flags TETAP ada: kartu ini mengganti tampilan, bukan peringatannya.
@@ -439,23 +450,20 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     s.verdict === 'BAHAYA'
       ? 'DO NOT LP (High Risk)'
       : s.verdict === 'HATI-HATI'
-        ? 'SAFE TO LP (Moderate Risk)'
+        ? 'PROCEED WITH CAUTION (Moderate Risk)'
         : 'SAFE TO LP';
   out.push('', `${icon} ${bold('PHILIPS Verdict:')} ${bold(verdictText)}`);
   for (const f of risk.slice(0, 4)) out.push(`• ${esc(f.msg)}`);
   if (s.verdict === 'HATI-HATI' && !risk.length) out.push('• Use a tighter range if you still want to LP.');
 
-  if (opts?.ca) out.push('', `📎 ${code(opts.ca)}`);
+  if (opts?.ca) out.push('', code(opts.ca));
 
   out.push(
     '',
-    '—————————————————',
-    `📋 ${bold('Your Wallet Status')}`,
-    `🕒 ${nowWib()}`,
     `• Holding Token: ${bold(opts?.heldLabel ? esc(opts.heldLabel) : 'No')}`,
     `• Active LP: ${bold(opts?.lpCount ? `${opts.lpCount} position(s)` : 'No')}`,
     '',
-    italic('What would you like to do with this token?'),
+    italic(nowWib()),
   );
   return out.join('\n');
 }

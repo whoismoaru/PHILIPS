@@ -13,8 +13,8 @@ function alertsKeyboard() {
   const a = alerts.get();
   return Markup.inlineKeyboard([
     [Markup.button.callback(`${a.rangeNotify ? '🔔' : '🔕'} In/out range: ${a.rangeNotify ? 'ON' : 'OFF'}`, 'al:range')],
-    [Markup.button.callback(`📉 Harga anjlok: ${a.dropPct === null ? 'OFF' : `-${a.dropPct}%`}`, 'al:drop')],
-    [Markup.button.callback(`⚠️ Rugi bersih: ${a.ilPct === null ? 'OFF' : `-${a.ilPct}%`}`, 'al:il')],
+    [Markup.button.callback(`📉 Price drop: ${a.dropPct === null ? 'OFF' : `-${a.dropPct}%`}`, 'al:drop')],
+    [Markup.button.callback(`⚠️ Net loss: ${a.ilPct === null ? 'OFF' : `-${a.ilPct}%`}`, 'al:il')],
   ]);
 }
 
@@ -28,7 +28,7 @@ bot.action(/^al:(range|drop|il)$/, async (ctx) => {
   if (ctx.match[1] === 'range') alerts.set({ rangeNotify: !a.rangeNotify });
   else if (ctx.match[1] === 'drop') alerts.set({ dropPct: alerts.cycle(a.dropPct, DROP_OPTIONS) });
   else alerts.set({ ilPct: alerts.cycle(a.ilPct, IL_OPTIONS) });
-  await ctx.answerCbQuery('Tersimpan');
+  await ctx.answerCbQuery('Saved');
   await ctx.editMessageText(msg.msgAlerts(alerts.get()), { ...html, ...alertsKeyboard() }).catch(() => {});
 });
 

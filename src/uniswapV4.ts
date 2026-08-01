@@ -131,11 +131,11 @@ export async function closePositionV4(
   leftover?: string;
 }> {
   const pmAddr = V4_PM[cc.key];
-  if (!pmAddr) throw new Error(`Uniswap v4 tak didukung di ${cc.label}.`);
+  if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
   const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
   const owner: string = await pm.ownerOf(tokenId);
   if (owner.toLowerCase() !== cc.wallet.address.toLowerCase()) {
-    throw new Error(`Posisi v4 #${tokenId} bukan milik wallet ini.`);
+    throw new Error(`v4 position #${tokenId} is not owned by this wallet.`);
   }
   const [pk] = await pm.getPoolAndPositionInfo(tokenId);
   const coder = ethers.AbiCoder.defaultAbiCoder();
@@ -334,7 +334,7 @@ export async function openPositionV4(
   opts: { widthSpacings?: number; gapSpacings?: number; dryRun: boolean },
 ): Promise<{ dryRun?: boolean; txHash?: string; tokenId?: string; tickLower: number; tickUpper: number; liquidity: bigint; baseIsCurrency0: boolean }> {
   const pmAddr = V4_PM[cc.key];
-  if (!pmAddr || !V4_POOL_MANAGER[cc.key]) throw new Error(`Uniswap v4 tak didukung di ${cc.label}.`);
+  if (!pmAddr || !V4_POOL_MANAGER[cc.key]) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
   const spacing = poolKey.tickSpacing;
   const width = (opts.widthSpacings ?? 50) * spacing;
   // gap default 0 → tepi-dekat MENEMPEL harga sekarang supaya posisi mulai terisi
@@ -343,7 +343,7 @@ export async function openPositionV4(
   const state = await readPoolState(cc, poolKey);
   // slot0 kosong = poolKey tak cocok pool mana pun. Tanpa cek ini, revert-nya baru
   // muncul sebagai 'unknown custom error' (PoolNotInitialized) di preview rencana.
-  if (state.sqrtPriceX96 === 0n) throw new Error('Pool v4 tak terinisialisasi (poolKey tak cocok) — pilih pool lain.');
+  if (state.sqrtPriceX96 === 0n) throw new Error('This v4 pool is not initialised — pick another pool.');
   const current = state.tick;
   const aligned = nearestUsableTick(current, spacing);
   let tickLower: number;
@@ -362,7 +362,7 @@ export async function openPositionV4(
   const sqrtL = sqrtAtTick(tickLower);
   const sqrtU = sqrtAtTick(tickUpper);
   const liquidity = baseIsCurrency0 ? liqForAmount0(sqrtL, sqrtU, baseAmountWei) : liqForAmount1(sqrtL, sqrtU, baseAmountWei);
-  if (liquidity <= 0n) throw new Error('Likuiditas terhitung 0 — nominal terlalu kecil.');
+  if (liquidity <= 0n) throw new Error('Computed liquidity is 0 — the amount is too small.');
 
   const coder = ethers.AbiCoder.defaultAbiCoder();
   const amount0Max = baseIsCurrency0 ? baseAmountWei : 0n;
@@ -421,7 +421,7 @@ export async function openPositionV4(
 /** PoolKey + info base sebuah posisi v4 (untuk add ke pool yg sama). */
 export async function getPoolKeyV4(cc: ChainCtx, tokenId: string): Promise<{ poolKey: PoolKeyV4; baseIsCurrency0: boolean; base: 'ETH' | 'USDG' | null }> {
   const pmAddr = V4_PM[cc.key];
-  if (!pmAddr) throw new Error(`Uniswap v4 tak didukung di ${cc.label}.`);
+  if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
   const pm = new ethers.Contract(pmAddr, V4_ABI, cc.provider);
   const [pk] = await pm.getPoolAndPositionInfo(tokenId);
   const poolKey: PoolKeyV4 = { currency0: pk.currency0, currency1: pk.currency1, fee: Number(pk.fee), tickSpacing: Number(pk.tickSpacing), hooks: pk.hooks };

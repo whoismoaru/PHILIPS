@@ -18,7 +18,7 @@ const BIN = '/home/ubuntu/.npm-global/bin/gmgn-cli';
 const TIMEOUT_MS = 12_000;
 
 /** PHILIPS key → nama chain GMGN. Tak ada di peta = GMGN tak mendukung chain itu. */
-const CHAIN: Record<string, string> = { robinhood: 'robinhood' };
+const CHAIN: Record<string, string> = { robinhood: 'robinhood', bsc: 'bsc' };
 
 export type GmgnExtra = {
   buyTaxPct: number | null;
@@ -33,6 +33,9 @@ export type GmgnExtra = {
   renounced: boolean | null;
   openSource: boolean | null;
   top10Pct: number | null;
+  /** Nama privilege/flag owner yang terdeteksi (pausable, cooldown, dst).
+   *  null = payload security tak terbaca; [] = terbaca & tak ada satupun. */
+  privileges: string[] | null;
   /** true bila angka tag (dev/insiders/sniper/bundler) hanya dari 100 holder terbesar */
   tagsFromTop100: boolean;
 };
@@ -50,6 +53,7 @@ const EMPTY: GmgnExtra = {
   renounced: null,
   openSource: null,
   top10Pct: null,
+  privileges: null,
   tagsFromTop100: false,
 };
 
@@ -109,6 +113,12 @@ export async function gmgnExtra(ca: string, chainKey: string): Promise<GmgnExtra
     out.renounced = boolOf(sec.is_renounced);
     out.openSource = boolOf(sec.is_open_source);
     out.top10Pct = ratioToPct(sec.top_10_holder_rate);
+    // privileges/flags bisa berisi string atau objek — ambil apa pun yang bisa dibaca
+    // sebagai nama. Array kosong itu JAWABAN ('tak ada privilege'), bukan 'tak tahu'.
+    const names = [...(sec.privileges ?? []), ...(sec.flags ?? [])]
+      .map((x: any) => String(typeof x === 'string' ? x : (x?.name ?? x?.type ?? x?.key ?? '')).toLowerCase())
+      .filter(Boolean);
+    out.privileges = names;
     // Burnt: burn_ratio saja sering '0' walau LP dikirim ke blackhole, jadi
     // jumlahkan juga bagian lock yang alamatnya blackhole.
     const burn = ratioToPct(sec.burn_ratio);

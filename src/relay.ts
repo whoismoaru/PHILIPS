@@ -35,7 +35,7 @@ export async function swapTokenViaRelay(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`Relay quote gagal (${res.status}): ${await res.text()}`);
+    throw new Error(`Relay quote failed (${res.status}): ${await res.text()}`);
   }
   const quote: any = await res.json();
 
@@ -108,9 +108,36 @@ export async function relayQuoteOut(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Dua bentuk struct exactInputSingle yang beredar. Uniswap SwapRouter02 membuang
+// `deadline`; SwapRouter v3 asli (dipakai PancakeSwap) tetap memakainya. Memanggil
+// dengan bentuk yang salah = revert tanpa data — mahal & membingungkan.
 const ROUTER_ABI = [
   'function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
 ];
+const ROUTER_ABI_DEADLINE = [
+  'function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 deadline,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
+];
+
+/** Kontrak router + parameter exactInputSingle sesuai bentuk struct chain ini. */
+function routerCall(
+  ctx: ChainCtx,
+  wallet: ethers.Signer,
+  p: { tokenIn: string; tokenOut: string; fee: number; recipient: string; amountIn: bigint; amountOutMinimum: bigint },
+): { router: ethers.Contract; params: Record<string, unknown> } {
+  const router = new ethers.Contract(
+    ctx.routerAddress,
+    ctx.routerHasDeadline ? ROUTER_ABI_DEADLINE : ROUTER_ABI,
+    wallet,
+  );
+  return {
+    router,
+    params: {
+      ...p,
+      ...(ctx.routerHasDeadline ? { deadline: BigInt(Math.floor(Date.now() / 1000) + 600) } : {}),
+      sqrtPriceLimitX96: 0n,
+    },
+  };
+}
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
 ];
@@ -128,7 +155,7 @@ async function swapViaUniswap(
   const { wallet, weth } = ctx;
 
   const pools = (await discoverPools(tokenAddress, ctx)).filter((p) => p.baseReserve > 0n);
-  if (pools.length === 0) throw new Error('tidak ada pool WETH untuk fallback swap');
+  if (pools.length === 0) throw new Error('no WETH pool available for the fallback swap');
   const fee = pools[0].fee;
 
   const txHashes: string[] = [];
@@ -157,23 +184,22 @@ async function swapViaUniswap(
     });
     minOut = (BigInt(q[0]) * BigInt(Math.floor((100 - slippagePct) * 100))) / 10000n;
   } catch (err) {
-    throw new Error(`quoter gagal (${(err as Error).message.slice(0, 60)}) — swap dibatalkan, hindari minOut=0`);
+    throw new Error(`quoter failed (${(err as Error).message.slice(0, 60)}) — swap cancelled to avoid minOut=0`);
   }
   if (minOut <= 0n) {
-    throw new Error('quoter mengembalikan 0 — swap dibatalkan (hindari sandwich)');
+    throw new Error('quoter returned 0 — swap cancelled (sandwich protection)');
   }
 
-  const router = new e.Contract(routerAddr, ROUTER_ABI, wallet);
-  const beforeWeth: bigint = await weth.balanceOf(wallet.address);
-  const tx = await router.exactInputSingle({
+  const { router, params } = routerCall(ctx, wallet as unknown as ethers.Signer, {
     tokenIn: tokenAddress,
     tokenOut: ctx.wethAddress,
     fee,
     recipient: wallet.address,
     amountIn: amountWei,
     amountOutMinimum: minOut,
-    sqrtPriceLimitX96: 0n,
   });
+  const beforeWeth: bigint = await weth.balanceOf(wallet.address);
+  const tx = await router.exactInputSingle(params);
   await tx.wait();
   txHashes.push(tx.hash);
 
@@ -214,7 +240,7 @@ async function relayVerified(
   const after = await tokenBalance(tokenAddress, ctx);
   // Harus berkurang ≥90% dari yang diminta; kalau tidak, anggap Relay no-op.
   if (before - after < (amountWei * 9n) / 10n) {
-    throw new Error(`relay tak mengurangi saldo token (before=${before} after=${after})`);
+    throw new Error(`relay did not reduce the token balance (before=${before} after=${after})`);
   }
   // outEthWei dari quote hanyalah ESTIMASI (kadang 0) — dan angka itu dipakai
   // sebagai hasil close di jurnal. Ukur dari delta saldo native bila bisa.
@@ -274,7 +300,7 @@ export async function swapTokenToEthRobust(
   } catch (e) {
     errors.push(`relay-retry: ${(e as Error).message.slice(0, 80)}`);
   }
-  throw new Error('Semua jalur swap gagal:\n' + errors.join('\n'));
+  throw new Error('All swap routes failed:\n' + errors.join('\n'));
 }
 
 /**
@@ -307,7 +333,7 @@ export async function swapTokenToUsdgRobust(
   // Pool USDG/token terlikuid (USDG reserve terbesar).
   let bestFee = 0;
   let bestReserve = -1n;
-  for (const fee of [100, 500, 3000, 10000]) {
+  for (const fee of ctx.feeTiers) {
     const pool: string = await ctx.factory.getPool(usdgAddress, tokenAddress, fee);
     if (!pool || pool === ethers.ZeroAddress) continue;
     const r: bigint = await usdg.balanceOf(pool);
@@ -316,7 +342,7 @@ export async function swapTokenToUsdgRobust(
       bestFee = fee;
     }
   }
-  if (bestReserve < 0n) throw new Error('tidak ada pool USDG untuk swap token→USDG');
+  if (bestReserve < 0n) throw new Error('no USDG pool available for the token→USDG swap');
 
   const routerAddr = ctx.routerAddress;
   const txHashes: string[] = [];
@@ -340,17 +366,17 @@ export async function swapTokenToUsdgRobust(
         sqrtPriceLimitX96: 0n,
       });
       const minOut = (BigInt(q[0]) * BigInt(Math.floor((100 - slip) * 100))) / 10000n;
-      if (minOut <= 0n) throw new Error('quoter mengembalikan 0 (hindari sandwich)');
+      if (minOut <= 0n) throw new Error('quoter returned 0 (sandwich protection)');
       const before: bigint = await usdg.balanceOf(wallet.address);
-      const tx = await router.exactInputSingle({
+      const call = routerCall(ctx, wallet as unknown as ethers.Signer, {
         tokenIn: tokenAddress,
         tokenOut: usdgAddress,
         fee: bestFee,
         recipient: wallet.address,
         amountIn: amountWei,
         amountOutMinimum: minOut,
-        sqrtPriceLimitX96: 0n,
       });
+      const tx = await call.router.exactInputSingle(call.params);
       await tx.wait();
       txHashes.push(tx.hash);
       const outWei = (await usdg.balanceOf(wallet.address)) - before;
@@ -370,7 +396,7 @@ export async function swapTokenToUsdgRobust(
     const r = await swapTokenViaRelay(tokenAddress, amountWei, usdgAddress, ctx);
     const afterTok = await tokenBalance(tokenAddress, ctx);
     if (beforeTok - afterTok < (amountWei * 9n) / 10n) {
-      throw new Error('relay tak mengurangi saldo token');
+      throw new Error('relay did not reduce the token balance');
     }
     const outWei = (await usdg.balanceOf(wallet.address)) - beforeUsdg;
     return { txHashes: r.txHashes, outWei, route: 'relay-usdg' };
@@ -378,5 +404,102 @@ export async function swapTokenToUsdgRobust(
     lastErr = `${lastErr} | relay: ${(e as Error).message.slice(0, 60)}`;
   }
 
-  throw new Error(`swap token→USDG gagal: ${lastErr}`);
+  throw new Error(`token→USDG swap failed: ${lastErr}`);
+}
+
+// ─── bridge lintas chain (Relay) ────────────────────────────────────
+//
+// Relay itu agregator bridge: swap same-chain di atas hanyalah kasus khusus dengan
+// origin == destination. Untuk lintas chain, kedua id diisi berbeda.
+
+export type BridgeQuote = {
+  inLabel: string; // "0.01 ETH"
+  outLabel: string; // "0.0319 BNB"
+  outWei: bigint;
+  impactPct: number | null; // selisih nilai USD masuk vs keluar
+  feeUsd: number | null; // biaya relayer
+  etaSec: number | null;
+  steps: Array<{ to: string; data: string; value: string }>;
+};
+
+/**
+ * Quote bridge native→native. Calldata-nya BERUMUR PENDEK — jangan pernah
+ * mengeksekusi `steps` dari quote yang dipakai merender kartu; minta quote baru
+ * tepat sebelum kirim (lihat executeBridge).
+ */
+export async function getBridgeQuote(
+  from: ChainCtx,
+  to: ChainCtx,
+  amountWei: bigint,
+): Promise<BridgeQuote> {
+  const body = {
+    user: from.wallet.address,
+    recipient: from.wallet.address, // dompet yang sama di kedua chain (EVM)
+    originChainId: from.chainId,
+    destinationChainId: to.chainId,
+    originCurrency: NATIVE,
+    destinationCurrency: NATIVE,
+    amount: amountWei.toString(),
+    tradeType: 'EXACT_INPUT',
+  };
+  const res = await fetch(RELAY_API, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Relay quote failed (${res.status}): ${(await res.text()).slice(0, 160)}`);
+  const q: any = await res.json();
+  const d = q?.details ?? {};
+  const steps: BridgeQuote['steps'] = [];
+  for (const st of q?.steps ?? []) {
+    for (const it of st?.items ?? []) {
+      if (it?.data?.to) steps.push({ to: it.data.to, data: it.data.data, value: it.data.value ?? '0' });
+    }
+  }
+  if (steps.length === 0) throw new Error('Relay returned no executable step for this route.');
+  const outWei = BigInt(d?.currencyOut?.amount ?? '0');
+  if (outWei <= 0n) throw new Error('Relay quote returned zero output — route unusable right now.');
+  // Relay mengembalikan presisi penuh (18 angka di belakang koma) — dipangkas 6,
+  // cukup untuk keputusan dan tak memenuhi layar HP.
+  const trim = (v: unknown, fallback: bigint): string =>
+    Number(v ?? ethers.formatEther(fallback)).toFixed(6);
+  return {
+    inLabel: `${trim(d?.currencyIn?.amountFormatted, amountWei)} ${d?.currencyIn?.currency?.symbol ?? from.nativeSymbol}`,
+    outLabel: `${trim(d?.currencyOut?.amountFormatted, outWei)} ${d?.currencyOut?.currency?.symbol ?? to.nativeSymbol}`,
+    outWei,
+    impactPct: d?.totalImpact?.percent != null ? Number(d.totalImpact.percent) : null,
+    feeUsd: q?.fees?.relayer?.amountUsd != null ? Number(q.fees.relayer.amountUsd) : null,
+    etaSec: d?.timeEstimate != null ? Number(d.timeEstimate) : null,
+    steps,
+  };
+}
+
+/**
+ * Kirim bridge. Quote DIMINTA ULANG di sini: calldata Relay berumur pendek, dan
+ * mengeksekusi calldata basi = dana terkirim dengan angka yang bukan lagi yang
+ * dilihat user. `minOutWei` menjaga hasil tak jatuh jauh dari yang dikonfirmasi.
+ */
+export async function executeBridge(
+  from: ChainCtx,
+  to: ChainCtx,
+  amountWei: bigint,
+  minOutWei: bigint,
+): Promise<{ txHashes: string[]; outWei: bigint }> {
+  const fresh = await getBridgeQuote(from, to, amountWei);
+  if (fresh.outWei < minOutWei) {
+    throw new Error(
+      `Route moved: now ${fresh.outLabel}, below the confirmed minimum. Nothing was sent — try again.`,
+    );
+  }
+  const txHashes: string[] = [];
+  for (const st of fresh.steps) {
+    const tx = await from.wallet.sendTransaction({
+      to: st.to,
+      data: st.data,
+      value: st.value ? BigInt(st.value) : 0n,
+    });
+    const rc = await tx.wait();
+    if (rc) txHashes.push(rc.hash);
+  }
+  return { txHashes, outWei: fresh.outWei };
 }

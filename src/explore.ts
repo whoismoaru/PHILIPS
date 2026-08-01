@@ -19,11 +19,13 @@ import * as m from './messages.js';
 const GATEWAY = 'https://interface.gateway.uniswap.org/v1/graphql';
 
 // key chain internal → nama enum Chain di API Uniswap.
+// Chain yang daftar pool-nya diambil dari gateway Uniswap. BSC SENGAJA tak ada:
+// posisi di sana dibuka di PancakeSwap, dan gateway Uniswap tak memuat pool Pancake
+// sama sekali — chain di luar peta ini memakai jalur DexScreener di bawah.
 const UNISWAP_CHAIN: Record<string, string> = {
   robinhood: 'ROBINHOOD',
   ethereum: 'ETHEREUM',
   base: 'BASE',
-  bsc: 'BNB',
 };
 
 // Ambil banyak lalu saring & urut sendiri (API urut by TVL, kita mau by APR).
@@ -84,7 +86,7 @@ export async function fetchTopPools(
   limit = 5,
 ): Promise<ExplorePool[]> {
   const chain = UNISWAP_CHAIN[ctx.key];
-  if (!chain) throw new Error(`Chain ${ctx.label} tak didukung Explore Uniswap.`);
+  if (!chain) return fetchTopPoolsDex(ctx, limit);
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20_000);
@@ -154,6 +156,7 @@ export type TokenPool = {
   otherSymbol: string; // simbol token target
   fee: number;
   tvlUsd: number;
+  aprPct?: number | null; // fee 24 jam disetahunkan; null = volume tak terbaca
   poolKey?: PoolKeyV4; // v4 saja — currency0/1, fee, tickSpacing, hooks
   baseIsCurrency0?: boolean; // v4 saja
 };
@@ -163,6 +166,7 @@ const TOKEN_POOL_FIELDS = `
     protocolVersion
     feeTier
     totalLiquidity { value }
+    cumulativeVolume(duration: DAY) { value }
     token0 { symbol address }
     token1 { symbol address }`;
 const TOKEN_QUERY = `query PoolsForToken($chain: Chain!, $n: Int!, $t: String!) {
@@ -174,11 +178,21 @@ const TOKEN_QUERY = `query PoolsForToken($chain: Chain!, $n: Int!, $t: String!) 
   }
 }`;
 
-const baseKindOf = (sym: string | null | undefined, addr: string | null | undefined, ctx: ChainCtx): 'weth' | 'usdg' | null => {
+/** Sisi base sebuah token dalam pool, dicocokkan ke daftar base CHAIN ini
+ *  (WETH/WBNB, USDG, USDT). null = bukan aset base. */
+const baseKindOf = (
+  sym: string | null | undefined,
+  addr: string | null | undefined,
+  ctx: ChainCtx,
+): 'weth' | 'usdg' | 'usdt' | null => {
   const s = (sym ?? '').toUpperCase();
   const a = (addr ?? '').toLowerCase();
-  if (s === 'ETH' || s === 'WETH' || (a && a === ctx.wethAddress.toLowerCase())) return 'weth';
-  if (ctx.usdgAddress && (s === 'USDG' || (a && a === ctx.usdgAddress.toLowerCase()))) return 'usdg';
+  for (const b of ctx.bases) {
+    if (a && a === b.address.toLowerCase()) return b.kind;
+    if (s && s === b.symbol.toUpperCase()) return b.kind;
+  }
+  // ETH-native (v4 currency0 = 0x0) memakai simbol 'ETH', bukan simbol wrapped-nya.
+  if (s === 'ETH' && ctx.hasWethBase) return 'weth';
   return null;
 };
 
@@ -190,7 +204,7 @@ const baseKindOf = (sym: string | null | undefined, addr: string | null | undefi
  */
 export async function poolsForToken(ctx: ChainCtx, token: string): Promise<TokenPool[]> {
   const chain = UNISWAP_CHAIN[ctx.key];
-  if (!chain) throw new Error(`Chain ${ctx.label} tak didukung Explore Uniswap.`);
+  if (!chain) return poolsForTokenDex(ctx, token);
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20_000);
@@ -227,7 +241,10 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
     const base = (b0 ?? b1)!;
     const baseSymbol = (baseIsCurrency0 ? t0.symbol : t1.symbol) ?? (base === 'usdg' ? 'USDG' : 'ETH');
     const otherSymbol = (baseIsCurrency0 ? t1.symbol : t0.symbol) ?? '?';
-    const tp: TokenPool = { protocol, base, baseSymbol, otherSymbol, fee, tvlUsd: tvl };
+    // APR = fee 24 jam disetahunkan (rumus sama dengan kartu /pools).
+    const vol = p.cumulativeVolume?.value ?? 0;
+    const aprPct = tvl > 0 && vol > 0 ? ((vol * (fee / 1e6) * 365) / tvl) * 100 : null;
+    const tp: TokenPool = { protocol, base, baseSymbol, otherSymbol, fee, tvlUsd: tvl, aprPct };
     if (protocol === 'v4') {
       tp.poolKey = {
         currency0: t0.address ?? ethers.ZeroAddress, // ETH native = null → 0x0
@@ -247,6 +264,196 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
   return out;
 }
 
+// ─── sumber alternatif: DexScreener (chain tanpa gateway Uniswap, mis. BSC) ──
+//
+// DexScreener memberi likuiditas & volume 24 jam per PAIR, tapi TIDAK memberi fee
+// tier. Fee dibaca on-chain dari pool-nya, sekaligus dipakai membuktikan pool itu
+// benar milik factory chain ini (fork lain punya alamat pool berbeda untuk pasangan
+// yang sama) — jadi angka yang dipakai membuka posisi tetap datang dari chain.
+
+const DEXSCREENER_TOKENS = 'https://api.dexscreener.com/latest/dex/tokens';
+const ERC20_SYM_ABI = ['function symbol() view returns (string)'];
+const ERC20_BAL_ABI = ['function balanceOf(address) view returns (uint256)'];
+
+/** Harga USD wrapped-native chain ini (untuk menilai sisi base). null = tak terbaca. */
+async function getBaseUsd(ctx: ChainCtx): Promise<number | null> {
+  const { getEthUsd } = await import('./screening.js');
+  return getEthUsd(ctx.wethAddress, ctx).catch(() => null);
+}
+const POOL_META_ABI = [
+  'function fee() view returns (uint24)',
+  'function token0() view returns (address)',
+  'function token1() view returns (address)',
+];
+
+type DexPair = {
+  pairAddress: string;
+  liquidityUsd: number;
+  vol24hUsd: number;
+  /** alamat(lowercase) → simbol. DexScreener memakai base/quote miliknya sendiri,
+   *  yang TIDAK selalu sama urutannya dengan token0/token1 pool — jadi simbol
+   *  harus dicocokkan lewat alamat, bukan lewat posisi. */
+  symByAddr: Record<string, string>;
+};
+
+async function dexPairs(ctx: ChainCtx, tokenAddress: string): Promise<DexPair[]> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  let json: any;
+  try {
+    const res = await fetch(`${DEXSCREENER_TOKENS}/${tokenAddress}`, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`dexscreener ${res.status}`);
+    json = await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+  const out: DexPair[] = [];
+  for (const p of json?.pairs ?? []) {
+    if (p?.chainId !== ctx.dexKey) continue;
+    if (!(p?.labels ?? []).includes('v3')) continue; // v2 tak punya rentang → bukan single-side
+    // liquidity.usd BOLEH kosong: DexScreener kadang tak mengisinya untuk pool v3
+    // yang sah. Membuangnya di sini pernah membuat pool nyata dilaporkan 'tak ada'.
+    const liq = Number(p?.liquidity?.usd ?? 0);
+    if (!p.pairAddress) continue;
+    const symByAddr: Record<string, string> = {};
+    for (const t of [p?.baseToken, p?.quoteToken]) {
+      if (t?.address) symByAddr[String(t.address).toLowerCase()] = t.symbol ?? '?';
+    }
+    out.push({
+      pairAddress: p.pairAddress,
+      liquidityUsd: liq,
+      vol24hUsd: Number(p?.volume?.h24 ?? 0),
+      symByAddr,
+    });
+  }
+  return out;
+}
+
+/** Baca fee & pasangan pool on-chain, lalu BUKTIKAN pool itu milik factory chain ini. */
+async function verifyPool(
+  pairAddress: string,
+  ctx: ChainCtx,
+): Promise<{ fee: number; token0: string; token1: string } | null> {
+  try {
+    const c = new ethers.Contract(pairAddress, POOL_META_ABI, ctx.provider);
+    const [fee, token0, token1] = await Promise.all([c.fee(), c.token0(), c.token1()]);
+    const feeNum = Number(fee);
+    if (!ctx.feeTiers.includes(feeNum)) return null;
+    const expect: string = await ctx.factory.getPool(token0, token1, feeNum);
+    if (expect.toLowerCase() !== pairAddress.toLowerCase()) return null; // pool DEX lain
+    return { fee: feeNum, token0, token1 };
+  } catch {
+    return null;
+  }
+}
+
+const aprOf = (vol24h: number, fee: number, tvl: number): number | null =>
+  tvl > 0 && vol24h > 0 ? ((vol24h * (fee / 1e6) * 365) / tvl) * 100 : null;
+
+/**
+ * Pool untuk 1 token di chain tanpa gateway Uniswap.
+ *
+ * SUMBER UTAMA = factory on-chain (getPool per base × per fee tier), bukan
+ * DexScreener: terbukti DexScreener bisa mengembalikan pair v3 yang sah dengan
+ * `liquidity: undefined` (token 黄金时代/USDT), dan menyaringnya membuat pool yang
+ * benar-benar ada dilaporkan "tak ada". DexScreener hanya dipakai MELENGKAPI
+ * volume 24 jam supaya APR bisa dihitung.
+ */
+async function poolsForTokenDex(ctx: ChainCtx, token: string): Promise<TokenPool[]> {
+  // Volume per pool (best-effort) — kegagalannya tak boleh menghilangkan pool.
+  const volByPool = new Map<string, number>();
+  const symByAddr: Record<string, string> = {};
+  try {
+    for (const p of await dexPairs(ctx, token)) {
+      volByPool.set(p.pairAddress.toLowerCase(), p.vol24hUsd);
+      Object.assign(symByAddr, p.symByAddr);
+    }
+  } catch {
+    /* tanpa DexScreener: pool tetap ketemu, APR-nya saja yang '?' */
+  }
+
+  const tokenC = new ethers.Contract(token, ERC20_SYM_ABI, ctx.provider);
+  const otherSymbol = symByAddr[token.toLowerCase()] ?? (await tokenC.symbol().catch(() => '?'));
+  const nativeUsd = await getBaseUsd(ctx);
+
+  const found = await Promise.all(
+    ctx.bases.flatMap((base) =>
+      ctx.feeTiers.map(async (fee): Promise<TokenPool | null> => {
+        try {
+          const pool: string = await ctx.factory.getPool(base.address, token, fee);
+          if (!pool || pool === ethers.ZeroAddress) return null;
+          const baseC = new ethers.Contract(base.address, ERC20_BAL_ABI, ctx.provider);
+          const reserve: bigint = await baseC.balanceOf(pool);
+          if (reserve <= 0n) return null; // pool terdaftar tapi kosong
+          const amt = Number(ethers.formatUnits(reserve, base.decimals));
+          // TVL ≈ 2× sisi base (pool seimbang secara nilai). Stablecoin = $1.
+          const usdPerBase = base.kind === 'weth' ? nativeUsd : 1;
+          const tvlUsd = usdPerBase !== null ? amt * usdPerBase * 2 : 0;
+          const vol = volByPool.get(pool.toLowerCase()) ?? 0;
+          return {
+            protocol: 'v3',
+            base: base.kind,
+            baseSymbol: base.symbol,
+            otherSymbol: String(otherSymbol),
+            fee,
+            tvlUsd,
+            aprPct: aprOf(vol, fee, tvlUsd),
+          };
+        } catch {
+          return null;
+        }
+      }),
+    ),
+  );
+  const out = found.filter((p): p is TokenPool => p !== null);
+  out.sort((a, b) => b.tvlUsd - a.tvlUsd);
+  return out;
+}
+
+/** Top pool chain (by APR) via DexScreener: pair paling likuid dari tiap aset base. */
+async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePool[]> {
+  const lists = await Promise.all(ctx.bases.map((b) => dexPairs(ctx, b.address).catch(() => [])));
+  const seen = new Set<string>();
+  const cand = lists
+    .flat()
+    .filter((p) => (seen.has(p.pairAddress.toLowerCase()) ? false : seen.add(p.pairAddress.toLowerCase())))
+    .filter((p) => p.liquidityUsd >= MIN_TVL_USD && p.vol24hUsd > 0)
+    .sort((a, b) => b.liquidityUsd - a.liquidityUsd)
+    .slice(0, 15); // batasi verifikasi on-chain
+  const pools: ExplorePool[] = [];
+  await Promise.all(
+    cand.map(async (p) => {
+      const v = await verifyPool(p.pairAddress, ctx);
+      if (!v) return;
+      const b0 = baseKindOf(null, v.token0, ctx);
+      const b1 = baseKindOf(null, v.token1, ctx);
+      if (!b0 && !b1) return;
+      const apr = aprOf(p.vol24hUsd, v.fee, p.liquidityUsd);
+      if (apr === null) return;
+      const bothBase = !!b0 && !!b1;
+      const otherAddr = bothBase ? undefined : b0 ? v.token1 : v.token0;
+      const symOf = (a: string) => p.symByAddr[a.toLowerCase()] ?? '?';
+      // Base ditaruh BELAKANG supaya terbaca "TOKEN/BASE", sama seperti jalur gateway.
+      const pair = bothBase
+        ? `${symOf(v.token0)}/${symOf(v.token1)}`
+        : b0
+          ? `${symOf(v.token1)}/${symOf(v.token0)}`
+          : `${symOf(v.token0)}/${symOf(v.token1)}`;
+      pools.push({
+        ver: 'v3',
+        pair,
+        feeTier: v.fee,
+        tvlUsd: p.liquidityUsd,
+        vol1dUsd: p.vol24hUsd,
+        apr,
+        otherAddr,
+      });
+    }),
+  );
+  pools.sort((a, b) => b.apr - a.apr);
+  return pools.slice(0, limit);
+}
+
 // ─── format ────────────────────────────────────────────────────────
 
 function usdCompact(n: number): string {
@@ -263,36 +470,42 @@ function aprLabel(n: number): string {
 }
 
 /** Kartu /pools — peringkat pool paling menguntungkan (naskah §4). */
-export function renderExplore(pools: ExplorePool[], chainLabel: string): string {
+export function renderExplore(pools: ExplorePool[], chainLabel: string, dexLabel = 'Uniswap', baseLabel = 'ETH/USDG'): string {
   if (pools.length === 0) {
     return [
-      `📊 ${m.bold(`Top Uniswap Pools · ${chainLabel}`)}`,
+      `📈 ${m.bold(`Top ${dexLabel} Pools (24H)`)}`,
       '',
-      m.note('Belum ada pool ETH/USDG yang memenuhi syarat. Coba lagi nanti.'),
-      m.italic(`Uniswap · ${m.nowWib()}`),
+      m.note(`No ${baseLabel} pool meets the criteria right now. Try again later.`),
+      m.italic(m.nowWib()),
     ].join('\n');
   }
 
   const medal = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
   const blocks = pools.map((p, i) => {
-    // Peringatan risiko: APR tinggi di Uniswap v3 hampir selalu dibayar volatilitas.
-    const risk = p.apr >= 100 ? ' ⚠️ (volatilitas tinggi)' : p.apr >= 40 ? ' ⚠️ (risiko IL)' : '';
+    // "Stable / Low Risk" HANYA untuk pool base-lawan-base (mis. WETH/USDG):
+    // otherAddr kosong artinya kedua sisinya aset base kita. Menempelkan label itu
+    // pada pool token biasa ber-APR rendah = klaim aman yang tak kita punya dasarnya.
+    const stablePair = !p.otherAddr;
+    const risk = stablePair
+      ? `✅ ${m.italic('Stable / Low Risk')}`
+      : p.apr >= 40
+        ? `⚠️ ${m.italic('High Volatility')}`
+        : `⚠️ ${m.italic('Volatile — impermanent loss risk')}`;
     return [
-      `${medal[i] ?? `${i + 1}.`} ${m.bold(p.pair)} (${p.ver.toUpperCase()}, ${m.feeLabel(p.feeTier)})`,
-      `💧 TVL: ${usdCompact(p.tvlUsd)} | 📈 APR: ${aprLabel(p.apr)}${risk}`,
+      `${medal[i] ?? `${i + 1}.`} ${m.bold(p.pair.replace('/', ' / '))} (${p.ver.toUpperCase()}, ${m.feeLabel(p.feeTier)})`,
+      `• TVL: ${usdCompact(p.tvlUsd)} | APR: ${aprLabel(p.apr)}`,
+      `• ${risk}`,
     ].join('\n');
   });
 
   return [
-    `📊 ${m.bold('Top Uniswap Pools (24J)')}`,
+    `📈 ${m.bold(`Top ${dexLabel} Pools (24H)`)}`,
     '',
-    'Pool paling menguntungkan saat ini:',
+    'Here are the most profitable pools right now :',
     '',
     blocks.join('\n\n'),
     '',
-    'Pilih pool untuk melihat rincian atau langsung membuka LP.',
-    '',
-    m.note(`top ${pools.length} by APR · single-sided ETH/USDG · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · APR = fee 1H disetahunkan`),
-    m.italic(`Uniswap · ${chainLabel} · ${m.nowWib()}`),
+    m.note(`top ${pools.length} by APR · single-sided ${baseLabel} · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · APR = 24h fees annualised`),
+    m.italic(`${chainLabel} · ${m.nowWib()}`),
   ].join('\n');
 }

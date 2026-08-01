@@ -305,7 +305,7 @@ export function renderPositionsCard(o: PositionsCardOpts): Buffer {
     y += 44;
     ctx.fillStyle = COL.muted;
     ctx.font = '26px PhSans';
-    ctx.fillText(`+${o.moreCount} posisi lain — tutup dulu untuk melihatnya`, PADX, y);
+    ctx.fillText(`+${o.moreCount} more positions — close some to see them`, PADX, y);
   }
 
   ctx.fillStyle = COL.muted;

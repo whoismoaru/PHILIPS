@@ -12,9 +12,13 @@ import { NATIVE, relayQuoteOut, swapTokenViaRelay } from './relay.js';
  * base→token). Sisi JUAL token→base tetap pakai swapTokenTo{Eth,Usdg}Robust yang teruji.
  */
 
-const VALID_FEES = [100, 500, 3000, 10000];
+// Bentuk struct ikut chain: PancakeSwap (SwapRouter v3 asli) memakai `deadline`,
+// SwapRouter02 Uniswap tidak. Bentuk salah = revert tanpa data.
 const ROUTER_ABI = [
   'function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
+];
+const ROUTER_ABI_DEADLINE = [
+  'function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 deadline,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
 ];
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
@@ -36,7 +40,7 @@ export async function quoteUniswap(
   let bestFee = 0;
   let bestReserve = -1n;
   await Promise.all(
-    VALID_FEES.map(async (fee) => {
+    ctx.feeTiers.map(async (fee) => {
       try {
         const pool: string = await ctx.factory.getPool(fromAddr, toAddr, fee);
         if (!pool || pool === ethers.ZeroAddress) return;
@@ -92,7 +96,7 @@ async function uniExec(
   minOut: bigint,
   ctx: ChainCtx,
 ): Promise<{ outWei: bigint; txHashes: string[] }> {
-  if (minOut <= 0n) throw new Error('quoter 0 — swap dibatalkan (hindari sandwich)');
+  if (minOut <= 0n) throw new Error('quoter returned 0 — swap cancelled (sandwich protection)');
   const txHashes: string[] = [];
   const from = new ethers.Contract(fromAddr, ERC20_ABI, ctx.wallet);
   const allowance: bigint = await from.allowance(ctx.wallet.address, ctx.routerAddress);
@@ -101,13 +105,18 @@ async function uniExec(
     await atx.wait();
     txHashes.push(atx.hash);
   }
-  const router = new ethers.Contract(ctx.routerAddress, ROUTER_ABI, ctx.wallet);
+  const router = new ethers.Contract(
+    ctx.routerAddress,
+    ctx.routerHasDeadline ? ROUTER_ABI_DEADLINE : ROUTER_ABI,
+    ctx.wallet,
+  );
   const before = await bal(toAddr, ctx);
   const tx = await router.exactInputSingle({
     tokenIn: fromAddr,
     tokenOut: toAddr,
     fee,
     recipient: ctx.wallet.address,
+    ...(ctx.routerHasDeadline ? { deadline: BigInt(Math.floor(Date.now() / 1000) + 600) } : {}),
     amountIn: amountInWei,
     amountOutMinimum: minOut,
     sqrtPriceLimitX96: 0n,
@@ -129,7 +138,7 @@ async function relayExec(
   const r = await swapTokenViaRelay(fromAddr, amountInWei, ethers.getAddress(toAddr), ctx);
   const afterFrom = await bal(fromAddr, ctx);
   if (beforeFrom - afterFrom < (amountInWei * 9n) / 10n) {
-    throw new Error('relay tak mengurangi saldo input');
+    throw new Error('relay did not reduce the input balance');
   }
   const outWei = (await bal(toAddr, ctx)) - beforeTo;
   return { outWei, txHashes: r.txHashes };
@@ -157,7 +166,7 @@ export async function swapExactInBest(
   const uniFirst = uniOut >= rOut;
 
   const tryUni = async (slip: number) => {
-    if (!uni) throw new Error('tak ada pool Uniswap');
+    if (!uni) throw new Error('no Uniswap pool for this pair');
     const minOut = (uni.out * BigInt(Math.floor((100 - slip) * 100))) / 10000n;
     return { ...(await uniExec(fromAddr, toAddr, amountInWei, uni.fee, minOut, ctx)), route: `uniswap(slip ${slip}%)` };
   };
@@ -174,5 +183,5 @@ export async function swapExactInBest(
       errors.push((e as Error).message.slice(0, 70));
     }
   }
-  throw new Error('Semua rute swap gagal:\n' + errors.join('\n'));
+  throw new Error('All swap routes failed:\n' + errors.join('\n'));
 }

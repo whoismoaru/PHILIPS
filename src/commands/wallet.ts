@@ -7,12 +7,12 @@ import * as store from '../store.js';
 import * as msg from '../messages.js';
 
 /**
- * Perintah dompet: /connect /settings /disconnect.
+ * Dompet: /settings (hubungkan & putuskan lewat tombol di kartunya).
  * `awaitingSecret` & `handleSecret` diekspor karena handler teks di index.ts
  * harus mendahulukan alur ini sebelum detektor rahasia-nyasar bekerja.
  */
 
-// ---------- /connect /settings /disconnect — dompet ----------
+// ---------- /settings — dompet (connect & disconnect = tombol) ----------
 export const awaitingSecret = new Set<number>();
 
 function cmdConnect(ctx: any) {
@@ -20,17 +20,16 @@ function cmdConnect(ctx: any) {
   awaitingSecret.add(ctx.from.id);
   return ctx.reply(msg.msgConnectPrompt(), {
     ...html,
-    ...Markup.inlineKeyboard([[Markup.button.callback('❌ Batalkan Koneksi', 'connect:cancel')]]),
+    ...Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel Connection', 'connect:cancel')]]),
   });
 }
-bot.command('connect', cmdConnect);
 bot.action('connect', async (ctx) => {
   await ctx.answerCbQuery();
   return cmdConnect(ctx);
 });
 bot.action('connect:cancel', async (ctx) => {
   awaitingSecret.delete(ctx.from!.id);
-  await ctx.answerCbQuery('Dibatalkan');
+  await ctx.answerCbQuery('Cancelled');
   await ctx.editMessageText(msg.msgCancelled(), html);
 });
 
@@ -46,8 +45,9 @@ export async function handleSecret(ctx: any, raw: string): Promise<void> {
     await editProgress(ctx, prog, msg.msgConnected(addr), {
       ...html,
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('💧 Buka LP', 'howto:add'), Markup.button.callback('📋 Posisi', 'positions')],
-        [Markup.button.callback('⚙️ Pengaturan', 'settings')],
+        [Markup.button.callback('💧 Add Liquidity', 'howto:add')],
+        [Markup.button.callback('📊 View Positions', 'positions')],
+        [Markup.button.callback('⚙️ Settings', 'settings')],
       ]),
     });
   } catch (e) {
@@ -60,8 +60,12 @@ async function cmdSettings(ctx: any) {
   const cc = getChain();
   const bal = addr ? await cc.provider.getBalance(addr).then((b) => `${msg.cleanUnits(b, 18)} ETH`).catch(() => '?') : null;
   const rows: any[] = [];
-  if (addr) rows.push([Markup.button.callback('🔴 Putuskan Dompet', 'disconnect')]);
-  else rows.push([Markup.button.callback('🔗 Hubungkan Dompet', 'connect')]);
+  // Tombol "Adjust Slippage" dari naskah sengaja TIDAK dipasang: slippage masih
+  // konstanta di kode, jadi tombolnya cuma akan membuka kartu yang tak mengubah apa
+  // pun. Pasang setelah nilainya benar-benar bisa disimpan & dipakai jalur swap.
+  if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
+  else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
+  rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   return ctx.reply(msg.msgSettings(addr, bal, cc.label, config.safety.dryRun, maxEthLabel), {
     ...html,
     ...Markup.inlineKeyboard(rows),
@@ -79,12 +83,11 @@ async function cmdDisconnect(ctx: any) {
   return ctx.reply(msg.msgDisconnectConfirm(walletStore.address()!, openLp), {
     ...html,
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Ya, Putuskan & Hapus Data', 'disconnect:ok')],
-      [Markup.button.callback('❌ Tidak, Tetap Terhubung', 'cancel')],
+      [Markup.button.callback('✅ Yes, Disconnect & Delete Key', 'disconnect:ok')],
+      [Markup.button.callback('❌ No, Stay Connected', 'cancel')],
     ]),
   });
 }
-bot.command('disconnect', cmdDisconnect);
 bot.action('disconnect', async (ctx) => {
   await ctx.answerCbQuery();
   return cmdDisconnect(ctx);

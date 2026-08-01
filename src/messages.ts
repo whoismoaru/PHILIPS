@@ -193,21 +193,21 @@ function footerMode(dryRun?: boolean): string {
 /** Parse multi-chain balance string into field rows. */
 function balanceFields(gasEth: string): Array<[string, string]> {
   const raw = (gasEth || '').trim();
-  if (!raw) return [['saldo', '—']];
+  if (!raw) return [['balance', '—']];
 
   const parts = raw.split(/\s*·\s*/).map((s) => s.trim()).filter(Boolean);
 
   if (parts.length === 1 && /^\d+(\.\d+)?$/.test(parts[0])) {
-    return [['saldo', `${parts[0]} ETH`]];
+    return [['balance', `${parts[0]} ETH`]];
   }
   if (parts.length === 1) {
-    return [['saldo', parts[0]]];
+    return [['balance', parts[0]]];
   }
 
   // "Robinhood 0.0376 ETH" → label chain, value amount
   return parts.map((p) => {
     const m = p.match(/^(\S+)\s+(.+)$/);
-    return m ? ([m[1].toLowerCase(), m[2]] as [string, string]) : (['saldo', p] as [string, string]);
+    return m ? ([m[1].toLowerCase(), m[2]] as [string, string]) : (['balance', p] as [string, string]);
   });
 }
 
@@ -215,46 +215,42 @@ function balanceFields(gasEth: string): Array<[string, string]> {
 
 // Badan cockpit bersama /start & /help: VIEW/EXECUTION/EMERGENCY dalam pohon.
 function cockpitLines(dryRun: boolean): string[] {
-  const grp = (rows: Array<[string, string]>) =>
-    rows.map(([c, d]) => `• ${bold(c)} — ${esc(d)}`);
+  const grp = (rows: Array<[string, string]>) => rows.map(([c, d]) => `• ${c} — ${esc(d)}`);
   return [
+    `📊 ${bold('View & Analytics :')}`,
     ...grp([
-      ['/status', 'Saldo, ekuitas & rincian dompet'],
-      ['/positions', 'Pemantauan LP aktif real-time'],
-      ['/history', 'Jurnal transaksi tertutup'],
-      ['/pnl', 'Rekapitulasi PnL seumur hidup'],
-      ['/pools', 'Pool APR tertinggi saat ini'],
-      ['/alerts', 'Setelan notifikasi posisi'],
-    ]).map((l, i) => (i === 0 ? `📊 <b>VIEW &amp; ANALYTICS</b>\n${l}` : l)),
+      ['/status', 'Balance, equity & wallet breakdown'],
+      ['/positions', 'Live monitoring of active LPs'],
+      ['/pnl', 'PnL recap & closed-trade journal'],
+      ['/pools', 'Highest-APR pools right now'],
+      ['/alerts', 'Position notification settings'],
+    ]),
     '',
+    `⚙️ ${bold('Execution & Trade :')}`,
     ...grp([
-      ['/add_lp', 'Buka posisi LP baru'],
-      ['/claim_fees', 'Panen fee tanpa menutup posisi'],
-      ['/remove_lp', 'Tarik likuiditas 25/50/75/100%'],
-      ['/stop', 'Tutup posisi LP spesifik'],
-      ['/buy', 'Beli token (Best Route)'],
-      ['/sell', 'Jual token di dompet'],
-    ]).map((l, i) => (i === 0 ? `⚙️ <b>EXECUTION &amp; TRADE</b>\n${l}` : l)),
+      ['/add_lp', 'Open a new LP position'],
+      ['/claim_fees', 'Harvest fees without closing'],
+      ['/remove_lp', 'Withdraw 25/50/75% of liquidity'],
+      ['/stop', 'Close an LP position completely'],
+      ['/unwrap', 'Return stuck wrapped native to native'],
+      ['/buy', 'Buy a token (best route)'],
+      ['/sell', 'Sell a token from your wallet'],
+      ['/bridge', 'Move native funds between chains'],
+    ]),
     '',
-    '⛔ <b>EMERGENCY</b>',
-    `• ${bold('/closeall')} — ${esc('Tutup SELURUH posisi sekaligus')}`,
+    `⚠️ ${bold('Notice :')}`,
+    `Commands under ${bold('Execution & Trade')} will move funds on-chain. Always double-check details before signing.`,
+    // Jalur masuk yang tak punya command sendiri — satu-satunya tempat ia disebut.
     '',
-    note('Tip: tempel CA token langsung di chat untuk membuka Token Hub.'),
-    '',
-    `⚠️ <i>${esc('/add_lp /remove_lp /stop /buy /sell /closeall menggerakkan dana on-chain')}</i>`,
+    note('Tip: paste a token CA straight into this chat to open its audit card.'),
+    // Mode simulasi mengubah arti SELURUH daftar di atas (tak ada uang bergerak).
+    ...(dryRun ? ['', note('mode: DRY RUN — no transaction is ever sent.')] : []),
   ];
 }
 
 /** Kartu daftar perintah (/help). */
 export function msgHelp(dryRun: boolean): string {
-  return [
-    hdr(`${dryRun ? '⚪' : '🟢'} PHILIPS · LP COCKPIT`),
-    '',
-    `⚡ ${bold('Single-Sided LP WETH / USDG')} — Uniswap v3 &amp; v4`,
-    note(`mode: ${dryRun ? 'DRY RUN (simulasi)' : 'LIVE (kirim tx)'}`),
-    '',
-    ...cockpitLines(dryRun),
-  ].join('\n');
+  return [bold('PHILIPS · LP Cockpit'), '', ...cockpitLines(dryRun)].join('\n');
 }
 
 /**
@@ -278,30 +274,31 @@ export function msgStarted(o: {
           .join(' · ')
       : '';
   return [
-    `🤖 ${bold('Welcome to PHILIPS Bot!')} 🚀`,
+    `🤖 ${bold('Welcome to PHILIPS!')}`,
     '',
-    `Hello! I am PHILIPS, your personal assistant for managing ${bold('Single-Side Liquidity Pools')} on ${bold('Uniswap V3')} through your ${bold('Robinhood Web3 Wallet')}.`,
+    `PHILIPS is your personal assistant for managing Single-Side Liquidity Pools (LP) on ${bold('Uniswap')}. PHILIPS goal is to make DeFi simple, secure, and efficient. Whether you are automatically buying the dip, taking profit on the rip, or tracking your fees, I've got you covered.`,
     '',
-    'My goal is to make DeFi simple, secure, and efficient — whether you are buying the dip, taking profit on the rip, or just tracking your fees.',
+    `🛠️ ${bold('Core Features :')}`,
+    '• Connect your Robinhood Wallet (Manual Import)',
+    '• Single-Side LP (Provide liquidity with only 1 token)',
+    '• Automated Token Security Audit &amp; Rug Pull Check',
+    '• Track active LP positions, APR, and earned fees',
     '',
-    `🛠️ ${bold('Core Features')}`,
-    '🔗 Connect your Robinhood Wallet (manual import)',
-    '💧 Single-Side LP — provide liquidity with only 1 token',
-    '🛡️ Automated token security audit & rug pull check',
-    '📊 Track active LP positions, APR, and earned fees',
+    `⚠️ ${bold('Security Notice :')}`,
+    // Pintu resminya kini tombol Connect Wallet di /settings — /connect sudah dihapus,
+    // dan menyuruh user mengetik perintah yang tak ada persis membuka celah yang
+    // peringatan ini coba tutup (dia mencari "alur resmi" lalu percaya yang palsu).
+    `PHILIPS will ${bold('never')} ask for your Seed Phrase outside of the official Connect Wallet flow in ${code('/settings')}. DeFi involves risks, including Impermanent Loss (IL). ${bold('Always DYOR.')}`,
     '',
-    `⚠️ ${bold('Security Notice')}`,
-    `PHILIPS will ${bold('never')} ask for your seed phrase outside the official /connect flow. DeFi involves risk, including Impermanent Loss (IL). Always DYOR.`,
-    '',
-    `📟 ${bold('Status')}`,
-    `• Mode · ${bold(o.dryRun ? '⚪ DRY RUN (simulation)' : '🟢 LIVE')}`,
-    `• Chain · ${esc(o.chainLabel)} (ID ${esc(String(o.chainId))})`,
-    `• Wallet · ${o.walletShort ? code(o.walletShort) : italic('not connected')}`,
-    `• LP Positions · ${bold(`${o.positions} active`)}`,
-    ...(sync ? [`• Sync · ${esc(sync)}`] : []),
-    '',
-    '👉 Tap a button below to get started.',
-    note(nowWib()),
+    // Blok "Bot Status" dibuang atas permintaan. Dua hal tetap disebut karena
+    // mengubah arti kartu ini: mode simulasi (tak ada uang bergerak) dan hasil
+    // sinkronisasi posisi (bot menemukan/menutup posisi tanpa kamu minta).
+    ...(o.dryRun ? [`⚪ ${bold('DRY RUN')} — simulation mode, no funds will move.`, ''] : []),
+    ...(sync ? [`🔄 ${bold('Sync:')} ${esc(sync)}`, ''] : []),
+    `👉 ${bold('Get Started :')}`,
+    o.walletShort
+      ? 'Tap the button below to open a new Single-Side LP and start earning trading fees.'
+      : 'Tap the button below to Connect your Robinhood Wallet and start earning trading fees.',
   ].join('\n');
 }
 
@@ -310,54 +307,52 @@ export function msgAddHowTo(): string {
   return [
     `💧 ${bold('Open a Single-Side LP')}`,
     '',
-    'Two ways to start:',
-    `• Paste a token ${bold('contract address (CA)')} straight into this chat — PHILIPS audits it first, then offers to LP.`,
-    `• Type ${code('/add_lp <CA>')} to jump into the wizard.`,
+    'Provide liquidity using only one token. This acts as a passive limit order where you earn trading fees while waiting for your target price.',
     '',
-    `No candidate yet? Open ${code('/pools')} to see the highest-APR pools.`,
+    `📝 ${bold('How to Start :')}`,
+    `• ${bold('Quick Method ->')} Paste a token Contract Address (CA) directly in this chat.`,
+    `• ${bold('Wizard Method ->')} Type ${code('/add_lp [CA]')} to enter the step-by-step setup.`,
+    // Jalur ketiga yang benar-benar ada: /add_lp tanpa CA membuka pemilih pair.
+    // Tanpa disebut, satu-satunya cara menemukannya adalah tak sengaja.
+    `• ${bold('No CA? ->')} Type ${code('/add_lp')} on its own to pick from the top pools.`,
+    '',
+    `💡 ${bold('No target token in mind?')}`,
+    `Use ${code('/pools')} to explore top Uniswap pools by APR.`,
+    '',
+    note(nowWib()),
   ].join('\n');
 }
 
 /** Kartu "How it Works" — penjelasan statis, dipanggil dari tombol di /start. */
 export function msgHighRiskBlocked(reasons: string[]): string {
   const out = [
-    `🚫 ${bold('Transaksi Diblokir: Token Berisiko Tinggi')}`,
+    `🚫 ${bold('Blocked: High-Risk Token')}`,
     '',
-    'PHILIPS menemukan masalah keamanan serius pada token ini:',
+    'PHILIPS found serious security problems with this token :',
   ];
   for (const r of reasons.slice(0, 5)) out.push(`• ${esc(r)}`);
-  if (!reasons.length) out.push('• vonis audit: BAHAYA');
+  if (!reasons.length) out.push('• audit verdict: HIGH RISK');
   out.push(
     '',
-    'Demi melindungi danamu, Single-Side LP dimatikan untuk kontrak ini. Pilih token lain.',
+    'To protect your funds, Single-Side LP is disabled for this contract. Pick another token.',
     '',
-    note('audit lengkapnya ada di kartu di atas.'),
+    note('the full audit is in the card above.'),
   );
   return out.join('\n');
 }
 
 export function msgSecretLeakWarning(): string {
   return [
-    `🚨 ${bold('PERINGATAN KEAMANAN')} 🚨`,
+    `🚨 ${bold('SECURITY WARNING')} 🚨`,
     '',
-    'Sepertinya kamu mengirim data sensitif (private key / seed phrase) di luar alur koneksi resmi.',
+    'It looks like you sent sensitive data (private key / seed phrase) outside the official connection flow.',
     '',
-    `❌ ${bold('Pesanmu diabaikan dan sudah dihapus.')}`,
+    `❌ ${bold('Your message was ignored and has been deleted.')}`,
     '',
-    `Kalau memang mau menghubungkan dompet, ketik ${code('/connect')} dan ikuti langkahnya. Jangan pernah menempel kunci sembarangan di chat.`,
+    `If you meant to connect a wallet, open ${code('/settings')} and follow the steps there. Never paste a key loosely into a chat.`,
     '',
-    note('kunci yang sudah pernah terkirim ke chat sebaiknya dianggap bocor — pindahkan dananya.'),
-    note('kalau tadi itu cuma tx hash (0x + 64 karakter), abaikan pesan ini — bot tak memakai tx hash sebagai masukan.'),
-  ].join('\n');
-}
-
-export function msgTokenInfoUsage(): string {
-  return [
-    `🔍 ${bold('Audit Keamanan Token')}`,
-    '',
-    `Kirim alamat kontraknya: ${code('/token_info 0x…')}`,
-    '',
-    note('atau tempel CA-nya langsung di chat — hasilnya sama.'),
+    note('any key that has already been sent to a chat should be treated as compromised — move the funds.'),
+    note('if that was just a tx hash (0x + 64 chars), ignore this — the bot never takes a tx hash as input.'),
   ].join('\n');
 }
 
@@ -365,7 +360,7 @@ export function msgHowItWorks(): string {
   return [
     `📖 ${bold('How PHILIPS Works')}`,
     '',
-    `1️⃣ ${bold('Connect your wallet')} — import it via /connect. The key is stored encrypted on this bot's server so PHILIPS can sign transactions for you.`,
+    `1️⃣ ${bold('Connect your wallet')} — import it from /settings. The key is stored encrypted on this bot's server so PHILIPS can sign transactions for you.`,
     '',
     `2️⃣ ${bold('Pick a token')} — /pools for the highest-APR pools, or paste a contract address (CA) straight into the chat. Every token is audited first: honeypot, buy/sell tax, locked liquidity, holder spread.`,
     '',
@@ -392,7 +387,7 @@ export function msgV4Position(p: {
     code(`${p.pair} · ${p.feeLabel}`),
     '',
     ...hrows([
-      ['Nilai', p.valueLabel],
+      ['Value', p.valueLabel],
       ['Range', p.rangeLabel],
     ]),
   ];
@@ -414,13 +409,13 @@ export function msgV4Closed(o: {
 }): string {
   if (o.dryRun) {
     return card(`⚪ ${title('CLOSE v4 (DRY)', `#${o.tokenId}`)}`, [
-      note(`simulasi valid — saat live, dana kembali${o.base ? ` & di-cash-out ke ${o.base}` : ''}.`),
+      note(`simulation valid — when live, funds return${o.base ? ` and are cashed out to ${o.base}` : ''}.`),
     ]);
   }
   const body: string[] = [];
-  if (o.cashedOut) body.push(`💰 ${bold(`semua jadi ${o.base}`)}`);
-  else if (o.leftover) body.push(`⚠️ ${bold('token receh tak dapat rute swap')} — tetap di wallet (bisa /swap manual).`);
-  else body.push(`💰 ${bold('dana kembali ke wallet')}`);
+  if (o.cashedOut) body.push(`💰 ${bold(`all converted to ${o.base}`)}`);
+  else if (o.leftover) body.push(`⚠️ ${bold('dust token has no swap route')} — it stays in your wallet (sell it later via /sell).`);
+  else body.push(`💰 ${bold('funds returned to your wallet')}`);
   if (o.pnlText) body.push('', bold(`PnL  ${o.pnlText}`));
   if (o.txHash) body.push('', ...hrows([['tx', shortAddr(o.txHash)]]));
   return card(`✅ ${title('CLOSED v4', `#${o.tokenId}`)}`, body, nowWib());
@@ -441,11 +436,11 @@ export function msgV4Added(o: {
         ['Range', o.rangeLabel],
       ]),
       '',
-      note('simulasi valid — tidak mengirim tx.'),
+      note('simulation valid — no transaction was sent.'),
     ]);
   }
   const body: string[] = [
-    `🟢 ${bold('posisi v4 baru dibuka')} — monitor aktif`,
+    `🟢 ${bold('new v4 position opened')} — monitoring is active`,
     '',
     ...hrows([
       ['Deposit', o.sizeEth],
@@ -459,13 +454,13 @@ export function msgV4Added(o: {
 /** Konfirmasi tutup posisi Uniswap v4. */
 export function msgV4CloseConfirm(tokenId: string): string {
   return [
-    hdr('🔴 KONFIRMASI TUTUP v4'),
+    `🔴 ${bold('Confirm Close (v4)')}`,
     '',
-    `Posisi: ${bold(`#${esc(tokenId)}`)} (Uniswap v4)`,
+    `🆔 ${bold('Position ID:')} #${esc(tokenId)} (Uniswap v4)`,
     '',
-    '⚠️ Posisi di-burn; SELURUH likuiditas + fee (kedua token) kembali ke dompet — tanpa auto-swap.',
+    '⚠️ The position is burned; ALL liquidity plus fees (both tokens) return to your wallet — with no auto-swap.',
     '',
-    bold('Yakin ingin menutup posisi ini?'),
+    bold('Close this position?'),
   ].join('\n');
 }
 
@@ -473,65 +468,22 @@ export function msgV4CloseConfirm(tokenId: string): string {
 export function msgV4Range(tokenId: string, inRange: boolean): string {
   return inRange
     ? [
-        hdr('🟢 LP KEMBALI IN RANGE'),
+        `🟢 ${bold('Alert: v4 Position In Range')}`,
         '',
-        `🟢 Posisi ${bold(`#${esc(tokenId)}`)} (Uniswap v4) kembali dalam rentang harga — fee mengalir lagi.`,
-        note(nowWib()),
+        `Position ${bold(`#${esc(tokenId)}`)} (Uniswap v4) is back inside its price range — fees are flowing again.`,
+        '',
+        `⏱️ <i>Triggered at: ${nowWib()}</i>`,
       ].join('\n')
     : [
-        hdr('⚠️ ALERT: LP OUT OF RANGE!'),
+        `🔴 ${bold('Alert: v4 Position Out of Range')}`,
         '',
-        `🔴 Posisi ${bold(`#${esc(tokenId)}`)} (Uniswap v4) keluar dari rentang harga efektif.`,
-        'Fee likuiditas terhenti. Pertimbangkan menutup atau memindahkan posisi.',
-        note(nowWib()),
+        `Position ${bold(`#${esc(tokenId)}`)} (Uniswap v4) has left its effective price range.`,
+        'Fee income has stopped. Consider closing or repositioning it.',
+        '',
+        `⏱️ <i>Triggered at: ${nowWib()}</i>`,
       ].join('\n');
 }
 
-
-/**
- * Kartu HUB TOKEN — muncul saat CA ditempel telanjang (tanpa command).
- * Satu identitas + satu screening melayani empat aksi; tiap tombol masuk ke alur
- * yang sudah ada (guard & konfirmasi masing-masing tetap utuh).
- */
-export function msgTokenHub(o: {
-  symbol: string;
-  chainLabel: string;
-  ca: string;
-  verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA' | null; // null = screening gagal
-  verdictNote?: string;
-  priceUsd?: string | null;
-  balanceLabel?: string; // hanya bila wallet memegang token ini
-  balanceUsd?: number | null;
-  lpCount?: number; // posisi LP aktif untuk token ini
-  lpIds?: string[];
-  dryRun: boolean;
-}): string {
-  const scan =
-    o.verdict === 'BAHAYA'
-      ? `⚠️ ${bold('BAHAYA')}`
-      : o.verdict === 'HATI-HATI'
-        ? `🟡 ${bold('HATI-HATI')}`
-        : o.verdict === 'AMAN'
-          ? `🟢 ${bold('AMAN')}`
-          : `🟡 ${bold('GAGAL')} — token tak terverifikasi`;
-  const body: string[] = [
-    hdr('🛡️ TOKEN HUB'),
-    '',
-    `📌 Token · ${bold(esc(o.symbol))} (${esc(o.chainLabel)})`,
-    `📄 CA · ${code(shortAddr(o.ca))}`,
-    `🛡️ Scan · ${scan}${o.verdict && o.verdictNote ? ` (${esc(o.verdictNote)})` : ''}`,
-  ];
-  const rows: Array<[string, string]> = [];
-  if (o.priceUsd) rows.push(['Harga token', `$${esc(o.priceUsd)}`]);
-  if (o.balanceLabel) {
-    rows.push(['Saldo anda', `${bold(esc(o.balanceLabel))}${o.balanceUsd ? ` (${usdPlain(o.balanceUsd)})` : ''}`]);
-  }
-  if (o.lpCount) rows.push(['LP aktif', `${o.lpCount} posisi${o.lpIds?.length ? ` (#${esc(o.lpIds.join(' #'))})` : ''}`]);
-  if (rows.length) body.push('', `📊 ${bold('METRICS AKTIF')}:`, ...tree(rows, 12));
-  if (!o.balanceLabel && !o.lpCount) body.push('', note('belum dipegang & belum ber-LP — bisa mulai dari Buka LP / Beli Token'));
-  body.push(note(`${o.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
-  return body.join('\n');
-}
 
 export function msgUnknown(txt: string): string {
   const shown = (txt || '').trim().slice(0, 40) || '…';
@@ -540,7 +492,7 @@ export function msgUnknown(txt: string): string {
     [
       fieldBlock([['input', shown]]),
       '',
-      note('ketik /help untuk daftar perintah · tempel CA untuk kartu token'),
+      note('type /help for the command list · paste a CA for its audit card'),
     ],
   );
 }
@@ -551,49 +503,69 @@ export function msgStatus(opts: {
   positions: number;
   limitLabel: string; // '∞' atau mis. '0.5 ETH'
   wallet: string;
-  chains: Array<{ label: string; amount: string; symbol: string; usd: number | null }>;
-  usdg?: { amount: string; usd: number }; // base USDG di chain utama — tampil bila > 0
-  totalUsd: number | null; // null = harga ETH tak terbaca (JANGAN 0)
+  /** Per chain: saldo native + stablecoin base yang dipegang di chain itu. */
+  chains: Array<{
+    label: string;
+    amount: string;
+    symbol: string;
+    usd: number | null;
+    stables?: Array<{ symbol: string; amount: string; usd: number | null }>;
+  }>;
+  totalUsd: number | null; // null = harga native tak terbaca (JANGAN 0)
   holdingsCount: number | null; // null = pembacaan gagal (BUKAN 'bersih')
   lpUsd?: number | null; // nilai posisi LP aktif
   lpFailed?: number; // posisi yang gagal dibaca → total belum lengkap
   realizedEth?: number; // PnL cashout seumur hidup
   explorerUrl?: string | null; // base URL explorer → alamat jadi tautan (null = teks biasa)
+  sellInto?: string; // aset tujuan yang disarankan saat menjual token nganggur
 }): string {
   // USD tak terbaca → '—' (netral), JANGAN '$0.00' yang terbaca sebagai fakta.
   const usdCol = (u: number | null | undefined) => (u === null || u === undefined ? '—' : usdPlain(u));
   const equity = opts.totalUsd === null ? '—' : usdPlain(opts.totalUsd + (opts.lpUsd ?? 0));
 
-  // Rincian aset unstaked jadi keterangan dalam kurung — kartu ini soal ANGKA
-  // besar; daftar per-aset yang panjang justru menenggelamkannya.
+  const held = opts.chains.filter((c) => Number(c.amount) > 0 || (c.stables ?? []).length > 0);
   const assetNames = [
-    ...opts.chains.filter((c) => Number(c.amount) > 0).map((c) => c.symbol),
-    ...(opts.usdg ? ['USDG'] : []),
+    ...new Set(
+      held.flatMap((c) => [
+        ...(Number(c.amount) > 0 ? [c.symbol] : []),
+        ...(c.stables ?? []).map((t) => t.symbol),
+      ]),
+    ),
   ];
 
   const parts: string[] = [
-    `💼 ${bold('Portfolio Status & Equity')}`,
+    bold('PORTFOLIO'),
     '',
-    `💰 ${bold('Total Equity:')} ${bold(equity)}`,
-    `🏦 ${bold('Unstaked Balance:')} ${bold(usdCol(opts.totalUsd))}${assetNames.length ? ` ${italic(`(${esc(assetNames.join(', '))})`)}` : ''}`,
+    `💰 ${bold('Equity Summary :')}`,
+    `• Total Equity: ${bold(equity)}`,
+    `• Unstaked Balance: ${bold(usdCol(opts.totalUsd))}${assetNames.length ? ` ${italic(`(${assetNames.join(', ')})`)}` : ''}`,
   ];
   if (opts.lpUsd !== undefined) {
     parts.push(
-      `🔒 ${bold('Active in LP:')} ${bold(usdCol(opts.lpUsd))} ${italic(`(${opts.positions} Active Position${opts.positions === 1 ? '' : 's'})`)}`,
+      `• Active in LP: ${bold(usdCol(opts.lpUsd))} ${italic(`(${opts.positions} Position${opts.positions === 1 ? '' : 's'})`)}`,
     );
   }
   if (opts.realizedEth !== undefined) {
     parts.push(
-      `📈 ${bold('Realized PnL:')} ${dot(opts.realizedEth)} ${bold(`${opts.realizedEth >= 0 ? '+' : ''}${opts.realizedEth.toFixed(5)} ETH`)}`,
+      `• Realized PnL: ${dot(opts.realizedEth)} ${bold(`${opts.realizedEth >= 0 ? '+' : ''}${opts.realizedEth.toFixed(5)} ETH`)}`,
     );
   }
 
-  // Rincian per-aset tetap tersedia, tapi di bawah angka besar.
-  const assets: Array<[string, string]> = opts.chains
-    .filter((c) => Number(c.amount) > 0)
-    .map((c) => [c.label, `${bold(`${esc(c.amount)} ${esc(c.symbol)}`)}${c.usd === null ? '' : ` (${usdPlain(c.usd)})`}`]);
-  if (opts.usdg) assets.push(['USDG', `${bold(`${esc(opts.usdg.amount)} USDG`)} (${usdPlain(opts.usdg.usd)})`]);
-  if (assets.length) parts.push('', ...tree(assets, 11));
+  // Rincian per CHAIN, bukan per aset lepas: stablecoin ikut baris chain tempat ia
+  // benar-benar berada. Baris "USDG" berdiri sendiri dulu menyamarkan chain-nya.
+  if (held.length) {
+    parts.push('', `📊 ${bold('Asset Breakdown :')}`);
+    for (const c of held) {
+      const cells: string[] = [];
+      if (Number(c.amount) > 0) {
+        cells.push(`${esc(c.amount)} ${esc(c.symbol)}${c.usd === null ? '' : ` (${usdPlain(c.usd)})`}`);
+      }
+      for (const t of c.stables ?? []) {
+        cells.push(`${esc(t.amount)} ${esc(t.symbol)}${t.usd === null ? '' : ` (${usdPlain(t.usd)})`}`);
+      }
+      parts.push(`• ${bold(`${c.label}:`)} ${cells.join(' | ')}`);
+    }
+  }
 
   if (opts.lpFailed) parts.push('', `⚠️ ${note(`${opts.lpFailed} position(s) failed to read — total is incomplete`)}`);
   if (opts.holdingsCount === null) {
@@ -601,9 +573,9 @@ export function msgStatus(opts: {
   } else if (opts.holdingsCount > 0) {
     parts.push(
       '',
-      `⚠️ ${bold('Action Required:')}`,
-      `You have ${bold(`${opts.holdingsCount} token${opts.holdingsCount === 1 ? '' : 's'}`)} sitting in your wallet earning nothing.`,
-      'Use /sell to convert them back to WETH/USDG.',
+      `⚠️ ${bold('Action Required :')}`,
+      `• You have ${bold(`${opts.holdingsCount} idle token${opts.holdingsCount === 1 ? '' : 's'}`)} sitting in your wallet earning nothing.`,
+      `• Use /sell to convert them back to ${esc(opts.sellInto ?? 'WETH/USDG')}.`,
     );
   }
 
@@ -613,20 +585,18 @@ export function msgStatus(opts: {
     : `<code>${short}</code>`;
   parts.push(
     '',
-    `🔗 ${bold('Connected Wallet:')} ${link}`,
-    `⚡ ${bold('Mode:')} ${opts.dryRun ? '⚪ DRY RUN' : '🟢 LIVE'} · chain ${esc(String(opts.chainId))} · max/tx ${esc(opts.limitLabel)}`,
-    `⏱️ <i>Last Updated: ${nowWib()}</i>`,
+    `🔗 ${bold('Wallet:')} ${link} · ${opts.dryRun ? '⚪ DRY RUN' : '🟢 LIVE'} · max/tx ${esc(opts.limitLabel)}`,
+    `<i>Last Updated: ${nowWib()}</i>`,
   );
 
   return parts.join('\n');
 }
 
-/** ETH bertanda ringkas: '+0.01820 ETH' / '-0.00284 ETH'. */
+/** Nilai ETH bertanda: '+0.14811 ETH' / '-0.02 ETH'. */
 function sgEth(n: number): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(5)} ETH`;
 }
 
-/** Kartu rekap PnL seumur hidup (dari jurnal). Satu highlight (net) di luar pre. */
 export function msgPnl(opts: {
   dryRun: boolean;
   known: number;
@@ -641,33 +611,37 @@ export function msgPnl(opts: {
   worst?: { symbol: string; pnlEth: number };
 }): string {
   if (opts.known === 0) {
-    return [hdr('📈 TOTAL LIFETIME PnL'), '', note('belum ada trade tertutup.')].join('\n');
+    return [`📈 ${bold('Total Lifetime PnL')}`, '', note('no closed trades yet.')].join('\n');
   }
   const winrate = (opts.wins / opts.known) * 100;
   const untracked = opts.count ? opts.count - opts.known - (opts.excluded ?? 0) : 0;
   const rows: Array<[string, string]> = [
-    ['Total Trade', `${opts.known} (${opts.wins} Win / ${opts.losses} Loss)`],
+    ['Total Trades', `${opts.known} (${opts.wins} Win / ${opts.losses} Loss)`],
     ['Winrate', `🎯 ${bold(`${winrate.toFixed(1)}%`)}`],
     ['Total Profit', `🟢 ${bold(sgEth(opts.grossWin))}`],
     ['Total Loss', `🔴 ${bold(sgEth(opts.grossLoss))}`],
-    ...(untracked > 0 ? ([['Untracked', `${untracked} trade (burned/luar bot)`]] as Array<[string, string]>) : []),
+    ...(untracked > 0
+      ? ([['Untracked', `${untracked} trade(s) (burned / closed outside the bot)`]] as Array<[string, string]>)
+      : []),
   ];
   const out = [
-    hdr('📈 TOTAL LIFETIME PnL'),
+    `📈 ${bold('Total Lifetime PnL')}`,
     '',
-    `${dot(opts.netEth)} ${bold('NET CASHOUT')}: ${bold(sgEth(opts.netEth))}`,
+    `${dot(opts.netEth)} ${bold('Net Cashout:')} ${bold(sgEth(opts.netEth))}`,
     '',
-    `📊 ${bold('STATISTIK PERDAGANGAN')}:`,
+    `📊 ${bold('Trading Statistics :')}`,
     ...tree(rows, 12),
   ];
-  if (opts.best) out.push('', `🏆 ${bold('Best Trade')}  : ${esc(opts.best.symbol)} (${dot(opts.best.pnlEth)} ${bold(sgEth(opts.best.pnlEth))})`);
-  if (opts.worst) out.push(`⚠️ ${bold('Worst Trade')} : ${esc(opts.worst.symbol)} (${dot(opts.worst.pnlEth)} ${bold(sgEth(opts.worst.pnlEth))})`);
-  if (opts.excluded && opts.excluded > 0) out.push('', note(`${opts.excluded} trade lama tanpa data hasil diabaikan.`));
+  if (opts.best)
+    out.push('', `🏆 ${bold('Best Trade')}  : ${esc(opts.best.symbol)} (${dot(opts.best.pnlEth)} ${bold(sgEth(opts.best.pnlEth))})`);
+  if (opts.worst)
+    out.push(`⚠️ ${bold('Worst Trade')} : ${esc(opts.worst.symbol)} (${dot(opts.worst.pnlEth)} ${bold(sgEth(opts.worst.pnlEth))})`);
+  if (opts.excluded && opts.excluded > 0)
+    out.push('', note(`${opts.excluded} older trade(s) without result data were excluded.`));
   out.push('', note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
   return out.join('\n');
 }
 
-/** Alert harga token anjlok ≥ambang dari harga entry (auto-monitor). */
 /**
  * Posisi terkonversi penuh. `tokenSide` menentukan arah: sisi base berubah jadi
  * token saat harga JATUH, sisi token berubah jadi base saat harga NAIK — jadi
@@ -691,97 +665,122 @@ export function msgConverted(tokenId: string, baseSym: string, tokenSym: string,
 
 export function msgIlAlert(tokenId: string, symbol: string, lossPct: number, limit: number): string {
   return [
-    `⚠️ ${bold('ALERT: RUGI BERSIH MELEWATI AMBANG')}`,
+    `⚠️ ${bold('Alert: Net Loss Threshold Crossed')}`,
     '',
-    `Posisi ${bold(`#${esc(tokenId)}`)} · ${bold(esc(symbol))}`,
-    `Nilai posisi + fee kini ${bold(`${lossPct.toFixed(1)}% di bawah modal`)} (ambangmu ${limit}%).`,
+    `🆔 ${bold('Position ID:')} #${esc(tokenId)} · ${bold(symbol)}`,
     '',
-    note('angka ini sudah memperhitungkan fee yang terkumpul — bukan IL teoretis.'),
-    note(nowWib()),
+    `📉 Position value plus fees is now ${bold(`${lossPct.toFixed(1)}% below your deposit`)} (your threshold: ${limit}%).`,
+    '',
+    note('this already accounts for the fees collected — it is not theoretical IL.'),
+    '',
+    `⏱️ <i>Triggered at: ${nowWib()}</i>`,
   ].join('\n');
 }
 
 export function msgPriceDrop(tokenId: string, symbol: string, dropPct: number, baseSymbol = 'WETH'): string {
   return [
-    hdr('⚠️ ALERT: HARGA ANJLOK'),
+    `🔴 ${bold('Alert: Price Drop')}`,
     '',
-    `Pair · ${bold(`${esc(baseSymbol)} / ${esc(symbol)}`)}`,
-    `Posisi · #${esc(tokenId)}`,
+    `🆔 ${bold('Position ID:')} #${esc(tokenId)}`,
+    `🔗 ${bold('Pair:')} ${esc(baseSymbol)} / ${esc(symbol)}`,
     '',
-    `🔴 ${bold(`Harga turun ${fmtPct(-dropPct)} dari harga entry.`)}`,
+    `📉 ${bold(`${esc(symbol)} is down ${fmtPct(-dropPct)} from your entry price.`)}`,
     '',
-    // Tombol '⛔ Tutup Sekarang' menyertai pesan ini (monitor.ts) — microcopy harus
-    // menunjuk ke tombol itu, bukan menyuruh mengetik command saat harga jatuh.
-    note('tutup sekarang lewat tombol di bawah, atau biarkan bila masih yakin.'),
+    // Tombol '⛔ Close Now' menyertai pesan ini (monitor.ts) — microcopy menunjuk ke
+    // tombol itu, bukan menyuruh mengetik command saat harga jatuh.
+    note('close it now with the button below, or hold if you still believe in it.'),
   ].join('\n');
 }
 
 export function msgCloseAllPick(countV3: number, countV4 = 0): string {
   const total = countV3 + countV4;
   return [
-    hdr('⛔ TUTUP POSISI LP'),
+    `⛔ ${bold('Close LP Position')}`,
     '',
-    `Ditemukan ${bold(`${total} posisi LP aktif`)}${countV4 ? ` (${countV3} v3 · ${countV4} v4)` : ''}.`,
-    'Pilih posisi yang ingin ditutup — tap ⛔ Tutup di kartunya.',
+    `Found ${bold(`${total} active LP position${total === 1 ? '' : 's'}`)}${countV4 ? ` (${countV3} v3 · ${countV4} v4)` : ''}.`,
+    'Pick the one to close — tap ⛔ Close on its card.',
     '',
-    note('tiap penutupan tetap lewat konfirmasi masing-masing.'),
+    note('each close still goes through its own confirmation.'),
   ].join('\n');
 }
 
 // ─── /buy /sell token (base↔token, rute terbaik) ───────────────────────
-export function msgBuyAskCA(dryRun: boolean): string {
-  return [
-    hdr('📈 BELI TOKEN (SWAP)'),
+export function msgBuyAskCA(
+  dryRun: boolean,
+  quick: Array<{ symbol: string; chain: string; ca: string }> = [],
+): string {
+  const out = [
+    `📈 ${bold('Buy Token')}`,
     '',
-    `💬 Tempel ${bold('alamat kontrak (CA)')} token (0x…).`,
-    '',
-    note('chain terdeteksi otomatis dari CA.'),
-    note(`${dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`),
-  ].join('\n');
+    `💬 Paste the token ${bold('contract address (CA)')} (0x…).`,
+  ];
+  if (quick.length) {
+    out.push('', `💵 ${bold('Stablecoins :')}`);
+    for (const q of quick) out.push(`• ${bold(q.symbol)} · ${esc(q.chain)} — ${code(q.ca)}`);
+    out.push('', note('tap a button below to buy one without pasting its address.'));
+  }
+  out.push('', note('the chain is detected automatically from the CA.'), note(`${dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
+  return out.join('\n');
 }
+
 export function msgBuySafetyHint(sym: string): string {
   // note() → italic() → esc(): apa pun HTML di dalamnya ikut ter-escape (user melihat
   // '<b>PONS</b>' mentah). Rakit di sini, jangan bikin primitif baru.
-  return `${italic('Cek detail & keamanan ')}${bold(sym)}${italic(' di atas. Lanjut untuk pilih aset & size.')}`;
+  return `${italic('Review the details and safety of ')}${bold(sym)}${italic(' above. Continue to pick the asset and amount.')}`;
 }
+
 export function msgSellList(n: number): string {
-  return [hdr('📉 JUAL TOKEN'), '', `${bold(String(n))} token dipegang — pilih yang mau dijual:`].join('\n');
+  return [
+    `📉 ${bold('Sell Token')}`,
+    '',
+    `You hold ${bold(String(n))} token${n === 1 ? '' : 's'} — pick one to sell :`,
+  ].join('\n');
 }
+
 export function msgSellNoHoldings(): string {
-  return [hdr('📉 JUAL TOKEN'), '', note('tak ada token dgn saldo di wallet (selain base).')].join('\n');
+  return [
+    `📉 ${bold('Sell Token')}`,
+    '',
+    note('no tokens with a balance in your wallet (other than base assets).'),
+  ].join('\n');
 }
+
 export function msgSellAmount(sym: string, balLabel: string): string {
   return [
-    hdr('📉 JUAL TOKEN'),
+    `📉 ${bold('Sell Token')}`,
     '',
-    `Token: ${bold(esc(sym))} | Saldo: ${bold(esc(balLabel))}`,
+    `🔗 ${bold('Token:')} ${esc(sym)}`,
+    `💰 ${bold('Balance:')} ${esc(balLabel)}`,
     '',
-    'Pilih porsi penjualan:',
-    note('base penerima dipilih otomatis — nilai terbaik antar rute.'),
+    'How much do you want to sell?',
+    note('the receiving asset is picked automatically — whichever route returns the most value.'),
   ].join('\n');
 }
+
 export function msgSellTypeAmount(sym: string): string {
-  return [hdr('📉 JUAL TOKEN'), '', `💬 Ketik jumlah ${bold(esc(sym))} untuk dijual (atau ${code('semua')}).`].join('\n');
+  return [`📉 ${bold('Sell Token')}`, '', `💬 Type how much ${bold(sym)} to sell (or ${code('all')}).`].join('\n');
 }
+
 export function msgTSwapBase(chainLabel: string, buy: boolean): string {
   return [
-    hdr(buy ? '📈 BELI TOKEN (SWAP)' : '📉 JUAL TOKEN (SWAP)'),
+    `${buy ? '📈' : '📉'} ${bold(buy ? 'Buy Token' : 'Sell Token')}`,
     '',
-    `Chain: ${bold(esc(chainLabel))}`,
+    `🔗 ${bold('Network:')} ${esc(chainLabel)}`,
     '',
-    bold(buy ? 'Pilih token pembayaran:' : 'Pilih token penerima:'),
+    bold(buy ? 'Pick the asset you want to pay with :' : 'Pick the asset you want to receive :'),
   ].join('\n');
 }
+
 export function msgTSwapAmountPrompt(buy: boolean, sym: string, balanceLine: string): string {
-  const what = buy ? `jumlah ${bold(esc(sym))} untuk dibelanjakan` : `jumlah ${bold(esc(sym))} untuk dijual`;
   return [
-    hdr(buy ? '📈 NOMINAL BELI' : '📉 NOMINAL JUAL'),
+    `${buy ? '📈' : '📉'} ${bold(buy ? 'Buy Amount' : 'Sell Amount')}`,
     '',
     balanceLine,
     '',
-    `💬 Ketik ${what}${buy ? '' : ` (atau ${code('semua')})`}.`,
+    `💬 Type how much ${bold(sym)} to ${buy ? 'spend' : 'sell'}${buy ? '' : ` (or ${code('all')})`}.`,
   ].join('\n');
 }
+
 export function msgTSwapConfirm(o: {
   buy: boolean;
   chainLabel: string;
@@ -790,37 +789,37 @@ export function msgTSwapConfirm(o: {
   estOutLabel: string;
   route: string;
   dryRun: boolean;
-  danger?: boolean; // verdikt screening BAHAYA (ikut sampai kartu pengirim tx)
+  danger?: boolean; // verdikt audit BAHAYA (ikut sampai kartu pengirim tx)
   screenFailed?: boolean;
   balanceLabel?: string;
   shortLabel?: string | null; // kurang berapa (bila kurang → tombol Konfirmasi tak dirender)
 }): string {
-  // Header meng-encode arah (kamus: 🔄 = refresh, jangan dipakai untuk beli/jual).
   const body: string[] = [
-    hdr(o.buy ? '📈 PREVIEW SWAP BELI' : '📉 PREVIEW SWAP JUAL'),
+    `${o.buy ? '📈' : '📉'} ${bold(o.buy ? 'Buy Order Preview' : 'Sell Order Preview')}`,
     '',
-    `${esc('Token')}   : ${bold(esc(o.tokenSym))} (${esc(o.chainLabel)})`,
+    `🔗 ${bold('Token:')} ${esc(o.tokenSym)} (${esc(o.chainLabel)})`,
     '',
-    `📤 Bayar · ${bold(esc(o.amountInLabel))}`,
-    `📥 Terima ≈ · ${bold(esc(o.estOutLabel))}`,
-    `🛣️ Rute · ${esc(o.route)}`,
-    // 5%→15% hanya berlaku untuk rute Uniswap; rute relay dilindungi quoter penyedia.
-    `🛡️ Slippage · ${o.route.startsWith('uniswap') ? 'auto 5% → 15%' : `${esc(o.route)} (auto)`}`,
+    `📤 ${bold('You pay:')} ${bold(o.amountInLabel)}`,
+    `📥 ${bold('You receive ≈')} ${bold(o.estOutLabel)}`,
+    `🛣️ ${bold('Route:')} ${esc(o.route)}`,
+    // 5%→15% hanya berlaku untuk rute router; rute relay dilindungi quoter penyedia.
+    `🛡️ ${bold('Slippage:')} ${o.route.startsWith('uniswap') ? 'auto 5% → 15%' : `${esc(o.route)} (auto)`}`,
   ];
-  if (o.balanceLabel) body.push(`💰 Saldo · ${esc(o.balanceLabel)}`);
+  if (o.balanceLabel) body.push(`💰 ${bold('Balance:')} ${esc(o.balanceLabel)}`);
   if (o.shortLabel) {
-    body.push('', `🔴 ${bold(`KURANG ${esc(o.shortLabel)}`)} — isi dulu wallet-nya, lalu ulangi.`);
+    body.push('', `🔴 ${bold(`Short by ${esc(o.shortLabel)}`)} — top up your wallet, then try again.`);
   }
   if (o.danger) {
-    body.push('', `⚠️ ${bold('SCREEN: BAHAYA')} — token ini bisa tak bisa dijual lagi. Batal kalau ragu.`);
+    body.push('', `⚠️ ${bold('AUDIT: HIGH RISK')} — this token may not be sellable again. Cancel if unsure.`);
   } else if (o.screenFailed) {
-    body.push('', `🟡 ${bold('SCREEN: GAGAL')} — token tak terverifikasi.`);
+    body.push('', `🟡 ${bold('AUDIT: FAILED')} — token could not be verified.`);
   } else {
-    body.push('', note('estimasi; jumlah pasti dilindungi quoter on-chain saat eksekusi.'));
+    body.push('', note('estimate only; the exact amount is protected by the on-chain quoter at execution.'));
   }
   body.push(note(`${o.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
   return body.join('\n');
 }
+
 export function msgTSwapDone(o: {
   buy: boolean;
   tokenSym: string;
@@ -831,23 +830,23 @@ export function msgTSwapDone(o: {
 }): string {
   if (o.dryRun) {
     return [
-      hdr('⚪ SWAP (DRY RUN)'),
+      `⚪ ${bold('Swap (DRY RUN)')}`,
       '',
-      note('mode DRY RUN — tidak dieksekusi.'),
+      note('DRY RUN mode — nothing was executed.'),
       '',
-      ...tree([['Bayar', bold(esc(o.amountInLabel))], ['≈ dapat', bold(esc(o.outLabel))]], 8),
+      ...tree([['Pay', bold(o.amountInLabel)], ['≈ get', bold(o.outLabel)]], 8),
     ].join('\n');
   }
   return [
-    hdr(o.buy ? '✅ SWAP BELI BERHASIL' : '✅ SWAP JUAL BERHASIL'),
+    `✅ ${bold(o.buy ? 'Buy Order Filled' : 'Sell Order Filled')}`,
     '',
-    `🟢 ${bold('DITERIMA')}: ${bold(`+${esc(o.outLabel)}`)}`,
+    `🟢 ${bold('Received:')} ${bold(`+${o.outLabel}`)}`,
     '',
     ...tree(
       [
-        ['Dibayar', esc(o.amountInLabel)],
+        ['Paid', esc(o.amountInLabel)],
         ['Token', esc(o.tokenSym)],
-        ['Rute', esc(o.route ?? '—')],
+        ['Route', esc(o.route ?? '—')],
       ],
       8,
     ),
@@ -859,14 +858,14 @@ export function msgTSwapDone(o: {
 export function msgError(where: string, err: string): string {
   // Revert ethers = blok multi-baris (reason/code/transaction) yang menutupi baris
   // "lakukan ini". Ambil baris pertama saja; detail lengkap tetap ada di log service.
-  const first = String(err).split('\n')[0].trim().slice(0, 200) || 'error tak dikenal';
+  const first = String(err).split('\n')[0].trim().slice(0, 200) || 'unknown error';
   return [
-    hdr('❌ ERROR TRANSAKSI'),
+    hdr('❌ TRANSACTION ERROR'),
     '',
-    `${esc('Tahap')}  : ${bold(esc(where))}`,
+    `${esc('Step')}   : ${bold(esc(where))}`,
     `${esc('Reason')} : ${code(first)}`,
     '',
-    note('coba ulangi — detail lengkap ada di log service.'),
+    note('try again — full details are in the service log.'),
     note(nowWib()),
   ].join('\n');
 }
@@ -876,13 +875,13 @@ export function msgProgress(text: string): string {
 }
 
 export function msgCancelled(): string {
-  return card(title('CANCELLED'), [note('aksi dibatalkan.')]);
+  return card(title('CANCELLED'), [note('action cancelled.')]);
 }
 
 export function msgChainPick(): string {
   return card(
     title('CHAIN'),
-    [note('token ditemukan di beberapa chain — pilih di bawah.')],
+    [note('token found on several chains — pick one below.')],
   );
 }
 
@@ -920,7 +919,7 @@ export function msgPositionCard(opts: {
   const explain = opts.inRange
     ? `Your liquidity is ${bold('active')} and earning fees right now. As long as ${sym} stays inside this range, fees keep accruing.`
     : opts.converted
-      ? `Price moved through your entire range, so this position is now ${bold(`100% ${tokenSide ? base : sym}`)} and no longer earning fees. Your target is done — withdraw, or leave it and wait for price to come back into range.`
+      ? `Price moved through your entire range, so this position is now ${bold(`100% ${tokenSide ? (opts.baseSymbol ?? 'WETH') : opts.symbol}`)} and no longer earning fees. Your target is done — withdraw, or leave it and wait for price to come back into range.`
       : tokenSide
       ? `Your liquidity is currently inactive. It will automatically convert to ${base} and start earning fees once the ${sym} price ${bold('rises')} into your target range (${range}).`
       : `Your liquidity is currently inactive. It will automatically convert to ${sym} and start earning fees once the token price ${bold('drops')} into your target range (${range}).`;
@@ -949,7 +948,7 @@ export function msgPositionGone(tokenId: string, symbol: string, baseSymbol = 'W
     `✅ ${title('CLOSED', `#${tokenId}`)}`,
     [
       fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
-      note('sudah tertutup on-chain — dibersihkan dari daftar aktif.'),
+      note('already closed on-chain — removed from the active list.'),
     ],
     nowWib(),
   );
@@ -988,7 +987,7 @@ export function msgPositionDetail(opts: {
       [
         ['Assets', esc(opts.composition)],
         ['Value', bold(esc(opts.value))],
-        ['Fees', `🟢 ${bold(esc(opts.fees))} (belum diklaim)`],
+        ['Fees', `🟢 ${bold(esc(opts.fees))} (unclaimed)`],
       ],
       6,
     ),
@@ -1001,7 +1000,7 @@ export function msgPositionDetail(opts: {
 export function msgPositionsList(opts: {
   dryRun: boolean;
   activeCount: number;
-  totalInvestLabel: string;
+  totalInvestLabel: string | null; // null = posisi tersebar di beberapa denominasi
   totalPnlUsd: number | null;
   outOfRange: number;
   totalFeesLabel?: string | null;
@@ -1013,6 +1012,7 @@ export function msgPositionsList(opts: {
     pnlUsd: number | null;
     pnlPct: number | null;
     inRange: boolean;
+    protocol?: string | null; // 'V3' | 'V4'
     rangeLabel?: string | null;
     feesLabel?: string | null;
     feesUsdLabel?: string | null; // fee dalam USD; jatuh ke feesLabel bila harga tak terbaca
@@ -1025,38 +1025,56 @@ export function msgPositionsList(opts: {
   const shown = opts.rows.slice(0, MAX_ROWS);
   const blocks = shown.map((r) => {
     // Sisi ditulis dari sudut pandang aset yang DISETOR: "ETH Side" = setor base.
-    const side = (r.strategy ?? '').toLowerCase().includes('jual') ? 'Token Side' : 'ETH Side';
-    // Dua-duanya "Out of Range" (permintaan user), tapi keterangannya beda:
-    // harga belum sampai vs harga sudah menembus seluruh rentang sehingga posisi
-    // 100% terkonversi. Tanpa keterangan itu, posisi yang belinya sudah SELESAI
-    // terbaca sama persis dengan yang belum mulai sama sekali.
-    const statusLine = r.inRange
-      ? `✅ Status: ${bold('Active (In Range)')}`
+    const tokenSide = r.strategy === 'token';
+    const side = tokenSide ? 'Token Side (Sell the rip)' : 'ETH Side (Buy the dip)';
+    // Tiga keadaan, bukan dua: belum sampai rentang, sedang di dalam rentang, dan
+    // sudah menembus SELURUH rentang (modal 100% jadi aset seberang, berhenti panen
+    // fee). Tanpa yang ketiga, posisi yang belinya sudah SELESAI terbaca sama persis
+    // dengan yang belum mulai sama sekali.
+    const status = r.inRange
+      ? bold('Active (In Range)')
       : r.converted
-        ? `⏳ Status: ${bold('Out of Range')} — fully converted to ${esc(r.convertedInto ?? 'token')}`
-        : `⏳ Status: ${bold('Out of Range')} — waiting`;
+        ? `${bold('Fully Converted (Out of Range)')} → ${esc(r.convertedInto ?? 'token')}`
+        : bold('Waiting (Out of Range)');
+    // Persen saja, seperti naskah — angka dolarnya ada di kartu detail posisi.
+    const pnl = r.pnlPct === null ? `— ${italic('(entry unknown)')}` : fmtPct(r.pnlPct);
     return [
-      `${r.inRange ? '🟢' : '🔴'} ${bold(esc(r.pair))}`,
-      `🆔 #${esc(r.id)} | 🎯 ${esc(side)}`,
-      statusLine,
-      `💰 Invested: ${esc(r.investLabel)}`,
-      `📈 Fees: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
-      ...(r.converted && r.pnlUsd !== null
-        ? [`💵 Current Value: ${dot(r.pnlUsd)} ${bold(usdSigned(r.pnlUsd))}${r.pnlPct === null ? '' : ` (${fmtPct(r.pnlPct)})`}`]
-        : []),
+      `${r.inRange ? '🟢' : '🔴'} ${bold(`${r.pair}${r.protocol ? ` (${r.protocol})` : ''}`)}`,
+      `• ID: #${esc(r.id)}`,
+      `• Strategy: ${esc(side)}`,
+      `• Invested: ${esc(r.investLabel)}`,
+      `• Status: ${status} · ${esc(r.age)}`,
+      `• Uncollected Fees: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
+      `• PnL: ${pnl}`,
     ].join('\n');
   });
 
   const out = [
-    `📊 ${bold(`Active LP Positions (${opts.rows.length} Active)`)}`,
+    `📊 ${bold('Active LP Positions')}`,
     '',
-    'Here are your current Uniswap positions:',
+    `Here ${opts.rows.length === 1 ? 'is' : 'are'} your current Uniswap position${opts.rows.length === 1 ? '' : 's'} :`,
     '',
     blocks.join('\n\n'),
   ];
   if (opts.rows.length > MAX_ROWS)
     out.push('', note(`+${opts.rows.length - MAX_ROWS} more positions — close some to see them`));
-  out.push('', italic('Select a position below to view detailed PnL, target range, or to withdraw.'));
+  // Catatan penutup mengikuti keadaan yang SEBENARNYA. Kalimat "liquidity is
+  // currently inactive" hanya benar bila semua posisi memang menunggu; menuliskannya
+  // saat ada posisi yang sedang panen fee (atau sudah terkonversi penuh) membuat
+  // kartu ini berbohong tentang hal yang justru dipakai user untuk memutuskan.
+  const anyIn = shown.some((r) => r.inRange);
+  const anyConverted = shown.some((r) => !r.inRange && r.converted);
+  const anyWaiting = shown.some((r) => !r.inRange && !r.converted);
+  const tail = anyIn
+    ? anyWaiting || anyConverted
+      ? 'Some positions are in range and earning fees; the rest are listed above with their current state.'
+      : 'Your liquidity is in range and actively earning trading fees.'
+    : anyConverted && !anyWaiting
+      ? 'Your liquidity has fully converted and stopped earning fees. Withdraw it, or wait for the price to move back into range.'
+      : anyConverted
+        ? 'Part of your liquidity has fully converted and stopped earning fees; the rest is still waiting to enter range.'
+        : 'Your liquidity is currently inactive. It will automatically convert and start earning fees once the token price moves into your target range.';
+  out.push('', italic(tail));
   return out.join('\n');
 }
 
@@ -1064,9 +1082,9 @@ export function msgNoPositions(): string {
   return card(
     title('POSITIONS'),
     [
-      note('belum ada posisi LP tercatat.'),
+      note('no LP positions recorded yet.'),
       '',
-      note('buka dengan'),
+      note('open one with'),
       code('/add_lp <CA>'),
     ],
   );
@@ -1082,19 +1100,20 @@ export function msgJournal(
     reason: 'cashed' | 'gone' | 'burned';
     ca?: string;
     chain?: string;
+    baseKind?: 'weth' | 'usdg' | 'usdt';
     closedAt?: number;
   }>,
   totalInJournal?: number,
 ): string {
   if (items.length === 0) {
-    return [hdr('🧾 RIWAYAT TRADE'), '', note('belum ada trade tertutup.')].join('\n');
+    return [`🧾 ${bold('Trade History')}`, '', note('no closed trades yet.')].join('\n');
   }
   const reasonId: Record<string, string> = {
-    cashed: 'cair',
-    gone: 'hilang',
-    burned: 'ditutup luar',
+    cashed: 'cashed',
+    gone: 'gone',
+    burned: 'closed outside',
   };
-  const header = ['id', 'token', 'pnl eth', 'pnl %', 'umur'];
+  const header = ['id', 'token', 'pnl eth', 'pnl %', 'age'];
   const rows = items.map((r) => [
     r.tokenId,
     r.symbol.length > 10 ? r.symbol.slice(0, 9) + '…' : r.symbol,
@@ -1102,18 +1121,27 @@ export function msgJournal(
     r.reason === 'cashed' ? fmtPct(r.pnlPct) : '—',
     r.closedAt ? fmtAge(Date.now() - r.closedAt) : '—',
   ]);
-  const net = items.filter((r) => r.reason === 'cashed').reduce((a, r) => a + r.pnlEth, 0);
+  // pnlEth entri USDG/USDT adalah DOLAR, dan entri BSC adalah BNB — menjumlahkan
+  // semuanya lalu menulis "ETH" menghasilkan angka yang salah 3–4 orde besaran.
+  // Yang dijumlahkan hanya entri base-native; sisanya dihitung, tidak dicampur.
+  const cashed = items.filter((r) => r.reason === 'cashed');
+  const sameBase = cashed.filter((r) => (r.baseKind ?? 'weth') === 'weth' && (r.chain ?? 'robinhood') === 'robinhood');
+  const net = sameBase.reduce((a, r) => a + r.pnlEth, 0);
+  const otherCount = cashed.length - sameBase.length;
   // Tabel tetap monospace (kolom angka harus sejajar); status pakai emoji dinamis
   // di baris ringkasan, bukan di dalam tabel — emoji merusak lebar kolom mono.
   const out = [
-    hdr('🧾 RIWAYAT TRADE'),
+    `🧾 ${bold('Trade History')}`,
     '',
     pre(alignTable(header, rows, [false, false, true, true, true])),
     '',
-    `💰 ${bold('Net')} ${items.length} trade tampil : ${dot(net)} ${bold(`${net >= 0 ? '+' : ''}${net.toFixed(5)} ETH`)}`,
+    `💰 ${bold('Net')} of the ${sameBase.length} ETH trades shown : ${dot(net)} ${bold(`${net >= 0 ? '+' : ''}${net.toFixed(5)} ETH`)}`,
   ];
+  if (otherCount > 0) {
+    out.push(note(`${otherCount} more closed trade${otherCount > 1 ? 's' : ''} in other denominations (stablecoin / other chain) — not summed above.`));
+  }
   if (totalInJournal && totalInJournal > items.length) {
-    out.push(`📜 ${bold('Total jurnal')}          : ${totalInJournal} trade tersimpan — rekap penuh di /pnl`);
+    out.push(`📜 ${bold('Journal total')} : ${totalInJournal} trades stored — full recap in /pnl`);
   }
   out.push('', note(nowWib()));
   return out.join('\n');
@@ -1121,66 +1149,78 @@ export function msgJournal(
 
 // ─── wizard steps ──────────────────────────────────────────────────
 
-export function msgPoolStep(tokenLabel?: string): string {
-  return [
-    hdr('💧 BUKA LP · LANGKAH [1/5] — PILIH POOL'),
-    '',
-    ...(tokenLabel ? [`Token target: ${bold(esc(tokenLabel))}`, ''] : []),
-    bold('Pilih pool terdalam (v3 & v4):'),
-    note('pair · protokol · fee · TVL · isi≤ — TVL terbesar di atas'),
-  ].join('\n');
+export function msgPoolStep(
+  tokenLabel?: string,
+  pools?: Array<{ pair: string; ver: string; feeLabel: string; tvl: string; apr: string; tight: string }>,
+): string {
+  const out = [bold('OPEN LP · Step [1/5] Choose Pool'), ''];
+  if (tokenLabel) out.push(`🎯 ${bold('Target Token:')} ${esc(tokenLabel)}`, '');
+  if (pools?.length) {
+    out.push(`📊 ${bold('Available Deep Pools :')}`);
+    for (const p of pools) {
+      out.push(`• ${bold(p.pair)} ${italic(`(${p.ver}, ${p.feeLabel} Fee)`)}`);
+      // 'fills≤' dipindah dari tombol ke sini: itu jarak harga sebelum posisi
+      // single-side MULAI terisi — angka yang menentukan pool mana yang benar-benar
+      // bekerja, dan tombol Telegram terlalu sempit untuk memuatnya.
+      out.push(`  TVL: ${esc(p.tvl)} | APR: ${esc(p.apr)} | fills≤${esc(p.tight)}`);
+    }
+  } else {
+    out.push(bold('Pick the deepest pool (v3 & v4):'));
+  }
+  return out.join('\n');
 }
 
 /** Langkah 2/5 — pilih sisi setoran. */
 export function msgStrategyStep(pair: string, baseSym: string, tokenSym: string, price: string | null): string {
   return [
-    hdr(`⚙️ PILIH STRATEGI · ${esc(pair)}`),
+    bold('OPEN LP · Step [2/5] Select Strategy'),
     '',
-    ...(price ? [`Harga pasar: 1 ${esc(tokenSym)} = ${bold(esc(price))} ${esc(baseSym)}`, ''] : []),
-    `Setoran satu sisi berarti kamu hanya menaruh ${bold(esc(baseSym))}. Posisimu bekerja seperti limit order pasif: memanen fee sambil menunggu harga ${esc(tokenSym)} turun ke rentangmu, lalu perlahan berubah jadi ${esc(tokenSym)}.`,
+    `🔗 ${bold('Selected Pair:')} ${esc(pair)}`,
+    ...(price ? [`💱 ${bold('Market Price:')} 1 ${esc(tokenSym)} = ${esc(price)} ${esc(baseSym)}`] : []),
     '',
-    note('sisi token butuh tokennya sudah ada di dompet — beli dulu lewat /buy bila belum'),
+    'Choose your single-side deposit strategy :',
+    '',
+    `🟢 ${bold(`${baseSym} Side (Buy the Dip)`)}`,
+    `• You deposit ${bold(baseSym)}. Your liquidity will automatically convert to ${esc(tokenSym)} and earn fees when the ${esc(tokenSym)} price ${bold('drops')} into your target range.`,
+    '',
+    `🔵 ${bold('Token Side (Sell the Rip)')}`,
+    `• You deposit ${bold(tokenSym)}. Your liquidity will automatically convert to ${esc(baseSym)} and earn fees when the ${esc(tokenSym)} price ${bold('rises')} into your target range.`,
+    '',
+    // Syarat yang menentukan apakah tombol kedua bisa dipakai sama sekali.
+    note(`Token Side requires you to already hold ${tokenSym} — buy it with /buy first if you do not.`),
   ].join('\n');
 }
 
-export function msgRangeStep(fee: number, poolLabel?: string, tokenSide = false): string {
+export function msgRangeStep(tokenSide = false): string {
   return [
-    hdr(`${tokenSide ? '📈' : '📉'} BUKA LP · LANGKAH [4/5] — RENTANG`),
+    bold('OPEN LP · Step [4/5] Set Price Range'),
     '',
-    `Pool: ${bold(poolLabel ? esc(poolLabel) : feeLabel(fee))} ✓`,
-    '',
-    bold(
-      tokenSide
-        ? 'Seberapa jauh di ATAS harga sekarang target jualmu?'
-        : 'Seberapa jauh di BAWAH harga sekarang batas belimu?',
-    ),
-    note(
-      tokenSide
-        ? 'makin lebar rentang, makin lambat token terjual habis tapi makin lama memanen fee'
-        : 'makin lebar rentang, makin lambat berubah jadi token tapi makin lama memanen fee',
-    ),
+    // Arah rentang menentukan seluruh arti langkah ini: sisi base menunggu harga
+    // TURUN jadi token, sisi token menunggu harga NAIK jadi base. Satu kalimat
+    // untuk keduanya pasti salah pada salah satunya.
+    tokenSide
+      ? 'A wider range means slower conversion back to the base asset, but a longer duration to earn trading fees.'
+      : 'A wider range means slower conversion to the token, but a longer duration to earn trading fees.',
   ].join('\n');
 }
 
-export function msgAmountStep(symbol: string, maxLabel: string, balanceLabel?: string): string {
+export function msgAmountStep(
+  symbol: string,
+  maxLabel: string,
+  balanceLabel?: string,
+  example = '0.05',
+): string {
   return [
-    hdr('💵 BUKA LP · LANGKAH [3/5] — NOMINAL'),
+    bold('OPEN LP · Step [3/5] Deposit Amount'),
     '',
+    `💼 ${bold('Your Wallet :')}`,
     // Saldo ikut ditampilkan: dulu user memilih buta lalu baru ditolak "KURANG"
-    // di kartu 4/4 (satu langkah + satu round-trip terbuang).
-    `💰 Saldo dompet · ${bold(esc(balanceLabel ?? '?'))}`,
-    `⚠️ Batas maks/tx · ${bold(esc(maxLabel))}`,
+    // di kartu rencana (satu langkah + satu round-trip terbuang).
+    `• Balance -> ${bold(balanceLabel ?? '?')}`,
+    `• Max Tx Limit -> ${bold(maxLabel)}`,
     '',
-    `💬 Ketik jumlah ${bold(esc(symbol))} langsung di chat:`,
-  ].join('\n');
-}
-
-export function msgAmountCustom(symbol: string, maxLabel: string, example: string): string {
-  return [
-    hdr('💵 BUKA LP · NOMINAL'),
-    '',
-    `💬 Ketik jumlah ${bold(esc(symbol))} (maks ${bold(esc(maxLabel))}).`,
-    `contoh · ${code(example)}`,
+    `Please type the amount of ${bold(symbol)} you want to deposit directly in the chat below.`,
+    italic(`Example: ${example}`),
   ].join('\n');
 }
 
@@ -1204,41 +1244,49 @@ export function msgPlanStep(opts: {
   priceUpper?: string;
   side?: 'base' | 'token';
   depositSymbol?: string;
+  protocol?: string; // 'V3' | 'V4'
   dryRun: boolean;
 }): string {
-  const body: string[] = [hdr('📝 TINJAU POSISI LP · LANGKAH [5/5]'), ''];
-  if (opts.screenDanger) body.push(`⚠️ ${bold('SCREEN: BAHAYA')} — pertimbangkan batal.`, '');
-  else if (opts.screenFailed) body.push(`🟡 ${bold('SCREEN: GAGAL')} — token tak terverifikasi.`, '');
+  const body: string[] = [bold('OPEN LP · Step [5/5] Review & Confirm'), ''];
+  if (opts.screenDanger) body.push(`⚠️ ${bold('AUDIT: HIGH RISK')} — consider cancelling.`, '');
+  else if (opts.screenFailed) body.push(`🟡 ${bold('AUDIT: FAILED')} — token could not be verified.`, '');
+  const tokenSide = opts.side === 'token';
+  // tickLower/Upper itu urutan TICK; dalam satuan HARGA bisa terbalik tergantung
+  // sisi base di pool — urutkan menaik supaya "a - b" tak pernah tampil mundur.
+  let bounds: string | null = null;
+  if (opts.priceLower && opts.priceUpper) {
+    const [lo, hi] =
+      Number(opts.priceLower) <= Number(opts.priceUpper)
+        ? [opts.priceLower, opts.priceUpper]
+        : [opts.priceUpper, opts.priceLower];
+    bounds = `${lo} - ${hi} ${opts.baseSymbol} per ${opts.symbol}`;
+  }
   body.push(
-    `🎯 Strategi · ${bold(
-      opts.side === 'token'
-        ? `Single-Side ${esc(opts.symbol)} (jual saat naik)`
-        : `Single-Side ${esc(opts.baseSymbol)} (beli saat turun)`,
-    )}`,
-    `📌 Pair · ${bold(`${esc(opts.baseSymbol)} / ${esc(opts.symbol)}`)} (${feeLabel(opts.fee)})`,
-    `🏛️ Protokol · Uniswap v3`,
-    `💵 Deposit · ${bold(`${esc(opts.depositAmount)} ${esc(opts.depositSymbol ?? opts.baseSymbol)}`)}${opts.depositUsd ? ` (≈ ${usdPlain(opts.depositUsd)})` : ''}`,
-    `🎯 Range · ${bold(`${fmtPct(opts.pctHigh)} → ${fmtPct(opts.pctLow)}`)}${opts.priceLower && opts.priceUpper ? ` (${esc(opts.priceLower)} — ${esc(opts.priceUpper)})` : ''}`,
-    `📊 Rate · 1 ${esc(opts.symbol)} = ${esc(opts.currentPrice)} ${esc(opts.baseSymbol)}`,
-    `⏳ Status awal · ${italic(
-      `out of range — aktif saat harga ${esc(opts.symbol)} ${opts.side === 'token' ? 'naik' : 'turun'} ke rentang`,
-    )}`,
-    '',
-    `⚓ Estimasi gas · ~${esc(opts.gasEth)} ETH`,
-    `💰 Total perlu · ${bold(esc(String(opts.needLabel)))} (saldo: ${esc(String(opts.balanceLabel))})`,
+    `🔗 ${bold('Transaction Details :')}`,
+    `• Pair: ${esc(opts.baseSymbol)} / ${esc(opts.symbol)} ${italic(`(${opts.protocol ?? 'V3'}, ${feeLabel(opts.fee)} Fee)`)}`,
+    `• Strategy: ${esc(tokenSide ? `${opts.symbol} Side (Sell the rip)` : `${opts.baseSymbol} Side (Buy the dip)`)}`,
+    `• Depositing: ${bold(`${opts.depositAmount} ${opts.depositSymbol ?? opts.baseSymbol}`)}${opts.depositUsd ? ` ${italic(`(≈ ${usdPlain(opts.depositUsd)})`)}` : ''}`,
+    `• Target Range: ${fmtPct(opts.pctLow)} → ${fmtPct(opts.pctHigh)} from market price`,
+    ...(bounds ? [`• Estimated Bounds: ${esc(bounds)}`] : []),
+    `• Market Price: 1 ${esc(opts.symbol)} = ${esc(opts.currentPrice)} ${esc(opts.baseSymbol)}`,
+    `• Status: ${italic(`Out of Range (Will activate on price ${tokenSide ? 'rise' : 'drop'})`)}`,
+    // Angka gas & saldo TETAP ditampilkan: ini kartu terakhir sebelum uang bergerak,
+    // dan "pastikan ETH-mu cukup" tanpa angka bukan informasi yang bisa dipakai.
+    `• Est. Gas: ~${esc(opts.gasEth)} ETH`,
+    `• Total Needed: ${esc(String(opts.needLabel))} ${italic(`(balance: ${String(opts.balanceLabel)})`)}`,
     '',
   );
   if (opts.costFailed) {
-    body.push(`🟡 ${bold('Status')}: saldo belum terverifikasi — RPC biaya gagal. Cek /status dulu.`);
+    body.push(`🟡 ${bold('Balance not verified')} — cost RPC failed. Check /status first.`);
   } else if (opts.shortLabel) {
-    body.push(`🔴 ${bold('Status')}: KURANG ${bold(esc(opts.shortLabel))} — top up dulu, lalu ulangi /add.`);
-  } else {
-    body.push(`🟢 ${bold('Status')}: saldo cukup. Klik konfirmasi untuk kirim transaksi.`);
+    body.push(`🔴 ${bold('Insufficient balance')} — short by ${bold(opts.shortLabel)}. Top up, then retry.`);
   }
   body.push(
-    '',
-    note('PnL LP = fee − impermanent loss. Tak ada SL/TP otomatis — proteksi manual lewat /positions.'),
-    note(`${opts.dryRun ? 'DRY RUN — tidak kirim tx' : 'LIVE · konfirmasi = kirim tx'} · ${nowWib()}`),
+    italic(
+      opts.dryRun
+        ? '*DRY RUN — no transaction will be sent.'
+        : '*PHILIPS will auto-sign this transaction using your connected wallet. Ensure you have enough ETH balance for gas fees.',
+    ),
   );
   return body.join('\n');
 }
@@ -1256,90 +1304,82 @@ export function msgPlanStepV4(opts: {
   rangePctLow: number;
   dryRun: boolean;
 }): string {
-  const body: string[] = [hdr('📝 TINJAU POSISI LP · LANGKAH [5/5]'), ''];
+  const body: string[] = [bold('OPEN LP · Step [5/5] Review &amp; Confirm'), ''];
   if (opts.screenDanger) {
-    body.push(`⚠️ ${bold('SCREEN: BAHAYA')} — token berisiko. Lanjut hanya jika yakin.`, '');
+    body.push(`⚠️ ${bold('AUDIT: HIGH RISK')} — consider cancelling.`, '');
   } else if (opts.screenFailed) {
-    body.push(`🟡 ${bold('SCREEN: GAGAL')} — token TIDAK terverifikasi. Lanjut dgn risiko sendiri.`, '');
+    body.push(`🟡 ${bold('AUDIT: FAILED')} — token could not be verified.`, '');
   }
   body.push(
-    `📌 Pair · ${bold(`${esc(opts.symbol)} / ${esc(opts.baseSymbol)}`)} (${feeLabel(opts.fee)})`,
-    `🏛️ Protokol · Uniswap v4 · TVL ${usdCompact(opts.tvlUsd)}`,
-    `💵 Deposit · ${bold(`${esc(opts.depositAmount)} ${esc(opts.baseSymbol)}`)}${opts.depositUsd != null ? ` (≈ $${opts.depositUsd.toFixed(2)})` : ''}`,
-    `🎯 Range · ${bold(`${fmtPct(opts.rangePctHigh)} → ${fmtPct(opts.rangePctLow)}`)}`,
+    `🔗 ${bold('Transaction Details :')}`,
+    `• Pair: ${esc(opts.baseSymbol)} / ${esc(opts.symbol)} ${italic(`(V4, ${feeLabel(opts.fee)} Fee)`)}`,
+    `• Pool TVL: ${usdCompact(opts.tvlUsd)}`,
+    `• Strategy: ${esc(opts.baseSymbol)} Side (Buy the dip)`,
+    `• Depositing: ${bold(`${opts.depositAmount} ${opts.baseSymbol}`)}${opts.depositUsd != null ? ` ${italic(`(≈ $${opts.depositUsd.toFixed(2)})`)}` : ''}`,
+    `• Target Range: ${fmtPct(opts.rangePctLow)} → ${fmtPct(opts.rangePctHigh)} from market price`,
+    `• Status: ${italic('Out of Range (Will activate on price drop)')}`,
+    // Dry-run staticCall sudah dijalankan sebelum kartu ini dirender — sebut hasilnya,
+    // karena itu satu-satunya jaminan mint v4-nya tidak akan revert.
+    `• Simulation: ${italic('mint simulated successfully')}`,
     '',
-    note('single-sided ETH — LP ditaruh di sisi ETH; fee mengalir saat harga bergerak masuk rentang.'),
-    note('est. PnL = fee terkumpul − impermanent loss; dipantau live di /positions.'),
-    '',
-    opts.dryRun
-      ? `⚪ ${bold('Status')}: simulasi — tidak mengirim tx on-chain`
-      : `🟢 ${bold('Status')}: tersimulasi OK. Klik konfirmasi untuk kirim transaksi.`,
-    note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`),
+    italic(
+      opts.dryRun
+        ? '*DRY RUN — no transaction will be sent.'
+        : '*PHILIPS will auto-sign this transaction using your connected wallet. Ensure you have enough ETH balance for gas fees.',
+    ),
   );
   return body.join('\n');
 }
 
 /** Pool v4 dipilih tapi base-nya bukan ETH-native (belum didukung utk buka). */
 export function msgV4BaseUnsupported(): string {
-  return card(`ℹ️ ${title('POOL v4 WETH-BUNGKUS')}`, [
-    note('pool v4 ini pakai WETH terbungkus (bukan ETH-native) — belum didukung.'),
-    note('pilih pool base ETH-native / USDG (v4) atau pool v3 dari daftar.'),
+  return card(`ℹ️ ${title('V4 POOL USES WRAPPED WETH')}`, [
+    note('this v4 pool pairs wrapped WETH (not native ETH) — not supported yet.'),
+    note('pick a native-ETH / USDG v4 pool, or a v3 pool from the list.'),
   ]);
 }
 
 export function msgPairPicker(n: number): string {
   return [
-    `💧 ${bold('Buka Single-Side Liquidity')}`,
+    `💧 ${bold('Open Single-Side Liquidity')}`,
     '',
-    'PHILIPS memungkinkanmu menyediakan likuiditas hanya dengan satu token. Posisinya bekerja seperti limit order pasif: kamu memanen fee sambil menunggu harga sampai ke targetmu.',
+    'Provide liquidity with only one token. The position works like a passive limit order: you earn trading fees while waiting for the price to reach your target.',
     '',
-    n ? bold('Pilih pasangan yang mau kamu tuju:') : italic('Pool teratas gagal dimuat — pakai "Cari Pair Sendiri".'),
+    n ? bold('Pick the pair you want :') : italic('Top pools failed to load — use "Search Your Own Pair".'),
   ].join('\n');
 }
 
 export function msgPairCustom(): string {
   return [
-    `🔍 ${bold('Cari Pair Sendiri')}`,
+    `🔍 ${bold('Search Your Own Pair')}`,
     '',
-    'Tempel alamat kontrak (CA) token yang kamu incar di chat ini.',
+    'Paste the contract address (CA) of the token you are targeting into this chat.',
     '',
-    note('PHILIPS akan mengauditnya dulu sebelum menawarkan LP.'),
+    note('PHILIPS audits it first, then offers to open an LP.'),
   ].join('\n');
-}
-
-export function msgAddlpUsage(): string {
-  return card(
-    title('USAGE'),
-    [
-      code('/add_lp <CA>'),
-      '',
-      note('contoh (EVM address 0x…)'),
-      code('/add_lp 0x020bfc65…1018b4'),
-    ],
-  );
 }
 
 export function msgInvalidAddress(): string {
   return card(
     title('INVALID'),
     [
-      note('alamat token tidak valid.'),
-      note('pakai contract address EVM (0x…), bukan mint Solana.'),
+      note('invalid token address.'),
+      note('use an EVM contract address (0x…), not a Solana mint.'),
     ],
   );
 }
 
-export function msgNoPools(): string {
+export function msgNoPools(baseLabel = 'WETH/USDG'): string {
   return card(
     `⚪ ${title('NO POOLS')}`,
-    [note('tidak ada pool WETH/USDG berlikuiditas untuk token ini.')],
+    [note(`no liquid ${baseLabel} pool exists for this token on this chain.`)],
   );
 }
 
 export function msgScreeningFailed(): string {
   return card(
     title('SCREENING'),
-    [note('gagal menjangkau sumber data — lanjut tanpa screening.')],
+    [note('could not reach the data sources — continuing without the audit.')],
   );
 }
 
@@ -1347,14 +1387,14 @@ export function msgDryRunAddDone(): string {
   return card(
     title('DRY RUN DONE'),
     [
-      note('tidak ada transaksi dikirim.'),
-      note('Set DRY_RUN=false di .env untuk eksekusi nyata.'),
+      note('no transaction was sent.'),
+      note('set DRY_RUN=false in .env for real execution.'),
     ],
   );
 }
 
 export function msgOpeningLp(): string {
-  return msgProgress('membuka LP…');
+  return msgProgress('opening LP…');
 }
 
 /**
@@ -1367,106 +1407,120 @@ export function msgOpeningLp(): string {
  */
 export function msgLpOpened(tokenId: string, notes: string[], pair?: string, rangeLabel?: string | null): string {
   const out = [
-    `✅ ${bold('Single-Side LP Berhasil Dibuat!')}`,
+    `✅ ${bold('Single-Side LP Successfully Created!')}`,
     '',
-    `Posisi ${bold(`#${esc(tokenId)}`)}${pair ? ` · ${bold(esc(pair))}` : ''} sudah aktif.`,
-    ...(rangeLabel ? [`Fee mulai terkumpul saat harga masuk rentang ${bold(esc(rangeLabel))}.`] : []),
+    `Position ${bold(`#${tokenId}`)}${pair ? ` · ${bold(pair)}` : ''} is now active.`,
+    ...(rangeLabel ? [`Fees will start accumulating when the price enters the range: ${code(rangeLabel)}.`] : []),
     '',
-    '🔗 Langkah transaksi:',
+    `🔗 ${bold('Transaction Steps :')}`,
   ];
 
-  // Daftar langkah RAPAT: tanpa baris kosong antar langkah maupun antara langkah
-  // dan hash-nya. Baris kosong hanya memisahkan judul dan footer.
+  // Langkah + hash-nya rapat (tanpa baris kosong di antaranya); baris kosong hanya
+  // memisahkan judul dan footer.
   for (const n of notes) {
     const m = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
-    out.push(`- ${esc(m ? m[1] : n)}`);
-    if (m) out.push(code(m[2]));
+    out.push(`• ${esc(m ? m[1] : n)}:`);
+    if (m) out.push(`  ${code(m[2])}`);
   }
 
   out.push(
     '',
-    `💡 ${bold('Tip')}: PHILIPS memantau posisi ini dan mengabari saat masuk/keluar rentang. Pantau kapan saja lewat /positions.`,
-    nowWib(),
+    'PHILIPS is monitoring this position and will notify you when it enters or exits the range. You can check it anytime via /positions.',
+    '',
+    italic(nowWib()),
   );
   return out.join('\n');
 }
 
-// ─── dompet: /connect /settings /disconnect ────────────────────────
+// ─── dompet: /settings (connect & disconnect lewat tombol) ─────────
 
 export function msgAlerts(a: { rangeNotify: boolean; dropPct: number | null; ilPct: number | null }): string {
   return [
-    `🔔 ${bold('Notifikasi Posisi')}`,
+    `🔔 ${bold('Position Alerts')}`,
     '',
-    'PHILIPS mengabarimu bila:',
-    `${a.rangeNotify ? '✅' : '⬜'} Posisi masuk / keluar rentang (mulai atau berhenti memanen fee)`,
-    `${a.dropPct === null ? '⬜' : '✅'} Harga token anjlok ${a.dropPct === null ? '—' : bold(`${a.dropPct}%`)} dari harga saat buka`,
-    `${a.ilPct === null ? '⬜' : '✅'} Nilai posisi + fee turun ${a.ilPct === null ? '—' : bold(`${a.ilPct}%`)} di bawah modal`,
+    'PHILIPS notifies you when :',
+    `${a.rangeNotify ? '✅' : '⬜'} A position enters / leaves its range (starts or stops earning fees)`,
+    `${a.dropPct === null ? '⬜' : '✅'} The token price drops ${a.dropPct === null ? '—' : bold(`${a.dropPct}%`)} below your entry price`,
+    `${a.ilPct === null ? '⬜' : '✅'} Position value plus fees falls ${a.ilPct === null ? '—' : bold(`${a.ilPct}%`)} below your deposit`,
     '',
-    note('tombol di bawah memutar nilainya; OFF = notifikasi itu dimatikan.'),
-    note('"rugi bersih" sudah menghitung fee yang terkumpul — bukan IL teoretis yang mengabaikan fee.'),
+    note('the buttons below cycle each value; OFF disables that notification.'),
+    note('"net loss" already counts the fees collected — it is not theoretical IL that ignores them.'),
   ].join('\n');
 }
 
 export function msgNeedWallet(): string {
   return [
-    `🔗 ${bold('Dompet Belum Terhubung')}`,
+    `🔗 ${bold('Wallet Not Connected')}`,
     '',
-    'Perintah ini menggerakkan dana, jadi PHILIPS butuh dompet dulu.',
+    'This command moves funds, so PHILIPS needs a wallet first.',
     '',
-    `Ketik ${code('/connect')} untuk menghubungkan dompet Robinhood-mu.`,
+    `Open ${code('/settings')} and tap ${bold('Connect Wallet')}.`,
   ].join('\n');
 }
 
 export function msgConnectPrompt(): string {
   return [
-    `🔗 ${bold('Hubungkan Dompet Robinhood')}`,
+    `🔗 ${bold('Connect Your Wallet')}`,
     '',
-    `Kirim ${bold('Private Key')} atau ${bold('Seed Phrase')} kamu ke chat ini. PHILIPS memakainya untuk menandatangani transaksi Uniswap atas namamu.`,
+    `To connect manually, please send your ${bold('Private Key')} or ${bold('Seed Phrase')} directly to this chat.`,
     '',
-    `⚠️ ${bold('YANG PERLU KAMU TAHU:')}`,
-    '1. Kunci itu melewati server Telegram sebelum sampai ke sini. Pesanmu akan PHILIPS hapus otomatis begitu diterima, tapi yang sudah terkirim tidak bisa ditarik kembali.',
-    '2. Di server ini kunci disimpan terenkripsi (keystore JSON, scrypt+AES) — bukan teks polos.',
-    '3. Pastikan ini chat pribadi. Jangan pernah memakai bot ini di grup.',
-    '4. Hubungkan hanya dompet berisi dana yang siap kamu risikokan di DeFi.',
+    'PHILIPS uses this to auto-sign transactions for Uniswap LP on your behalf.',
     '',
-    `📥 ${bold('Tempel private key (0x…) atau seed 12/24 kata di bawah:')}`,
+    `⚠️ ${bold('CRITICAL SECURITY WARNING :')}`,
+    `1. PHILIPS will ${bold('NEVER')} ask for your seed phrase outside of this secure connection process.`,
+    '2. Ensure you are in a private chat. Do not use this bot in group chats.',
+    '3. Only connect a wallet with funds you are willing to risk in DeFi.',
+    // Dua fakta yang tak boleh hilang dari kartu ini: kunci melewati server Telegram
+    // (tak bisa ditarik kembali), dan di sisi kita ia terenkripsi. Keduanya mengubah
+    // keputusan "dompet mana yang saya pakai" — bukan sekadar basa-basi keamanan.
+    '4. Your message passes through Telegram servers. PHILIPS deletes it the moment it arrives, but anything already sent cannot be unsent.',
+    '5. On this server the key is stored encrypted (keystore JSON, scrypt+AES) — never as plain text.',
+    '',
+    `📥 ${bold('Please paste your Private Key (starts with 0x) or 12/24-word Seed Phrase below :')}`,
   ].join('\n');
 }
 
 export function msgConnectImporting(): string {
-  return [`⏳ ${bold('Mengimpor dompet…')}`, '', 'Mengenkripsi kunci & memeriksa akses jaringan.'].join('\n');
+  return [`⏳ ${bold('Importing wallet…')}`, '', 'Encrypting the key and checking network access.'].join('\n');
 }
 
 export function msgConnectFailed(reason: string): string {
   return [
-    `❌ ${bold('Gagal Menghubungkan')}`,
+    `❌ ${bold('Connection Failed')}`,
     '',
     esc(reason),
     '',
-    note('ulangi /connect lalu tempel private key (0x + 64 karakter) atau seed 12/24 kata.'),
+    note('try again from /settings → Connect Wallet, then paste a private key (0x + 64 chars) or a 12/24-word seed.'),
   ].join('\n');
 }
 
 export function msgConnected(addr: string): string {
   return [
-    `✅ ${bold('Dompet Terhubung!')}`,
+    `✅ ${bold('Wallet Successfully Connected!')}`,
     '',
-    `Halo, ${code(shortAddr(addr))} 🎉`,
-    'Dompet Robinhood-mu sudah tertaut ke PHILIPS.',
+    `🔗 ${bold('Address ->')} ${code(shortAddr(addr))}`,
     '',
-    `🛡️ ${bold('Sudah diamankan:')} pesan berisi kuncimu sudah PHILIPS hapus dari chat ini, dan kuncinya disimpan terenkripsi.`,
+    `🛡️ ${bold('Security Action :')}`,
+    '• For your safety, the message containing your Private Key / Seed Phrase has been automatically deleted from this chat.',
+    // Enkripsi at-rest disebut karena kartu ini satu-satunya tempat user melihat
+    // ke mana kuncinya pergi; "linked" saja menyisakan tebakan tersimpan sebagai apa.
+    '• Your wallet is now securely linked to PHILIPS — the key is stored encrypted on this server.',
     '',
-    'Mau lanjut ke mana?',
+    note(nowWib()),
+    '',
+    '—————————————————',
+    `👉 ${bold('Next Steps :')}`,
+    'Select an option below to continue.',
   ].join('\n');
 }
 
 export function msgAlreadyConnected(addr: string): string {
   return [
-    `🔗 ${bold('Dompet Sudah Terhubung')}`,
+    `🔗 ${bold('Wallet Already Connected')}`,
     '',
-    `Alamat: ${code(shortAddr(addr))}`,
+    `${bold('Address:')} ${code(shortAddr(addr))}`,
     '',
-    `Mau ganti? Putuskan dulu lewat ${code('/disconnect')}.`,
+    `Want to switch? Disconnect first from ${code('/settings')}.`,
   ].join('\n');
 }
 
@@ -1478,32 +1532,42 @@ export function msgSettings(
   maxPerTx: string,
 ): string {
   return [
-    `⚙️ ${bold('Pengaturan PHILIPS')}`,
+    `⚙️ ${bold('PHILIPS Settings')}`,
     '',
-    `🔗 Dompet · ${addr ? code(shortAddr(addr)) : italic('belum terhubung')}`,
-    ...(balance ? [`💰 Saldo · ${bold(esc(balance))}`] : []),
-    `⛓️ Chain · ${esc(chainLabel)}`,
-    `⚡ Mode · ${bold(dryRun ? '⚪ DRY RUN (simulasi)' : '🟢 LIVE')}`,
-    `⚠️ Batas per tx · ${esc(maxPerTx)}`,
+    `🔗 ${bold('Wallet Details')}`,
+    `• Address: ${addr ? code(shortAddr(addr)) : italic('not connected')}`,
+    ...(balance ? [`• Balance: ${esc(balance)}`] : []),
+    `• Network: ${esc(chainLabel)}`,
+    `• Status: ${dryRun ? `⚪ ${bold('DRY RUN')}` : `🟢 ${bold('LIVE')}`}`,
     '',
-    note('gas dihitung otomatis dari jaringan (L2) — tak ada pilihan cepat/lambat.'),
-    note('slippage swap otomatis 5% lalu 15% bila tertolak.'),
+    `💸 ${bold('Transaction Preferences')}`,
+    `• Tx Limit: ${esc(maxPerTx)}`,
+    '• Gas Fee: Auto-fetched from L2',
+    // Angka slippage ditulis sesuai yang BENAR-BENAR dipakai kode: swap coba 5%
+    // dulu, naik ke 15% kalau tertolak; mint LP terpisah & jauh lebih ketat (0.5%).
+    '• Swap Slippage: 5%, retried at 15% if rejected',
+    '• LP Mint Slippage: 0.5%',
+    '',
+    note(nowWib()),
+    '',
+    '—————————————————',
+    'Manage your wallet connection or adjust preferences below.',
   ].join('\n');
 }
 
 export function msgDisconnectConfirm(addr: string, openLp: number): string {
   const out = [
-    `🔴 ${bold('Putuskan Dompet')}`,
+    `🔴 ${bold('Disconnect Wallet')}`,
     '',
-    `Yakin memutuskan ${code(shortAddr(addr))} dari PHILIPS?`,
+    `Disconnect ${code(shortAddr(addr))} from PHILIPS?`,
     '',
-    `⚠️ ${bold('Peringatan:')}`,
-    '• Kunci terenkripsimu akan DIHAPUS permanen dari server ini.',
-    '• Danamu tidak hilang — tapi posisi LP harus kamu kelola sendiri lewat aplikasi Robinhood/Uniswap.',
+    `⚠️ ${bold('Warning :')}`,
+    '• Your encrypted key will be permanently DELETED from this server.',
+    '• Your funds are not lost — but you will have to manage your LP positions yourself in the Robinhood/Uniswap app.',
   ];
   if (openLp) {
     out.push(
-      `• ${bold(`Kamu masih punya ${openLp} posisi LP terbuka.`)} PHILIPS akan berhenti memantaunya, dan fee yang belum diklaim tak bisa dipanen dari sini.`,
+      `• ${bold(`You still have ${openLp} open LP position(s).`)} PHILIPS will stop monitoring them, and unclaimed fees can no longer be harvested from here.`,
     );
   }
   return out.join('\n');
@@ -1511,11 +1575,11 @@ export function msgDisconnectConfirm(addr: string, openLp: number): string {
 
 export function msgDisconnected(): string {
   return [
-    `✅ ${bold('Dompet Diputuskan')}`,
+    `✅ ${bold('Wallet Disconnected')}`,
     '',
-    'Kunci terenkripsimu sudah dihapus dari server ini.',
+    'Your encrypted key has been deleted from this server.',
     '',
-    `Mau memakai PHILIPS lagi nanti? Ketik ${code('/connect')}. Jaga dirimu!`,
+    `Want to use PHILIPS again later? Open ${code('/settings')}. Stay safe!`,
   ].join('\n');
 }
 
@@ -1523,70 +1587,73 @@ export function msgDisconnected(): string {
 
 export function msgNoFees(): string {
   return [
-    `💵 ${bold('Panen Fee')}`,
+    `💵 ${bold('Harvest Fees')}`,
     '',
-    note('belum ada fee yang bisa dipanen dari posisi aktifmu.'),
+    note('no harvestable fees on your active positions yet.'),
   ].join('\n');
 }
 
 export function msgClaimPick(rows: Array<{ symbol: string; id: string; label: string }>): string {
-  const out = [`💵 ${bold('Panen Fee Belum Diklaim')}`, '', 'Fee dari posisi aktifmu:'];
+  const out = [`💵 ${bold('Unclaimed Fees')}`, '', 'Fees on your active positions :'];
   rows.forEach((r, i) => out.push(`${i + 1}️⃣ ${bold(esc(r.symbol))} · #${esc(r.id)} — ${bold(esc(r.label))}`));
   out.push(
     '',
-    '⚠️ Fee dikirim langsung ke dompetmu. Posisi LP tetap terbuka; hanya butuh sedikit gas.',
+    '⚠️ Fees go straight to your wallet. The LP position stays open; this only costs a little gas.',
   );
   return out.join('\n');
 }
 
 export function msgClaimDone(id: string, label: string, txHash: string | null): string {
   return [
-    `✅ ${bold('Fee Berhasil Dipanen!')}`,
+    `✅ ${bold('Fees Harvested!')}`,
     '',
-    `Posisi ${bold(`#${esc(id)}`)} → ${bold(esc(label))} masuk ke dompetmu.`,
-    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — tidak ada transaksi dikirim.')]),
+    `Position ${bold(`#${id}`)} → ${bold(label)} is now in your wallet.`,
+    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — no transaction was sent.')]),
     '',
     note(nowWib()),
   ].join('\n');
 }
 
 export function msgRemovePick(rows: Array<{ symbol: string; id: string }>): string {
-  const out = [`🗑️ ${bold('Tarik Likuiditas')}`, '', 'Pilih posisi yang mau ditarik:'];
+  const out = [`🗑️ ${bold('Withdraw Liquidity')}`, '', 'Pick the position to withdraw from :'];
   rows.forEach((r, i) => out.push(`${i + 1}️⃣ ${bold(esc(r.symbol))} · #${esc(r.id)}`));
   return out.join('\n');
 }
 
 export function msgRemovePct(id: string): string {
   return [
-    `🗑️ ${bold('Tarik Likuiditas')} · #${esc(id)}`,
+    `🗑️ ${bold('Withdraw Liquidity')} · #${esc(id)}`,
     '',
-    'Berapa banyak yang mau ditarik?',
+    'How much do you want to withdraw?',
     '',
-    note('25/50/75% menarik sebagian — posisi tetap hidup dan tetap memanen fee.'),
-    note('100% menutup posisi sepenuhnya (burn NFT + tukar hasilnya ke ETH).'),
+    note('25/50/75% is a partial withdrawal — the position stays alive and keeps earning fees.'),
+    note('100% closes the position entirely (burns the NFT and swaps the proceeds to ETH).'),
   ].join('\n');
 }
 
 export function msgRemoveConfirm(id: string, symbol: string, pct: number, est: string, dryRun: boolean): string {
   return [
-    `📝 ${bold('Konfirmasi Penarikan')}`,
+    `📝 ${bold('Confirm Withdrawal')}`,
     '',
-    `Menarik ${bold(`${pct}%`)} dari posisi ${bold(esc(symbol))} · #${esc(id)}.`,
-    `Perkiraan keluar: ${bold(esc(est))} + fee yang belum diklaim.`,
+    `Withdrawing ${bold(`${pct}%`)} from position ${bold(symbol)} · #${esc(id)}.`,
+    `Estimated out: ${bold(est)} plus any unclaimed fees.`,
     '',
-    `Posisi ${bold('tetap terbuka')} dengan sisa ${100 - pct}% likuiditas.`,
+    `The position ${bold('stays open')} with the remaining ${100 - pct}% of its liquidity.`,
+    // Basis modal ikut diperkecil saat penarikan parsial — tanpa catatan ini, PnL
+    // yang mengecil setelahnya terbaca seperti kerugian mendadak.
+    note('your recorded cost basis is scaled down by the same share, so PnL stays comparable.'),
     '',
-    note(dryRun ? 'DRY RUN — tidak kirim tx' : 'LIVE · konfirmasi = kirim tx, butuh gas'),
+    note(dryRun ? 'DRY RUN — no transaction will be sent' : 'LIVE · confirming sends a transaction and costs gas'),
   ].join('\n');
 }
 
 export function msgRemoveDone(id: string, pct: number, txHash: string | null): string {
   return [
-    `✅ ${bold('Penarikan Berhasil')}`,
+    `✅ ${bold('Withdrawal Complete')}`,
     '',
-    `${bold(`${pct}%`)} likuiditas posisi ${bold(`#${esc(id)}`)} sudah ditarik ke dompetmu, berikut fee yang belum diklaim.`,
-    `Sisa ${100 - pct}% masih bekerja di pool.`,
-    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — tidak ada transaksi dikirim.')]),
+    `${bold(`${pct}%`)} of position ${bold(`#${id}`)} liquidity is now in your wallet, along with any unclaimed fees.`,
+    `The remaining ${100 - pct}% is still working in the pool.`,
+    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — no transaction was sent.')]),
     '',
     note(nowWib()),
   ].join('\n');
@@ -1615,40 +1682,33 @@ export function msgStopConfirm(opts: {
     '',
     bold(`PnL  ${opts.pnlText}`),
     '',
-    quoteHtml(`⚠️ Menutup = remove + swap semua ke ${esc(opts.baseSymbol)}. Tak bisa dibatalkan.`),
+    quoteHtml(`⚠️ Closing removes the liquidity and swaps everything to ${esc(opts.baseSymbol)}. This cannot be undone.`),
   ];
   return card(title('CLOSE', `#${opts.tokenId}`), body, nowWib());
-}
-
-export function msgStopPick(): string {
-  return card(
-    title('STOP LP'),
-    [note('pilih posisi — tap Tutup pada kartu.'), note('posisi v4 ditutup dari /positions atau /closeall.')],
-  );
 }
 
 export function msgNoActiveToStop(): string {
   return card(
     title('STOP LP'),
-    [note('tidak ada posisi aktif.')],
+    [note('no active positions.')],
   );
 }
 
 export function msgDryRunClose(tokenId: string): string {
   return card(
     title('DRY RUN'),
-    [note(`posisi #${tokenId} tidak ditutup (simulasi).`)],
+    [note(`position #${tokenId} was not closed (simulation).`)],
   );
 }
 
 export function msgClosing(baseSymbol = 'ETH'): string {
-  return msgProgress(`menutup posisi & cash-out ke ${baseSymbol}…`);
+  return msgProgress(`closing position & cashing out to ${baseSymbol}…`);
 }
 
 export function msgAlreadyClosed(tokenId: string): string {
   return card(
     title('ALREADY CLOSED', `#${tokenId}`),
-    [note('ditandai STOPPED & dibersihkan.')],
+    [note('marked STOPPED and cleaned up.')],
     nowWib(),
   );
 }
@@ -1660,17 +1720,17 @@ export function msgCashOut(opts: {
   txHashes: string[];
 }): string {
   const out = [
-    `✅ ${bold('Posisi Ditutup & Dicairkan')}`,
+    `✅ ${bold('Position Closed &amp; Cashed Out')}`,
     '',
-    `🎉 ${bold('ID Posisi:')} #${esc(opts.tokenId)}`,
-    `💰 ${bold('Diterima:')} ${bold(esc(opts.ethOut))}`,
+    `🎉 ${bold('Position ID:')} #${esc(opts.tokenId)}`,
+    `💰 ${bold('Received:')} ${bold(opts.ethOut)}`,
   ];
 
   // Langkah yang BENAR-BENAR dijalankan, apa adanya dari executor. Hash-nya
   // dipisah ke barisnya sendiri: di tengah kalimat, 66 karakter mustahil
   // diseleksi dengan jempol.
   if (opts.notes.length) {
-    out.push('', `📝 ${bold('Langkah yang dijalankan:')}`);
+    out.push('', `📝 ${bold('Steps performed :')}`);
     for (const n of opts.notes) {
       const m = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
       out.push(`• ${esc(m ? m[1] : n)}`);
@@ -1688,9 +1748,9 @@ export function msgCashOut(opts: {
 
   out.push(
     '',
-    `⏱️ <i>Selesai ${nowWib()}</i>`,
+    `⏱️ <i>Completed at ${nowWib()}</i>`,
     '',
-    `<i>Posisi LP-mu sudah ditarik. Seluruh token pasangannya otomatis ditukar dan di-unwrap kembali jadi ${bold('ETH murni')}, dan kini aman di dompetmu.</i>`,
+    `<i>Your LP has been withdrawn. The paired token was swapped and unwrapped back into ${bold('native ETH')}, now sitting safely in your wallet.</i>`,
   );
   return out.join('\n');
 }
@@ -1725,52 +1785,187 @@ export function msgRangeExit(
   side: 'above' | 'below',
   baseSymbol = 'WETH',
 ): string {
-  if (side === 'above') {
-    return card(
-      `🟢 ${title('OUT ↑', `#${tokenId}`)}`,
-      [
-        fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
-        `🟢 ${bold('AMAN')} — harga naik keluar rentang; posisi kembali 100% ${esc(baseSymbol)} + fee.`,
-      ],
-      nowWib(),
-    );
-  }
-  return card(
-    `🔴 ${title('OUT ↓', `#${tokenId}`)}`,
-    [
-      fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
-      `🔴 ${bold('RISIKO')} — ${esc(baseSymbol)} sudah 100% jadi ${esc(symbol)}.`,
-      note(`pulih hanya bila harga naik lagi. Pertimbangkan /stop.`),
-    ],
-    nowWib(),
-  );
+  const up = side === 'above';
+  return [
+    `${up ? '🟡' : '🔴'} ${bold('Alert: Position Out of Range')}`,
+    '',
+    `🆔 ${bold('Position ID:')} #${esc(tokenId)}`,
+    `🔗 ${bold('Pair:')} ${esc(baseSymbol)} / ${esc(symbol)}`,
+    '',
+    up
+      ? `📈 The price moved ${bold('above')} your range. The position is back to ${bold(esc(baseSymbol))} plus collected fees, and has stopped earning.`
+      : `📉 The price moved ${bold('below')} your range. Your ${esc(baseSymbol)} is now fully converted to ${esc(symbol)}, and the position has stopped earning.`,
+    '',
+    italic(
+      up
+        ? 'It will start earning again if the price comes back down into range.'
+        : 'It will start earning again if the price comes back up into range.',
+    ),
+    '',
+    `⏱️ <i>Triggered at: ${nowWib()}</i>`,
+  ].join('\n');
 }
 
 export function msgCrash(kind: string, err: string): string {
   // Hanya baris pertama (pesan), BUKAN stack — hindari bocor internal/RPC & bikin
   // panik. Reassure: restart otomatis, dana/posisi aman on-chain.
-  const firstLine = String(err).split('\n')[0].trim().slice(0, 160) || 'error tak dikenal';
+  const firstLine = String(err).split('\n')[0].trim().slice(0, 160) || 'unknown error';
   return card(
-    `⚠️ ${title('GANGGUAN SEBENTAR')}`,
+    `⚠️ ${title('BRIEF OUTAGE')}`,
     [
-      `😵 error tak terduga (${bold(kind)}).`,
+      `😵 unexpected error (${bold(kind)}).`,
       '',
-      note(`teknis: ${firstLine}`),
-      note('bot restart otomatis — dana & posisi aman on-chain.'),
+      note(`technical: ${firstLine}`),
+      note('the bot restarts automatically — funds and positions are safe on-chain.'),
     ],
     nowWib(),
   );
 }
 
 export function msgInvalidAmount(): string {
-  return card(title('INVALID'), [note('masukkan angka ETH valid, mis. 0.02')]);
+  return card(title('INVALID'), [note('enter a valid amount, e.g. 0.02')]);
 }
 
 /** Sesi wizard/swap kedaluwarsa (ditinggalkan terlalu lama). */
 export function msgSessionExpired(): string {
-  return card(`⌛ ${title('SESI HABIS')}`, [note('sesi lama ditutup — mulai lagi dari menu bila mau lanjut.')]);
+  return card(`⌛ ${title('SESSION EXPIRED')}`, [note('the old session was closed — start again from the menu.')]);
 }
 
 export function msgOverLimit(maxLabel: string): string {
-  return card(title('LIMIT'), [note(`melebihi batas ${maxLabel}.`)]);
+  return card(title('LIMIT'), [note(`above the ${maxLabel} limit.`)]);
+}
+
+// ─── /unwrap — WETH nyangkut → ETH ─────────────────────────────────
+
+// wrapped/native ikut chain: WETH→ETH di Robinhood, WBNB→BNB di BSC.
+export function msgUnwrapNone(dust: string, wrapped = 'WETH', native = 'ETH'): string {
+  return [
+    `🔄 ${bold(`Unwrap ${wrapped} → ${native}`)}`,
+    '',
+    `No stuck ${esc(wrapped)} in your wallet — balance is below ${bold(dust)}.`,
+    '',
+    note(`${wrapped} only ever sits here as an intermediate step (opening an LP, swapping).`),
+  ].join('\n');
+}
+
+export function msgUnwrapConfirm(
+  amount: string,
+  usd: string | null,
+  dryRun: boolean,
+  wrapped = 'WETH',
+  native = 'ETH',
+): string {
+  return [
+    `🔄 ${bold(`Unwrap ${wrapped} → ${native}`)}`,
+    '',
+    `💰 ${bold(`Stuck ${wrapped}:`)} ${bold(amount)}${usd ? ` ${italic(`(${usd})`)}` : ''}`,
+    '',
+    `All of it will be unwrapped back to native ${esc(native)}. One transaction, no swap, no slippage.`,
+    ...(dryRun ? ['', note('DRY RUN — no transaction will be sent.')] : []),
+  ].join('\n');
+}
+
+export function msgUnwrapDone(amount: string, txHash: string | null, wrapped = 'WETH', native = 'ETH'): string {
+  return [
+    `✅ ${bold('Unwrapped')}`,
+    '',
+    `${bold(amount)} ${esc(wrapped)} → native ${esc(native)}, now in your wallet.`,
+    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — no transaction was sent.')]),
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
+
+// ─── /bridge — pindah dana antar chain (Relay) ─────────────────────
+
+export function msgBridgePick(routes: Array<{ from: string; to: string }>): string {
+  return [
+    `🌉 ${bold('Bridge Between Chains')}`,
+    '',
+    'Move native funds from one chain to another via Relay.',
+    '',
+    `🔀 ${bold('Available Routes :')}`,
+    ...routes.map((r) => `• ${esc(r.from)} → ${esc(r.to)}`),
+    '',
+    note('a bridge cannot be undone — funds land on the destination chain and only another bridge brings them back.'),
+  ].join('\n');
+}
+
+export function msgBridgeAmount(fromLabel: string, toLabel: string, balanceLabel: string, symbol: string): string {
+  return [
+    `🌉 ${bold('Bridge')} · ${esc(fromLabel)} → ${esc(toLabel)}`,
+    '',
+    `💼 ${bold('Balance:')} ${bold(balanceLabel)}`,
+    '',
+    `Please type the amount of ${bold(symbol)} to bridge.`,
+    // Gas dibayar di chain ASAL: mengirim seluruh saldo membuat tx-nya sendiri gagal.
+    note('leave some for gas on the origin chain — sending your whole balance will fail.'),
+  ].join('\n');
+}
+
+export function msgBridgeConfirm(o: {
+  fromLabel: string;
+  toLabel: string;
+  inLabel: string;
+  outLabel: string;
+  impactPct: number | null;
+  feeUsd: number | null;
+  etaSec: number | null;
+  dryRun: boolean;
+}): string {
+  return [
+    `🌉 ${bold('Review Bridge')}`,
+    '',
+    `🔗 ${bold('Transaction Details :')}`,
+    `• Route: ${esc(o.fromLabel)} → ${esc(o.toLabel)}`,
+    `• You send: ${bold(o.inLabel)}`,
+    `• You receive ≈ ${bold(o.outLabel)}`,
+    ...(o.impactPct !== null ? [`• Value Impact: ${fmtPct(o.impactPct)}`] : []),
+    ...(o.feeUsd !== null ? [`• Relayer Fee: ${usdPlain(o.feeUsd)}`] : []),
+    ...(o.etaSec !== null ? [`• Estimated Time: ~${Math.max(1, Math.round(o.etaSec))}s`] : []),
+    '',
+    // Quote di-refresh saat konfirmasi; angka di atas jadi lantai minimumnya.
+    italic(
+      o.dryRun
+        ? '*DRY RUN — no transaction will be sent.'
+        : '*The quote is refreshed the moment you confirm; if the route moves against you, nothing is sent. Bridges cannot be reversed.',
+    ),
+  ].join('\n');
+}
+
+export function msgBridgeDone(o: {
+  fromLabel: string;
+  toLabel: string;
+  inLabel: string;
+  outLabel: string;
+  txHashes: string[];
+  dryRun: boolean;
+}): string {
+  const out = [
+    `✅ ${bold('Bridge Sent')}`,
+    '',
+    `🔀 ${bold('Route:')} ${esc(o.fromLabel)} → ${esc(o.toLabel)}`,
+    `📤 ${bold('Sent:')} ${bold(o.inLabel)}`,
+    `📥 ${bold('Receiving ≈')} ${bold(o.outLabel)}`,
+  ];
+  if (o.txHashes.length) {
+    out.push('', `🔗 ${bold('Tx Hash:')}`);
+    for (const h of o.txHashes) out.push(code(h));
+  }
+  if (o.dryRun) out.push('', note('DRY RUN — no transaction was sent.'));
+  out.push(
+    '',
+    italic('Funds usually arrive within seconds. Check /status once the destination chain updates.'),
+    '',
+    note(nowWib()),
+  );
+  return out.join('\n');
+}
+
+export function msgBridgeUnavailable(): string {
+  return [
+    `🌉 ${bold('Bridge Unavailable')}`,
+    '',
+    note('bridging needs at least two chains enabled. Only one chain is active right now.'),
+  ].join('\n');
 }

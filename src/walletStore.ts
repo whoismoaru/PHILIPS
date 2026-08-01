@@ -22,7 +22,7 @@ const FILE = join(process.cwd(), 'data', 'keystore.json');
 
 function passphrase(): string {
   const s = process.env.WALLET_SECRET || config.telegram.botToken;
-  if (!s) throw new Error('WALLET_SECRET / token bot kosong — tak bisa mengenkripsi keystore');
+  if (!s) throw new Error('WALLET_SECRET / bot token is empty — cannot encrypt the keystore');
   return `philips:${s}`;
 }
 
@@ -93,7 +93,7 @@ export function connect(secret: string): string {
   } else if (ethers.Mnemonic.isValidMnemonic(t.toLowerCase())) {
     w = ethers.HDNodeWallet.fromPhrase(t.toLowerCase());
   } else {
-    throw new Error('bukan private key (hex 64) maupun seed phrase yang sah');
+    throw new Error('not a valid private key (64 hex chars) or seed phrase');
   }
   save(w);
   return w.address;

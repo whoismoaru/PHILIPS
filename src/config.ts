@@ -28,6 +28,12 @@ export const config = {
     rpcUrl: required('RPC_URL'),
     chainId: Number(required('CHAIN_ID')),
   },
+  // BSC opsional: kosongkan BSC_ENABLED (atau isi 'false') untuk mematikan chain-nya
+  // sama sekali — bot tetap jalan hanya dengan Robinhood.
+  bsc: {
+    enabled: (process.env.BSC_ENABLED ?? 'false').toLowerCase() === 'true',
+    rpcUrl: process.env.BSC_RPC_URL || 'https://bsc-dataseed.binance.org',
+  },
   wallet: {
     // Opsional sejak /connect ada: dipakai sekali untuk mengadopsi pemasangan
     // lama jadi keystore terenkripsi (walletStore.ts), lalu boleh dihapus.

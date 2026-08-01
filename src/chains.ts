@@ -20,6 +20,7 @@ export type ChainCtx = {
   chainId: number;
   nativeSymbol: string; // ETH / BNB
   dexKey: string; // chainId versi DexScreener
+  dexLabel: string; // nama DEX tempat posisi dibuka ('Uniswap' | 'PancakeSwap')
   blockscout: string | null; // base URL API explorer (null = tak tersedia)
   provider: ethers.JsonRpcProvider;
   /** Signer aktif. VoidSigner (alamat 0x0) bila belum ada dompet terhubung. */
@@ -30,10 +31,21 @@ export type ChainCtx = {
   wethAddress: string; // WETH canonical; ZeroAddress bila chain tak punya WETH (stablecoin-native)
   hasWethBase: boolean; // apakah WETH boleh jadi base LP di chain ini
   usdgAddress?: string; // hanya chain yg punya USDG (Global Dollar). undefined = tak ada.
-  usdtAddress?: string; // hanya chain yg punya USDT (mis. Stable). undefined = tak ada.
+  usdtAddress?: string; // hanya chain yg punya USDT. undefined = tak ada.
+  /** Aset pasangan LP yang tersedia di chain ini — desimal & simbolnya milik CHAIN,
+   *  bukan konstanta global: USDG di Robinhood 6 desimal, USDT di BSC 18. */
+  bases: BaseAsset[];
+  /** Fee tier yang benar-benar terdaftar di factory chain ini, dan tick-spacing-nya.
+   *  Uniswap: 100/500/3000/10000. PancakeSwap: 100/500/2500/10000 (tanpa 3000). */
+  feeTiers: number[];
+  tickSpacing: Record<number, number>;
   pmAddress: string;
   routerAddress: string;
   quoterAddress: string;
+  /** Router memakai struct exactInputSingle BER-`deadline` (SwapRouter v3 asli /
+   *  PancakeSwap). SwapRouter02 Uniswap membuangnya — struct yang salah = revert
+   *  tanpa data, terbukti lewat staticCall di kedua bentuk. */
+  routerHasDeadline: boolean;
 };
 
 // --- Base asset (aset pasangan LP). Per chain: WETH (bila hasWethBase), USDG dan/atau
@@ -50,20 +62,22 @@ export type BaseAsset = {
 /** true bila base ini stablecoin dolar (USDG/USDT ≈ $1, 6-desimal, non-wrappable). */
 export const isStableBase = (kind: BaseKind): boolean => kind === 'usdg' || kind === 'usdt';
 
-/** Simbol tampilan sebuah base kind. */
-export const baseSymbolOf = (kind: BaseKind | undefined): string =>
-  kind === 'usdg' ? 'USDG' : kind === 'usdt' ? 'USDT' : 'WETH';
+/**
+ * Simbol tampilan sebuah base kind. Beri `ctx` bila tersedia: simbol wrapped-native
+ * berbeda antar chain (WETH di Robinhood, WBNB di BSC), dan menampilkan 'WETH' di
+ * BSC berarti menyebut aset yang tak pernah dipegang user.
+ */
+export const baseSymbolOf = (kind: BaseKind | undefined, ctx?: ChainCtx): string => {
+  if (ctx) {
+    const b = ctx.bases.find((x) => x.kind === (kind ?? 'weth'));
+    if (b) return b.symbol;
+  }
+  return kind === 'usdg' ? 'USDG' : kind === 'usdt' ? 'USDT' : 'WETH';
+};
 
 /** Daftar base asset yang tersedia di chain ini. */
 export function basesFor(ctx: ChainCtx): BaseAsset[] {
-  const out: BaseAsset[] = [];
-  if (ctx.hasWethBase)
-    out.push({ kind: 'weth', address: ctx.wethAddress, decimals: 18, symbol: 'WETH', wrappable: true });
-  if (ctx.usdgAddress)
-    out.push({ kind: 'usdg', address: ctx.usdgAddress, decimals: 6, symbol: 'USDG', wrappable: false });
-  if (ctx.usdtAddress)
-    out.push({ kind: 'usdt', address: ctx.usdtAddress, decimals: 6, symbol: 'USDT', wrappable: false });
-  return out;
+  return ctx.bases;
 }
 
 /** Base asset berdasarkan kind (fallback ke WETH bila kind tak tersedia di chain). */
@@ -87,6 +101,7 @@ type Def = {
   chainId: number;
   nativeSymbol: string;
   dexKey: string;
+  dexLabel?: string; // default 'Uniswap'
   blockscout: string | null;
   rpc: string;
   factory: string;
@@ -96,8 +111,18 @@ type Def = {
   weth: string;
   usdg?: string;
   usdt?: string;
-  hasWethBase?: boolean; // default true; false utk chain stablecoin-native (Stable)
+  hasWethBase?: boolean; // default true; false utk chain stablecoin-native
+  wrappedSymbol?: string; // simbol wrapped-native (default 'WETH'; BSC 'WBNB')
+  stableDecimals?: number; // desimal USDG/USDT di chain ini (default 6; BSC USDT 18)
+  feeTiers?: number[]; // default fee tier Uniswap v3
+  tickSpacing?: Record<number, number>; // default pemetaan Uniswap v3
+  noBatch?: boolean; // RPC publik yang menolak JSON-RPC batch (mis. bsc-dataseed)
+  routerHasDeadline?: boolean; // default false (SwapRouter02 Uniswap)
 };
+
+/** Default Uniswap v3 — dipakai chain yang tak menyebut sendiri. */
+const UNI_FEES = [100, 500, 3000, 10000];
+const UNI_SPACING: Record<number, number> = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
 
 const DEFS: Record<string, Def> = {
   robinhood: {
@@ -114,12 +139,58 @@ const DEFS: Record<string, Def> = {
     weth: config.uniswap.weth,
     usdg: '0x5fc5360d0400a0fd4f2af552add042d716f1d168', // Global Dollar (USDG), 6 desimal — terverifikasi on-chain
   },
+  ...(config.bsc.enabled
+    ? {
+        bsc: {
+          label: 'BSC',
+          chainId: 56,
+          nativeSymbol: 'BNB',
+          dexKey: 'bsc',
+          dexLabel: 'PancakeSwap',
+          // BSC tak punya Blockscout publik: holders/verified/top-10 diambil dari GMGN,
+          // dan v4Supported() otomatis false (memang tak ada v4 di PancakeSwap).
+          blockscout: null,
+          rpc: config.bsc.rpcUrl,
+          // PancakeSwap v3 — fork Uniswap v3, ABI position manager identik.
+          // Semua alamat diverifikasi on-chain (PM.factory & PM.WETH9 cocok).
+          factory: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865',
+          pm: '0x46A15B0b27311cedF172AB29E4f4766fbE7F4364',
+          router: '0x1b81D678ffb9C0263b24A97847620C99d213eB14', // PancakeSwap v3 SwapRouter
+          quoter: '0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997', // QuoterV2
+          weth: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // WBNB
+          usdt: '0x55d398326f99059fF775485246999027B3197955',
+          wrappedSymbol: 'WBNB',
+          // USDT di BSC 18 desimal — BUKAN 6 seperti USDG di Robinhood. Memakai 6 di
+          // sini menggeser setiap nominal 10^12.
+          stableDecimals: 18,
+          // Terdaftar di factory Pancake: 100/500/2500/10000. 3000 TIDAK ADA.
+          feeTiers: [100, 500, 2500, 10000],
+          tickSpacing: { 100: 1, 500: 10, 2500: 50, 10000: 200 },
+          noBatch: true,
+          routerHasDeadline: true, // PancakeSwap v3 SwapRouter (diverifikasi staticCall)
+        },
+      }
+    : {}),
 };
 
-// Hanya Robinhood. Antar-chain ke depan = Robinhood <-> Solana (belum diimplementasi).
+function basesOf(d: Def): BaseAsset[] {
+  const out: BaseAsset[] = [];
+  const stableDec = d.stableDecimals ?? 6;
+  if (d.hasWethBase ?? true)
+    out.push({ kind: 'weth', address: d.weth, decimals: 18, symbol: d.wrappedSymbol ?? 'WETH', wrappable: true });
+  if (d.usdg) out.push({ kind: 'usdg', address: d.usdg, decimals: stableDec, symbol: 'USDG', wrappable: false });
+  if (d.usdt) out.push({ kind: 'usdt', address: d.usdt, decimals: stableDec, symbol: 'USDT', wrappable: false });
+  return out;
+}
 
 function build(key: string, d: Def): ChainCtx {
-  const provider = new ethers.JsonRpcProvider(d.rpc, d.chainId);
+  // staticNetwork: chainId sudah kita ketahui — jangan buang satu round-trip deteksi.
+  // batchMaxCount 1: RPC publik BSC menolak batch JSON-RPC, dan ethers membatch
+  // secara default → seluruh pembacaan gagal serentak ("failed to detect network").
+  const provider = new ethers.JsonRpcProvider(d.rpc, d.chainId, {
+    staticNetwork: true,
+    ...(d.noBatch ? { batchMaxCount: 1 } : {}),
+  });
   // Belum ada dompet terhubung → VoidSigner: BACA tetap jalan (saldo, posisi,
   // audit token), TULIS gagal terang-terangan alih-alih memakai kunci hantu.
   const wallet: ethers.Wallet | ethers.VoidSigner =
@@ -130,6 +201,7 @@ function build(key: string, d: Def): ChainCtx {
     chainId: d.chainId,
     nativeSymbol: d.nativeSymbol,
     dexKey: d.dexKey,
+    dexLabel: d.dexLabel ?? 'Uniswap',
     blockscout: d.blockscout,
     provider,
     wallet,
@@ -143,6 +215,10 @@ function build(key: string, d: Def): ChainCtx {
     pmAddress: d.pm,
     routerAddress: d.router,
     quoterAddress: d.quoter,
+    routerHasDeadline: d.routerHasDeadline ?? false,
+    bases: basesOf(d),
+    feeTiers: d.feeTiers ?? UNI_FEES,
+    tickSpacing: d.tickSpacing ?? UNI_SPACING,
   };
 }
 
