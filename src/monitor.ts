@@ -92,10 +92,10 @@ async function sweepLeftovers(bot: Telegraf) {
             x.ca?.toLowerCase() === r.ca.toLowerCase(),
         );
       if (st) store.remove(st.tokenId);
-      console.log(`[sweep] ${r.symbol} (${cc.key}) → +${ethers.formatEther(res.outEthWei)} ETH via ${res.route}`);
+      console.log(`[sweep] ${r.symbol} (${cc.key}) → +${ethers.formatEther(res.outEthWei)} ${cc.nativeSymbol} via ${res.route}`);
       await bot.telegram.sendMessage(
         config.telegram.allowedUserId,
-        `♻️ Sisa ${r.symbol} tersapu → +${Number(ethers.formatEther(res.outEthWei)).toFixed(6)} ETH (${res.route})`,
+        `♻️ Swept leftover ${r.symbol} → +${Number(ethers.formatEther(res.outEthWei)).toFixed(6)} ${cc.nativeSymbol} (${res.route})`,
       );
     } catch (e) {
       const emsg = (e as Error).message ?? '';
@@ -127,10 +127,11 @@ async function sweepStuckWeth(bot: Telegraf) {
       if (config.safety.dryRun) continue;
       const tx = await cc.weth.withdraw(bal);
       await tx.wait();
-      console.log(`[sweep-weth] unwrap ${ethers.formatEther(bal)} WETH → ETH (${cc.key})`);
+      const wrapped = cc.bases.find((b) => b.kind === 'weth')?.symbol ?? 'WETH';
+      console.log(`[sweep-weth] unwrap ${ethers.formatEther(bal)} ${wrapped} → ${cc.nativeSymbol} (${cc.key})`);
       await bot.telegram.sendMessage(
         config.telegram.allowedUserId,
-        `♻️ WETH nyangkut ${Number(ethers.formatEther(bal)).toFixed(6)} disapu → ETH (${cc.label})`,
+        `♻️ Swept ${Number(ethers.formatEther(bal)).toFixed(6)} stuck ${wrapped} → ${cc.nativeSymbol} (${cc.label})`,
       );
     } catch (e) {
       console.log(`[sweep-weth] ${cc.key} gagal: ${(e as Error).message.slice(0, 80)}`);
@@ -138,16 +139,23 @@ async function sweepStuckWeth(bot: Telegraf) {
   }
 }
 
-let ticking = false;
+let tickStartedAt = 0; // 0 = idle
+// Satu tx yang tak pernah settle (RPC blackhole, unwrap underpriced) membuat
+// `finally` tak pernah jalan. Dengan flag boolean, monitor mati DIAM-DIAM selamanya:
+// tak ada alert range, anjlok, rugi, maupun sweep. Batas waktu ini membiarkan tick
+// berikutnya mengambil alih; tick yang menggantung dibiarkan selesai sendiri.
+const TICK_STUCK_MS = 5 * 60_000;
 
 export function startMonitor(bot: Telegraf) {
   setInterval(async () => {
-    if (ticking) return; // tick sebelumnya masih menunggu tx — jangan bertumpuk
-    ticking = true;
+    // tick sebelumnya masih menunggu tx — jangan bertumpuk, KECUALI sudah macet.
+    if (tickStartedAt && Date.now() - tickStartedAt < TICK_STUCK_MS) return;
+    if (tickStartedAt) console.log('[monitor] tick sebelumnya macet >5m — dilanjutkan tanpa menunggu');
+    tickStartedAt = Date.now();
     try {
       await tick(bot);
     } finally {
-      ticking = false;
+      tickStartedAt = 0;
     }
   }, INTERVAL_MS);
 }
@@ -224,7 +232,7 @@ async function tick(bot: Telegraf) {
             {
               ...html,
               reply_markup: {
-                inline_keyboard: [[{ text: '⛔ Tutup Sekarang', callback_data: `stop:${rec.tokenId}` }]],
+                inline_keyboard: [[{ text: '⛔ Close Now', callback_data: `stop:${rec.tokenId}` }]],
               },
             },
           );
@@ -247,7 +255,7 @@ async function tick(bot: Telegraf) {
               {
                 ...html,
                 reply_markup: {
-                  inline_keyboard: [[{ text: '⛔ Tutup Sekarang', callback_data: `stop:${rec.tokenId}` }]],
+                  inline_keyboard: [[{ text: '⛔ Close Now', callback_data: `stop:${rec.tokenId}` }]],
                 },
               },
             );

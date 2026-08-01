@@ -29,13 +29,13 @@ async function unclaimedList(): Promise<Array<{ rec: store.PosRecord; label: str
 }
 
 async function cmdClaimFees(ctx: any) {
-  const prog = await ctx.reply(msg.msgProgress('membaca fee belum diklaim…'), html);
+  const prog = await ctx.reply(msg.msgProgress('reading unclaimed fees…'), html);
   const list = await unclaimedList();
   if (!list.length) return editProgress(ctx, prog, msg.msgNoFees());
   const rows = list.map((x) => [
     Markup.button.callback(`💵 ${x.rec.symbol} · ${x.label}`, `claim:${x.rec.tokenId}`),
   ]);
-  rows.push([Markup.button.callback('Batal', 'cancel')]);
+  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
   await editProgress(
     ctx,
     prog,
@@ -48,11 +48,12 @@ bot.command('claim_fees', cmdClaimFees);
 const claiming = new Set<string>(); // anti double-tap: tx kedua menarik 0 & buang gas
 bot.action(/^claim:(\d+)$/, async (ctx) => {
   const id = ctx.match[1];
-  if (claiming.has(id)) return ctx.answerCbQuery('Sedang diproses…');
+  if (claiming.has(id)) return ctx.answerCbQuery('Processing…');
   const rec = store.active().find((r) => r.tokenId === id);
-  if (!rec) return ctx.answerCbQuery('Posisi tak aktif lagi.');
+  if (!rec) return ctx.answerCbQuery('Position is no longer active.');
   claiming.add(id);
   await ctx.answerCbQuery();
+  store.beginMoneyOp(); // sweep monitor tak boleh mengirim tx dari dompet yang sama
   try {
     const cc = getChain(rec.chain);
     if (config.safety.dryRun) {
@@ -71,6 +72,7 @@ bot.action(/^claim:(\d+)$/, async (ctx) => {
     await ctx.reply(msg.msgError('claim', (e as Error).message), html);
   } finally {
     claiming.delete(id);
+    store.endMoneyOp();
   }
 });
 
@@ -81,7 +83,7 @@ async function cmdRemoveLp(ctx: any) {
   const rows = active.map((r) => [
     Markup.button.callback(`${r.symbol} · #${r.tokenId}`, `rm:${r.tokenId}`),
   ]);
-  rows.push([Markup.button.callback('Batal', 'cancel')]);
+  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
   await ctx.reply(msg.msgRemovePick(active.map((r) => ({ symbol: r.symbol, id: r.tokenId }))), {
     ...html,
     ...Markup.inlineKeyboard(rows),
@@ -96,8 +98,8 @@ bot.action(/^rm:(\d+)$/, async (ctx) => {
     ...html,
     ...Markup.inlineKeyboard([
       [25, 50, 75].map((p) => Markup.button.callback(`${p}%`, `rmpct:${id}:${p}`)),
-      [Markup.button.callback('100% (tutup posisi)', `stop:${id}`)],
-      [Markup.button.callback('Batal', 'cancel')],
+      [Markup.button.callback('100% (close position)', `stop:${id}`)],
+      [Markup.button.callback('❌ Cancel', 'cancel')],
     ]),
   });
 });
@@ -118,8 +120,8 @@ bot.action(/^rmpct:(\d+):(\d+)$/, async (ctx) => {
   await ctx.editMessageText(msg.msgRemoveConfirm(id, rec.symbol, pct, est, config.safety.dryRun), {
     ...html,
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Konfirmasi & Tarik', `rmok:${id}:${pct}`)],
-      [Markup.button.callback('Kembali', `rm:${id}`), Markup.button.callback('Batal', 'cancel')],
+      [Markup.button.callback('✅ Confirm & Withdraw', `rmok:${id}:${pct}`)],
+      [Markup.button.callback('⬅️ Back', `rm:${id}`), Markup.button.callback('❌ Cancel', 'cancel')],
     ]),
   });
 });
@@ -127,22 +129,34 @@ bot.action(/^rmpct:(\d+):(\d+)$/, async (ctx) => {
 const removing = new Set<string>();
 bot.action(/^rmok:(\d+):(\d+)$/, async (ctx) => {
   const [id, pct] = [ctx.match[1], Number(ctx.match[2])];
-  if (removing.has(id)) return ctx.answerCbQuery('Sedang diproses…');
+  if (removing.has(id)) return ctx.answerCbQuery('Processing…');
   const rec = store.active().find((r) => r.tokenId === id);
-  if (!rec) return ctx.answerCbQuery('Posisi tak aktif lagi.');
+  if (!rec) return ctx.answerCbQuery('Position is no longer active.');
   removing.add(id);
   await ctx.answerCbQuery();
+  store.beginMoneyOp(); // idem: penarikan sebagian juga mengirim tx
   try {
     if (config.safety.dryRun) {
       await ctx.editMessageText(msg.msgRemoveDone(id, pct, null), html);
       return;
     }
     const { txHash } = await removeLiquidityPct(id, pct, getChain(rec.chain));
+    // Modal tercatat harus ikut menyusut. Tanpa ini sisa posisi dibandingkan dengan
+    // modal PENUH: tarik 50% → kartu selamanya menampilkan −50%, dan alert rugi
+    // bersih langsung menyala padahal dananya sudah ada di dompet.
+    const kept = 100n - BigInt(pct);
+    const keptWei = (BigInt(rec.initialWethWei || '0') * kept) / 100n;
+    store.update(id, {
+      initialWethWei: keptWei.toString(),
+      ...(rec.nominalEth ? { nominalEth: String((Number(rec.nominalEth) * Number(kept)) / 100) } : {}),
+      ilAlerted: false,
+    });
     await ctx.editMessageText(msg.msgRemoveDone(id, pct, txHash), html);
   } catch (e) {
     await ctx.reply(msg.msgError('remove', (e as Error).message), html);
   } finally {
     removing.delete(id);
+    store.endMoneyOp();
   }
 });
 

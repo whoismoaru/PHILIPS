@@ -50,9 +50,18 @@ function load(): PosRecord[] {
     if (!existsSync(FILE)) return [];
     return JSON.parse(readFileSync(FILE, 'utf8')) as PosRecord[];
   } catch (e) {
-    // JANGAN senyap: file rusak = basis PnL & kandidat sweep hilang.
-    console.error('[store] positions.json tak terbaca — mulai KOSONG:', (e as Error).message);
-    return [];
+    // Mulai KOSONG = bunuh diri: monitor memanggil update() dalam 60 detik pertama,
+    // dan persist() menimpa satu-satunya salinan modal awal (initialWethWei), entry
+    // price, dan status semua posisi. Sisihkan file rusaknya lalu BERHENTI — biar
+    // systemd me-restart dengan berisik daripada mengamputasi posisi diam-diam.
+    const aside = `${FILE}.corrupt-${Date.now()}`;
+    try {
+      renameSync(FILE, aside);
+    } catch {
+      /* tak bisa dipindah pun, tetap jangan lanjut */
+    }
+    console.error(`[store] positions.json rusak (${(e as Error).message}) — disisihkan ke ${aside}`);
+    throw e;
   }
 }
 

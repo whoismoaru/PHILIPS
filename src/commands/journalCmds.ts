@@ -16,14 +16,14 @@ export function cmdHistory(ctx: any) {
     reason: e.reason,
     ca: e.ca,
     chain: e.chain,
+    baseKind: e.baseKind,
     closedAt: e.closedAt,
   }));
   return ctx.reply(msg.msgJournal(items, total), {
     ...html,
-    ...Markup.inlineKeyboard([[Markup.button.callback('🧾 Rekap PnL', 'pnl'), Markup.button.callback('📋 Posisi', 'positions')]]),
+    ...Markup.inlineKeyboard([[Markup.button.callback('🧾 PnL Recap', 'pnl'), Markup.button.callback('📊 View Positions', 'positions')]]),
   });
 }
-bot.command('history', cmdHistory);
 
 // /pnl — rekap PnL seumur hidup (agregasi jurnal).
 export function cmdPnl(ctx: any) {
@@ -44,7 +44,7 @@ export function cmdPnl(ctx: any) {
     }),
     {
       ...html,
-      ...Markup.inlineKeyboard([[Markup.button.callback('📜 Riwayat', 'history'), Markup.button.callback('📋 Posisi', 'positions')]]),
+      ...Markup.inlineKeyboard([[Markup.button.callback('📜 History', 'history'), Markup.button.callback('📊 View Positions', 'positions')]]),
     },
   );
 }

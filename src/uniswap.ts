@@ -6,6 +6,12 @@ import type { Pool as TPool, Position as TPosition } from '@uniswap/v3-sdk';
 // SDK Uniswap masih CommonJS → impor default lalu ambil isinya.
 const { Token, Percent, CurrencyAmount } = sdkCore;
 const { Pool, Position, TICK_SPACINGS, nearestUsableTick, tickToPrice } = v3sdk;
+
+// SDK Uniswap tak mengenal fee tier 2500 (khas PancakeSwap v3): Pool.tickSpacing
+// mengembalikan undefined, lalu invariant Position gagal / lebar rentang jadi NaN.
+// Daftarkan spacing-nya sekali di sini — angkanya diverifikasi on-chain lewat
+// factory.feeAmountTickSpacing(2500) = 50.
+(TICK_SPACINGS as Record<number, number>)[2500] = 50;
 import { ERC20_ABI } from './chain.js';
 import { getChain, baseOf, basesFor, detectBase, type ChainCtx, type BaseAsset, type BaseKind } from './chains.js';
 
@@ -13,7 +19,13 @@ const MAX_UINT128 = (1n << 128n) - 1n;
 const SLIPPAGE = new Percent(50, 10_000); // 0.5%
 
 /** Fee tier yang valid di Uniswap v3. */
-export const VALID_FEES = [100, 500, 3000, 10000];
+/** Tick-spacing fee tier di chain ini. Melempar bila tier tak terdaftar — lebih baik
+ *  berhenti daripada menghitung lebar rentang dengan spacing `undefined` (NaN → tick sampah). */
+function spacingOf(fee: number, ctx: ChainCtx): number {
+  const s = ctx.tickSpacing[fee] ?? TICK_SPACINGS[fee as FeeAmount];
+  if (!s) throw new Error(`Fee tier ${fee} is not available on ${ctx.label}.`);
+  return s;
+}
 
 // Cache metadata token per chain (alamat sama bisa ada di banyak chain).
 const tokenMetaCache = new Map<string, { symbol: string; decimals: number }>();
@@ -56,12 +68,14 @@ export async function loadPool(
   base: BaseAsset,
   ctx: ChainCtx = getChain(),
 ): Promise<PoolState> {
-  if (!VALID_FEES.includes(fee)) {
-    throw new Error(`Fee tier ${fee} tidak valid. Pilihan: ${VALID_FEES.join(', ')}`);
+  // Fee tier & tick-spacing milik CHAIN: PancakeSwap memakai 2500 (spacing 50) dan
+  // sama sekali tak punya 3000. Memakai tabel Uniswap di sana = lebar rentang NaN.
+  if (!ctx.feeTiers.includes(fee)) {
+    throw new Error(`Invalid fee tier ${fee}. Options: ${ctx.feeTiers.join(', ')}`);
   }
   const poolAddress: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
   if (!poolAddress || poolAddress === ethers.ZeroAddress) {
-    throw new Error(`Pool ${base.symbol}/token fee ini belum ada di Uniswap.`);
+    throw new Error(`No ${base.symbol}/token pool at this fee tier.`);
   }
 
   const poolAbi = [
@@ -161,7 +175,7 @@ export async function planAddSingleSided(
   ctx: ChainCtx = getChain(),
 ): Promise<AddPlan> {
   const st = await loadPool(tokenAddress, fee, base, ctx);
-  const spacing = TICK_SPACINGS[fee as FeeAmount];
+  const spacing = spacingOf(fee, ctx);
   const width = widthInTicks(rangePercent, spacing);
   const baseWei = ethers.parseUnits(amount, base.decimals);
 
@@ -255,7 +269,7 @@ export async function planAddTokenSide(
   ctx: ChainCtx = getChain(),
 ): Promise<AddPlan> {
   const st = await loadPool(tokenAddress, fee, base, ctx);
-  const spacing = TICK_SPACINGS[fee as FeeAmount];
+  const spacing = spacingOf(fee, ctx);
   const width = widthInTicksUp(rangePercentUp, spacing);
   const tokenWei = ethers.parseUnits(amountToken, st.tokenOther.decimals);
 
@@ -334,7 +348,7 @@ export const ADD_GAS_UNITS = 700_000n;
  * kecil, ETH habis ke wrap lalu mint gagal "insufficient funds" & dana terjebak
  * sebagai WETH. Hitung dari harga gas nyata (+20% headroom), dengan lantai lama.
  */
-async function gasBuffer(ctx: ChainCtx): Promise<bigint> {
+export async function gasBuffer(ctx: ChainCtx): Promise<bigint> {
   try {
     const fee = await ctx.provider.getFeeData();
     const price = fee.maxFeePerGas ?? fee.gasPrice;
@@ -359,9 +373,9 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
     if (!base.wrappable) {
       // USDG dsb: ERC20 biasa, harus SUDAH ada di wallet.
       throw new Error(
-        `Saldo ${base.symbol} di ${ctx.label} kurang: butuh ${ethers.formatUnits(amountWei, base.decimals)}, ` +
-          `tersedia ${ethers.formatUnits(bal, base.decimals)}. ${base.symbol} tak bisa di-wrap dari ETH — ` +
-          `isi wallet dgn ${base.symbol} dulu atau kecilkan nominal.`,
+        `Not enough ${base.symbol} on ${ctx.label}: need ${ethers.formatUnits(amountWei, base.decimals)}, ` +
+          `available ${ethers.formatUnits(bal, base.decimals)}. ${base.symbol} cannot be wrapped from ETH — ` +
+          `top up with ${base.symbol} first, or lower the amount.`,
       );
     }
     // WETH: wrap ETH native seperlunya, jaga cadangan gas.
@@ -371,27 +385,27 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
     const buffer = await gasBuffer(ctx);
     if (ethBal < need + buffer) {
       throw new Error(
-        `Saldo ${native} di ${ctx.label} kurang: butuh ~${ethers.formatEther(need + buffer)} ` +
-          `(wrap + gas), tersedia ${ethers.formatEther(ethBal)}. Isi wallet dulu atau kecilkan nominal.`,
+        `Not enough ${native} on ${ctx.label}: need ~${ethers.formatEther(need + buffer)} ` +
+          `(wrap + gas), available ${ethers.formatEther(ethBal)}. Top up your wallet or lower the amount.`,
       );
     }
     const tx = await ctx.weth.deposit({ value: need });
     await tx.wait();
-    notes.push(`Bungkus ${ethers.formatEther(need)} ${native} (tx ${tx.hash})`);
+    notes.push(`Wrap ${ethers.formatEther(need)} ${native} (tx ${tx.hash})`);
     bal = await baseC.balanceOf(wallet.address);
     if (bal < amountWei) {
       const tx2 = await ctx.weth.deposit({ value: amountWei - bal });
       await tx2.wait();
-      notes.push(`Wrap tambahan ${ethers.formatEther(amountWei - bal)} ${native} (tx ${tx2.hash})`);
+      notes.push(`Wrap extra ${ethers.formatEther(amountWei - bal)} ${native} (tx ${tx2.hash})`);
       bal = await baseC.balanceOf(wallet.address);
-      if (bal < amountWei) throw new Error('Wrap tetap kurang setelah retry — coba lagi.');
+      if (bal < amountWei) throw new Error('Wrap still short after retry — try again.');
     }
   }
   const allowance: bigint = await baseC.allowance(wallet.address, ctx.pmAddress);
   if (allowance < amountWei) {
     const tx = await baseC.approve(ctx.pmAddress, ethers.MaxUint256);
     await tx.wait();
-    notes.push(`Setujui ${base.symbol} untuk Position Manager (tx ${tx.hash})`);
+    notes.push(`Approve ${base.symbol} for Position Manager (tx ${tx.hash})`);
   }
   return notes;
 }
@@ -411,15 +425,15 @@ async function ensureErc20Ready(
   const bal: bigint = await c.balanceOf(wallet.address);
   if (bal < amountWei) {
     throw new Error(
-      `Saldo ${symbol} kurang: butuh ${ethers.formatUnits(amountWei, decimals)}, ` +
-        `tersedia ${ethers.formatUnits(bal, decimals)}. Beli dulu lewat /buy atau kecilkan nominal.`,
+      `Insufficient ${symbol} balance: need ${ethers.formatUnits(amountWei, decimals)}, ` +
+        `have ${ethers.formatUnits(bal, decimals)}. Buy some with /buy or lower the amount.`,
     );
   }
   const allowance: bigint = await c.allowance(wallet.address, ctx.pmAddress);
   if (allowance < amountWei) {
     const tx = await c.approve(ctx.pmAddress, ethers.MaxUint256);
     await tx.wait();
-    notes.push(`Setujui ${symbol} untuk Position Manager (tx ${tx.hash})`);
+    notes.push(`Approve ${symbol} for Position Manager (tx ${tx.hash})`);
   }
   return notes;
 }
@@ -461,7 +475,7 @@ export async function executeAdd(
   } catch (e) {
     // STF = transfer base gagal (saldo/allowance). Pulihkan sekali lalu retry.
     if (/STF/i.test((e as Error).message)) {
-      notes.push(`Mint kena STF — verifikasi ulang aset & retry...`);
+      notes.push(`Mint hit STF — re-verifying assets and retrying...`);
       notes.push(
         ...(plan.side === 'token'
           ? await ensureErc20Ready(tokenAddress, plan.tokenAmountWei, plan.otherSymbol, plan.tokenDecimals, ctx)
@@ -473,7 +487,7 @@ export async function executeAdd(
       throw e;
     }
   }
-  notes.push(`Mint posisi terkirim (tx ${receipt.hash})`);
+  notes.push(`Mint Position (tx ${receipt.hash})`);
 
   // tokenId dibaca dari event Transfer(0x0 -> wallet) di receipt mint sendiri.
   // JANGAN pakai tokenOfOwnerByIndex(bal-1): urutan index ERC721 berubah-ubah
@@ -495,7 +509,7 @@ export async function executeAdd(
   }
   if (tokenId === null) {
     // Fallback terakhir (seharusnya tak pernah terjadi).
-    notes.push('⚠️ Event mint tak ditemukan di receipt — pakai index terakhir.');
+    notes.push('⚠️ Mint event not found in receipt — falling back to last index.');
     const bal: bigint = await positionManager.balanceOf(wallet.address);
     tokenId = BigInt(await positionManager.tokenOfOwnerByIndex(wallet.address, bal - 1n));
   }
@@ -583,26 +597,64 @@ export async function collectFeesOnly(
  * hidup — dipakai /remove_lp 25/50/75%. Untuk 100% pakai executeRemove (burn +
  * jurnal + cashout), supaya tak ada dua jalur penutupan yang bisa menyimpang.
  */
+/**
+ * Lantai slippage untuk decreaseLiquidity.
+ *
+ * amount0Min/amount1Min adalah SATU-SATUNYA proteksi harga yang dimiliki
+ * decreaseLiquidity. Dengan 0, penarikan bisa disandwich: harga didorong ke tepi
+ * rentang, posisi keluar ~100% sebagai aset yang sedang ditekan, lalu harga
+ * dikembalikan — dan tx-nya tetap "sukses" sehingga tak ada yang menandai.
+ *
+ * Angka harapannya dibaca lewat staticCall (harga saat ini), lantainya 99.5% dari
+ * situ. Kalau harga digeser antara pembacaan dan eksekusi, tx REVERT — itu hasil
+ * yang benar: gas hangus jauh lebih murah daripada ditutup di harga sembarang.
+ */
+const WITHDRAW_SLIPPAGE_BPS = 50n; // 0.5%
+
+async function withdrawMins(
+  positionManager: ethers.Contract,
+  tokenId: string,
+  liquidity: bigint,
+  deadline: number,
+): Promise<{ amount0Min: bigint; amount1Min: bigint }> {
+  try {
+    const [a0, a1] = await positionManager.decreaseLiquidity.staticCall({
+      tokenId,
+      liquidity,
+      amount0Min: 0n,
+      amount1Min: 0n,
+      deadline,
+    });
+    const floor = (v: bigint) => (BigInt(v) * (10000n - WITHDRAW_SLIPPAGE_BPS)) / 10000n;
+    return { amount0Min: floor(a0), amount1Min: floor(a1) };
+  } catch {
+    // Simulasi gagal (RPC rewel / PM tak mendukung staticCall di chain ini):
+    // jangan blokir penarikan — user bisa kehilangan akses ke dananya sendiri.
+    return { amount0Min: 0n, amount1Min: 0n };
+  }
+}
+
 export async function removeLiquidityPct(
   tokenId: string,
   pct: number,
   ctx: ChainCtx = getChain(),
 ): Promise<{ notes: string[]; txHash: string }> {
-  if (!(pct > 0 && pct < 100)) throw new Error(`persen tarik harus 1–99 (dapat ${pct})`);
+  if (!(pct > 0 && pct < 100)) throw new Error(`withdraw percentage must be 1–99 (got ${pct})`);
   const { positionManager, wallet } = ctx;
   const p = await positionManager.positions(tokenId);
   const liquidity: bigint = BigInt(p.liquidity);
-  if (liquidity === 0n) throw new Error('posisi tak punya likuiditas untuk ditarik');
+  if (liquidity === 0n) throw new Error('position has no liquidity to withdraw');
 
   // Pembagian bilangan bulat: sisa pembagian tertinggal di pool (bukan hilang).
   const part = (liquidity * BigInt(Math.round(pct))) / 100n;
-  if (part === 0n) throw new Error('porsi tarik membulat jadi 0 — pakai 100%');
+  if (part === 0n) throw new Error('withdraw amount rounds to 0 — use 100% instead');
 
   const iface = positionManager.interface;
   const deadline = Math.floor(Date.now() / 1000) + 600;
+  const mins = await withdrawMins(positionManager, tokenId, part, deadline);
   const calls = [
     iface.encodeFunctionData('decreaseLiquidity', [
-      { tokenId, liquidity: part, amount0Min: 0n, amount1Min: 0n, deadline },
+      { tokenId, liquidity: part, ...mins, deadline },
     ]),
     iface.encodeFunctionData('collect', [
       { tokenId, recipient: wallet.address, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 },
@@ -612,7 +664,7 @@ export async function removeLiquidityPct(
   const receipt = await tx.wait();
   return {
     txHash: receipt.hash,
-    notes: [`Tarik ${pct}% likuiditas posisi #${tokenId} + panen fee (tx ${receipt.hash})`],
+    notes: [`Withdraw ${pct}% of position #${tokenId} liquidity + harvest fees (tx ${receipt.hash})`],
   };
 }
 
@@ -631,10 +683,9 @@ export async function executeRemove(
 
   const calls: string[] = [];
   if (liquidity > 0n) {
+    const mins = await withdrawMins(positionManager, tokenId, liquidity, deadline);
     calls.push(
-      iface.encodeFunctionData('decreaseLiquidity', [
-        { tokenId, liquidity, amount0Min: 0n, amount1Min: 0n, deadline },
-      ]),
+      iface.encodeFunctionData('decreaseLiquidity', [{ tokenId, liquidity, ...mins, deadline }]),
     );
   }
   calls.push(
@@ -647,7 +698,7 @@ export async function executeRemove(
   const tx = await positionManager.multicall(calls);
   const receipt = await tx.wait();
   return {
-    notes: [`Tutup posisi #${tokenId}${liquidity === 0n ? ' (kosong → langsung burn)' : ''} (tx ${receipt.hash})`],
+    notes: [`Close position #${tokenId}${liquidity === 0n ? ' (empty → burn directly)' : ''} (tx ${receipt.hash})`],
   };
 }
 
@@ -669,7 +720,7 @@ async function poolsForBase(
   const baseC = base.wrappable ? ctx.weth : new ethers.Contract(base.address, ERC20_ABI, ctx.provider);
   // Semua fee tier diperiksa serentak (round-trip RPC diparalel + auto-batch ethers).
   const perFee = await Promise.all(
-    VALID_FEES.map(async (fee): Promise<PoolOption | null> => {
+    ctx.feeTiers.map(async (fee): Promise<PoolOption | null> => {
       const poolAddress: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
       if (!poolAddress || poolAddress === ethers.ZeroAddress) return null;
       // Dulu ikut memanggil priceInfo (= loadPool penuh) per fee tier hanya untuk

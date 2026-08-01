@@ -116,6 +116,9 @@ export function lifetimeStats(): LifetimeStats {
     if (e.resultEthWei === undefined) continue; // gone/burned → tak terukur
     if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; } // placeholder backfill lama
     if ((e.baseKind ?? 'weth') !== 'weth') { excluded++; continue; } // denominasi stablecoin
+    // baseKind 'weth' di BSC berarti BNB, bukan ETH. Menjumlahkannya ke net ETH
+    // sama salahnya dengan mencampur stablecoin — kecualikan chain non-utama.
+    if ((e.chain ?? 'robinhood') !== 'robinhood') { excluded++; continue; }
     known++;
     netEth += e.pnlEth;
     if (e.pnlEth >= 0) { wins++; grossWin += e.pnlEth; } else { losses++; grossLoss += e.pnlEth; }
