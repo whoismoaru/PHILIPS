@@ -85,6 +85,18 @@ export function baseOf(ctx: ChainCtx, kind: BaseKind): BaseAsset {
   return basesFor(ctx).find((b) => b.kind === kind) ?? basesFor(ctx)[0];
 }
 
+/**
+ * Desimal base pada sebuah chain — SATU-SATUNYA sumber kebenaran.
+ *
+ * JANGAN pernah menulis `isStableBase(k) ? 6 : 18` lagi. USDG di Robinhood memang
+ * 6, tapi USDT di BSC 18; menyamakannya menggeser setiap nominal 10^12 — jurnal
+ * dan kartu PnL sempat memperlihatkan "48.000.000.000.000 USDT" untuk 48 USDT.
+ * Terima `chain` yang mungkin undefined (entri lama) → jatuh ke chain utama.
+ */
+export function baseDecimalsOf(chain: string | undefined, kind: BaseKind | undefined): number {
+  return baseOf(getChain(chain), kind ?? 'weth').decimals;
+}
+
 /** Deteksi base dari pasangan (token0, token1) sebuah pool. null bila bukan pool base. */
 export function detectBase(ctx: ChainCtx, token0: string, token1: string): BaseAsset | null {
   const t0 = token0.toLowerCase();

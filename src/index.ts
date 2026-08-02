@@ -58,6 +58,7 @@ import {
   rebuildChains,
   detectChains,
   baseOf,
+  baseDecimalsOf,
   basesFor,
   detectBase,
   isStableBase,
@@ -491,7 +492,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       const v4 = v4Supported(ccLp) ? await listPositionsV4(ccLp).catch(() => []) : [];
       const v4Vals = v4.map((p) => {
         if (p.valueBaseWei === null || !p.base) return undefined;
-        const v = Number(ethers.formatUnits(p.valueBaseWei, p.base === 'USDG' ? 6 : 18));
+        const v = Number(ethers.formatUnits(p.valueBaseWei, baseDecimalsOf(ccLp.key, p.base === 'USDG' ? 'usdg' : 'weth')));
         return p.base === 'USDG' ? v : ethUsd !== null ? v * ethUsd : null;
       });
       const all = [...vals, ...v4Vals];
@@ -623,7 +624,7 @@ async function buildPositionCard(
   const range = `${msg.fmtPct(pcts[0])} ⇄ ${msg.fmtPct(pcts[1])}`;
   const invest = rec.imported
     ? '—'
-    : (rec.nominalEth ?? msg.cleanUnits(BigInt(rec.initialWethWei), isStableBase(rec.baseKind ?? 'weth') ? 6 : 18));
+    : (rec.nominalEth ?? msg.cleanUnits(BigInt(rec.initialWethWei), baseDecimalsOf(rec.chain, rec.baseKind)));
   const text = msg.msgPositionCard({
     tokenId: rec.tokenId,
     symbol: rec.symbol,
@@ -742,7 +743,7 @@ function finalizeClose(
 /** Kartu detail satu posisi v4 (nilai + range% + PnL bila dikelola bot) + tombol. */
 function buildV4Card(p: V4Position, ethUsdV4: number | null): { text: string; extra: Record<string, unknown> } {
   const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
-  const dec = p.base === 'USDG' ? 6 : 18;
+  const dec = baseDecimalsOf(undefined, p.base === 'USDG' ? 'usdg' : 'weth'); // v4 = chain utama
   let valueLabel = '—';
   if (p.valueBaseWei !== null && p.base === 'ETH') {
     const eth = Number(ethers.formatEther(p.valueBaseWei));
@@ -889,7 +890,7 @@ async function cmdPositions(ctx: any, edit = false) {
 
   // v4 (baca-saja + PnL bila dikelola bot).
   for (const p of v4) {
-    const dec = p.base === 'USDG' ? 6 : 18;
+    const dec = baseDecimalsOf(undefined, p.base === 'USDG' ? 'usdg' : 'weth'); // v4 = chain utama
     const tracked = v4store.getV4(p.tokenId);
     const curF = p.valueBaseWei !== null ? Number(ethers.formatUnits(p.valueBaseWei, dec)) : null;
     let investNum = curF ?? 0;
@@ -2892,7 +2893,7 @@ async function sendProfitCard(
 ): Promise<void> {
   if (!rec) return;
   const stable = isStableBase(rec.baseKind ?? 'weth');
-  const dec = stable ? 6 : 18;
+  const dec = baseDecimalsOf(rec.chain, rec.baseKind);
   const baseSym = baseSymbolOf(rec.baseKind, getChain(rec.chain));
   const baseIn = Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
   const baseOut = Number(ethers.formatUnits(baseOutWei, dec));
@@ -3033,21 +3034,46 @@ async function stopAndCashOut(
 
   let baseOutWei: bigint;
   if (base.wrappable) {
-    // ② WETH: unwrap SELURUH WETH (pokok + hasil swap) → ETH native.
-    let unwrappedWeth = 0n;
+    // ② WETH: unwrap SELURUH saldo (pokok + hasil swap) → ETH native.
     const wethBal: bigint = await wethC.balanceOf(w.address).catch(() => 0n);
+
+    // Hasil posisi = WETH yang BERTAMBAH selama close ini, diukur SEBELUM unwrap.
+    //
+    // Dua kesalahan yang dulu ada di sini, dua-duanya membuat kartu PnL bohong:
+    //  • memakai seluruh saldo dompet, bukan pertambahannya → WETH sisa operasi lain
+    //    (mis. 0,12 yang sempat nyangkut) dihitung sebagai untung posisi ini;
+    //  • menghitung dari hasil unwrap, sehingga unwrap yang GAGAL tercatat hasil 0
+    //    dan jurnal melaporkan −100% padahal dananya utuh, cuma masih berbentuk WETH.
+    // Unwrap itu urusan bentuk (WETH vs ETH), bukan urusan nilai.
+    const gainedWeth = wethBal > baseBefore ? wethBal - baseBefore : 0n;
+    if (wethBal > gainedWeth) {
+      notes.push(
+        `Note: ${msg.fmtEth(wethBal - gainedWeth)} WETH was already in the wallet before this close — ` +
+          `unwrapped too, but not counted as this position's result.`,
+      );
+    }
+
     if (wethBal > 0n) {
       try {
         const tx = await wethC.withdraw(wethBal);
         const rc = await tx.wait();
         if (rc) txHashes.push(rc.hash);
-        unwrappedWeth = wethBal;
         notes.push(`Unwrap ${msg.fmtEth(wethBal)} WETH → ETH`);
-      } catch {
-        notes.push('Unwrap failed — the WETH stays in your wallet (use /unwrap).');
+      } catch (e) {
+        // Jangan percaya pengecualian soal apa yang mendarat di chain. Pada 2 Agu 2026
+        // pesan "Unwrap failed" muncul untuk transaksi yang BERHASIL (blok 25593905,
+        // status 1) — kemungkinan wait()/RPC yang gagal, bukan transaksinya. Bacanya
+        // jadi salah dua kali: pengguna disuruh /unwrap padahal tak perlu.
+        const after: bigint = await wethC.balanceOf(w.address).catch(() => wethBal);
+        if (after < wethBal) {
+          notes.push(`Unwrap ${msg.fmtEth(wethBal - after)} WETH → ETH (confirmed by balance)`);
+        } else {
+          console.error(`[unwrap] gagal saat close #${tokenId}: ${(e as Error).message.slice(0, 160)}`);
+          notes.push('Unwrap failed — the WETH stays in your wallet (use /unwrap). Your result is unaffected.');
+        }
       }
     }
-    baseOutWei = unwrappedWeth + sw.baseOut;
+    baseOutWei = gainedWeth + sw.baseOut;
   } else {
     // ② USDG: tetap sbg stablecoin (tak di-unwrap). Total bersih = kenaikan saldo.
     const baseAfter: bigint = await baseC.balanceOf(w.address).catch(() => baseBefore);

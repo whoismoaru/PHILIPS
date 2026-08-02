@@ -1,7 +1,7 @@
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ethers } from 'ethers';
-import { isStableBase } from './chains.js';
+import { baseDecimalsOf } from './chains.js';
 
 /**
  * Jurnal riwayat trade (append-only, file khusus `data/journal.jsonl`).
@@ -48,8 +48,9 @@ export function recordClose(
   },
   opts: { resultEthWei?: bigint; reason: JournalEntry['reason'] },
 ): void {
-  // Desimal mengikuti base: USDG/USDT 6-dec. formatEther tanpa syarat = salah 10^12 (PRD §8.9).
-  const dec = isStableBase(rec.baseKind ?? 'weth') ? 6 : 18;
+  // Desimal WAJIB dari konfigurasi chain: USDG Robinhood 6, USDT BSC 18. Menulis
+  // "stable = 6" di sini pernah membuat 48 USDT tercatat sebagai 48.000.000.000.000.
+  const dec = baseDecimalsOf(rec.chain, rec.baseKind);
   const initF = Number(ethers.formatUnits(BigInt(rec.initialWethWei || '0'), dec));
   const has = opts.resultEthWei !== undefined;
   const resF = has ? Number(ethers.formatUnits(opts.resultEthWei as bigint, dec)) : 0;
