@@ -142,6 +142,20 @@ const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
 ];
 
+/**
+ * Tangga slippage Uniswap: mulai 5%, naik ke 15% bila revert (volume ramai).
+ * `max` menjepitnya: /buy & /sell mengirim 3 → tangga jadi [3] saja, tak pernah
+ * ada percobaan kedua yang lebih longgar. Tanpa parameter = perilaku lama, sengaja
+ * dipertahankan untuk close/sweep: di sana gagal berarti token nyangkut.
+ *
+ * Relay TIDAK diikutkan: default-nya sudah 1% (diverifikasi 2 Agu 2026 — kirim
+ * slippageTolerance=300 justru melonggarkannya ke 3%), jadi biarkan apa adanya.
+ */
+export function slipLadder(max?: number): number[] {
+  if (max === undefined) return [5, 15];
+  return [...new Set([Math.min(5, max), max])].filter((s) => s > 0);
+}
+
 /** Fallback: swap token → WETH langsung via Uniswap SwapRouter02 (pool ter-likuid). */
 async function swapViaUniswap(
   tokenAddress: string,
@@ -253,6 +267,7 @@ export async function swapTokenToEthRobust(
   tokenAddress: string,
   amountWei: bigint,
   ctx: ChainCtx = getChain(),
+  maxSlipPct?: number,
 ): Promise<{ txHashes: string[]; outEthWei: bigint; route: string }> {
   const errors: string[] = [];
 
@@ -265,7 +280,7 @@ export async function swapTokenToEthRobust(
   }
 
   // Jalur 2: langsung Uniswap router (exactInputSingle → swap FULL amountIn), slippage naik.
-  for (const slip of [5, 15]) {
+  for (const slip of slipLadder(maxSlipPct)) {
     try {
       const r = await swapViaUniswap(tokenAddress, amountWei, slip, ctx);
       return { ...r, route: `uniswap(slip ${slip}%)` };
@@ -280,8 +295,8 @@ export async function swapTokenToEthRobust(
   const usdgAddr = ctx.usdgAddress;
   if (usdgAddr && tokenAddress.toLowerCase() !== usdgAddr.toLowerCase()) {
     try {
-      const u = await swapTokenToUsdgRobust(tokenAddress, amountWei, usdgAddr, ctx);
-      const eth = await swapTokenToEthRobust(usdgAddr, u.outWei, ctx); // USDG→ETH (relay/uniswap)
+      const u = await swapTokenToUsdgRobust(tokenAddress, amountWei, usdgAddr, ctx, maxSlipPct);
+      const eth = await swapTokenToEthRobust(usdgAddr, u.outWei, ctx, maxSlipPct); // USDG→ETH (relay/uniswap)
       return {
         txHashes: [...u.txHashes, ...eth.txHashes],
         outEthWei: eth.outEthWei,
@@ -314,6 +329,7 @@ export async function swapTokenToUsdgRobust(
   amountWei: bigint,
   usdgAddress: string,
   ctx: ChainCtx = getChain(),
+  maxSlipPct?: number,
 ): Promise<{ txHashes: string[]; outWei: bigint; route: string }> {
   const { wallet } = ctx;
   const usdg = new ethers.Contract(
@@ -342,21 +358,26 @@ export async function swapTokenToUsdgRobust(
       bestFee = fee;
     }
   }
-  if (bestReserve < 0n) throw new Error('no USDG pool available for the token→USDG swap');
+  // TIDAK ADA pool langsung bukan alasan menyerah: Relay di bawah bisa merutekan
+  // lewat WETH dll. Dulu di sini ada `throw` — akibatnya fallback Relay TAK PERNAH
+  // tercapai dan /sell ke base stablecoin selalu gagal utk token yang cuma
+  // berpasangan dgn WETH. Lewati saja bagian pool langsung, jangan berhenti.
+  const hasDirectPool = bestReserve >= 0n;
 
   const routerAddr = ctx.routerAddress;
   const txHashes: string[] = [];
-  const allowance: bigint = await token.allowance(wallet.address, routerAddr);
-  if (allowance < amountWei) {
-    const atx = await token.approve(routerAddr, ethers.MaxUint256);
-    await atx.wait();
-    txHashes.push(atx.hash);
+  if (hasDirectPool) {
+    const allowance: bigint = await token.allowance(wallet.address, routerAddr);
+    if (allowance < amountWei) {
+      const atx = await token.approve(routerAddr, ethers.MaxUint256);
+      await atx.wait();
+      txHashes.push(atx.hash);
+    }
   }
 
   const quoter = new ethers.Contract(ctx.quoterAddress, QUOTER_ABI, wallet);
-  const router = new ethers.Contract(routerAddr, ROUTER_ABI, wallet);
-  let lastErr = '';
-  for (const slip of [5, 15]) {
+  let lastErr = hasDirectPool ? '' : 'no direct token→USDG pool';
+  for (const slip of hasDirectPool ? slipLadder(maxSlipPct) : []) {
     try {
       const q = await quoter.quoteExactInputSingle.staticCall({
         tokenIn: tokenAddress,
@@ -402,6 +423,33 @@ export async function swapTokenToUsdgRobust(
     return { txHashes: r.txHashes, outWei, route: 'relay-usdg' };
   } catch (e) {
     lastErr = `${lastErr} | relay: ${(e as Error).message.slice(0, 60)}`;
+  }
+
+  // Rute 3: 2-hop token → WETH → USDG. Cermin dari `usdg-hop` di
+  // swapTokenToEthRobust, dan bukan teori: diukur 2 Agu 2026 utk SESTRI & IF —
+  // pool token/WETH ADA (fee 1%), pool token/USDG TIDAK ADA, dan Relay pun tak
+  // punya rute (quote null). Tanpa hop ini, /sell & close berbasis stablecoin
+  // gagal total untuk mayoritas token, yang memang cuma berpasangan dgn WETH.
+  //
+  // Bila kaki-1 sukses tapi kaki-2 gagal, dompet memegang WETH (bukan token) —
+  // itu tetap kemajuan: sweep monitor bisa meng-unwrap-nya.
+  const wethLower = ctx.wethAddress.toLowerCase();
+  const tokLower = tokenAddress.toLowerCase();
+  if (tokLower !== wethLower && tokLower !== usdgAddress.toLowerCase()) {
+    try {
+      // Import dinamis: swapRoute.ts meng-import modul INI, jadi import statik
+      // akan membuat siklus modul. Dipanggil saat runtime → aman.
+      const { swapExactInBest } = await import('./swapRoute.js');
+      const leg1 = await swapExactInBest(tokenAddress, ctx.wethAddress, amountWei, ctx, maxSlipPct ?? 5, maxSlipPct);
+      const leg2 = await swapExactInBest(ctx.wethAddress, usdgAddress, leg1.outWei, ctx, maxSlipPct ?? 5, maxSlipPct);
+      return {
+        txHashes: [...txHashes, ...leg1.txHashes, ...leg2.txHashes],
+        outWei: leg2.outWei,
+        route: `weth-hop(${leg1.route}→${leg2.route})`,
+      };
+    } catch (e) {
+      lastErr = `${lastErr} | weth-hop: ${(e as Error).message.slice(0, 60)}`;
+    }
   }
 
   throw new Error(`token→USDG swap failed: ${lastErr}`);

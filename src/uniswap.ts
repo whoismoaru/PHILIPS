@@ -392,11 +392,29 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
     const tx = await ctx.weth.deposit({ value: need });
     await tx.wait();
     notes.push(`Wrap ${ethers.formatEther(need)} ${native} (tx ${tx.hash})`);
-    bal = await baseC.balanceOf(wallet.address);
+    // RPC kerap belum memperbarui saldo tepat setelah tx mendarat. Baca ulang
+    // beberapa kali SEBELUM menyimpulkan kurang: dulu pembacaan basi (0) langsung
+    // memicu wrap KEDUA sebesar amountWei PENUH — padahal ETH sudah terpakai di
+    // wrap pertama, jadi node menolak "insufficient funds" dan seluruh hasil wrap
+    // tertinggal sebagai WETH. Terjadi 2 Agu 2026: 0.12 WETH nyangkut.
+    for (let i = 0; i < 5 && bal < amountWei; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      bal = await baseC.balanceOf(wallet.address);
+    }
     if (bal < amountWei) {
-      const tx2 = await ctx.weth.deposit({ value: amountWei - bal });
+      // Yang kurang saja, dan hanya bila ETH yang tersisa memang menutupi.
+      const short = amountWei - bal;
+      const nativeNow = await provider.getBalance(wallet.address);
+      if (nativeNow < short + buffer) {
+        throw new Error(
+          `Wrap fell short by ${ethers.formatEther(short)} ${native} and the remaining ` +
+            `${ethers.formatEther(nativeNow)} ${native} cannot cover it plus gas. ` +
+            `Your wrapped ${base.symbol} is safe in the wallet — use /unwrap to convert it back.`,
+        );
+      }
+      const tx2 = await ctx.weth.deposit({ value: short });
       await tx2.wait();
-      notes.push(`Wrap extra ${ethers.formatEther(amountWei - bal)} ${native} (tx ${tx2.hash})`);
+      notes.push(`Wrap extra ${ethers.formatEther(short)} ${native} (tx ${tx2.hash})`);
       bal = await baseC.balanceOf(wallet.address);
       if (bal < amountWei) throw new Error('Wrap still short after retry — try again.');
     }
