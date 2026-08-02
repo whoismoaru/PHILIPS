@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import { getChain, type ChainCtx } from './chains.js';
 import { ERC20_ABI } from './chain.js';
-import { NATIVE, relayQuoteOut, swapTokenViaRelay } from './relay.js';
+import { NATIVE, relayQuoteOut, slipLadder, swapTokenViaRelay } from './relay.js';
 
 /**
  * Swap generik EXACT-IN `from`→`to` (ERC20→ERC20) lewat RUTE TERBAIK:
@@ -154,6 +154,7 @@ export async function swapExactInBest(
   amountInWei: bigint,
   ctx: ChainCtx = getChain(),
   slipPct = 5,
+  maxSlipPct?: number,
 ): Promise<{ outWei: bigint; route: string; txHashes: string[] }> {
   const [uni, relayOut] = await Promise.all([
     quoteUniswap(fromAddr, toAddr, amountInWei, ctx),
@@ -172,9 +173,13 @@ export async function swapExactInBest(
   };
   const tryRelay = async () => ({ ...(await relayExec(fromAddr, toAddr, amountInWei, ctx)), route: 'relay' });
 
+  // Tangga slippage Uniswap dijepit `maxSlipPct` (/buy & /sell mengirim 3): tanpa cap
+  // percobaan kedua memakai 15% — jauh di atas yang kamu setujui di kartu konfirmasi.
+  const uniSlips = maxSlipPct === undefined ? [slipPct, 15] : slipLadder(maxSlipPct);
+  const uniSteps = uniSlips.map((s) => () => tryUni(s));
   const order: Array<() => Promise<{ outWei: bigint; txHashes: string[]; route: string }>> = uniFirst
-    ? [() => tryUni(slipPct), () => tryUni(15), tryRelay]
-    : [tryRelay, () => tryUni(slipPct), () => tryUni(15)];
+    ? [...uniSteps, tryRelay]
+    : [tryRelay, ...uniSteps];
 
   for (const step of order) {
     try {

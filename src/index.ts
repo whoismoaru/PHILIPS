@@ -20,6 +20,7 @@ import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
 import { config } from './config.js';
 import { provider, ERC20_ABI } from './chain.js';
+import { retryOnce } from './retry.js';
 import * as walletStore from './walletStore.js';
 import {
   planAddSingleSided,
@@ -36,7 +37,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4, resolvePoolKeyV4, valuePositionV4, type V4Position } from './uniswapV4.js';
+import { listPositionsV4, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4, resolvePoolKeyV4, valuePositionV4, type V4Position } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
@@ -1641,7 +1642,13 @@ bot.action('addok', async (ctx) => {
       const base = baseOf(cc, selected.base); // 'weth'→ETH-native / 'usdg'→USDG
       const amountWei = ethers.parseUnits(ethAmount, base.decimals);
       const widthSpacings = rangePctToSpacings(rangePct, pk.tickSpacing);
-      const r = await openPositionV4(cc, pk, selected.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: false });
+      // Probe = jumlah NFT posisi v4 (lihat retryOnce): mint mendarat → tak diulang.
+      const r = await retryOnce(
+        'add v4',
+        () => v4PositionCount(cc),
+        () => openPositionV4(cc, pk, selected.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: false }),
+        { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+      );
       if (r.tokenId) {
         v4store.trackV4({
           tokenId: r.tokenId,
@@ -1667,6 +1674,7 @@ bot.action('addok', async (ctx) => {
         html,
       );
     } catch (err) {
+      await recoverStrayWeth(getChain(chain), 'add v4').catch(() => {});
       await ctx.reply(msg.msgError('add v4', (err as Error).message), html);
     } finally {
       store.endMoneyOp();
@@ -1696,10 +1704,22 @@ bot.action('addok', async (ctx) => {
     // memakai planAddSingleSided di sini membuat pilihan "sisi token" berubah jadi
     // setoran base saat dikonfirmasi — nominal token dibaca sbg nominal ETH.
     const args = [flow.token, flow.fee, flow.ethAmount, flow.rangePct, baseOf(ccAdd, flow.base ?? 'weth'), ccAdd] as const;
-    const plan = await (flow.strategy === 'token'
-      ? planAddTokenSide(...args)
-      : planAddSingleSided(...args));
-    const { tokenId, notes } = await executeAdd(plan, flow.token, flow.fee, ccAdd);
+    // Probe = jumlah NFT posisi. Mint yang sudah mendarat menaikkannya → JANGAN diulang
+    // (posisi dobel = modal dobel). Wrap ETH→WETH tak menaikkannya, jadi kegagalan
+    // sesudah wrap tetap boleh diulang — dan percobaan kedua memakai WETH yang sudah
+    // jadi, tanpa perlu unwrap manual dulu.
+    const { tokenId, notes, plan } = await retryOnce(
+      'add',
+      () => ccAdd.positionManager.balanceOf(ccAdd.wallet.address) as Promise<bigint>,
+      async () => {
+        // re-plan tiap percobaan: tick & harga dihitung ulang, jangan pakai yang basi.
+        const p2 = await (flow.strategy === 'token'
+          ? planAddTokenSide(...args)
+          : planAddSingleSided(...args));
+        return { ...(await executeAdd(p2, flow.token!, flow.fee!, ccAdd)), plan: p2 };
+      },
+      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+    );
     store.add({
       tokenId,
       chain: flow.chain,
@@ -1747,6 +1767,9 @@ bot.action('addok', async (ctx) => {
       }
     }
   } catch (err) {
+    // Add gagal setelah wrap menyisakan WETH — dirapikan di sini supaya tak perlu
+    // /unwrap manual sebelum mencoba /add_lp lagi.
+    await recoverStrayWeth(getChain(flow.chain), 'add').catch(() => {});
     await ctx.reply(msg.msgError('add', (err as Error).message), html);
   } finally {
     store.endMoneyOp();
@@ -2510,41 +2533,27 @@ function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
-// Auto-pilih base TERIMA terbaik (nilai USD tertinggi antar ETH/USDG/USDT) + kartu Preview.
+/**
+ * Kartu Preview jual. Hasil akhir SELALU ETH — permintaan pemilik 2 Agu 2026.
+ *
+ * Dulu di sini ada pemilihan base otomatis: ETH/USDG/USDT dibandingkan nilai USD-nya
+ * lalu yang tertinggi dipakai. Akibatnya /sell kadang mendarat di stablecoin tanpa
+ * diminta, dan PnL jadi tercampur dua denominasi. Sekarang tak ada pilihan sama sekali.
+ *
+ * Token yang likuiditasnya hanya di pool USDG tetap terlayani: swapTokenToEthRobust
+ * punya rute 2-hop token→USDG→ETH di dalamnya. Jadi "selalu ETH" tak mempersempit
+ * apa yang bisa dijual, hanya memastikan di mana berakhirnya.
+ */
 async function sellPreview(ctx: any, flow: TSwapFlow, amountWei: bigint, amtLabel: string) {
   const cc = CHAINS[flow.chainKey]!;
   const prog = await ctx.reply(msg.msgProgress('finding the best sell route…'), html);
-  const ethUsd = await getEthUsd(cc.wethAddress, cc).catch(() => null);
-  const quotes = (
-    await Promise.all(
-      basesFor(cc)
-        // Menjual USDT ke USDT itu bukan rute — dan quoter-nya akan revert.
-        .filter((base) => base.address.toLowerCase() !== flow.token!.toLowerCase())
-        .map(async (base) => {
-          const q = await previewSwapOut(flow.token!, base.address, amountWei, cc).catch(() => null);
-          return q && q.out > 0n ? { base, out: q.out } : null;
-        }),
-    )
-  ).filter((x): x is { base: BaseAsset; out: bigint } => x !== null);
-  let best: { base: BaseAsset; usd: number } | null = null;
-  if (ethUsd === null) {
-    // Tanpa kurs, membandingkan 0.004 (ETH) vs 12 (USDG) sebagai angka polos selalu
-    // memenangkan stablecoin. Default PRD §9 = ETH.
-    const pick = quotes.find((q) => q.base.wrappable) ?? quotes[0] ?? null;
-    if (pick) best = { base: pick.base, usd: 0 };
-  } else {
-    for (const q of quotes) {
-      const outNum = Number(ethers.formatUnits(q.out, q.base.decimals));
-      const usd = isStableBase(q.base.kind) ? outNum : outNum * ethUsd;
-      if (!best || usd > best.usd) best = { base: q.base, usd };
-    }
-  }
-  if (!best) {
+  const ethBase = basesFor(cc).find((b) => b.wrappable);
+  if (!ethBase) {
     tswapFlows.delete(ctx.from!.id);
-    return editProgress(ctx, prog, msg.msgError('sell', 'No sell route (thin liquidity) for this token.'));
+    return editProgress(ctx, prog, msg.msgError('sell', `${cc.label} has no native base to sell into.`));
   }
-  flow.base = best.base;
-  await tswapQuoteConfirm(ctx, flow, cc, flow.token!, best.base.address, amountWei, amtLabel, { message_id: prog.message_id });
+  flow.base = ethBase;
+  await tswapQuoteConfirm(ctx, flow, cc, flow.token!, ethBase.address, amountWei, amtLabel, { message_id: prog.message_id });
 }
 
 async function cmdSell(ctx: any) {
@@ -2716,7 +2725,24 @@ async function tswapQuoteConfirm(
  * yang sudah habis — nyangkut sampai dompet diisi ulang. Lebih baik ditolak di sini.
  */
 /** Umur maksimum angka di kartu Preview /buy & /sell (sama dgn /bridge). */
+/**
+ * Unwrap WETH nyasar → native. Dipanggil setelah add/close gagal separuh jalan, supaya
+ * tak perlu /unwrap manual atau menunggu sweep monitor (siklus 30 menit).
+ * Aman diulang: saldo 0 → tak ada transaksi sama sekali.
+ */
+async function recoverStrayWeth(cc: ChainCtx, why: string): Promise<void> {
+  if (config.safety.dryRun || !cc.hasWethBase) return;
+  const bal: bigint = await cc.weth.balanceOf(cc.wallet.address);
+  if (bal === 0n) return;
+  const tx = await cc.weth.withdraw(bal);
+  await tx.wait();
+  console.log(`[recover:${why}] unwrap ${ethers.formatEther(bal)} → ${cc.nativeSymbol} (${cc.key}) tx ${tx.hash}`);
+}
+
 const TSWAP_QUOTE_TTL_MS = 120_000;
+/** Slippage maksimum untuk /buy & /sell — TAK PERNAH dilampaui, tak ada eskalasi.
+ *  Jalur close/sweep sengaja TIDAK memakai ini: di sana gagal = token nyangkut. */
+const MAX_SLIP_PCT = 3;
 
 async function wrapWithGasReserve(cc: ChainCtx, wrapWei: bigint): Promise<void> {
   const [nativeBal, buffer] = await Promise.all([
@@ -2781,32 +2807,35 @@ bot.action('tswapok', async (ctx) => {
         );
       }
     }
-    let outLabel: string;
-    let route: string;
-    if (buy) {
-      // base → token. Base ETH: wrap seperlunya dulu (Uniswap butuh WETH).
-      if (base!.wrappable) {
-        const have: bigint = await cc.weth.balanceOf(cc.wallet.address);
-        if (have < amountWei) await wrapWithGasReserve(cc, amountWei - have);
+    const attempt = async (): Promise<{ outLabel: string; route: string }> => {
+      if (buy) {
+        // base → token. Base ETH: wrap seperlunya dulu (Uniswap butuh WETH).
+        if (base!.wrappable) {
+          const have: bigint = await cc.weth.balanceOf(cc.wallet.address);
+          if (have < amountWei) await wrapWithGasReserve(cc, amountWei - have);
+        }
+        const r = await swapExactInBest(base!.address, token!, amountWei, cc, MAX_SLIP_PCT, MAX_SLIP_PCT);
+        return {
+          outLabel: `${Number(ethers.formatUnits(r.outWei, tokenDec!)).toLocaleString('en-US', { maximumFractionDigits: 6 })} ${tokenSym}`,
+          route: r.route,
+        };
       }
-      const r = await swapExactInBest(base!.address, token!, amountWei, cc, 5);
-      outLabel = `${Number(ethers.formatUnits(r.outWei, tokenDec!)).toLocaleString('en-US', { maximumFractionDigits: 6 })} ${tokenSym}`;
-      route = r.route;
-    } else if (base!.wrappable) {
-      const r = await swapTokenToEthRobust(token!, amountWei, cc);
-      outLabel = `${Number(ethers.formatEther(r.outEthWei)).toFixed(6)} ${cc.nativeSymbol}`;
-      route = r.route;
-    } else {
-      // Menjual NATIVE: yang dipegang ETH/BNB, sedangkan router butuh wrapped.
-      // Wrap seperlunya dulu — tanpa ini swap revert "STF" walau saldo cukup.
-      if (token!.toLowerCase() === cc.wethAddress.toLowerCase()) {
-        const have: bigint = await cc.weth.balanceOf(cc.wallet.address);
-        if (have < amountWei) await wrapWithGasReserve(cc, amountWei - have);
-      }
-      const r = await swapTokenToUsdgRobust(token!, amountWei, base!.address, cc);
-      outLabel = `${Number(ethers.formatUnits(r.outWei, base!.decimals)).toFixed(2)} ${base!.symbol}`;
-      route = r.route;
-    }
+      // JUAL selalu berakhir di native ETH (permintaan pemilik 2 Agu 2026). Tak ada
+      // lagi cabang ke stablecoin: sellPreview mengunci base ke wrapped-native, dan
+      // token yang cuma punya pool USDG tetap terlayani lewat rute 2-hop di dalam
+      // swapTokenToEthRobust (token→USDG→ETH).
+      const r = await swapTokenToEthRobust(token!, amountWei, cc, MAX_SLIP_PCT);
+      return { outLabel: `${Number(ethers.formatEther(r.outEthWei)).toFixed(6)} ${cc.nativeSymbol}`, route: r.route };
+    };
+
+    // Probe = saldo aset masukan. Berkurang → swap sudah (sebagian) jalan → jangan ulang.
+    const inC = new ethers.Contract(buy ? base!.address : token!, ERC20_ABI, cc.provider);
+    const { outLabel, route } = await retryOnce(
+      'swap',
+      () => inC.balanceOf(cc.wallet.address) as Promise<bigint>,
+      attempt,
+      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+    );
     await ctx.editMessageText(
       msg.msgTSwapDone({ buy, tokenSym: tokenSym!, amountInLabel: amountInLabel!, outLabel, route, dryRun: false }),
       html,
@@ -2916,7 +2945,15 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       ? baseSymbolOf(closingRec?.baseKind, ccClose)
       : ccClose.nativeSymbol;
     await ctx.editMessageText(msg.msgClosing(baseSym), html);
-    const summary = await stopAndCashOut(tokenId, getChain(closingRec?.chain));
+    // Probe = likuiditas posisi. Sudah berkurang → decreaseLiquidity/burn mendarat,
+    // mengulang dari awal hanya akan revert (dan bisa menjual dua kali). Posisi sudah
+    // hangus → pm.positions melempar → probe -1n → juga tak diulang.
+    const summary = await retryOnce(
+      'close',
+      async () => BigInt((await ccClose.positionManager.positions(tokenId)).liquidity),
+      () => stopAndCashOut(tokenId, ccClose),
+      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+    );
     // resultEthWei = 0 adalah PLACEHOLDER backfill di jurnal (dikecualikan dari PnL).
     // Hasil yang benar-benar tak terukur harus undefined, bukan 0.
     finalizeClose(tokenId, {
@@ -2939,6 +2976,10 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       finalizeClose(tokenId, { reason: 'gone' });
       await ctx.reply(msg.msgAlreadyClosed(tokenId), html);
     } else {
+      // Close gagal separuh jalan biasanya menyisakan WETH hasil remove. Dulu itu
+      // berarti /unwrap manual (atau menunggu sweep monitor sampai 30 menit). Rapikan
+      // di sini juga: withdraw() aman & idempoten — tak ada WETH, tak ada tx.
+      await recoverStrayWeth(getChain(closingRec?.chain), 'close').catch(() => {});
       await ctx.reply(msg.msgError('close', (err as Error).message), html);
     }
   } finally {
@@ -3073,7 +3114,13 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   try {
     await ctx.answerCbQuery('Processing…');
     await ctx.editMessageText(msg.msgProgress('closing v4 position…'), html).catch(() => {});
-    const r = await closePositionV4(tokenId, cc, { dryRun: config.safety.dryRun });
+    // Probe = likuiditas posisi v4: sudah turun → sebagian close mendarat, jangan ulang.
+    const r = await retryOnce(
+      'close v4',
+      () => v4Liquidity(cc, tokenId),
+      () => closePositionV4(tokenId, cc, { dryRun: config.safety.dryRun }),
+      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+    );
     if (!r.dryRun) {
       // Jurnalkan sebelum berhenti melacak — tanpa ini /history & /pnl buta pada v4,
       // dan sisa token v4 tak pernah jadi kandidat sweep (ca hanya ada di jurnal).
@@ -3120,6 +3167,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
       );
     }
   } catch (e) {
+    await recoverStrayWeth(cc, 'close v4').catch(() => {});
     await ctx.reply(msg.msgError('close v4', (e as Error).message), html);
   } finally {
     closingInFlight.delete(key);

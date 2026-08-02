@@ -30,6 +30,26 @@ const V4_PM: Record<string, string> = {
 
 const DYNAMIC_FEE_FLAG = 0x800000; // v4: fee bertanda dynamic
 
+/**
+ * Probe untuk retry otomatis: apakah sebuah operasi SUDAH mendarat di chain?
+ * -1n = tak bisa dipastikan (v4 tak didukung / RPC gagal) → pemanggil WAJIB
+ * memperlakukannya sebagai "mungkin sudah mendarat" dan tidak mengulang.
+ */
+export async function v4PositionCount(cc: ChainCtx): Promise<bigint> {
+  const addr = V4_PM[cc.key];
+  if (!addr) return -1n;
+  const c = new ethers.Contract(addr, ['function balanceOf(address) view returns (uint256)'], cc.provider);
+  return (await c.balanceOf(cc.wallet.address)) as bigint;
+}
+
+/** Likuiditas posisi v4. Berubah = decreaseLiquidity sudah mendarat. */
+export async function v4Liquidity(cc: ChainCtx, tokenId: string): Promise<bigint> {
+  const addr = V4_PM[cc.key];
+  if (!addr) return -1n;
+  const c = new ethers.Contract(addr, V4_ABI, cc.provider);
+  return BigInt(await c.getPositionLiquidity(tokenId));
+}
+
 const V4_ABI = [
   'function getPoolAndPositionInfo(uint256) view returns (tuple(address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) poolKey, uint256 info)',
   'function getPositionLiquidity(uint256) view returns (uint128)',
