@@ -859,6 +859,10 @@ export function msgError(where: string, err: string): string {
   // Revert ethers = blok multi-baris (reason/code/transaction) yang menutupi baris
   // "lakukan ini". Ambil baris pertama saja; detail lengkap tetap ada di log service.
   const first = String(err).split('\n')[0].trim().slice(0, 200) || 'unknown error';
+  // Kartu berjanji "details are in the service log" — dan janji itu dulu BOHONG:
+  // 156 dari 177 catch tak menulis apa pun, jadi bagian yang dipotong hilang total
+  // dan error tak bisa diaudit sesudahnya. Satu baris di sini menutup ke-42 pemanggil.
+  console.error(`[error:${where}] ${String(err).replace(/\s+/g, ' ').slice(0, 500)}`);
   return [
     hdr('❌ TRANSACTION ERROR'),
     '',
