@@ -162,7 +162,8 @@ export function startMonitor(bot: Telegraf) {
 
 async function tick(bot: Telegraf) {
   // Sweep hanya saat tak ada tx uang berjalan (nonce & WETH perantara).
-  if (!store.isBusy()) await sweepLeftovers(bot).catch(() => {});
+  if (!store.isBusy())
+    await sweepLeftovers(bot).catch((e) => console.log('[sweep] gagal:', (e as Error).message.slice(0, 120)));
   for (const rec of store.active()) {
     try {
       const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
@@ -292,8 +293,8 @@ async function tick(bot: Telegraf) {
       if (st.inRange !== null && v4store.setV4InRange(rec.tokenId, st.inRange)) {
         await bot.telegram.sendMessage(config.telegram.allowedUserId, msgV4Range(rec.tokenId, st.inRange), html);
       }
-    } catch {
-      /* lewati ronde ini */
+    } catch (e) {
+      console.log(`[monitor:v4] #${rec.tokenId} dilewati ronde ini:`, (e as Error).message.slice(0, 120));
     }
   }
 }

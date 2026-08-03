@@ -185,7 +185,12 @@ export async function swapExactInBest(
     try {
       return await step();
     } catch (e) {
-      errors.push((e as Error).message.slice(0, 70));
+      const why = (e as Error).message.slice(0, 70);
+      // Rute yang gagal lalu ditambal rute berikutnya tetap harus terlihat — kalau
+      // hanya dilaporkan saat SEMUA gagal, kegagalan berulang yang "tertolong"
+      // fallback tak pernah muncul di journal sampai jadi kegagalan total.
+      console.log(`[swap] rute gagal, coba berikutnya: ${why}`);
+      errors.push(why);
     }
   }
   throw new Error('All swap routes failed:\n' + errors.join('\n'));

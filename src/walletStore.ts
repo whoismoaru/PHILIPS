@@ -74,10 +74,29 @@ export function address(): string | null {
   return load()?.address ?? null;
 }
 
+/**
+ * Antrean kirim-tx global. Dua tx yang berangkat bersamaan membaca nonce
+ * "pending" yang sama dan yang kedua mati `nonce has already been used`.
+ * Guard beginMoneyOp/isBusy hanya menjaga monitor; jalur fallback swap, relay,
+ * approve, dan unwrap tidak lewat sana. Antreannya di modul (bukan instance)
+ * karena tiap chain membuat Wallet-nya sendiri dari kunci yang sama.
+ * ponytail: satu antrean lintas chain — pisahkan per chainId kalau throughput
+ * multi-chain jadi masalah.
+ */
+let txQueue: Promise<unknown> = Promise.resolve();
+
 /** Signer untuk sebuah provider; null bila belum terhubung. */
 export function signerFor(provider: ethers.Provider): ethers.Wallet | null {
   const w = load();
-  return w ? new ethers.Wallet(w.privateKey, provider) : null;
+  if (!w) return null;
+  const s = new ethers.Wallet(w.privateKey, provider);
+  const send = s.sendTransaction.bind(s);
+  s.sendTransaction = (tx) => {
+    const run = txQueue.then(() => send(tx));
+    txQueue = run.catch(() => {}); // rute yang gagal tak boleh memutus antrean
+    return run;
+  };
+  return s;
 }
 
 /**

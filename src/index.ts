@@ -1748,6 +1748,7 @@ bot.action('addok', async (ctx) => {
       status: 'ACTIVE',
       lastInRange: false,
     });
+    console.log(`[open] #${tokenId}:`, notes.join(' | ')); // pasangan [cashout] — tanpa ini buka posisi tak berjejak
     // Ringkas OPENED di bubble yang sama, lalu kartu posisi live.
     // priceLower/Upper mengikuti urutan TICK; dalam satuan harga bisa terbalik,
     // dan rentang yang tercetak mundur membuat kartu ini tampak salah hitung.
@@ -1770,6 +1771,7 @@ bot.action('addok', async (ctx) => {
   } catch (err) {
     // Add gagal setelah wrap menyisakan WETH — dirapikan di sini supaya tak perlu
     // /unwrap manual sebelum mencoba /add_lp lagi.
+    console.error('[open] gagal:', (err as Error).message.slice(0, 200));
     await recoverStrayWeth(getChain(flow.chain), 'add').catch(() => {});
     await ctx.reply(msg.msgError('add', (err as Error).message), html);
   } finally {
