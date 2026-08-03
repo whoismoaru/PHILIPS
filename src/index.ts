@@ -238,6 +238,7 @@ const RANGE_OPTIONS = [
   { pct: 30, label: 'Moderate' },
   { pct: 50, label: 'Aggressive' },
   { pct: 70, label: 'Very Aggressive' },
+  { pct: 90, label: 'Extreme' },
 ];
 
 
