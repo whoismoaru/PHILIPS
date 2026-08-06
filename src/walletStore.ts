@@ -84,6 +84,14 @@ export function address(): string | null {
  * multi-chain jadi masalah.
  */
 let txQueue: Promise<unknown> = Promise.resolve();
+// Lantai nonce lokal per-chainId. Mengurutkan pengiriman saja tak cukup: nonce
+// bisa dibaca lebih awal (sebelum tx op sebelumnya mendarat) lalu baru mengantre,
+// jadi RPC memberi "pending" basi dan tx mati `nonce has already been used`.
+// Karena itu nonce dihitung DI DALAM bagian terserialisasi = max(pending, lantai).
+// Lantai hanya maju setelah broadcast sukses → gagal tak meninggalkan lubang.
+// ponytail: kalau sebuah broadcast sukses tapi tx-nya lenyap dari mempool (langka
+// di Alchemy), lantai bisa nyangkut di atas chain; pakai `pkill`+restart untuk reset.
+const nonceFloor = new Map<number, number>();
 
 /** Signer untuk sebuah provider; null bila belum terhubung. */
 export function signerFor(provider: ethers.Provider): ethers.Wallet | null {
@@ -92,7 +100,14 @@ export function signerFor(provider: ethers.Provider): ethers.Wallet | null {
   const s = new ethers.Wallet(w.privateKey, provider);
   const send = s.sendTransaction.bind(s);
   s.sendTransaction = (tx) => {
-    const run = txQueue.then(() => send(tx));
+    const run = txQueue.then(async () => {
+      const cid = Number((await provider.getNetwork()).chainId);
+      const pending = await provider.getTransactionCount(s.address, 'pending');
+      const nonce = Math.max(pending, nonceFloor.get(cid) ?? 0);
+      const resp = await send({ ...tx, nonce });
+      nonceFloor.set(cid, nonce + 1);
+      return resp;
+    });
     txQueue = run.catch(() => {}); // rute yang gagal tak boleh memutus antrean
     return run;
   };
