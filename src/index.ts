@@ -811,6 +811,10 @@ type PosRow = {
 // /positions — SATU pesan konsolidasi: ringkasan + pohon per-posisi (v3 + v4).
 async function cmdPositions(ctx: any, edit = false) {
   const cc = getChain();
+  // Tarik posisi on-chain yang belum tercatat (mis. dibuka setelah /start terakhir)
+  // supaya /positions tak melewatkannya. Fungsi ini fail-safe: gagal baca = store
+  // tak disentuh. Sebelumnya sync hanya di /start → posisi baru tak pernah muncul.
+  await syncOnChainPositions(cc).catch(() => {});
   const active = store.active();
   const v4 = v4Supported(cc) ? await listPositionsV4(cc).catch(() => []) : [];
   if (active.length === 0 && v4.length === 0) {
