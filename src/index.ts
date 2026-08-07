@@ -3522,6 +3522,37 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
 launchWithRetry();
 startMonitor(bot); // auto-monitor posisi aktif
 
+// --- Watchdog liveness: telegraf long-poll bisa NGADAT diam-diam (getUpdates
+// wedged / DC bot 502) — proses tetap "hidup", tapi bot bisu berjam-jam: tak ada
+// alert anjlok/IL, tak ada respons command. systemd tak me-restart karena tak crash.
+// Probe getMe() berkala; gagal beruntun = poll mati → exit(1), biar systemd restart
+// (memulai long-poll baru — obat yang sama yang memulihkan insiden 7 jam). getMe
+// lewat DC yang sama dgn getUpdates, jadi ikut gagal saat poll ngadat.
+function startWatchdog() {
+  const EVERY_MS = 3 * 60_000;
+  const TIMEOUT_MS = 10_000;
+  const MAX_FAILS = 4; // ~12 menit tak terjangkau → restart
+  let fails = 0;
+  setInterval(async () => {
+    try {
+      await Promise.race([
+        bot.telegram.getMe(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('getMe timeout')), TIMEOUT_MS)),
+      ]);
+      fails = 0;
+    } catch (e) {
+      fails++;
+      console.error(`[watchdog] getMe gagal ${fails}/${MAX_FAILS}: ${(e as Error).message.slice(0, 80)}`);
+      if (fails >= MAX_FAILS) {
+        console.error('[watchdog] Telegram tak terjangkau — restart via systemd.');
+        await notifyCrash('watchdog', 'long-poll ngadat — restart otomatis').catch(() => {});
+        setTimeout(() => process.exit(1), 2000).unref();
+      }
+    }
+  }, EVERY_MS).unref();
+}
+startWatchdog();
+
 // --- Auto-recovery: error tak tertangani → log + notif + restart via systemd ---
 async function notifyCrash(kind: string, err: unknown) {
   try {
