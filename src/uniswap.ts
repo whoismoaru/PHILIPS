@@ -629,25 +629,58 @@ export async function collectFeesOnly(
  */
 const WITHDRAW_SLIPPAGE_BPS = 50n; // 0.5%
 
+/** Ekspektasi jumlah token0/token1 dari burn `liquidity`, dihitung dari HARGA POOL
+ *  saat ini via SDK (tanpa simulasi decreaseLiquidity). Dipakai sebagai lantai
+ *  slippage cadangan bila staticCall PM tak tersedia. */
+async function expectedBurnAmounts(
+  tokenId: string,
+  liquidity: bigint,
+  ctx: ChainCtx,
+): Promise<{ amount0: bigint; amount1: bigint }> {
+  const p = await ctx.positionManager.positions(tokenId);
+  const fee = Number(p.fee);
+  const [m0, m1] = await Promise.all([getTokenMeta(p.token0, ctx), getTokenMeta(p.token1, ctx)]);
+  const poolAddr: string = await ctx.factory.getPool(p.token0, p.token1, fee);
+  const pool = new ethers.Contract(
+    poolAddr,
+    ['function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint8,bool)', 'function liquidity() view returns (uint128)'],
+    ctx.provider,
+  );
+  const [slot0, liq] = await Promise.all([pool.slot0(), pool.liquidity()]);
+  const t0 = new Token(ctx.chainId, ethers.getAddress(p.token0), m0.decimals, m0.symbol);
+  const t1 = new Token(ctx.chainId, ethers.getAddress(p.token1), m1.decimals, m1.symbol);
+  const sdkPool = new Pool(t0, t1, fee as FeeAmount, slot0[0].toString(), liq.toString(), Number(slot0[1]));
+  const pos = new Position({ pool: sdkPool, liquidity: liquidity.toString(), tickLower: Number(p.tickLower), tickUpper: Number(p.tickUpper) });
+  return { amount0: BigInt(pos.amount0.quotient.toString()), amount1: BigInt(pos.amount1.quotient.toString()) };
+}
+
 async function withdrawMins(
   positionManager: ethers.Contract,
   tokenId: string,
   liquidity: bigint,
   deadline: number,
+  ctx: ChainCtx,
 ): Promise<{ amount0Min: bigint; amount1Min: bigint }> {
+  const floor = (v: bigint) => (BigInt(v) * (10000n - WITHDRAW_SLIPPAGE_BPS)) / 10000n;
+  // Retry: kegagalan staticCall paling lazim TRANSIEN (RPC rewel sesaat) — bukan
+  // alasan menutup tanpa proteksi. Coba 3x sebelum menyerah ke jalur cadangan.
+  for (let i = 0; i < 3; i++) {
+    try {
+      const [a0, a1] = await positionManager.decreaseLiquidity.staticCall({ tokenId, liquidity, amount0Min: 0n, amount1Min: 0n, deadline });
+      return { amount0Min: floor(a0), amount1Min: floor(a1) };
+    } catch {
+      if (i < 2) await new Promise((r) => setTimeout(r, 800));
+    }
+  }
+  // Cadangan: hitung lantai dari harga pool + SDK. Proteksi sandwich TETAP ADA
+  // walau PM tak bisa disimulasikan — dulu di sini langsung {0,0} (bocor senyap).
   try {
-    const [a0, a1] = await positionManager.decreaseLiquidity.staticCall({
-      tokenId,
-      liquidity,
-      amount0Min: 0n,
-      amount1Min: 0n,
-      deadline,
-    });
-    const floor = (v: bigint) => (BigInt(v) * (10000n - WITHDRAW_SLIPPAGE_BPS)) / 10000n;
-    return { amount0Min: floor(a0), amount1Min: floor(a1) };
+    const exp = await expectedBurnAmounts(tokenId, liquidity, ctx);
+    console.log(`[withdraw] staticCall gagal, pakai lantai dari harga pool (#${tokenId})`);
+    return { amount0Min: floor(exp.amount0), amount1Min: floor(exp.amount1) };
   } catch {
-    // Simulasi gagal (RPC rewel / PM tak mendukung staticCall di chain ini):
-    // jangan blokir penarikan — user bisa kehilangan akses ke dananya sendiri.
+    // Benar-benar tak bisa hitung → jangan blokir penarikan (dana user > risiko MEV).
+    console.log(`[withdraw] ⚠️ lantai slippage TAK tersedia (#${tokenId}) — tarik tanpa proteksi harga`);
     return { amount0Min: 0n, amount1Min: 0n };
   }
 }
@@ -669,7 +702,7 @@ export async function removeLiquidityPct(
 
   const iface = positionManager.interface;
   const deadline = Math.floor(Date.now() / 1000) + 600;
-  const mins = await withdrawMins(positionManager, tokenId, part, deadline);
+  const mins = await withdrawMins(positionManager, tokenId, part, deadline, ctx);
   const calls = [
     iface.encodeFunctionData('decreaseLiquidity', [
       { tokenId, liquidity: part, ...mins, deadline },
@@ -701,7 +734,7 @@ export async function executeRemove(
 
   const calls: string[] = [];
   if (liquidity > 0n) {
-    const mins = await withdrawMins(positionManager, tokenId, liquidity, deadline);
+    const mins = await withdrawMins(positionManager, tokenId, liquidity, deadline, ctx);
     calls.push(
       iface.encodeFunctionData('decreaseLiquidity', [{ tokenId, liquidity, ...mins, deadline }]),
     );
