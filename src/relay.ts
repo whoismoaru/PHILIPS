@@ -44,10 +44,17 @@ export async function swapTokenViaRelay(
     for (const item of step.items ?? []) {
       const d = item?.data;
       if (!d?.to) continue;
+      // Jual token same-chain = ERC20 masuk, TAK ADA native. Step ber-value>0 itu
+      // anomali (calldata relay tak terduga bisa kuras BNB/ETH) → tolak. Pemanggil
+      // punya fallback Uniswap, jadi menolak di sini aman, bukan menggagalkan total.
+      const value = d.value ? BigInt(d.value) : 0n;
+      if (value > 0n) {
+        throw new Error(`relay step unexpectedly requires ${value} native on a token sell — aborted for safety`);
+      }
       const tx = await wallet.sendTransaction({
         to: d.to,
         data: d.data,
-        value: d.value ? BigInt(d.value) : 0n,
+        value,
       });
       const rc = await tx.wait();
       if (rc) txHashes.push(rc.hash);
