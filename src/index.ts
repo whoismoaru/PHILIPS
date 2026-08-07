@@ -113,12 +113,15 @@ async function sweepTokenToBase(
   base: BaseAsset,
   cc: ChainCtx,
   notes: string[],
-): Promise<{ baseOut: bigint; txHashes: string[]; leftover: boolean }> {
+  keepFloor: bigint = 0n, // saldo token yang SUDAH ada sebelum close (bag spot) — JANGAN dijual
+): Promise<{ baseOut: bigint; txHashes: string[]; leftover: boolean; leftoverWei: bigint }> {
   let baseOut = 0n;
   const txHashes: string[] = [];
   let prev = -1n;
   for (let attempt = 1; attempt <= MAX_CLOSE_SWEEP; attempt++) {
-    const bal: bigint = await otherC.balanceOf(cc.wallet.address);
+    const total: bigint = await otherC.balanceOf(cc.wallet.address);
+    // Jual HANYA yang dihasilkan posisi ini (di atas bag yang sudah dipegang).
+    const bal = total > keepFloor ? total - keepFloor : 0n;
     if (bal === 0n) break;
     if (bal === prev) {
       notes.push(`${bal} token units left and not decreasing — swap stopped (needs a manual sweep).`);
@@ -144,8 +147,9 @@ async function sweepTokenToBase(
     }
     await sleep(1500); // beri waktu saldo settle di RPC sebelum verifikasi ulang
   }
-  const finalBal: bigint = await otherC.balanceOf(cc.wallet.address);
-  return { baseOut, txHashes, leftover: finalBal > 0n };
+  const finalTotal: bigint = await otherC.balanceOf(cc.wallet.address);
+  const leftoverWei = finalTotal > keepFloor ? finalTotal - keepFloor : 0n;
+  return { baseOut, txHashes, leftover: leftoverWei > 0n, leftoverWei };
 }
 
 /** Hitung biaya jaringan (est) + kebutuhan untuk buka LP, base-aware.
@@ -720,7 +724,7 @@ async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolea
  */
 function finalizeClose(
   tokenId: string,
-  opts: { resultEthWei?: bigint; reason: journal.JournalEntry['reason']; keep?: boolean },
+  opts: { resultEthWei?: bigint; reason: journal.JournalEntry['reason']; keep?: boolean; leftoverWei?: bigint },
 ) {
   // Posisi yang sedang ditutup jalur manual: hanya jalur itu ('cashed') yang boleh
   // menjurnalkan — dia yang memegang angka hasil. Render/sync yang kebetulan
@@ -735,6 +739,7 @@ function finalizeClose(
       status: 'STOPPED',
       stoppedAt: Date.now(),
       ...(opts.resultEthWei !== undefined ? { resultEthWei: opts.resultEthWei.toString() } : {}),
+      ...(opts.leftoverWei !== undefined ? { leftoverWei: opts.leftoverWei.toString() } : {}),
     });
   } else {
     store.remove(tokenId);
@@ -2968,6 +2973,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       ...(summary.baseOutWei > 0n ? { resultEthWei: summary.baseOutWei } : {}),
       reason: 'cashed',
       keep: summary.leftover,
+      leftoverWei: summary.leftoverWei,
     });
     await ctx.reply(summary.text, {
       ...html,
@@ -3000,7 +3006,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
 async function stopAndCashOut(
   tokenId: string,
   cc: ChainCtx = getChain(),
-): Promise<{ text: string; baseOutWei: bigint; leftover: boolean }> {
+): Promise<{ text: string; baseOutWei: bigint; leftover: boolean; leftoverWei: bigint }> {
   const { positionManager: pm, weth: wethC, wallet: w } = cc;
   const p = await pm.positions(tokenId);
   // Pool tanpa base yang kita kenal (mis. TOKENA/TOKENB hasil impor): tak ada rute
@@ -3017,23 +3023,27 @@ async function stopAndCashOut(
   const otherC = new ethers.Contract(otherAddr, ERC20_ABI, w);
   const baseC = base.wrappable ? wethC : new ethers.Contract(base.address, ERC20_ABI, w);
   const baseBefore: bigint = await baseC.balanceOf(w.address);
+  // Saldo token SEBELUM burn = bag spot yang mungkin kamu pegang terpisah. Cash-out
+  // hanya boleh menjual yang dihasilkan POSISI ini (delta di atas ini), bukan bag-mu.
+  const otherBefore: bigint = await otherC.balanceOf(w.address).catch(() => 0n);
 
   const notes: string[] = [];
   notes.push(...(await executeRemove(tokenId, cc)).notes);
   await sleep(1500); // beri waktu collect settle sebelum baca saldo
 
   const txHashes: string[] = [];
-  // ① Swap SELURUH saldo token sisi non-base → base, ulang sampai habis (bukan
+  // ① Swap token hasil posisi (di atas bag lama) → base, ulang sampai habis (bukan
   //    sekali/delta). Menutup celah: token sisa dari close lama, RPC telat, no-op.
   // NFT sudah di-burn di atas: mulai sini TAK BOLEH melempar, kalau tidak user
   // hanya melihat ERROR mentah & tak tahu posisinya sudah ditarik (PnL pun hilang).
-  let sw: { baseOut: bigint; txHashes: string[]; leftover: boolean } = {
+  let sw: { baseOut: bigint; txHashes: string[]; leftover: boolean; leftoverWei: bigint } = {
     baseOut: 0n,
     txHashes: [],
     leftover: true, // default konservatif: anggap masih ada sisa → monitor retry
+    leftoverWei: 0n,
   };
   try {
-    sw = await sweepTokenToBase(otherAddr, otherC, base, cc, notes);
+    sw = await sweepTokenToBase(otherAddr, otherC, base, cc, notes, otherBefore);
   } catch (e) {
     notes.push(`Cash-out failed: ${(e as Error).message.slice(0, 120)} — token held, the monitor will retry.`);
   }
@@ -3098,7 +3108,7 @@ async function stopAndCashOut(
   console.log(`[cashout] #${tokenId}:`, notes.join(' | ')); // rekam ke journal
   const text = msg.msgCashOut({ tokenId, notes, ethOut, txHashes });
   // leftover = token benar-benar masih tersisa di wallet setelah semua percobaan.
-  return { text, baseOutWei, leftover: sw.leftover };
+  return { text, baseOutWei, leftover: sw.leftover, leftoverWei: sw.leftoverWei };
 }
 
 // ── Tutup posisi Uniswap v4 (baca-saja untuk lihat; close didukung) ──

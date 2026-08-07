@@ -37,6 +37,7 @@ export type PosRecord = {
   stoppedAt?: number;
   resultEthWei?: string; // ETH diterima saat stop (untuk PnL final)
   imported?: boolean; // ditemukan on-chain (bukan dibuka via bot) → entry tak diketahui
+  leftoverWei?: string; // sisa token dari posisi ini yang belum ke-cash-out (batas jual auto-sweep — lindungi bag spot)
   side?: 'base' | 'token'; // sisi setoran saat buka; kosong = base (posisi lama)
   nominalToken?: string; // nominal token yang disetor (sisi token)
 };

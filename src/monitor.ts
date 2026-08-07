@@ -60,11 +60,11 @@ async function sweepLeftovers(bot: Telegraf) {
     ...store
       .all()
       .filter((r) => r.status === 'STOPPED')
-      .map((r) => ({ ca: r.ca, chain: r.chain, symbol: r.symbol })),
+      .map((r) => ({ ca: r.ca, chain: r.chain, symbol: r.symbol, cap: r.leftoverWei ? BigInt(r.leftoverWei) : undefined })),
     ...journal
       .read(80)
       .filter((e) => e.ca && Date.now() - e.closedAt < SWEEP_RECENT_MS)
-      .map((e) => ({ ca: e.ca as string, chain: e.chain, symbol: e.symbol })),
+      .map((e) => ({ ca: e.ca as string, chain: e.chain, symbol: e.symbol, cap: undefined as bigint | undefined })),
   ];
   for (const r of candidates) {
     if (!r.ca) continue;
@@ -77,10 +77,14 @@ async function sweepLeftovers(bot: Telegraf) {
       const t = new ethers.Contract(r.ca, ERC20_ABI, cc.wallet);
       const bal: bigint = await t.balanceOf(cc.wallet.address);
       if (bal === 0n) continue;
+      // Jual maksimal SISA posisi ini — jangan dump bag spot token yang sama yang
+      // kebetulan kamu pegang terpisah. Tanpa cap (record lama) → seluruh saldo.
+      const amt = r.cap !== undefined && r.cap < bal ? r.cap : bal;
+      if (amt === 0n) continue;
       nextSweep.set(key, Date.now() + SWEEP_COOLDOWN_MS);
       saveSweep();
       if (config.safety.dryRun) continue;
-      const res = await swapTokenToEthRobust(r.ca, bal, cc);
+      const res = await swapTokenToEthRobust(r.ca, amt, cc);
       // Sisa sudah pulih → record STOPPED tak perlu dipertahankan (kalau tidak ia
       // menumpuk selamanya & tetap jadi kandidat sweep tiap ronde).
       const st = store
