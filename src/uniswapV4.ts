@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import v3sdk from '@uniswap/v3-sdk';
 import type { ChainCtx } from './chains.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
+import { allV4 } from './v4store.js';
 
 const { TickMath, nearestUsableTick } = v3sdk;
 const Q96 = 2n ** 96n;
@@ -101,22 +102,34 @@ async function tokenSymbol(addr: string, cc: ChainCtx): Promise<string> {
 /** tokenId NFT v4 yang dipegang wallet (via Blockscout). */
 async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
   const pm = V4_PM[cc.key];
-  if (!pm || !cc.blockscout) return [];
+  if (!pm) return [];
+  // Posisi yang bot kelola SELALU disertakan: kalau Blockscout down/lag, posisi
+  // v4-mu tak boleh lenyap dari /positions (dulu catch→[] bikin kedip "tak sinkron").
+  const ids = new Set(allV4().filter((r) => r.chain === cc.key).map((r) => r.tokenId));
+  if (!cc.blockscout) return [...ids];
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 8000);
-    const res = await fetch(`${cc.blockscout}/addresses/${cc.wallet.address}/nft?type=ERC-721`, {
-      headers: { accept: 'application/json' },
-      signal: ctrl.signal,
-    }).finally(() => clearTimeout(t));
-    if (!res.ok) return [];
-    const j: any = await res.json();
-    return (j.items || [])
-      .filter((x: any) => ((x.token?.address_hash || x.token?.address || '').toLowerCase() === pm.toLowerCase()))
-      .map((x: any) => String(x.id));
-  } catch {
-    return [];
+    // Blockscout memberi ~50 item per halaman; wallet menimbun NFT v4 KOSONG tiap
+    // tutup posisi, jadi tanpa paginasi posisi hidup bisa jatuh dari halaman 1.
+    let url: string | null = `${cc.blockscout}/addresses/${cc.wallet.address}/nft?type=ERC-721`;
+    for (let page = 0; url && page < 10; page++) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetch(url, { headers: { accept: 'application/json' }, signal: ctrl.signal }).finally(() =>
+        clearTimeout(t),
+      );
+      if (!res.ok) throw new Error(`blockscout HTTP ${res.status}`);
+      const j: any = await res.json();
+      for (const x of j.items || []) {
+        if ((x.token?.address_hash || x.token?.address || '').toLowerCase() === pm.toLowerCase()) ids.add(String(x.id));
+      }
+      const p = j.next_page_params;
+      url = p ? `${cc.blockscout}/addresses/${cc.wallet.address}/nft?${new URLSearchParams(p as any)}` : null;
+    }
+  } catch (e) {
+    // Jangan diam-diam: kegagalan indexer yang "tertolong" v4store harus terlihat.
+    console.log('[v4] enumerasi Blockscout gagal, pakai v4store saja:', (e as Error).message.slice(0, 100));
   }
+  return [...ids];
 }
 
 const signExt24 = (v: bigint): number => Number(v >= 1n << 23n ? v - (1n << 24n) : v);
