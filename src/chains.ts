@@ -22,7 +22,7 @@ export type ChainCtx = {
   dexKey: string; // chainId versi DexScreener
   dexLabel: string; // nama DEX tempat posisi dibuka ('Uniswap' | 'PancakeSwap')
   blockscout: string | null; // base URL API explorer (null = tak tersedia)
-  provider: ethers.JsonRpcProvider;
+  provider: ethers.Provider; // JsonRpcProvider, atau FallbackProvider bila ada RPC cadangan
   /** Signer aktif. VoidSigner (alamat 0x0) bila belum ada dompet terhubung. */
   wallet: ethers.Wallet | ethers.VoidSigner;
   factory: ethers.Contract;
@@ -130,6 +130,7 @@ type Def = {
   tickSpacing?: Record<number, number>; // default pemetaan Uniswap v3
   noBatch?: boolean; // RPC publik yang menolak JSON-RPC batch (mis. bsc-dataseed)
   routerHasDeadline?: boolean; // default false (SwapRouter02 Uniswap)
+  fallbackRpc?: string[]; // RPC cadangan bila `rpc` utama down (FallbackProvider, prioritas)
 };
 
 /** Default Uniswap v3 — dipakai chain yang tak menyebut sendiri. */
@@ -180,6 +181,9 @@ const DEFS: Record<string, Def> = {
           tickSpacing: { 100: 1, 500: 10, 2500: 50, 10000: 200 },
           noBatch: true,
           routerHasDeadline: true, // PancakeSwap v3 SwapRouter (diverifikasi staticCall)
+          // RPC utama = BSC_RPC_URL (Alchemy). Down → otomatis pakai publik; pulih →
+          // otomatis balik ke utama (FallbackProvider mengevaluasi prioritas tiap request).
+          fallbackRpc: ['https://bsc-dataseed.binance.org', 'https://bsc-dataseed1.defibit.io'],
         },
       }
     : {}),
@@ -199,10 +203,22 @@ function build(key: string, d: Def): ChainCtx {
   // staticNetwork: chainId sudah kita ketahui — jangan buang satu round-trip deteksi.
   // batchMaxCount 1: RPC publik BSC menolak batch JSON-RPC, dan ethers membatch
   // secara default → seluruh pembacaan gagal serentak ("failed to detect network").
-  const provider = new ethers.JsonRpcProvider(d.rpc, d.chainId, {
-    staticNetwork: true,
-    ...(d.noBatch ? { batchMaxCount: 1 } : {}),
-  });
+  const jsonOpts = { staticNetwork: true, ...(d.noBatch ? { batchMaxCount: 1 } : {}) };
+  const mkJson = (url: string) => new ethers.JsonRpcProvider(url, d.chainId, jsonOpts);
+  // Satu RPC → JsonRpcProvider biasa. Ada cadangan → FallbackProvider: utama
+  // (priority 1) dipakai selama sehat; down/stall → jatuh ke publik; begitu utama
+  // pulih, request berikutnya otomatis balik ke utama (quorum 1, evaluasi per-panggilan).
+  const provider: ethers.Provider =
+    d.fallbackRpc && d.fallbackRpc.length
+      ? new ethers.FallbackProvider(
+          [
+            { provider: mkJson(d.rpc), priority: 1, stallTimeout: 1500, weight: 1 },
+            ...d.fallbackRpc.map((u, i) => ({ provider: mkJson(u), priority: 2 + i, stallTimeout: 1500, weight: 1 })),
+          ],
+          d.chainId,
+          { quorum: 1 },
+        )
+      : mkJson(d.rpc);
   // Belum ada dompet terhubung → VoidSigner: BACA tetap jalan (saldo, posisi,
   // audit token), TULIS gagal terang-terangan alih-alih memakai kunci hantu.
   const wallet: ethers.Wallet | ethers.VoidSigner =
