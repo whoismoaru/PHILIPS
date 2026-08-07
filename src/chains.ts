@@ -131,6 +131,7 @@ type Def = {
   noBatch?: boolean; // RPC publik yang menolak JSON-RPC batch (mis. bsc-dataseed)
   routerHasDeadline?: boolean; // default false (SwapRouter02 Uniswap)
   fallbackRpc?: string[]; // RPC cadangan bila `rpc` utama down (FallbackProvider, prioritas)
+  privateRpc?: string; // relay privat utk broadcast tx (proteksi MEV/sandwich)
 };
 
 /** Default Uniswap v3 — dipakai chain yang tak menyebut sendiri. */
@@ -184,6 +185,9 @@ const DEFS: Record<string, Def> = {
           // RPC utama = BSC_RPC_URL (Alchemy). Down → otomatis pakai publik; pulih →
           // otomatis balik ke utama (FallbackProvider mengevaluasi prioritas tiap request).
           fallbackRpc: ['https://bsc-dataseed.binance.org', 'https://bsc-dataseed1.defibit.io'],
+          // Broadcast lewat relay privat 48 Club (anti-sandwich). Kosongkan
+          // BSC_PRIVATE_RPC='' untuk matikan (kembali ke mempool publik).
+          privateRpc: process.env.BSC_PRIVATE_RPC ?? 'https://rpc-bsc.48.club',
         },
       }
     : {}),
@@ -219,6 +223,29 @@ function build(key: string, d: Def): ChainCtx {
           { quorum: 1 },
         )
       : mkJson(d.rpc);
+
+  // Proteksi MEV: broadcast tx lewat relay PRIVAT (mempool tak publik → tak bisa
+  // disandwich). HANYA broadcast yang dialihkan; nonce/gas/wait tetap via provider
+  // utama (relay privat kadang tak melayani baca receipt). Privat gagal → fallback
+  // broadcast publik supaya tx TAK PERNAH gagal mendarat. Aktif bila d.privateRpc diset.
+  if (d.privateRpc) {
+    const priv = mkJson(d.privateRpc);
+    const publicBroadcast = provider.broadcastTransaction.bind(provider);
+    provider.broadcastTransaction = async (signedTx: string) => {
+      let resp;
+      try {
+        resp = await priv.broadcastTransaction(signedTx);
+      } catch (e) {
+        console.log('[mev] broadcast privat gagal, pakai publik:', (e as Error).message.slice(0, 80));
+        return publicBroadcast(signedTx);
+      }
+      // Lacak receipt via provider utama (bukan relay privat).
+      resp.wait = (confirms?: number, timeout?: number) =>
+        provider.waitForTransaction(resp.hash, confirms, timeout) as ReturnType<typeof resp.wait>;
+      return resp;
+    };
+  }
+
   // Belum ada dompet terhubung → VoidSigner: BACA tetap jalan (saldo, posisi,
   // audit token), TULIS gagal terang-terangan alih-alih memakai kunci hantu.
   const wallet: ethers.Wallet | ethers.VoidSigner =
