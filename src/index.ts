@@ -37,7 +37,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4, resolvePoolKeyV4, valuePositionV4, type V4Position } from './uniswapV4.js';
+import { listPositionsV4, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
@@ -1486,6 +1486,27 @@ async function continueAddlp(
       }),
     )
   ).filter((p): p is explore.TokenPool => p !== null);
+  // Buang pool v4 ETH yang SEKARAT: TVL gateway sering nol/salah utk v4, dan pool
+  // liq ~$0 harganya nyangkut jauh dari pasar → dana yang disetor langsung
+  // "hilang" ke harga palsu (persis kasus PEPE di pool liq $25). Saring pakai
+  // likuiditas aktif on-chain + selisih harga vs pasar (DexScreener).
+  {
+    const tokMkt = await getTokenEthPrice(token, cc).catch(() => null);
+    pools = (
+      await Promise.all(
+        pools.map(async (p) => {
+          if (p.protocol !== 'v4' || !p.poolKey || p.base !== 'weth') return p;
+          const h = await poolHealthV4(cc, p.poolKey).catch(() => null);
+          if (!h || h.liquidity === 0n) return null; // pool aktif kosong → tak layak
+          if (tokMkt && h.impliedTokenEthPrice) {
+            const r = h.impliedTokenEthPrice / tokMkt;
+            if (r > 1.25 || r < 0.8) return null; // harga melenceng >25% dari pasar
+          }
+          return p;
+        }),
+      )
+    ).filter((p): p is explore.TokenPool => p !== null);
+  }
   if (pools.length === 0) {
     await editProgress(ctx, prog, msg.msgNoPools(cc.bases.map((b) => b.symbol).join('/')));
     return;

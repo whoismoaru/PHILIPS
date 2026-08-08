@@ -374,6 +374,35 @@ export async function resolvePoolKeyV4(
   return best ? { poolKey: best.poolKey, baseIsCurrency0: best.baseIsCurrency0 } : null;
 }
 
+/**
+ * Kesehatan pool v4 utk keputusan BUKA: likuiditas aktif on-chain + harga token
+ * (dlm ETH) menurut slot0 pool ini. Dipakai wizard buat menyaring pool sekarat /
+ * harga melenceng dari pasar sebelum menawarkannya. impliedTokenEthPrice hanya
+ * untuk pasangan ETH (null selain itu / gagal baca).
+ */
+export async function poolHealthV4(
+  cc: ChainCtx,
+  pk: PoolKeyV4,
+): Promise<{ liquidity: bigint; impliedTokenEthPrice: number | null }> {
+  const liquidity = await readPoolLiquidity(cc, pk).catch(() => 0n);
+  let impliedTokenEthPrice: number | null = null;
+  const pb = pairBase(cc, pk.currency0, pk.currency1);
+  if (pb.base === 'ETH') {
+    try {
+      const { tick } = await readPoolState(cc, pk);
+      const tokenAddr = pb.baseIsCurrency0 ? pk.currency1 : pk.currency0;
+      const tokDec = await tokenDecimals(tokenAddr, cc);
+      const P = Math.pow(1.0001, tick);
+      const factor = pb.baseIsCurrency0 ? 1 / P : P;
+      const px = factor * Math.pow(10, tokDec - 18);
+      if (isFinite(px) && px > 0) impliedTokenEthPrice = px;
+    } catch {
+      /* biarkan null */
+    }
+  }
+  return { liquidity, impliedTokenEthPrice };
+}
+
 async function ensurePermit2(cc: ChainCtx, token: string, spender: string, amount: bigint): Promise<void> {
   const erc = new ethers.Contract(token, ['function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'], cc.wallet);
   if ((await erc.allowance(cc.wallet.address, PERMIT2)) < amount) {
