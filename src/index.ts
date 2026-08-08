@@ -39,7 +39,7 @@ import {
 } from './uniswap.js';
 import { listPositionsV4, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4, resolvePoolKeyV4, valuePositionV4, type V4Position } from './uniswapV4.js';
 import * as v4store from './v4store.js';
-import { screenToken, formatScreen, getEthUsd } from './screening.js';
+import { screenToken, formatScreen, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
 import { startMonitor } from './monitor.js';
 import * as store from './store.js';
@@ -747,7 +747,7 @@ function finalizeClose(
 }
 
 /** Kartu detail satu posisi v4 (nilai + range% + PnL bila dikelola bot) + tombol. */
-function buildV4Card(p: V4Position, ethUsdV4: number | null): { text: string; extra: Record<string, unknown> } {
+async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain()): Promise<{ text: string; extra: Record<string, unknown> }> {
   const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
   const dec = baseDecimalsOf(undefined, p.base === 'USDG' ? 'usdg' : 'weth'); // v4 = chain utama
   let valueLabel = '—';
@@ -771,6 +771,21 @@ function buildV4Card(p: V4Position, ethUsdV4: number | null): { text: string; ex
         ? `${msg.usdSigned(pnlF * ethUsdV4)} (${msg.fmtPct(pct)})`
         : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${p.base} (${msg.fmtPct(pct)})`;
   }
+  // Guard pool sekarat: bandingkan harga token menurut slot0 pool INI dengan
+  // harga PASAR (DexScreener pool terdalam). Selisih besar = pool tipis, harga &
+  // range di kartu tak bisa dipercaya (persis kasus PEPE di pool liq $25).
+  let priceWarn: string | null = null;
+  if (p.base === 'ETH' && p.impliedTokenEthPrice) {
+    const tokenAddr = p.poolKey.currency0 === ethers.ZeroAddress ? p.poolKey.currency1 : p.poolKey.currency0;
+    const mkt = await getTokenEthPrice(tokenAddr, cc).catch(() => null);
+    if (mkt && mkt > 0) {
+      const ratio = p.impliedTokenEthPrice / mkt;
+      if (ratio > 1.25 || ratio < 0.8) {
+        const x = ratio >= 1 ? ratio : 1 / ratio;
+        priceWarn = `harga pool ini ${x.toFixed(1)}× dari harga pasar — likuiditas dangkal, nilai & range di atas mengikuti pool ini, bukan pasar.`;
+      }
+    }
+  }
   const text = msg.msgV4Position({
     tokenId: p.tokenId,
     pair: `${p.sym0} / ${p.sym1}`,
@@ -780,6 +795,7 @@ function buildV4Card(p: V4Position, ethUsdV4: number | null): { text: string; ex
     inRange: p.inRange,
     pnlText,
     tracked: !!tracked,
+    priceWarn,
   });
   // Tombol "➕ <size> ETH" dihapus: jalur uang tanpa screening/preview/cap dengan
   // rentang default ~170% yang tak pernah ditampilkan. Tambah modal lewat /add.
@@ -1011,7 +1027,7 @@ bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
     const p = (await listPositionsV4(cc).catch(() => [])).find((x) => x.tokenId === id);
     if (!p) return ctx.reply(msg.msgError('detail', 'position not found.'), html);
     const ethUsdV4 = p.base === 'ETH' ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
-    const c = buildV4Card(p, ethUsdV4);
+    const c = await buildV4Card(p, ethUsdV4, cc);
     return ctx.reply(c.text, c.extra);
   } catch (e) {
     return ctx.reply(msg.msgError('detail', (e as Error).message), html);
@@ -1856,7 +1872,7 @@ async function cmdCloseAll(ctx: any) {
   else await ctx.reply(msg.msgCloseAllPick(0, v4.length), html);
   const ethUsd = v4.length ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
   for (const p of v4) {
-    const c = buildV4Card(p, ethUsd);
+    const c = await buildV4Card(p, ethUsd, cc);
     await ctx.reply(c.text, c.extra);
   }
 }
@@ -2242,7 +2258,7 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
     for (const id of v4) {
       const p = list.find((x) => x.tokenId === id);
       if (p) {
-        const c = buildV4Card(p, ethUsd);
+        const c = await buildV4Card(p, ethUsd, cc);
         await ctx.reply(c.text, c.extra);
       }
     }
@@ -3120,7 +3136,7 @@ bot.action(/^posv4:(\d+)$/, async (ctx) => {
     const list = await listPositionsV4(cc);
     const p = list.find((x) => x.tokenId === ctx.match[1]);
     if (!p) return ctx.editMessageText(msg.msgAlreadyClosed(ctx.match[1]), html);
-    const c = buildV4Card(p, await getEthUsd(cc.wethAddress, cc).catch(() => null));
+    const c = await buildV4Card(p, await getEthUsd(cc.wethAddress, cc).catch(() => null), cc);
     await ctx.editMessageText(c.text, c.extra);
   } catch (e) {
     if (!/not modified/i.test((e as Error).message)) {

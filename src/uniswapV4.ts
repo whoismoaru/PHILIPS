@@ -73,6 +73,7 @@ export type V4Position = {
   rangePctHigh: number | null; // % ujung terdekat dari harga sekarang
   rangePctLow: number | null;
   inRange: boolean | null;
+  impliedTokenEthPrice: number | null; // harga token dlm ETH menurut slot0 pool INI (buat cek pool sekarat)
 };
 
 /** Tentukan aset dasar pasangan + apakah base = currency0. */
@@ -96,6 +97,15 @@ async function tokenSymbol(addr: string, cc: ChainCtx): Promise<string> {
     return await new ethers.Contract(addr, ERC20_SYM, cc.provider).symbol();
   } catch {
     return addr.slice(0, 6);
+  }
+}
+
+async function tokenDecimals(addr: string, cc: ChainCtx): Promise<number> {
+  if (!addr || addr === ethers.ZeroAddress) return 18; // native ETH
+  try {
+    return Number(await new ethers.Contract(addr, ['function decimals() view returns (uint8)'], cc.provider).decimals());
+  } catch {
+    return 18;
   }
 }
 
@@ -278,6 +288,22 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
         } catch {
           /* biarkan null */
         }
+        // Harga token dlm ETH menurut slot0 pool INI (untuk deteksi pool sekarat:
+        // dibandingkan harga pasar DexScreener di kartu). Hanya untuk pasangan ETH.
+        let impliedTokenEthPrice: number | null = null;
+        const pb = pairBase(cc, pk.currency0, pk.currency1);
+        if (val && pb.base === 'ETH') {
+          try {
+            const tokenAddr = pb.baseIsCurrency0 ? pk.currency1 : pk.currency0;
+            const tokDec = await tokenDecimals(tokenAddr, cc);
+            const P = Math.pow(1.0001, val.currentTick); // currency1_raw / currency0_raw
+            const factor = pb.baseIsCurrency0 ? 1 / P : P; // ETH_raw per token_raw
+            const px = factor * Math.pow(10, tokDec - 18);
+            if (isFinite(px) && px > 0) impliedTokenEthPrice = px;
+          } catch {
+            /* biarkan null */
+          }
+        }
         return {
           tokenId: id,
           sym0,
@@ -293,7 +319,8 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
           rangePctHigh: val ? val.rangePctHigh : null,
           rangePctLow: val ? val.rangePctLow : null,
           inRange: val ? val.inRange : null,
-          base: pairBase(cc, pk.currency0, pk.currency1).base,
+          base: pb.base,
+          impliedTokenEthPrice,
         };
       } catch {
         return null;
@@ -332,13 +359,19 @@ export async function resolvePoolKeyV4(
   const otherAddr = baseIsCurrency0 ? pk.currency1 : pk.currency0;
   const isWeth = baseAddr.toLowerCase() === cc.wethAddress.toLowerCase();
   const bases = isWeth ? [baseAddr, ethers.ZeroAddress] : [baseAddr];
+  // Jangan ambil pool PERTAMA yang terinisialisasi: varian native-ETH vs WETH bisa
+  // dua-duanya hidup, dan yang satu bisa pool sekarat (liq ~$0) yang harganya
+  // nyangkut jauh dari pasar. Pilih yang LIKUIDITASNYA paling dalam.
+  let best: { poolKey: PoolKeyV4; baseIsCurrency0: boolean; liq: bigint } | null = null;
   for (const b of bases) {
     const [c0, c1] = b.toLowerCase() < otherAddr.toLowerCase() ? [b, otherAddr] : [otherAddr, b];
     const cand: PoolKeyV4 = { ...pk, currency0: c0, currency1: c1 };
     const { sqrtPriceX96 } = await readPoolState(cc, cand).catch(() => ({ sqrtPriceX96: 0n }));
-    if (sqrtPriceX96 > 0n) return { poolKey: cand, baseIsCurrency0: c0 === b };
+    if (sqrtPriceX96 === 0n) continue;
+    const liq = await readPoolLiquidity(cc, cand).catch(() => 0n);
+    if (!best || liq > best.liq) best = { poolKey: cand, baseIsCurrency0: c0 === b, liq };
   }
-  return null;
+  return best ? { poolKey: best.poolKey, baseIsCurrency0: best.baseIsCurrency0 } : null;
 }
 
 async function ensurePermit2(cc: ChainCtx, token: string, spender: string, amount: bigint): Promise<void> {
@@ -474,6 +507,21 @@ async function readPoolState(cc: ChainCtx, pk: PoolKeyV4): Promise<{ tick: numbe
   let tick = Number((raw >> 160n) & 0xffffffn);
   if (tick >= 2 ** 23) tick -= 2 ** 24;
   return { tick, sqrtPriceX96 };
+}
+
+/**
+ * Likuiditas TOTAL pool v4 (bukan posisi). Layout Pool.State: base slot =
+ * keccak256(poolId, POOLS_SLOT=6); slot0 di offset 0, liquidity (uint128) di
+ * offset 3. Dipakai untuk deteksi pool sekarat (harga tak andal).
+ */
+async function readPoolLiquidity(cc: ChainCtx, pk: PoolKeyV4): Promise<bigint> {
+  const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const poolId = ethers.keccak256(coder.encode(['tuple(address,address,uint24,int24,address)'], [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]]));
+  const base = BigInt(ethers.keccak256(ethers.concat([poolId, ethers.zeroPadValue(ethers.toBeHex(6n), 32)])));
+  const slot = ethers.zeroPadValue(ethers.toBeHex(base + 3n), 32);
+  const raw = BigInt(await mgr.extsload(slot));
+  return raw & ((1n << 128n) - 1n);
 }
 
 function amount0Delta(a: bigint, b: bigint, L: bigint): bigint {

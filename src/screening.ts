@@ -319,6 +319,40 @@ export async function screenToken(
 /** Susun laporan screening jadi teks siap kirim ke Telegram. */
 const ethUsdCache = new Map<string, { v: number | null; t: number }>();
 
+/**
+ * Harga PASAR token dalam native (ETH per token) dari pair DexScreener ber-liq
+ * TERDALAM di chain ini. Dipakai buat cek apakah pool v4 sebuah posisi
+ * "sekarat" (harga on-chain-nya melenceng jauh dari pasar). null = tak terbaca.
+ */
+const tokenEthCache = new Map<string, { v: number | null; t: number }>();
+export async function getTokenEthPrice(tokenAddress: string, ctx: ChainCtx = getChain()): Promise<number | null> {
+  const key = `${ctx.key}:${tokenAddress.toLowerCase()}`;
+  const cached = tokenEthCache.get(key);
+  if (cached && Date.now() - cached.t < 60_000) return cached.v;
+  const dex = await fetchJson(`${DEXSCREENER}/${tokenAddress}`);
+  const w = ctx.wethAddress.toLowerCase();
+  const isEthQuote = (a: string) => a === '0x0000000000000000000000000000000000000000' || a.toLowerCase() === w;
+  const t = tokenAddress.toLowerCase();
+  let best: number | null = null;
+  let bestLiq = -1;
+  for (const p of (dex?.pairs ?? []) as any[]) {
+    if (p.chainId !== ctx.dexKey) continue;
+    const liq = p.liquidity?.usd ?? 0;
+    let ethPerTok: number | null = null;
+    // base=token, quote=ETH → priceNative = ETH per token (langsung).
+    if ((p.baseToken?.address || '').toLowerCase() === t && isEthQuote(p.quoteToken?.address || '')) {
+      const pn = Number(p.priceNative);
+      if (pn > 0) ethPerTok = pn;
+    }
+    if (ethPerTok && isFinite(ethPerTok) && liq > bestLiq) {
+      best = ethPerTok;
+      bestLiq = liq;
+    }
+  }
+  tokenEthCache.set(key, { v: best, t: Date.now() });
+  return best;
+}
+
 /** Harga native (ETH/BNB) dalam USD via DexScreener, per chain (cache 60 dtk). */
 export async function getEthUsd(
   wethAddress: string,

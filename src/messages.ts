@@ -381,6 +381,7 @@ export function msgV4Position(p: {
   inRange: boolean | null;
   pnlText?: string; // hanya bila dikelola bot (entry diketahui)
   tracked: boolean;
+  priceWarn?: string | null; // pool sekarat: harga on-chain melenceng dari pasar
 }): string {
   const emoji = p.inRange === null ? '🔷' : p.inRange ? '🟢' : '🔴';
   const body: string[] = [
@@ -391,6 +392,7 @@ export function msgV4Position(p: {
       ['Range', p.rangeLabel],
     ]),
   ];
+  if (p.priceWarn) body.push('', `⚠️ ${bold('Pool tipis')} — ${p.priceWarn}`);
   if (p.pnlText) body.push('', bold(`PnL  ${p.pnlText}`));
   if (p.inRange !== null) body.push('', p.inRange ? `🟢 ${bold('IN RANGE')} — fee mengalir` : `🔴 ${bold('OUT OF RANGE')}`);
   body.push('', note(p.tracked ? 'Uniswap v4 · dikelola bot' : 'Uniswap v4 · baca-saja (dibuka di luar bot)'));
