@@ -1444,7 +1444,7 @@ async function continueAddlp(
   const [screened, found, krystalFound] = await Promise.allSettled([
     pre ? Promise.resolve(null) : screenToken(token, cc),
     explore.poolsForToken(cc, token),
-    krystal.krystalV4Pools(cc, token),
+    krystal.krystalPools(cc, token),
   ]);
 
   let screenBahaya = pre?.bahaya ?? false;
@@ -1491,6 +1491,9 @@ async function continueAddlp(
         )
       : null;
   const kIds = new Set(kPools.map(poolIdOf).filter(Boolean) as string[]);
+  // v3 tak punya poolId; dedup-nya per (base+fee) — satu token+base+fee = satu pool v3.
+  const v3Key = (p: explore.TokenPool) => `v3:${p.base}:${p.fee}`;
+  const kV3 = new Set(kPools.filter((p) => p.protocol === 'v3').map(v3Key));
 
   // Gateway: v3 tetap disaring fee-tier standar; v4 poolKey-nya divalidasi/di-resolve
   // on-chain (urutan currency & ETH-native sering salah). Pool yang sudah ada di
@@ -1502,7 +1505,9 @@ async function continueAddlp(
       gwPools
         .filter((p) => (p.protocol === 'v4' ? true : cc.feeTiers.includes(p.fee)))
         .map(async (p) => {
-          if (p.protocol !== 'v4' || !p.poolKey) return p;
+          if (p.protocol !== 'v4' || !p.poolKey) {
+            return kV3.has(v3Key(p)) ? null : p; // v3 sudah ada di Krystal → skip
+          }
           const fixed = await resolvePoolKeyV4(cc, p.poolKey, p.baseIsCurrency0!).catch(() => null);
           if (!fixed) return null;
           const merged = { ...p, poolKey: fixed.poolKey, baseIsCurrency0: fixed.baseIsCurrency0 };
