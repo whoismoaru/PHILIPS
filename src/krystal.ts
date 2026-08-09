@@ -19,7 +19,6 @@ import type { PoolKeyV4 } from './uniswapV4.js';
 
 const CHAIN_ID: Record<string, number> = { robinhood: 4663, bsc: 56 };
 const API = 'https://cloud-api.krystal.app/v1';
-const INIT_SIG = ethers.id('Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)');
 const V3_PROTOCOLS = new Set(['uniswapv3', 'pancakev3', 'sushiv3']);
 
 export const krystalConfigured = (cc: ChainCtx): boolean => !!config.krystal.apiKey && CHAIN_ID[cc.key] !== undefined;
@@ -39,46 +38,59 @@ async function fetchJson(url: string): Promise<any> {
   }
 }
 
+const coder = ethers.AbiCoder.defaultAbiCoder();
+// Buffer ABI-encoded poolKey dgn fee=0 (placeholder); fee ditulis-ulang saat brute.
+const poolIdBufferHex = (c0: string, c1: string, ts: number, h: string): string =>
+  coder.encode(['tuple(address,address,uint24,int24,address)'], [[c0, c1, 0, ts, h]]);
+
+// poolKey diverifikasi bersifat TETAP (poolId = keccak-nya) → cache selamanya.
+// Bikin resolusi tahan gangguan API sesaat: sekali terbukti, tak perlu diulang.
+const pkCache = new Map<string, PoolKeyV4>();
+
+/** Detail 1 pool: list memberi tickSpacing 0, detail memberi tickSpacing & hooks asli. */
+async function krystalDetail(cid: number, poolId: string): Promise<{ tickSpacing: number; hooks: string; feeTier: number } | null> {
+  const d = await fetchJson(`${API}/pools/${cid}/${poolId}`).catch(() => null);
+  if (!d || d.tickSpacing == null) return null;
+  return { tickSpacing: Number(d.tickSpacing), hooks: d.hook ?? ethers.ZeroAddress, feeTier: Number(d.feeTier) };
+}
+
 /**
- * poolKey v4 PASTI dari event Initialize (difilter poolId), diverifikasi
- * keccak==poolId. Blockscout REST getLogs menelan rentang blok penuh (RPC getLogs
- * 0→latest ditolak). null = tak bisa dibuktikan → jangan tawarkan.
+ * poolKey v4 diverifikasi, ANDAL (tanpa Blockscout — dulu getLogs 0→latest sering
+ * timeout/rate-limit → pool v4 lenyap dari daftar). Sumber: detail Krystal
+ * (tickSpacing + hooks) + fee di-BRUTE-FORCE. Krystal cuma tahu fee EFEKTIF (≈ fee
+ * poolKey − ~1000 unit), jadi fee dicari di window sempit sekitar feeTier lalu
+ * DIVERIFIKASI keccak==poolId. Cocok → pasti aman di-mint; hooks/ts salah → tak
+ * cocok → null (tak ditawarkan). Hasil di-cache.
  */
-async function poolKeyFromInitialize(cc: ChainCtx, poolManager: string, poolId: string): Promise<PoolKeyV4 | null> {
-  if (!cc.blockscout) return null;
-  const base = cc.blockscout.replace('/api/v2', '/api');
-  const url = `${base}?module=logs&action=getLogs&fromBlock=1&toBlock=latest&address=${poolManager}&topic0=${INIT_SIG}&topic1=${poolId}&topic0_1_opr=and`;
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 12_000);
-  let j: any;
-  try {
-    const res = await fetch(url, { headers: { accept: 'application/json' }, signal: ctrl.signal });
-    if (!res.ok) return null;
-    j = await res.json();
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(t);
+async function resolveV4PoolKey(cc: ChainCtx, p: any): Promise<PoolKeyV4 | null> {
+  const poolId = String(p.poolAddress);
+  const hit = pkCache.get(poolId);
+  if (hit) return hit;
+  const a = p.token0?.token?.address, b = p.token1?.token?.address;
+  if (!a || !b) return null;
+  const det = await krystalDetail(CHAIN_ID[cc.key], poolId);
+  if (!det) return null;
+  const [c0, c1] = a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
+  // Encode poolKey SEKALI, lalu tiap iterasi cuma tulis-ulang 3 byte fee (uint24 di
+  // ujung word ke-3) + keccak — jauh lebih cepat dari AbiCoder.encode per iterasi
+  // (dulu ~40 dtk untuk 5 pool → wizard menggantung). Window lebar aman karena murah.
+  const buf = ethers.getBytes(poolIdBufferHex(c0, c1, det.tickSpacing, det.hooks));
+  const target = poolId.toLowerCase();
+  // fee poolKey ≈ fee efektif − beberapa % (dynamic-fee premium; terukur 2–3%).
+  // Window 20% ke bawah + 2000 ke atas = margin ~6× dari yang teramati, tetap murah.
+  const lo = Math.max(0, Math.floor(det.feeTier * 0.8) - 100);
+  const hi = det.feeTier + 2_000;
+  for (let f = lo; f <= hi; f++) {
+    buf[93] = (f >> 16) & 0xff;
+    buf[94] = (f >> 8) & 0xff;
+    buf[95] = f & 0xff;
+    if (ethers.keccak256(buf) === target) {
+      const pk: PoolKeyV4 = { currency0: ethers.getAddress(c0), currency1: ethers.getAddress(c1), fee: f, tickSpacing: det.tickSpacing, hooks: det.hooks };
+      pkCache.set(poolId, pk);
+      return pk;
+    }
   }
-  const log = Array.isArray(j?.result) ? j.result[0] : null;
-  if (!log?.data || !log?.topics) return null;
-  try {
-    const [fee, tickSpacing, hooks] = ethers.AbiCoder.defaultAbiCoder().decode(
-      ['uint24', 'int24', 'address', 'uint160', 'int24'],
-      log.data,
-    );
-    const currency0 = ethers.getAddress('0x' + String(log.topics[2]).slice(26));
-    const currency1 = ethers.getAddress('0x' + String(log.topics[3]).slice(26));
-    const pk: PoolKeyV4 = { currency0, currency1, fee: Number(fee), tickSpacing: Number(tickSpacing), hooks };
-    const coder = ethers.AbiCoder.defaultAbiCoder();
-    const recomputed = ethers.keccak256(
-      coder.encode(['tuple(address,address,uint24,int24,address)'], [[currency0, currency1, pk.fee, pk.tickSpacing, hooks]]),
-    );
-    if (recomputed.toLowerCase() !== poolId.toLowerCase()) return null;
-    return pk;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /** Protokol v3 asli chain ini (samakan dgn cc.factory): PancakeSwap→pancakev3, selain itu uniswapv3. */
@@ -120,13 +132,18 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
       if (!proto || !p.poolAddress) return null;
       const t0 = p.token0?.token, t1 = p.token1?.token;
       if (!t0?.address || !t1?.address) return null;
+      // Debu → lewati SEBELUM resolusi poolKey v4 yang mahal (brute-force). Ambang
+      // rendah; penyaringan tampilan final ada di pemanggil.
+      const tvl = Number(p.tvl) || 0;
+      const vol = p.stats24h?.volume != null ? Number(p.stats24h.volume) : 0;
+      if (tvl + vol < 500) return null;
 
       if (proto === 'uniswapv4') {
         // v4 hanya di chain yang bot dukung PENUH: enumerasi/monitor/tutup posisi v4
         // butuh Blockscout (BSC tak punya) + V4_PM terkonfigurasi. Tanpa itu, posisi
         // yang dibuka tak bisa dipantau/ditutup — jangan tawarkan.
         if (!cc.blockscout) return null;
-        const pk = await poolKeyFromInitialize(cc, p.protocol.factoryAddress, p.poolAddress);
+        const pk = await resolveV4PoolKey(cc, p);
         if (!pk) return null; // poolKey tak terbukti → jangan tawarkan
         const b = baseOfPair(cc, pk.currency0, pk.currency1);
         if (!b) return null;

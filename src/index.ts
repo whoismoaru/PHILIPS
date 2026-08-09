@@ -1548,16 +1548,25 @@ async function continueAddlp(
       )
     ).filter((p): p is explore.TokenPool => p !== null);
   }
+  // Jaminan SINGLE-SIDE: hanya pool yang base-nya benar-benar didukung chain ini
+  // (ETH/USDG di Robinhood, BNB/USDT di BSC). base datang dari 3 sumber berbeda —
+  // ini penjaga terakhir supaya tiap pool yang ditawarkan pasti bisa dibuka 1-sisi.
+  const okBase = new Set(cc.bases.map((b) => b.kind));
+  pools = pools.filter((p) => okBase.has(p.base));
+  // Buang pool debu (TVL+Vol < $500): lebih baik menawarkan <3 pool nyata daripada
+  // mengisi top-3 dengan pool $2 yang tak ada gunanya untuk LP.
+  const sized = pools.filter((p) => p.tvlUsd + (p.vol24hUsd ?? 0) >= 500);
+  if (sized.length > 0) pools = sized;
   if (pools.length === 0) {
     await editProgress(ctx, prog, msg.msgNoPools(cc.bases.map((b) => b.symbol).join('/')));
     return;
   }
+  // Cukup TOP-3 by TVL+Volume (rankPoolsForFill), gabungan semua sumber chain ini.
+  pools = rankPoolsForFill(pools).slice(0, POOL_PICK_MAX);
   console.log(
-    `[add] ${token} ${cc.key}: krystal=${kPools.length} gateway=${gwPools.length} merged=${pools.length}` +
-      ` | top: ${pools.slice(0, 3).map((p) => `${p.baseSymbol}/${p.otherSymbol} ${p.protocol} fee${p.fee} $${Math.round(p.tvlUsd)}`).join(' , ')}`,
+    `[add] ${token} ${cc.key}: krystal=${kPools.length} gateway=${gwPools.length} → top${pools.length}` +
+      ` | ${pools.map((p) => `${p.baseSymbol}/${p.otherSymbol} ${p.protocol} fee${p.fee} $${Math.round(p.tvlUsd)}+v${Math.round(p.vol24hUsd ?? 0)}`).join(' , ')}`,
   );
-  // Bias ke spacing halus (isi rapat) di antara pool likuiditas se-orde.
-  pools = rankPoolsForFill(pools);
 
   // 3) Mulai wizard — reuse bubble progress jadi step pilih pool.
   const flow: AddFlow = { token, chain: chainKey, screenBahaya, screenFailed, pools, startedAt: Date.now() };
