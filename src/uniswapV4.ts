@@ -457,7 +457,17 @@ export async function openPositionV4(
   const sqrtL = sqrtAtTick(tickLower);
   const sqrtU = sqrtAtTick(tickUpper);
   const liquidity = baseIsCurrency0 ? liqForAmount0(sqrtL, sqrtU, baseAmountWei) : liqForAmount1(sqrtL, sqrtU, baseAmountWei);
-  if (liquidity <= 0n) throw new Error('Computed liquidity is 0 — the amount is too small.');
+  if (liquidity <= 0n) {
+    // Buta tanpa angka: catat pool, jumlah, spacing & lebar tick supaya jelas apakah
+    // ini deposit kekecilan (wei USDG 6-dec) atau range kelewat lebar (spacing besar).
+    console.log(
+      `[v4] liquidity 0 — pool=${poolKey.currency0}/${poolKey.currency1} fee=${poolKey.fee} spacing=${spacing}` +
+        ` baseIsC0=${baseIsCurrency0} amountWei=${baseAmountWei} widthTicks=${tickUpper - tickLower} [${tickLower},${tickUpper}]`,
+    );
+    throw new Error(
+      `Computed liquidity is 0 — the deposit is too small for this pool's range (spacing ${spacing}, width ${tickUpper - tickLower} ticks). Increase the amount, narrow the range %, or pick a finer-spacing pool.`,
+    );
+  }
 
   const coder = ethers.AbiCoder.defaultAbiCoder();
   const amount0Max = baseIsCurrency0 ? baseAmountWei : 0n;

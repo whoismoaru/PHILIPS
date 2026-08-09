@@ -1474,7 +1474,11 @@ async function continueAddlp(
     pools = await discoverAllPoolsFallback(token, cc).catch(() => []);
   }
   // Fee tier non-standar diterima gateway tapi ditolak loadPool → dead-end 3 tap.
-  pools = pools.filter((p) => p.protocol === 'v4' || cc.feeTiers.includes(p.fee));
+  // v4 boleh fee bebas, TAPI buang pool fee gila (>3%, mis. BULL fee 59–99%): itu
+  // jebakan yang menelan setoran sebagai "fee". 0x800000 = penanda dynamic-fee (lewat).
+  pools = pools.filter((p) =>
+    p.protocol === 'v4' ? p.fee === 0x800000 || p.fee <= 30000 : cc.feeTiers.includes(p.fee),
+  );
   // poolKey v4 gateway divalidasi ke on-chain (urutan currency & ETH-native sering
   // salah). Tak terinisialisasi → pool dibuang, bukan dibiarkan revert di langkah 4.
   pools = (
@@ -1495,12 +1499,16 @@ async function continueAddlp(
     pools = (
       await Promise.all(
         pools.map(async (p) => {
-          if (p.protocol !== 'v4' || !p.poolKey || p.base !== 'weth') return p;
+          if (p.protocol !== 'v4' || !p.poolKey) return p;
           const h = await poolHealthV4(cc, p.poolKey).catch(() => null);
-          if (!h || h.liquidity === 0n) return null; // pool aktif kosong → tak layak
-          if (tokMkt && h.impliedTokenEthPrice) {
+          // Likuiditas AKTIF 0 = pool mati (TVL gateway sering bohong: mis. BULL
+          // fee 30000 "TVL $173" tapi activeLiq 0). Mint di sini → 'liquidity 0'
+          // atau dana nyangkut. Buang, apapun base-nya (ETH & USDG sama saja).
+          if (!h || h.liquidity === 0n) return null;
+          // Utk pasangan ETH ada acuan harga pasar → buang juga yang melenceng >25%.
+          if (p.base === 'weth' && tokMkt && h.impliedTokenEthPrice) {
             const r = h.impliedTokenEthPrice / tokMkt;
-            if (r > 1.25 || r < 0.8) return null; // harga melenceng >25% dari pasar
+            if (r > 1.25 || r < 0.8) return null;
           }
           return p;
         }),
