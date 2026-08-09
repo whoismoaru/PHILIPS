@@ -1548,6 +1548,10 @@ async function continueAddlp(
     await editProgress(ctx, prog, msg.msgNoPools(cc.bases.map((b) => b.symbol).join('/')));
     return;
   }
+  console.log(
+    `[add] ${token} ${cc.key}: krystal=${kPools.length} gateway=${gwPools.length} merged=${pools.length}` +
+      ` | top: ${pools.slice(0, 3).map((p) => `${p.baseSymbol}/${p.otherSymbol} ${p.protocol} fee${p.fee} $${Math.round(p.tvlUsd)}`).join(' , ')}`,
+  );
   // Bias ke spacing halus (isi rapat) di antara pool likuiditas se-orde.
   pools = rankPoolsForFill(pools);
 
