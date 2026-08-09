@@ -81,6 +81,9 @@ async function poolKeyFromInitialize(cc: ChainCtx, poolManager: string, poolId: 
   }
 }
 
+/** Protokol v3 asli chain ini (samakan dgn cc.factory): PancakeSwap→pancakev3, selain itu uniswapv3. */
+const chainV3Protocol = (cc: ChainCtx): string => (cc.dexLabel === 'PancakeSwap' ? 'pancakev3' : 'uniswapv3');
+
 /** base bot dari sepasang currency (ETH-native/WETH/WBNB, USDG, atau USDT). null = tak didukung. */
 function baseOfPair(
   cc: ChainCtx,
@@ -119,6 +122,10 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
       if (!t0?.address || !t1?.address) return null;
 
       if (proto === 'uniswapv4') {
+        // v4 hanya di chain yang bot dukung PENUH: enumerasi/monitor/tutup posisi v4
+        // butuh Blockscout (BSC tak punya) + V4_PM terkonfigurasi. Tanpa itu, posisi
+        // yang dibuka tak bisa dipantau/ditutup — jangan tawarkan.
+        if (!cc.blockscout) return null;
         const pk = await poolKeyFromInitialize(cc, p.protocol.factoryAddress, p.poolAddress);
         if (!pk) return null; // poolKey tak terbukti → jangan tawarkan
         const b = baseOfPair(cc, pk.currency0, pk.currency1);
@@ -140,6 +147,9 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
       }
 
       if (V3_PROTOCOLS.has(proto)) {
+        // Hanya v3 dari DEX ASLI chain ini (yang cc.factory tunjuk). Pool uniswapv3 di
+        // BSC pakai factory berbeda dari PancakeSwap → factory.getPool gagal saat buka.
+        if (proto !== chainV3Protocol(cc)) return null;
         const b = baseOfPair(cc, t0.address, t1.address);
         if (!b) return null;
         const fee = Number(p.feeTier);
