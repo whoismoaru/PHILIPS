@@ -46,6 +46,7 @@ import * as store from './store.js';
 import * as journal from './journal.js';
 import * as msg from './messages.js';
 import * as explore from './explore.js';
+import * as krystal from './krystal.js';
 import { awaitingSecret, handleSecret } from './commands/wallet.js';
 import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import './commands/feesAndRemove.js';
@@ -1440,9 +1441,10 @@ async function continueAddlp(
     prog,
     msg.msgProgress(pre ? 'finding pools…' : `auditing token & finding pools on ${cc.label}…`),
   );
-  const [screened, found] = await Promise.allSettled([
+  const [screened, found, krystalFound] = await Promise.allSettled([
     pre ? Promise.resolve(null) : screenToken(token, cc),
     explore.poolsForToken(cc, token),
+    krystal.krystalV4Pools(cc, token),
   ]);
 
   let screenBahaya = pre?.bahaya ?? false;
@@ -1466,30 +1468,52 @@ async function continueAddlp(
     return;
   }
 
-  let pools: explore.TokenPool[];
+  let gwPools: explore.TokenPool[];
   if (found.status === 'fulfilled') {
-    pools = found.value;
+    gwPools = found.value;
   } else {
     console.log('[poolsForToken] gateway gagal, fallback v3 on-chain:', String(found.reason).slice(0, 120));
-    pools = await discoverAllPoolsFallback(token, cc).catch(() => []);
+    gwPools = await discoverAllPoolsFallback(token, cc).catch(() => []);
   }
-  // Fee tier non-standar diterima gateway tapi ditolak loadPool → dead-end 3 tap.
-  // v4 boleh fee bebas, TAPI buang pool fee gila (>3%, mis. BULL fee 59–99%): itu
-  // jebakan yang menelan setoran sebagai "fee". 0x800000 = penanda dynamic-fee (lewat).
-  pools = pools.filter((p) =>
-    p.protocol === 'v4' ? p.fee === 0x800000 || p.fee <= 30000 : cc.feeTiers.includes(p.fee),
-  );
-  // poolKey v4 gateway divalidasi ke on-chain (urutan currency & ETH-native sering
-  // salah). Tak terinisialisasi → pool dibuang, bukan dibiarkan revert di langkah 4.
-  pools = (
+  // Krystal = sumber pool yang lengkap (gateway sering melewatkan pool ETH/token
+  // ber-TVL besar & melaporkan TVL ngawur). poolKey-nya sudah DIVERIFIKASI on-chain
+  // (event Initialize), jadi tak perlu resolve ulang & fee-nya fee poolKey asli.
+  const kPools = krystalFound.status === 'fulfilled' ? krystalFound.value : [];
+  if (krystalFound.status === 'rejected')
+    console.log('[krystal] gagal:', String(krystalFound.reason).slice(0, 120));
+  const poolIdOf = (p: explore.TokenPool): string | null =>
+    p.poolKey
+      ? ethers.keccak256(
+          ethers.AbiCoder.defaultAbiCoder().encode(
+            ['tuple(address,address,uint24,int24,address)'],
+            [[p.poolKey.currency0, p.poolKey.currency1, p.poolKey.fee, p.poolKey.tickSpacing, p.poolKey.hooks]],
+          ),
+        )
+      : null;
+  const kIds = new Set(kPools.map(poolIdOf).filter(Boolean) as string[]);
+
+  // Gateway: v3 tetap disaring fee-tier standar; v4 poolKey-nya divalidasi/di-resolve
+  // on-chain (urutan currency & ETH-native sering salah). Pool yang sudah ada di
+  // Krystal (by poolId) dibuang di sini supaya tak dobel. TIDAK ada lagi cap fee:
+  // pool asli Robinhood justru ber-fee tinggi (5%+); yang membedakan asli vs jebakan
+  // adalah TVL/likuiditas, bukan fee.
+  const gwFixed = (
     await Promise.all(
-      pools.map(async (p) => {
-        if (p.protocol !== 'v4' || !p.poolKey) return p;
-        const fixed = await resolvePoolKeyV4(cc, p.poolKey, p.baseIsCurrency0!).catch(() => null);
-        return fixed ? { ...p, poolKey: fixed.poolKey, baseIsCurrency0: fixed.baseIsCurrency0 } : null;
-      }),
+      gwPools
+        .filter((p) => (p.protocol === 'v4' ? true : cc.feeTiers.includes(p.fee)))
+        .map(async (p) => {
+          if (p.protocol !== 'v4' || !p.poolKey) return p;
+          const fixed = await resolvePoolKeyV4(cc, p.poolKey, p.baseIsCurrency0!).catch(() => null);
+          if (!fixed) return null;
+          const merged = { ...p, poolKey: fixed.poolKey, baseIsCurrency0: fixed.baseIsCurrency0 };
+          const id = poolIdOf(merged);
+          return id && kIds.has(id) ? null : merged; // sudah ada versi Krystal → skip
+        }),
     )
   ).filter((p): p is explore.TokenPool => p !== null);
+
+  // Krystal duluan (TVL benar & poolKey terverifikasi), lalu sisa gateway.
+  let pools = [...kPools, ...gwFixed];
   // Buang pool v4 ETH yang SEKARAT: TVL gateway sering nol/salah utk v4, dan pool
   // liq ~$0 harganya nyangkut jauh dari pasar → dana yang disetor langsung
   // "hilang" ke harga palsu (persis kasus PEPE di pool liq $25). Saring pakai

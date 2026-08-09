@@ -50,4 +50,9 @@ export const config = {
     maxEthPerTx: optional('MAX_ETH_PER_TX', ''), // kosong = tanpa batas (lihat index.ts)
     dryRun: optional('DRY_RUN', 'true').toLowerCase() === 'true',
   },
+  // Krystal Cloud API — sumber pool yang jauh lebih lengkap dari gateway Uniswap
+  // (mis. pool ETH/token yang gateway lewatkan). Kosong = fitur mati, jatuh ke gateway.
+  krystal: {
+    apiKey: optional('KRYSTAL_API_KEY', ''),
+  },
 };
