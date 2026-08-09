@@ -132,6 +132,7 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
           otherSymbol: otherSym,
           fee: pk.fee,
           tvlUsd: Number(p.tvl) || 0,
+          vol24hUsd: p.stats24h?.volume != null ? Number(p.stats24h.volume) : 0,
           aprPct: p.stats24h?.apr != null ? Number(p.stats24h.apr) : null,
           poolKey: pk,
           baseIsCurrency0: b.baseIsCurrency0,
@@ -152,6 +153,7 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
           otherSymbol: otherSym,
           fee,
           tvlUsd: Number(p.tvl) || 0,
+          vol24hUsd: p.stats24h?.volume != null ? Number(p.stats24h.volume) : 0,
           aprPct: p.stats24h?.apr != null ? Number(p.stats24h.apr) : null,
         };
       }

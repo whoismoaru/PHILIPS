@@ -1157,7 +1157,7 @@ export function msgJournal(
 
 export function msgPoolStep(
   tokenLabel?: string,
-  pools?: Array<{ pair: string; ver: string; feeLabel: string; tvl: string; apr: string; tight: string }>,
+  pools?: Array<{ pair: string; ver: string; feeLabel: string; tvl: string; vol?: string; apr: string; tight: string }>,
 ): string {
   const out = [bold('OPEN LP · Step [1/5] Choose Pool'), ''];
   if (tokenLabel) out.push(`🎯 ${bold('Target Token:')} ${esc(tokenLabel)}`, '');
@@ -1168,7 +1168,7 @@ export function msgPoolStep(
       // 'fills≤' dipindah dari tombol ke sini: itu jarak harga sebelum posisi
       // single-side MULAI terisi — angka yang menentukan pool mana yang benar-benar
       // bekerja, dan tombol Telegram terlalu sempit untuk memuatnya.
-      out.push(`  TVL: ${esc(p.tvl)} | APR: ${esc(p.apr)} | fills≤${esc(p.tight)}`);
+      out.push(`  TVL: ${esc(p.tvl)} | Vol 24h: ${esc(p.vol ?? '?')} | APR: ${esc(p.apr)} | fills≤${esc(p.tight)}`);
     }
   } else {
     out.push(bold('Pick the deepest pool (v3 & v4):'));

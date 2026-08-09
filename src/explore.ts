@@ -156,6 +156,7 @@ export type TokenPool = {
   otherSymbol: string; // simbol token target
   fee: number;
   tvlUsd: number;
+  vol24hUsd?: number; // volume 24 jam (USD) — untuk ranking "terbesar" & tampilan
   aprPct?: number | null; // fee 24 jam disetahunkan; null = volume tak terbaca
   poolKey?: PoolKeyV4; // v4 saja — currency0/1, fee, tickSpacing, hooks
   baseIsCurrency0?: boolean; // v4 saja
@@ -244,7 +245,7 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
     // APR = fee 24 jam disetahunkan (rumus sama dengan kartu /pools).
     const vol = p.cumulativeVolume?.value ?? 0;
     const aprPct = tvl > 0 && vol > 0 ? ((vol * (fee / 1e6) * 365) / tvl) * 100 : null;
-    const tp: TokenPool = { protocol, base, baseSymbol, otherSymbol, fee, tvlUsd: tvl, aprPct };
+    const tp: TokenPool = { protocol, base, baseSymbol, otherSymbol, fee, tvlUsd: tvl, vol24hUsd: vol, aprPct };
     if (protocol === 'v4') {
       tp.poolKey = {
         currency0: t0.address ?? ethers.ZeroAddress, // ETH native = null → 0x0
@@ -397,6 +398,7 @@ async function poolsForTokenDex(ctx: ChainCtx, token: string): Promise<TokenPool
             otherSymbol: String(otherSymbol),
             fee,
             tvlUsd,
+            vol24hUsd: vol,
             aprPct: aprOf(vol, fee, tvlUsd),
           };
         } catch {

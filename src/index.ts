@@ -1165,8 +1165,11 @@ function fillTightnessPct(p: explore.TokenPool): number {
 // yang tampil benar-benar tiga terdalam. Konsekuensinya, pool teratas bisa punya
 // spacing kasar (isi single-side lebih lambat) — karena itu angka 'isi≤x%' tetap
 // dicetak di tombolnya supaya kompromi itu kelihatan sebelum ditekan.
+// Peringkat pool = TVL + Volume 24 jam (dua-duanya USD): "paling besar" dari sisi
+// kedalaman (TVL) sekaligus aktivitas fee (volume). Seri → spacing halus dulu.
+const poolSize = (p: explore.TokenPool): number => p.tvlUsd + (p.vol24hUsd ?? 0);
 function rankPoolsForFill(pools: explore.TokenPool[]): explore.TokenPool[] {
-  return [...pools].sort((a, b) => b.tvlUsd - a.tvlUsd || poolSpacing(a) - poolSpacing(b));
+  return [...pools].sort((a, b) => poolSize(b) - poolSize(a) || poolSpacing(a) - poolSpacing(b));
 }
 
 const tightLabel = (p: explore.TokenPool): string => {
@@ -1181,6 +1184,7 @@ const poolSummaries = (pools: explore.TokenPool[]) =>
     ver: p.protocol.toUpperCase(),
     feeLabel: msg.feeLabel(p.fee),
     tvl: msg.usdCompact(p.tvlUsd),
+    vol: p.vol24hUsd != null && p.vol24hUsd > 0 ? msg.usdCompact(p.vol24hUsd) : '?',
     // APR null = volume tak terbaca. '~0.0%' akan mengarang pool mati.
     apr: p.aprPct == null ? '?' : `~${p.aprPct >= 100 ? Math.round(p.aprPct) : p.aprPct.toFixed(1)}%`,
     tight: tightLabel(p),
