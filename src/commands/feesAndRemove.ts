@@ -2,7 +2,7 @@ import { Markup } from 'telegraf';
 import { ethers } from 'ethers';
 import { config } from '../config.js';
 import { bot, html, editProgress, mapLimit, POS_CARD_CONCURRENCY } from '../core.js';
-import { getChain } from '../chains.js';
+import { ctxOf } from '../chains.js';
 import { getPositionDetail, collectFeesOnly, removeLiquidityPct } from '../uniswap.js';
 import * as store from '../store.js';
 import * as msg from '../messages.js';
@@ -18,7 +18,7 @@ import * as msg from '../messages.js';
 async function unclaimedList(): Promise<Array<{ rec: store.PosRecord; label: string; base: number }>> {
   const out = await mapLimit(store.active(), POS_CARD_CONCURRENCY, async (rec) => {
     try {
-      const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+      const d = await getPositionDetail(rec.tokenId, ctxOf(rec));
       const amt = Number(ethers.formatUnits(d.feesBaseWei, d.baseDecimals));
       return { rec, label: `${amt.toFixed(d.baseDecimals >= 18 ? 5 : 2)} ${d.baseSymbol}`, base: amt };
     } catch {
@@ -55,7 +55,7 @@ bot.action(/^claim:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   store.beginMoneyOp(); // sweep monitor tak boleh mengirim tx dari dompet yang sama
   try {
-    const cc = getChain(rec.chain);
+    const cc = ctxOf(rec);
     if (config.safety.dryRun) {
       await ctx.editMessageText(msg.msgClaimDone(id, '(dry run)', null), html);
       return;
@@ -111,7 +111,7 @@ bot.action(/^rmpct:(\d+):(\d+)$/, async (ctx) => {
   if (!rec) return ctx.editMessageText(msg.msgAlreadyClosed(id), html);
   let est = '—';
   try {
-    const d = await getPositionDetail(id, getChain(rec.chain));
+    const d = await getPositionDetail(id, ctxOf(rec));
     const v = Number(ethers.formatUnits(d.valueBaseWei, d.baseDecimals)) * (pct / 100);
     est = `≈ ${v.toFixed(d.baseDecimals >= 18 ? 5 : 2)} ${d.baseSymbol}`;
   } catch {
@@ -140,7 +140,7 @@ bot.action(/^rmok:(\d+):(\d+)$/, async (ctx) => {
       await ctx.editMessageText(msg.msgRemoveDone(id, pct, null), html);
       return;
     }
-    const { txHash } = await removeLiquidityPct(id, pct, getChain(rec.chain));
+    const { txHash } = await removeLiquidityPct(id, pct, ctxOf(rec));
     // Modal tercatat harus ikut menyusut. Tanpa ini sisa posisi dibandingkan dengan
     // modal PENUH: tarik 50% → kartu selamanya menampilkan −50%, dan alert rugi
     // bersih langsung menyala padahal dananya sudah ada di dompet.

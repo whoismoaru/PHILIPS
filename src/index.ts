@@ -1908,7 +1908,7 @@ bot.action('addok', async (ctx) => {
 /** Konfirmasi tutup posisi (kartu). Eksekusi: remove + collect + cash-out ETH via Relay. */
 async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
   const rec = store.get(tokenId);
-  const cc = getChain(rec?.chain);
+  const cc = rec ? ctxOf(rec) : getChain();
   const d = await getPositionDetail(tokenId, cc);
   const pnlText = await positionPnlText(rec, d, cc);
   const feeF = Number(ethers.formatUnits(d.feesBaseWei, d.baseDecimals));
@@ -3069,7 +3069,11 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       await ctx.editMessageText(msg.msgDryRunClose(tokenId), html);
       return;
     }
-    const ccClose = getChain(closingRec?.chain);
+    // WAJIB venue-aware: posisi yang dibuka di Uniswap v3 BSC harus ditutup lewat
+    // PositionManager Uniswap. Dengan getChain() saja, PM PancakeSwap yang dipakai
+    // dan positions(tokenId) menunjuk posisi ORANG LAIN — detectBase gagal dan close
+    // berhenti dengan "pool is not paired with WETH/USDG/USDT".
+    const ccClose = closingRec ? ctxOf(closingRec) : getChain();
     const baseSym = isStableBase(closingRec?.baseKind ?? 'weth')
       ? baseSymbolOf(closingRec?.baseKind, ccClose)
       : ccClose.nativeSymbol;
