@@ -157,12 +157,17 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
 
   // Stats: jarak dari lebar TERUKUR. Jarak mati membuat nilai panjang bertabrakan.
   let x = PAD;
+  // Berhenti sebelum kolom teks habis: stat yang meluber akan tercetak DI ATAS
+  // karakter di kanan dan jadi tak terbaca. Lebih baik satu stat tak tampil
+  // daripada semuanya kotor.
+  const STATS_MAX_X = 700;
   for (const s of o.stats.slice(0, 4)) {
     const label = s.label.toUpperCase();
     ctx.font = '20px PhSansB';
     const lw = ctx.measureText(label).width;
     ctx.font = '28px PhSans';
     const vw = ctx.measureText(s.value).width;
+    if (x + Math.max(lw, vw) > STATS_MAX_X) break;
     ctx.fillStyle = COL.muted;
     ctx.font = '20px PhSansB';
     ctx.fillText(label, x, 518);

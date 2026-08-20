@@ -90,20 +90,28 @@ const n2 = (v: number, unit: string): string => {
 async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.PeriodStats): Promise<Buffer | null> {
   const main = s.books[0];
   if (!main) return null;
-  const wr = main.known > 0 ? (main.wins / main.known) * 100 : 0;
+  const wr = journal.winrateOf(main);
+  const pf = journal.profitFactorOf(main);
+  const avgWin = main.wins > 0 ? main.grossWin / main.wins : 0;
+  const avgLoss = main.losses > 0 ? main.grossLoss / main.losses : 0;
+  // Rata-rata menang vs kalah = penjelasan langsung untuk "kok winrate tinggi tapi
+  // rugi": di BSC satu kekalahan sebesar 27x satu kemenangan. Angka gross saja tak
+  // memperlihatkan asimetri itu.
   const stats: Array<{ label: string; value: string }> = [
-    { label: 'trades', value: `${main.known} (${main.wins}W/${main.losses}L)` },
-    { label: 'profit', value: n2(main.grossWin, main.unit) },
-    { label: 'loss', value: n2(main.grossLoss, main.unit) },
+    { label: 'trades', value: `${main.wins}W/${main.losses}L${main.flats ? `/${main.flats}=` : ''}` },
+    { label: 'avg win', value: n2(avgWin, main.unit) },
+    { label: 'avg loss', value: n2(avgLoss, main.unit) },
   ];
-  // Buku kedua HARUS kelihatan: di BSC ia bisa jadi satu-satunya yang rugi.
-  const other = s.books[1];
-  if (other) stats.push({ label: `${other.unit} book`, value: n2(other.net, other.unit) });
+  // Sengaja BERHENTI di 3: kolom teks kartu cuma muat segitu sebelum menabrak
+  // artwork. Profit factor sudah ada di baris bawah angka besar, dan buku kedua
+  // ada di caption — tak ada informasi yang hilang.
   return renderProfitCard({
     pair: `${chainLabel(chain)} · ${journal.PERIODS[key].label}`,
     positive: main.net >= 0,
     pnlBig: n2(main.net, main.unit),
-    pnlPct: `${wr.toFixed(1)}% winrate`,
+    // Winrate SENDIRIAN menyesatkan saat net negatif; profit factor ditempel di
+    // sebelahnya supaya keduanya terbaca bersama.
+    pnlPct: `${wr.toFixed(1)}% WR${pf === null ? '' : ` · PF ${pf.toFixed(2)}`}`,
     stats,
     footerLeft: `${s.known} closed · ${new Date().toISOString().slice(0, 10)}`,
   }).catch(() => null);
@@ -116,7 +124,10 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
   if (s.books.length === 0) lines.push('<i>no closed trades with a measured result in this period.</i>');
   else
     for (const b of s.books)
-      lines.push(`${b.net >= 0 ? '🟢' : '🔴'} <b>${b.unit}</b> ${n2(b.net, b.unit)} · ${b.known} trades · ${((b.wins / b.known) * 100).toFixed(1)}% WR`);
+      lines.push(
+        `${b.net >= 0 ? '🟢' : '🔴'} <b>${b.unit}</b> ${n2(b.net, b.unit)} · ${b.known} trades · ` +
+          `${journal.winrateOf(b).toFixed(1)}% WR${journal.profitFactorOf(b) === null ? '' : ` · PF ${journal.profitFactorOf(b)!.toFixed(2)}`}`,
+      );
   const tail: string[] = [];
   if (s.recovered) tail.push(`${s.recovered} sweep credited`);
   if (s.untracked) tail.push(`${s.untracked} closed outside`);

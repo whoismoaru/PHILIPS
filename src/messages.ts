@@ -628,6 +628,7 @@ export function msgPnl(opts: {
     known: number;
     wins: number;
     losses: number;
+    flats?: number;
     net: number;
     grossWin: number;
     grossLoss: number;
@@ -648,13 +649,22 @@ export function msgPnl(opts: {
   };
   const out = [head, ''];
   for (const b of opts.books) {
-    const winrate = b.known > 0 ? (b.wins / b.known) * 100 : 0;
+    // Impas (PnL tepat 0) tak masuk penyebut winrate — kalau ikut, winrate naik
+    // tanpa satu pun trade tambahan yang benar-benar menang.
+    const winrate = b.wins + b.losses > 0 ? (b.wins / (b.wins + b.losses)) * 100 : 0;
+    const pf = b.grossLoss < 0 ? b.grossWin / Math.abs(b.grossLoss) : null;
+    const avgWin = b.wins > 0 ? b.grossWin / b.wins : 0;
+    const avgLoss = b.losses > 0 ? b.grossLoss / b.losses : 0;
     out.push(
       `${dot(b.net)} ${bold(`${esc(b.unit)} book`)} : ${bold(num(b.net, b.unit))}`,
       ...tree(
         [
-          ['Trades', `${b.known} (${b.wins}W / ${b.losses}L)`],
+          ['Trades', `${b.known} (${b.wins}W / ${b.losses}L${b.flats ? ` / ${b.flats} flat` : ''})`],
           ['Winrate', `🎯 ${bold(`${winrate.toFixed(1)}%`)}`],
+          // Profit factor <1 = rugi, seberapa pun tingginya winrate.
+          ['Profit factor', pf === null ? '—' : `${pf < 1 ? '🔴' : '🟢'} ${bold(pf.toFixed(2))}`],
+          ['Avg win', `🟢 ${num(avgWin, b.unit)}`],
+          ['Avg loss', `🔴 ${num(avgLoss, b.unit)}`],
           ['Profit', `🟢 ${num(b.grossWin, b.unit)}`],
           ['Loss', `🔴 ${num(b.grossLoss, b.unit)}`],
           ...((b.best ? [['Best', `${b.best.symbol} (${num(b.best.pnl, b.unit)})`]] : []) as Array<[string, string]>),

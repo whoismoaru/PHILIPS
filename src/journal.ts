@@ -129,11 +129,23 @@ export function unitOf(chain?: string, baseKind?: JournalEntry['baseKind']): str
 }
 
 /** Satu buku PnL = satu denominasi (ETH / BNB / USDG / USDT). */
+/** Winrate = menang / (menang + kalah). Impas tak masuk penyebut. */
+export const winrateOf = (b: { wins: number; losses: number }): number =>
+  b.wins + b.losses > 0 ? (b.wins / (b.wins + b.losses)) * 100 : 0;
+
+/**
+ * Profit factor = total untung / total rugi. <1 berarti RUGI meski winrate tinggi —
+ * satu-satunya angka yang tak bisa berbohong seperti winrate. BSC: 86,31/224,92 = 0,38.
+ */
+export const profitFactorOf = (b: { grossWin: number; grossLoss: number }): number | null =>
+  b.grossLoss < 0 ? b.grossWin / Math.abs(b.grossLoss) : null;
+
 export type Book = {
   unit: string;
   known: number;
   wins: number;
   losses: number;
+  flats: number; // PnL tepat 0 (impas / hasil tak bergerak) — BUKAN menang
   net: number;
   grossWin: number;
   grossLoss: number; // negatif
@@ -174,7 +186,7 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
     const unit = unitOf(e.chain, e.baseKind);
     let b = byUnit.get(unit);
     if (!b) {
-      b = { unit, known: 0, wins: 0, losses: 0, net: 0, grossWin: 0, grossLoss: 0 };
+      b = { unit, known: 0, wins: 0, losses: 0, flats: 0, net: 0, grossWin: 0, grossLoss: 0 };
       byUnit.set(unit, b);
     }
     // 'recovery' = sisa token yang baru tersapu setelah posisinya ditutup. Uangnya
@@ -189,7 +201,13 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
     known++;
     b.known++;
     b.net += e.pnlEth;
-    if (e.pnlEth >= 0) { b.wins++; b.grossWin += e.pnlEth; } else { b.losses++; b.grossLoss += e.pnlEth; }
+    // PnL tepat 0 BUKAN kemenangan. Menghitungnya sebagai menang menggelembungkan
+    // winrate (BSC: 91,2% → 93,2% dari 10 entri impas) dan bikin kartu terbaca lebih
+    // bagus dari kenyataan — persis angka yang dipakai untuk memutuskan uang.
+    const EPS = 1e-9;
+    if (e.pnlEth > EPS) { b.wins++; b.grossWin += e.pnlEth; }
+    else if (e.pnlEth < -EPS) { b.losses++; b.grossLoss += e.pnlEth; }
+    else b.flats++;
     if (!b.best || e.pnlEth > b.best.pnl) b.best = { symbol: e.symbol, pnl: e.pnlEth };
     if (!b.worst || e.pnlEth < b.worst.pnl) b.worst = { symbol: e.symbol, pnl: e.pnlEth };
   }
