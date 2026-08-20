@@ -1146,7 +1146,7 @@ bot.action(/^back:card:(\d+)$/, async (ctx) => {
 // ---------- Fase 3: tulis (wizard /add bertahap) ----------
 
 /** Keyboard pilih pool: pasangan (WETH/USDG) · fee · kedalaman. Callback bawa base. */
-const POOL_PICK_MAX = 3; // TOP 3 by TVL — sisanya tak ditawarkan
+const POOL_PICK_MAX = 3; // TOP 3 by skor kedalaman (lihat poolSize) — sisanya tak ditawarkan
 
 // tickSpacing pool: v4 langsung; v3 dipetakan dari fee tier standar.
 function poolSpacing(p: explore.TokenPool, cc: ChainCtx = getChain()): number {
@@ -1158,16 +1158,30 @@ function poolSpacing(p: explore.TokenPool, cc: ChainCtx = getChain()): number {
 function fillTightnessPct(p: explore.TokenPool): number {
   return (Math.pow(1.0001, poolSpacing(p)) - 1) * 100;
 }
-// Urutan pool: TVL TERBESAR dulu, titik. Spacing hanya jadi pemutus saat TVL sama.
+// Pool teratas bisa punya spacing kasar (isi single-side lebih lambat) — karena itu
+// angka 'fills≤x%' tetap dicetak di kartunya supaya kompromi itu terlihat sebelum
+// ditekan.
 //
-// Sebelumnya urutannya memakai tier log10 TVL lalu spacing terhalus, sehingga pool
-// ber-TVL lebih kecil bisa naik ke atas selama masih se-orde. Sekarang murni TVL:
-// yang tampil benar-benar tiga terdalam. Konsekuensinya, pool teratas bisa punya
-// spacing kasar (isi single-side lebih lambat) — karena itu angka 'isi≤x%' tetap
-// dicetak di tombolnya supaya kompromi itu kelihatan sebelum ditekan.
-// Peringkat pool = TVL + Volume 24 jam (dua-duanya USD): "paling besar" dari sisi
-// kedalaman (TVL) sekaligus aktivitas fee (volume). Seri → spacing halus dulu.
-const poolSize = (p: explore.TokenPool): number => p.tvlUsd + (p.vol24hUsd ?? 0);
+// Ambang kedalaman: pool di bawah ini tak layak jadi tempat menaruh modal, berapa
+// pun volumenya. Volume BUKAN pengganti kedalaman — ia gampang dipalsukan.
+export const MIN_POOL_TVL_USD = 1_000;
+// Bobot volume dalam peringkat. TVL & volume beda satuan (stok vs aliran) dan
+// volume 24 jam rutin 10–30× TVL, jadi menjumlahkannya mentah-mentah membuat
+// peringkat efektif = volume saja: pernah terjadi di produksi, pool TVL $429k
+// (vol $12,8M) mengalahkan pool TVL $654k (vol $6,7M). Untuk LP yang menentukan
+// risiko eksekusi & slippage adalah kedalaman, jadi TVL yang memimpin dan volume
+// hanya menambah nilai — bukan mengambil alih.
+// Bobot saja tak cukup: dengan volume rutin 30× TVL, bahkan 0,25× masih mengambil
+// alih peringkat. Kontribusi volume karena itu DIBATASI setinggi-tingginya sebesar
+// TVL pool itu sendiri — volume boleh menggandakan skor, tak boleh lebih. Efeknya:
+// pool yang lebih dalam tak akan pernah kalah oleh pool yang >2× lebih dangkal,
+// seberapa pun ramai volumenya (yang gampang dipalsukan).
+const VOL_WEIGHT = 0.25;
+// Peringkat pool = kedalaman + bonus aktivitas fee (dibatasi). Seri → spacing halus.
+const poolSize = (p: explore.TokenPool): number => {
+  const tvl = p.tvlUsd;
+  return tvl + Math.min(VOL_WEIGHT * (p.vol24hUsd ?? 0), tvl);
+};
 function rankPoolsForFill(pools: explore.TokenPool[]): explore.TokenPool[] {
   return [...pools].sort((a, b) => poolSize(b) - poolSize(a) || poolSpacing(a) - poolSpacing(b));
 }
@@ -1553,9 +1567,10 @@ async function continueAddlp(
   // ini penjaga terakhir supaya tiap pool yang ditawarkan pasti bisa dibuka 1-sisi.
   const okBase = new Set(cc.bases.map((b) => b.kind));
   pools = pools.filter((p) => okBase.has(p.base));
-  // Buang pool debu (TVL+Vol < $500): lebih baik menawarkan <3 pool nyata daripada
-  // mengisi top-3 dengan pool $2 yang tak ada gunanya untuk LP.
-  const sized = pools.filter((p) => p.tvlUsd + (p.vol24hUsd ?? 0) >= 500);
+  // Ambang diuji pada TVL SENDIRI, bukan TVL+Volume. Dengan ambang gabungan, volume
+  // palsu meloloskan pool kosong: 20 Agu 2026 pool `USDT/牛来 fee100` ber-TVL $2
+  // (vol $83k) benar-benar tampil di top-3. Lebih baik menawarkan <3 pool nyata.
+  const sized = pools.filter((p) => p.tvlUsd >= MIN_POOL_TVL_USD);
   if (sized.length > 0) pools = sized;
   if (pools.length === 0) {
     await editProgress(ctx, prog, msg.msgNoPools(cc.bases.map((b) => b.symbol).join('/')));

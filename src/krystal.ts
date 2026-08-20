@@ -10,9 +10,10 @@ import type { PoolKeyV4 } from './uniswapV4.js';
  * dengan TVL benar. Dipakai di Robinhood (uniswap v3/v4) DAN BSC (pancakeswap v3).
  *
  * Catatan penting per protokol:
- *  - v4: Krystal mengembalikan fee EFEKTIF & tickSpacing 0 → TAK bisa dipakai mint.
- *    poolKey (currency0/1, fee, tickSpacing, hooks) diambil dari event Initialize
- *    on-chain (Blockscout) lalu DIVERIFIKASI keccak==poolId. Butuh cc.blockscout.
+ *  - v4: Krystal memberi fee EFEKTIF & tickSpacing 0 di list → TAK bisa dipakai mint.
+ *    poolKey direkonstruksi di resolveV4PoolKey (detail Krystal + brute-force fee)
+ *    lalu DIVERIFIKASI keccak==poolId. Hanya ditawarkan di chain yang bot bisa
+ *    KELOLA posisinya (butuh Blockscout utk enumerasi/monitor — BSC tak punya).
  *  - v3: poolAddress = kontrak pool langsung; buka cukup pakai fee + factory.getPool,
  *    jadi tak perlu rekonstruksi. fee wajib termasuk feeTiers chain.
  */
@@ -132,11 +133,11 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
       if (!proto || !p.poolAddress) return null;
       const t0 = p.token0?.token, t1 = p.token1?.token;
       if (!t0?.address || !t1?.address) return null;
-      // Debu → lewati SEBELUM resolusi poolKey v4 yang mahal (brute-force). Ambang
-      // rendah; penyaringan tampilan final ada di pemanggil.
+      // Debu → lewati SEBELUM resolusi poolKey v4 yang mahal (brute-force). Diuji pada
+      // TVL sendiri: volume tak boleh menutupi pool kosong (lihat MIN_POOL_TVL_USD).
+      // Ambang di sini setengah ambang tampilan — biar pemanggil tetap yang memutuskan.
       const tvl = Number(p.tvl) || 0;
-      const vol = p.stats24h?.volume != null ? Number(p.stats24h.volume) : 0;
-      if (tvl + vol < 500) return null;
+      if (tvl < 500) return null;
 
       if (proto === 'uniswapv4') {
         // v4 hanya di chain yang bot dukung PENUH: enumerasi/monitor/tutup posisi v4
