@@ -1,7 +1,8 @@
-import { Markup } from 'telegraf';
+import { Markup, Input } from 'telegraf';
 import { config } from '../config.js';
 import { bot, html } from '../core.js';
 import { CHAINS } from '../chains.js';
+import { renderProfitCard } from '../card.js';
 import * as journal from '../journal.js';
 import * as msg from '../messages.js';
 
@@ -76,24 +77,91 @@ const swap = (ctx: any, text: string, extra: any) =>
     if (!/not modified/i.test(e.message)) throw e;
   });
 
-async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey) {
+const n2 = (v: number, unit: string): string => {
+  const d = unit === 'USDG' || unit === 'USDT' ? 2 : 5;
+  return `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
+};
+
+/**
+ * Kartu PnL sebagai GAMBAR — artwork yang sama dengan profit card saat close, jadi
+ * rekap ini terbaca sebagai "momen" yang sepadan, bukan sekadar tabel teks.
+ * Buku utama (paling banyak trade) jadi angka besar; buku lain masuk baris stats.
+ */
+async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.PeriodStats): Promise<Buffer | null> {
+  const main = s.books[0];
+  if (!main) return null;
+  const wr = main.known > 0 ? (main.wins / main.known) * 100 : 0;
+  const stats: Array<{ label: string; value: string }> = [
+    { label: 'trades', value: `${main.known} (${main.wins}W/${main.losses}L)` },
+    { label: 'profit', value: n2(main.grossWin, main.unit) },
+    { label: 'loss', value: n2(main.grossLoss, main.unit) },
+  ];
+  // Buku kedua HARUS kelihatan: di BSC ia bisa jadi satu-satunya yang rugi.
+  const other = s.books[1];
+  if (other) stats.push({ label: `${other.unit} book`, value: n2(other.net, other.unit) });
+  return renderProfitCard({
+    pair: `${chainLabel(chain)} · ${journal.PERIODS[key].label}`,
+    positive: main.net >= 0,
+    pnlBig: n2(main.net, main.unit),
+    pnlPct: `${wr.toFixed(1)}% winrate`,
+    stats,
+    footerLeft: `${s.known} closed · ${new Date().toISOString().slice(0, 10)}`,
+  }).catch(() => null);
+}
+
+/** Caption ringkas — detailnya sudah terbaca di gambar (batas caption 1024 char). */
+function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStats): string {
+  const p = journal.PERIODS[key];
+  const lines = [`📈 <b>PnL Recap</b> · <b>${chainLabel(chain)}</b> · ${p.label}`, ''];
+  if (s.books.length === 0) lines.push('<i>no closed trades with a measured result in this period.</i>');
+  else
+    for (const b of s.books)
+      lines.push(`${b.net >= 0 ? '🟢' : '🔴'} <b>${b.unit}</b> ${n2(b.net, b.unit)} · ${b.known} trades · ${((b.wins / b.known) * 100).toFixed(1)}% WR`);
+  const tail: string[] = [];
+  if (s.recovered) tail.push(`${s.recovered} sweep credited`);
+  if (s.untracked) tail.push(`${s.untracked} closed outside`);
+  if (tail.length) lines.push('', `<i>${tail.join(' · ')}</i>`);
+  lines.push('', `<i>${config.safety.dryRun ? 'DRY RUN' : 'LIVE'}</i>`);
+  return lines.join('\n');
+}
+
+/**
+ * Tampilkan rekap. Kartunya adalah DOKUMEN PNG (bukan foto): Telegram mengompres
+ * foto jadi JPEG dan artefaknya paling terlihat pada teks tajam di latar gelap —
+ * persis isi kartu ini. Tombol periode meng-edit media+caption di tempat, jadi tetap
+ * satu pesan. Gagal render → jatuh ke kartu teks, rekap tak boleh hilang.
+ */
+async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh = false) {
   const p = journal.PERIODS[key];
   const s = journal.statsFor(p.ms === 0 ? 0 : Date.now() - p.ms, chain);
-  return swap(
-    ctx,
-    msg.msgPnl({
-      dryRun: config.safety.dryRun,
-      chainLabel: chainLabel(chain),
-      periodLabel: p.label,
-      known: s.known,
-      count: s.count,
-      untracked: s.untracked,
-      excluded: s.excluded,
-      recovered: s.recovered,
-      books: s.books,
-    }),
-    { ...html, ...periodKb(chain, key) },
-  );
+  const kb = periodKb(chain, key);
+  const text = msg.msgPnl({
+    dryRun: config.safety.dryRun,
+    chainLabel: chainLabel(chain),
+    periodLabel: p.label,
+    known: s.known,
+    count: s.count,
+    untracked: s.untracked,
+    excluded: s.excluded,
+    recovered: s.recovered,
+    books: s.books,
+  });
+  const buf = await pnlImage(chain, key, s);
+  if (!buf) return fresh ? ctx.reply(text, { ...html, ...kb }) : swap(ctx, text, { ...html, ...kb });
+
+  const doc = Input.fromBuffer(buf, `philips-pnl-${chain}-${key}.png`);
+  const caption = pnlCaption(chain, key, s);
+  if (fresh) {
+    // Pesan pemilih chain berupa TEKS — tak bisa di-edit jadi dokumen. Ganti utuh.
+    await ctx.deleteMessage().catch(() => {});
+    return ctx.replyWithDocument(doc, { caption, parse_mode: 'HTML', ...kb });
+  }
+  return ctx
+    .editMessageMedia({ type: 'document', media: doc, caption, parse_mode: 'HTML' }, kb)
+    .catch((e: Error) => {
+      if (/not modified/i.test(e.message)) return;
+      return swap(ctx, text, { ...html, ...kb }); // media tak bisa di-edit → teks saja
+    });
 }
 
 // Kembali ke pemilih chain — EDIT kartu yang sama, jangan kirim pesan baru.
@@ -106,7 +174,7 @@ bot.action('pnlback', async (ctx: any) => {
 // Langkah 1 → 2: chain dipilih, langsung tampilkan All Time (jawaban paling berguna).
 bot.action(/^pnlc:([a-z0-9_-]+)$/i, async (ctx: any) => {
   await ctx.answerCbQuery().catch(() => {});
-  return renderPnl(ctx, ctx.match[1], 'all');
+  return renderPnl(ctx, ctx.match[1], 'all', true);
 });
 
 bot.action(/^pnl:([a-z0-9_-]+):(1d|1w|1m|all)$/i, async (ctx: any) => {

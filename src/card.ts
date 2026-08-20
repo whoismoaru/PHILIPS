@@ -131,10 +131,21 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   ctx.font = '24px PhSansB';
   ctx.fillText(o.positive ? 'PROFIT' : 'LOSS', PAD, 250);
   ctx.fillStyle = accent;
-  ctx.font = '118px PhSansB';
-  ctx.fillText(o.pnlBig, PAD - 2, 356);
+  // Angka utama MENGECIL sendiri sampai muat di kolom teks. Ukuran mati 118px cocok
+  // untuk '+$1.42' tapi '-138.61 USDT' meluber menutupi karakter di kanan — dan
+  // rekap PnL memang sering panjang (nilai + satuan).
+  const HERO_MAX_W = 700;
+  let heroPx = 118;
+  ctx.font = `${heroPx}px PhSansB`;
+  while (heroPx > 56 && ctx.measureText(o.pnlBig).width > HERO_MAX_W) {
+    heroPx -= 4;
+    ctx.font = `${heroPx}px PhSansB`;
+  }
+  // Baseline ikut turun-naik supaya jarak ke label & ke persen tetap seimbang.
+  const heroY = 356 - Math.round((118 - heroPx) * 0.35);
+  ctx.fillText(o.pnlBig, PAD - 2, heroY);
   ctx.font = '46px PhSansB';
-  ctx.fillText(o.pnlPct, PAD, 412);
+  ctx.fillText(o.pnlPct, PAD, heroY + 56);
 
   // Divider hanya selebar area teks — jangan memotong karakter di kanan.
   ctx.strokeStyle = 'rgba(255,255,255,0.14)';
