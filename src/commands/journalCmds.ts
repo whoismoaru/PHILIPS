@@ -98,7 +98,7 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   // rugi": di BSC satu kekalahan sebesar 27x satu kemenangan. Angka gross saja tak
   // memperlihatkan asimetri itu.
   const stats: Array<{ label: string; value: string }> = [
-    { label: 'trades', value: `${main.wins}W/${main.losses}L${main.flats ? `/${main.flats}=` : ''}` },
+    { label: 'trades', value: `${main.wins}W / ${main.losses}L` },
     { label: 'avg win', value: n2(avgWin, main.unit) },
     { label: 'avg loss', value: n2(avgLoss, main.unit) },
   ];
@@ -113,7 +113,7 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
     // sebelahnya supaya keduanya terbaca bersama.
     pnlPct: `${wr.toFixed(1)}% WR${pf === null ? '' : ` · PF ${pf.toFixed(2)}`}`,
     stats,
-    footerLeft: `${s.known} closed · ${new Date().toISOString().slice(0, 10)}`,
+    footerLeft: `${s.known} scored${s.books.reduce((n, b) => n + b.flats, 0) ? ` · ${s.books.reduce((n, b) => n + b.flats, 0)} flat` : ''} · ${new Date().toISOString().slice(0, 10)}`,
   }).catch(() => null);
 }
 

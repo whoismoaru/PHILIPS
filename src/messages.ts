@@ -652,6 +652,7 @@ export function msgPnl(opts: {
     // Impas (PnL tepat 0) tak masuk penyebut winrate — kalau ikut, winrate naik
     // tanpa satu pun trade tambahan yang benar-benar menang.
     const winrate = b.wins + b.losses > 0 ? (b.wins / (b.wins + b.losses)) * 100 : 0;
+    // b.known SUDAH hanya menang+kalah (impas tak dihitung), jadi tak perlu dikurangi.
     const pf = b.grossLoss < 0 ? b.grossWin / Math.abs(b.grossLoss) : null;
     const avgWin = b.wins > 0 ? b.grossWin / b.wins : 0;
     const avgLoss = b.losses > 0 ? b.grossLoss / b.losses : 0;
@@ -659,8 +660,10 @@ export function msgPnl(opts: {
       `${dot(b.net)} ${bold(`${esc(b.unit)} book`)} : ${bold(num(b.net, b.unit))}`,
       ...tree(
         [
-          ['Trades', `${b.known} (${b.wins}W / ${b.losses}L${b.flats ? ` / ${b.flats} flat` : ''})`],
+          ['Trades', `${b.known} (${b.wins}W / ${b.losses}L)`],
           ['Winrate', `🎯 ${bold(`${winrate.toFixed(1)}%`)}`],
+          // Impas dipisah supaya jelas ia TAK ikut menghitung winrate/PF.
+          ...((b.flats ? [['Flat', `${b.flats} trade (under ~$0.1 — not scored)`]] : []) as Array<[string, string]>),
           // Profit factor <1 = rugi, seberapa pun tingginya winrate.
           ['Profit factor', pf === null ? '—' : `${pf < 1 ? '🔴' : '🟢'} ${bold(pf.toFixed(2))}`],
           ['Avg win', `🟢 ${num(avgWin, b.unit)}`],

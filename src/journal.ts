@@ -129,6 +129,19 @@ export function unitOf(chain?: string, baseKind?: JournalEntry['baseKind']): str
 }
 
 /** Satu buku PnL = satu denominasi (ETH / BNB / USDG / USDT). */
+/**
+ * Ambang "impas": di bawah ini hasilnya bukan untung maupun rugi, cuma debu — dan
+ * memasukkannya ke W/L memalsukan winrate. Nilainya per SATUAN, disetel supaya
+ * kira-kira setara $0,1: stablecoin apa adanya, ETH/BNB dikonversi kasar dari
+ * harganya. Kasar disengaja — ini penyaring debu, bukan akuntansi.
+ */
+const FLAT_EPS: Record<string, number> = {
+  USDT: 0.1,
+  USDG: 0.1,
+  ETH: 0.00005, // ~$0,11 @ $2.300
+  BNB: 0.0002, // ~$0,13 @ $650
+};
+
 /** Winrate = menang / (menang + kalah). Impas tak masuk penyebut. */
 export const winrateOf = (b: { wins: number; losses: number }): number =>
   b.wins + b.losses > 0 ? (b.wins / (b.wins + b.losses)) * 100 : 0;
@@ -145,7 +158,7 @@ export type Book = {
   known: number;
   wins: number;
   losses: number;
-  flats: number; // PnL tepat 0 (impas / hasil tak bergerak) — BUKAN menang
+  flats: number; // hasil di bawah ambang debu — bukan menang, bukan kalah
   net: number;
   grossWin: number;
   grossLoss: number; // negatif
@@ -155,7 +168,7 @@ export type Book = {
 
 export type PeriodStats = {
   count: number; // entri jurnal dalam periode
-  known: number; // total trade terukur (semua buku)
+  known: number; // trade BERKEPUTUSAN (menang/kalah); impas tak dihitung
   untracked: number; // gone/burned — hasil tak diketahui
   excluded: number; // placeholder backfill lama (result 0)
   recovered: number; // entri pemulihan sisa token (masuk net, bukan trade)
@@ -198,16 +211,17 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
       recovered++;
       continue;
     }
+    b.net += e.pnlEth;
+    // Trade yang hasilnya bukan untung maupun rugi (di bawah ~$0,1) TIDAK dihitung
+    // sebagai menang MAUPUN kalah: ia cuma impas. Dulu `pnlEth >= 0` melemparnya ke
+    // kolom menang dan menggelembungkan winrate (BSC: 10 entri impas menaikkan
+    // 91,2% → 93,2%). Uangnya tetap masuk `net` — yang tak dihitung hanya SKOR-nya.
+    const eps = FLAT_EPS[unit] ?? 0.1;
+    if (e.pnlEth > eps) { b.wins++; b.grossWin += e.pnlEth; }
+    else if (e.pnlEth < -eps) { b.losses++; b.grossLoss += e.pnlEth; }
+    else { b.flats++; continue; }
     known++;
     b.known++;
-    b.net += e.pnlEth;
-    // PnL tepat 0 BUKAN kemenangan. Menghitungnya sebagai menang menggelembungkan
-    // winrate (BSC: 91,2% → 93,2% dari 10 entri impas) dan bikin kartu terbaca lebih
-    // bagus dari kenyataan — persis angka yang dipakai untuk memutuskan uang.
-    const EPS = 1e-9;
-    if (e.pnlEth > EPS) { b.wins++; b.grossWin += e.pnlEth; }
-    else if (e.pnlEth < -EPS) { b.losses++; b.grossLoss += e.pnlEth; }
-    else b.flats++;
     if (!b.best || e.pnlEth > b.best.pnl) b.best = { symbol: e.symbol, pnl: e.pnlEth };
     if (!b.worst || e.pnlEth < b.worst.pnl) b.worst = { symbol: e.symbol, pnl: e.pnlEth };
   }
