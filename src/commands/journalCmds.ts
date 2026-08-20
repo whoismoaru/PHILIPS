@@ -89,6 +89,7 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey) {
       count: s.count,
       untracked: s.untracked,
       excluded: s.excluded,
+      recovered: s.recovered,
       books: s.books,
     }),
     { ...html, ...periodKb(chain, key) },

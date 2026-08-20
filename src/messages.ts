@@ -622,6 +622,7 @@ export function msgPnl(opts: {
   count?: number;
   untracked?: number;
   excluded?: number;
+  recovered?: number;
   books: Array<{
     unit: string;
     known: number;
@@ -667,6 +668,8 @@ export function msgPnl(opts: {
     );
   }
   const tail: string[] = [];
+  if (opts.recovered)
+    out.push(note(`Includes ${opts.recovered} leftover sweep(s) credited to the books above (not counted as trades).`));
   if (opts.untracked) tail.push(`${opts.untracked} closed outside the bot (result unknown)`);
   if (opts.excluded) tail.push(`${opts.excluded} legacy entries without result data`);
   if (tail.length) out.push(note(`Not counted: ${tail.join(' · ')}.`));
@@ -709,9 +712,18 @@ export function msgIlAlert(tokenId: string, symbol: string, lossPct: number, lim
   ].join('\n');
 }
 
-export function msgPriceDrop(tokenId: string, symbol: string, dropPct: number, baseSymbol = 'WETH'): string {
+export function msgPriceDrop(
+  tokenId: string,
+  symbol: string,
+  dropPct: number,
+  baseSymbol = 'WETH',
+  tier?: number, // anak tangga yang baru dilewati — menandai ini alert LANJUTAN
+): string {
+  // Alert kedua & seterusnya harus terbaca beda dari yang pertama; kalau tampilannya
+  // identik, penurunan yang makin dalam gampang dikira notifikasi lama yang terulang.
+  const deep = tier !== undefined && tier >= 50;
   return [
-    `🔴 ${bold('Alert: Price Drop')}`,
+    `${deep ? '🚨' : '🔴'} ${bold(`Alert: Price Drop${tier !== undefined ? ` · past −${tier}%` : ''}`)}`,
     '',
     `🆔 ${bold('Position ID:')} #${esc(tokenId)}`,
     `🔗 ${bold('Pair:')} ${esc(baseSymbol)} / ${esc(symbol)}`,
@@ -1133,7 +1145,7 @@ export function msgJournal(
     symbol: string;
     pnlPct: number;
     pnlEth: number;
-    reason: 'cashed' | 'gone' | 'burned';
+    reason: 'cashed' | 'gone' | 'burned' | 'recovery';
     ca?: string;
     chain?: string;
     baseKind?: 'weth' | 'usdg' | 'usdt';
@@ -1148,6 +1160,7 @@ export function msgJournal(
     cashed: 'cashed',
     gone: 'gone',
     burned: 'closed outside',
+    recovery: 'swept',
   };
   const header = ['id', 'token', 'pnl eth', 'pnl %', 'age'];
   const rows = items.map((r) => [

@@ -19,8 +19,15 @@ import { join } from 'node:path';
  */
 
 const INTERVAL_MS = 60_000;
-const DROP_ALERT_PCT = 25; // alert bila harga token turun ≥25% dari entry
-const DROP_REARM_PCT = 20; // pulih di atas -20% → boleh alert lagi (histeresis anti-spam)
+const DROP_ALERT_PCT = 25; // ambang bawaan bila /alerts belum diatur
+const DROP_HYSTERESIS_PCT = 5; // pulih 5% di atas ambang → tangga di-arm ulang (anti-spam)
+/**
+ * Anak tangga alert anjlok, dari ambang user ke bawah. Satu bunyi per tangga, jadi
+ * penurunan yang makin dalam tetap memberi kabar tanpa membanjiri notifikasi.
+ */
+function dropLadder(base: number): number[] {
+  return [...new Set([base, 30, 50, 75].filter((t) => t >= base))].sort((a, b) => a - b);
+}
 const SWEEP_EVERY_MS = 30 * 60_000; // sapu sisa token tiap 30 menit
 const SWEEP_COOLDOWN_MS = 6 * 3_600_000; // per token max 1 percobaan / 6 jam
 const SWEEP_RECENT_MS = 24 * 3_600_000; // sisa cash-out selalu muncul di jam-jam pertama
@@ -74,6 +81,7 @@ async function sweepLeftovers(bot: Telegraf) {
       .all()
       .filter((r) => r.status === 'STOPPED')
       .map((r) => ({
+        tokenId: r.tokenId,
         ca: r.ca,
         chain: r.chain,
         symbol: r.symbol,
@@ -84,6 +92,7 @@ async function sweepLeftovers(bot: Telegraf) {
       .read(80)
       .filter((e) => e.ca && Date.now() - e.closedAt < SWEEP_RECENT_MS)
       .map((e) => ({
+        tokenId: e.tokenId,
         ca: e.ca as string,
         chain: e.chain,
         symbol: e.symbol,
@@ -136,6 +145,16 @@ async function sweepLeftovers(bot: Telegraf) {
       // Sisa sudah pulih → record STOPPED tak perlu dipertahankan (kalau tidak ia
       // menumpuk selamanya & tetap jadi kandidat sweep tiap ronde).
       reapStopped(r.ca, r.chain);
+      // Uangnya baru masuk SEKARANG, jauh setelah entri close ditulis. Tanpa catatan
+      // ini jurnal permanen mengecilkan PnL posisi tersebut.
+      journal.recordRecovery({
+        tokenId: r.tokenId,
+        symbol: r.symbol,
+        ca: r.ca,
+        chain: r.chain,
+        baseKind: stableAddr ? r.baseKind : 'weth',
+        amountWei: res.outEthWei,
+      });
       const gotLabel = `${Number(ethers.formatUnits(res.outEthWei, res.dec)).toFixed(res.dec >= 18 ? 6 : 2)} ${res.unit}`;
       console.log(`[sweep] ${r.symbol} (${cc.key}) → +${gotLabel} via ${res.route}`);
       await bot.telegram.sendMessage(
@@ -263,18 +282,26 @@ async function tick(bot: Telegraf) {
         store.update(rec.tokenId, { convertedAlerted: false });
       }
 
-      // Alert anjlok: harga token vs entry. Sekali per crossing; re-arm saat pulih.
+      // Alert anjlok BERTINGKAT. Versi lama menyala SEKALI lalu diam sampai harga
+      // pulih — jadi penurunan katastrofik menghasilkan tepat satu notifikasi:
+      // 币安城 dialerti di -15%, lalu SENYAP sampai -93% (record-nya dropAlerted=true).
+      // Sekarang tiap anak tangga (-15/-30/-50/-75 dari ambangmu) berbunyi sendiri.
       const entry = rec.entryPrice ? Number(rec.entryPrice) : 0;
       const cur = Number(d.currentPrice);
-      const dropLimit = cfg.dropPct ?? DROP_ALERT_PCT;
       if (cfg.dropPct !== null && entry > 0 && cur > 0) {
+        const ladder = dropLadder(cfg.dropPct ?? DROP_ALERT_PCT);
         const dropPct = (1 - cur / entry) * 100;
-        if (dropPct >= dropLimit && !rec.dropAlerted) {
+        // Migrasi record lama: dropAlerted=true berarti tangga pertama sudah bunyi.
+        const tier = rec.dropTier ?? (rec.dropAlerted ? 1 : 0);
+        // Tangga terdalam yang sudah dilewati harga sekarang.
+        let reached = 0;
+        for (const t of ladder) if (dropPct >= t) reached++;
+        if (reached > tier) {
           // Tombol menuju kartu KONFIRMASI tutup (stop:), bukan kirim tx — invariant
           // §8.5 utuh, tapi user tak perlu mengetik command saat harga jatuh.
           await bot.telegram.sendMessage(
             config.telegram.allowedUserId,
-            msgPriceDrop(rec.tokenId, rec.symbol, dropPct, d.baseSymbol),
+            msgPriceDrop(rec.tokenId, rec.symbol, dropPct, d.baseSymbol, ladder[reached - 1]),
             {
               ...html,
               reply_markup: {
@@ -282,9 +309,10 @@ async function tick(bot: Telegraf) {
               },
             },
           );
-          store.update(rec.tokenId, { dropAlerted: true });
-        } else if (rec.dropAlerted && dropPct < dropLimit - (DROP_ALERT_PCT - DROP_REARM_PCT)) {
-          store.update(rec.tokenId, { dropAlerted: false });
+          store.update(rec.tokenId, { dropTier: reached, dropAlerted: true });
+        } else if (tier > 0 && dropPct < ladder[0] - DROP_HYSTERESIS_PCT) {
+          // Pulih di atas ambang (minus histeresis) → seluruh tangga di-arm ulang.
+          store.update(rec.tokenId, { dropTier: 0, dropAlerted: false });
         }
       }
       // Alert rugi bersih (IL setelah fee): nilai posisi + fee vs modal saat buka.

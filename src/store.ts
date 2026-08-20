@@ -33,7 +33,8 @@ export type PosRecord = {
   entryPrice?: string; // harga token dalam base saat buka (untuk alert anjlok); kosong = posisi lama
   convertedAlerted?: boolean; // sudah kirim alert terkonversi penuh? (reset saat in range lagi)
   ilAlerted?: boolean; // sudah kirim alert rugi bersih? (reset saat pulih)
-  dropAlerted?: boolean; // sudah kirim alert anjlok? (reset saat harga pulih — anti-spam)
+  dropAlerted?: boolean; // LAMA: sudah kirim alert anjlok? (dimigrasi ke dropTier)
+  dropTier?: number; // berapa anak tangga anjlok yang sudah dialerti (0 = belum)
   stoppedAt?: number;
   resultEthWei?: string; // ETH diterima saat stop (untuk PnL final)
   imported?: boolean; // ditemukan on-chain (bukan dibuka via bot) → entry tak diketahui

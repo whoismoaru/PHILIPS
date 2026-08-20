@@ -21,10 +21,44 @@ export type JournalEntry = {
   resultEthWei?: string; // kosong = tidak diketahui (posisi gone/burned)
   pnlEth: number;
   pnlPct: number;
-  reason: 'cashed' | 'gone' | 'burned';
+  reason: 'cashed' | 'gone' | 'burned' | 'recovery';
 };
 
 const FILE = join(process.cwd(), 'data', 'journal.jsonl');
+
+/**
+ * Catat PEMULIHAN sisa token yang baru berhasil disapu setelah posisinya ditutup.
+ *
+ * Tanpa ini jurnal permanen mengecilkan PnL: entri close sudah tertulis dengan hasil
+ * saat itu, lalu monitor menjual sisanya berjam-jam kemudian dan hasilnya tak pernah
+ * masuk ke mana pun. 'recovery' menambah NET ke buku denominasinya tapi TIDAK
+ * dihitung sebagai trade (tak menggeser jumlah trade / winrate).
+ */
+export function recordRecovery(r: {
+  tokenId: string;
+  symbol: string;
+  ca?: string;
+  chain?: string;
+  baseKind?: JournalEntry['baseKind'];
+  amountWei: bigint;
+}): void {
+  const amt = Number(ethers.formatUnits(r.amountWei, baseDecimalsOf(r.chain, r.baseKind)));
+  if (!(amt > 0)) return;
+  record({
+    tokenId: r.tokenId,
+    symbol: r.symbol,
+    ca: r.ca,
+    chain: r.chain,
+    baseKind: r.baseKind,
+    openedAt: Date.now(),
+    closedAt: Date.now(),
+    initialWethWei: '0',
+    resultEthWei: r.amountWei.toString(),
+    pnlEth: amt,
+    pnlPct: 0,
+    reason: 'recovery',
+  });
+}
 
 export function record(e: JournalEntry): void {
   try {
@@ -112,6 +146,7 @@ export type PeriodStats = {
   known: number; // total trade terukur (semua buku)
   untracked: number; // gone/burned — hasil tak diketahui
   excluded: number; // placeholder backfill lama (result 0)
+  recovered: number; // entri pemulihan sisa token (masuk net, bukan trade)
   books: Book[]; // urut: paling banyak trade dulu
 };
 
@@ -132,7 +167,7 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
     (e) => (e.closedAt ?? 0) >= sinceMs && (!chain || (e.chain ?? 'robinhood') === chain),
   );
   const byUnit = new Map<string, Book>();
-  let known = 0, untracked = 0, excluded = 0;
+  let known = 0, untracked = 0, excluded = 0, recovered = 0;
   for (const e of all) {
     if (e.resultEthWei === undefined) { untracked++; continue; }
     if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; }
@@ -142,6 +177,15 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
       b = { unit, known: 0, wins: 0, losses: 0, net: 0, grossWin: 0, grossLoss: 0 };
       byUnit.set(unit, b);
     }
+    // 'recovery' = sisa token yang baru tersapu setelah posisinya ditutup. Uangnya
+    // NYATA (masuk net & profit), tapi itu bukan trade tersendiri — menghitungnya
+    // sebagai trade akan menggelembungkan jumlah trade sekaligus memalsukan winrate.
+    if (e.reason === 'recovery') {
+      b.net += e.pnlEth;
+      b.grossWin += e.pnlEth;
+      recovered++;
+      continue;
+    }
     known++;
     b.known++;
     b.net += e.pnlEth;
@@ -150,7 +194,7 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
     if (!b.worst || e.pnlEth < b.worst.pnl) b.worst = { symbol: e.symbol, pnl: e.pnlEth };
   }
   const books = [...byUnit.values()].sort((a, b) => b.known - a.known);
-  return { count: all.length, known, untracked, excluded, books };
+  return { count: all.length, known, untracked, excluded, recovered, books };
 }
 
 /**
