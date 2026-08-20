@@ -1,7 +1,7 @@
 import type { Telegraf } from 'telegraf';
 import { config } from './config.js';
 import { getPositionDetail } from './uniswap.js';
-import { getChain, CHAINS, ERC20_ABI, baseDecimalsOf } from './chains.js';
+import { getChain, CHAINS, ERC20_ABI, baseDecimalsOf, ctxOf } from './chains.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { ethers } from 'ethers';
 import * as store from './store.js';
@@ -84,6 +84,7 @@ async function sweepLeftovers(bot: Telegraf) {
         tokenId: r.tokenId,
         ca: r.ca,
         chain: r.chain,
+        venue: r.venue,
         symbol: r.symbol,
         baseKind: r.baseKind,
         cap: r.leftoverWei ? BigInt(r.leftoverWei) : undefined,
@@ -95,6 +96,7 @@ async function sweepLeftovers(bot: Telegraf) {
         tokenId: e.tokenId,
         ca: e.ca as string,
         chain: e.chain,
+        venue: undefined as string | undefined,
         symbol: e.symbol,
         baseKind: e.baseKind,
         cap: undefined as bigint | undefined,
@@ -106,7 +108,7 @@ async function sweepLeftovers(bot: Telegraf) {
     if (seen.has(key)) continue;
     seen.add(key);
     if (Date.now() < (nextSweep.get(key) ?? 0)) continue;
-    const cc = getChain(r.chain);
+    const cc = ctxOf(r);
     try {
       const t = new ethers.Contract(r.ca, ERC20_ABI, cc.wallet);
       const bal: bigint = await t.balanceOf(cc.wallet.address);
@@ -230,7 +232,7 @@ async function tick(bot: Telegraf) {
     await sweepLeftovers(bot).catch((e) => console.log('[sweep] gagal:', (e as Error).message.slice(0, 120)));
   for (const rec of store.active()) {
     try {
-      const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+      const d = await getPositionDetail(rec.tokenId, ctxOf(rec));
       const cfg = alerts.get();
       if (cfg.rangeNotify && rec.lastInRange !== undefined && rec.lastInRange !== d.inRange) {
         if (d.inRange) {

@@ -11,7 +11,7 @@
  *
  * Read-only murni: tak menyentuh wallet/on-chain. Aman gagal (throw → kartu error).
  */
-import { getChain, type ChainCtx } from './chains.js';
+import { getChain, venueCtx, venuesFor, type ChainCtx } from './chains.js';
 import type { PoolKeyV4 } from './uniswapV4.js';
 import { ethers } from 'ethers';
 import * as m from './messages.js';
@@ -158,6 +158,7 @@ export type TokenPool = {
   tvlUsd: number;
   vol24hUsd?: number; // volume 24 jam (USD) — untuk ranking "terbesar" & tampilan
   aprPct?: number | null; // fee 24 jam disetahunkan; null = volume tak terbaca
+  venue?: string; // DEX non-bawaan chain (mis. 'uniswapv3' di BSC); kosong = bawaan
   poolKey?: PoolKeyV4; // v4 saja — currency0/1, fee, tickSpacing, hooks
   baseIsCurrency0?: boolean; // v4 saja
 };
@@ -377,35 +378,44 @@ async function poolsForTokenDex(ctx: ChainCtx, token: string): Promise<TokenPool
   const otherSymbol = symByAddr[token.toLowerCase()] ?? (await tokenC.symbol().catch(() => '?'));
   const nativeUsd = await getBaseUsd(ctx);
 
+  // Sapu SEMUA DEX yang bot punya kontraknya di chain ini: bawaan (undefined) +
+  // tiap venue. Tanpa ini, di BSC hanya PancakeSwap yang terlihat, padahal Uniswap
+  // v3 juga hidup di sana dengan factory sendiri — dan untuk sebagian token justru
+  // hanya Uniswap yang punya pool.
+  const venues: Array<string | undefined> = [undefined, ...venuesFor(ctx.key)];
   const found = await Promise.all(
-    ctx.bases.flatMap((base) =>
-      ctx.feeTiers.map(async (fee): Promise<TokenPool | null> => {
-        try {
-          const pool: string = await ctx.factory.getPool(base.address, token, fee);
-          if (!pool || pool === ethers.ZeroAddress) return null;
-          const baseC = new ethers.Contract(base.address, ERC20_BAL_ABI, ctx.provider);
-          const reserve: bigint = await baseC.balanceOf(pool);
-          if (reserve <= 0n) return null; // pool terdaftar tapi kosong
-          const amt = Number(ethers.formatUnits(reserve, base.decimals));
-          // TVL ≈ 2× sisi base (pool seimbang secara nilai). Stablecoin = $1.
-          const usdPerBase = base.kind === 'weth' ? nativeUsd : 1;
-          const tvlUsd = usdPerBase !== null ? amt * usdPerBase * 2 : 0;
-          const vol = volByPool.get(pool.toLowerCase()) ?? 0;
-          return {
-            protocol: 'v3',
-            base: base.kind,
-            baseSymbol: base.symbol,
-            otherSymbol: String(otherSymbol),
-            fee,
-            tvlUsd,
-            vol24hUsd: vol,
-            aprPct: aprOf(vol, fee, tvlUsd),
-          };
-        } catch {
-          return null;
-        }
-      }),
-    ),
+    venues.flatMap((venue) => {
+      const vctx = venueCtx(ctx, venue);
+      return vctx.bases.flatMap((base) =>
+        vctx.feeTiers.map(async (fee): Promise<TokenPool | null> => {
+          try {
+            const pool: string = await vctx.factory.getPool(base.address, token, fee);
+            if (!pool || pool === ethers.ZeroAddress) return null;
+            const baseC = new ethers.Contract(base.address, ERC20_BAL_ABI, vctx.provider);
+            const reserve: bigint = await baseC.balanceOf(pool);
+            if (reserve <= 0n) return null; // pool terdaftar tapi kosong
+            const amt = Number(ethers.formatUnits(reserve, base.decimals));
+            // TVL ≈ 2× sisi base (pool seimbang secara nilai). Stablecoin = $1.
+            const usdPerBase = base.kind === 'weth' ? nativeUsd : 1;
+            const tvlUsd = usdPerBase !== null ? amt * usdPerBase * 2 : 0;
+            const vol = volByPool.get(pool.toLowerCase()) ?? 0;
+            return {
+              protocol: 'v3',
+              base: base.kind,
+              baseSymbol: base.symbol,
+              otherSymbol: String(otherSymbol),
+              fee,
+              tvlUsd,
+              vol24hUsd: vol,
+              aprPct: aprOf(vol, fee, tvlUsd),
+              ...(venue ? { venue } : {}),
+            };
+          } catch {
+            return null;
+          }
+        }),
+      );
+    }),
   );
   const out = found.filter((p): p is TokenPool => p !== null);
   out.sort((a, b) => b.tvlUsd - a.tvlUsd);

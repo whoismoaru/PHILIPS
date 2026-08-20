@@ -21,6 +21,7 @@ export type ChainCtx = {
   nativeSymbol: string; // ETH / BNB
   dexKey: string; // chainId versi DexScreener
   dexLabel: string; // nama DEX tempat posisi dibuka ('Uniswap' | 'PancakeSwap')
+  venue?: string; // DEX non-bawaan di chain ini (mis. 'uniswapv3' di BSC); kosong = bawaan
   blockscout: string | null; // base URL API explorer (null = tak tersedia)
   provider: ethers.Provider; // JsonRpcProvider, atau FallbackProvider bila ada RPC cadangan
   /** Signer aktif. VoidSigner (alamat 0x0) bila belum ada dompet terhubung. */
@@ -277,6 +278,73 @@ function build(key: string, d: Def): ChainCtx {
   };
 }
 
+/**
+ * VENUE = DEX kedua di chain yang SAMA.
+ *
+ * ChainCtx menyimpan satu set kontrak per chain, jadi BSC hanya bisa "melihat"
+ * PancakeSwap. Padahal Uniswap v3 juga hidup di BSC dengan factory sendiri, dan
+ * pool-nya sering justru yang terdalam untuk token tertentu (mis. SAUCE/USDT:
+ * PancakeSwap TIDAK punya pool sama sekali, Uniswap v3 punya TVL $14,7k & volume
+ * $263k/24j). Membuangnya berarti menyembunyikan pool single-side yang nyata.
+ *
+ * Venue TIDAK dimasukkan ke CHAINS: `Object.values(CHAINS)` dipakai untuk sapu
+ * saldo/WETH per chain, dan chain yang muncul dua kali akan diproses dua kali.
+ * Sebagai gantinya venueCtx() mengkloning ChainCtx dan menukar KONTRAK-nya saja —
+ * provider, wallet, base, dan RPC tetap satu (tak ada koneksi/nonce tambahan).
+ */
+export type VenueDef = {
+  dexLabel: string;
+  factory: string;
+  pm: string;
+  router: string;
+  quoter: string;
+  feeTiers?: number[];
+  tickSpacing?: Record<number, number>;
+  routerHasDeadline?: boolean;
+};
+
+// Alamat diverifikasi on-chain: PM.factory() cocok & PM.WETH9() = WBNB.
+export const VENUES: Record<string, Record<string, VenueDef>> = {
+  bsc: {
+    uniswapv3: {
+      dexLabel: 'Uniswap',
+      factory: '0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7',
+      pm: '0x7b8A01B39D58278b5DE7e48c8449c9f4F5170613',
+      router: '0xB971eF87ede563556b2ED4b1C0b0019111Dd85d2',
+      quoter: '0x78D78E420Da98ad378D7799bE8f4AF69033EB077',
+      // Uniswap memakai 3000, PancakeSwap 2500 — jangan diwarisi.
+      feeTiers: UNI_FEES,
+      tickSpacing: UNI_SPACING,
+    },
+  },
+};
+
+/** Nama venue non-default yang tersedia di sebuah chain. */
+export const venuesFor = (key: string): string[] => Object.keys(VENUES[key] ?? {});
+
+/**
+ * ChainCtx untuk sebuah venue. venue kosong / tak dikenal → ctx aslinya (DEX bawaan
+ * chain). Wallet & provider dipakai ulang, jadi nonce tetap satu antrean.
+ */
+export function venueCtx(cc: ChainCtx, venue?: string): ChainCtx {
+  if (!venue) return cc;
+  const v = VENUES[cc.key]?.[venue];
+  if (!v) return cc;
+  return {
+    ...cc,
+    dexLabel: v.dexLabel,
+    factory: new ethers.Contract(v.factory, FACTORY_ABI, cc.wallet),
+    positionManager: new ethers.Contract(v.pm, POSITION_MANAGER_ABI, cc.wallet),
+    pmAddress: v.pm,
+    routerAddress: v.router,
+    quoterAddress: v.quoter,
+    routerHasDeadline: v.routerHasDeadline ?? false,
+    feeTiers: v.feeTiers ?? cc.feeTiers,
+    tickSpacing: v.tickSpacing ?? cc.tickSpacing,
+    venue,
+  };
+}
+
 // Dibangun MALAS dan bisa dibangun ulang: dompet baru ada setelah /connect,
 // dan kontrak menyimpan signer-nya di dalam. Proxy dipakai supaya ~100 titik
 // pemakaian `CHAINS[...]` / `Object.values(CHAINS)` tak perlu diubah sama sekali.
@@ -303,6 +371,14 @@ export const CHAINS: Record<string, ChainCtx> = new Proxy({} as Record<string, C
 });
 
 export const DEFAULT_CHAIN = 'robinhood';
+/**
+ * ChainCtx untuk sebuah record posisi/jurnal: chain + venue-nya. Posisi yang dibuka
+ * di DEX non-bawaan (mis. Uniswap v3 di BSC) HARUS ditutup/dibaca lewat kontrak DEX
+ * itu juga — memakai cc.factory chain akan menunjuk pool yang salah (atau nol).
+ */
+export const ctxOf = (rec: { chain?: string; venue?: string }): ChainCtx =>
+  venueCtx(getChain(rec.chain), rec.venue);
+
 export const getChain = (key?: string): ChainCtx => CHAINS[key ?? DEFAULT_CHAIN] ?? CHAINS[DEFAULT_CHAIN];
 
 /** Deteksi di chain mana alamat token ini ADA (punya kode kontrak). */

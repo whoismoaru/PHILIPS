@@ -67,6 +67,8 @@ import {
   type ChainCtx,
   type BaseKind,
   type BaseAsset,
+  venueCtx,
+  ctxOf,
 } from './chains.js';
 import { swapExactInBest, previewSwapOut } from './swapRoute.js';
 
@@ -488,7 +490,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       const ccLp = getChain();
       const vals = await mapLimit(store.active(), POS_CARD_CONCURRENCY, async (rec) => {
         try {
-          const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+          const d = await getPositionDetail(rec.tokenId, ctxOf(rec));
           const v = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
           return isStableBase(d.baseKind) ? v : ethUsd !== null ? v * ethUsd : null;
         } catch {
@@ -608,18 +610,18 @@ async function buildPositionCard(
 ): Promise<{ text: string; extra: Record<string, unknown> }> {
   let d: PositionDetail;
   try {
-    d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+    d = await getPositionDetail(rec.tokenId, ctxOf(rec));
   } catch (e) {
     if (isGoneErr(e)) {
       finalizeClose(rec.tokenId, { reason: 'gone' });
       return {
-        text: msg.msgPositionGone(rec.tokenId, rec.symbol, baseSymbolOf(rec.baseKind, getChain(rec.chain))),
+        text: msg.msgPositionGone(rec.tokenId, rec.symbol, baseSymbolOf(rec.baseKind, ctxOf(rec))),
         extra: html,
       };
     }
     return { text: msg.msgPositionReadFail(rec.tokenId, (e as Error).message), extra: html };
   }
-  const cc = getChain(rec.chain);
+  const cc = ctxOf(rec);
   // Warm ethUsd cache sekali per chain (getEthUsd sudah TTL 60s).
   if (d.baseKind === 'weth') await getEthUsd(cc.wethAddress, cc);
   const pnlText = await positionPnlText(rec, d, cc);
@@ -679,7 +681,7 @@ async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean)
 
 /** Tampilan detail (komposisi, nilai, fee). */
 async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolean) {
-  const cc = getChain(rec.chain);
+  const cc = ctxOf(rec);
   const d = await getPositionDetail(rec.tokenId, cc);
   const valF = Number(ethers.formatUnits(d.valueBaseWei, d.baseDecimals));
   const feeF = Number(ethers.formatUnits(d.feesBaseWei, d.baseDecimals));
@@ -848,7 +850,7 @@ async function cmdPositions(ctx: any, edit = false) {
   // v3 (RPC paralel, urutan stabil). Posisi hilang (NFT burned) → finalize & buang.
   const v3rows = await mapLimit(active, POS_CARD_CONCURRENCY, async (rec): Promise<PosRow | null> => {
     try {
-      const d = await getPositionDetail(rec.tokenId, getChain(rec.chain));
+      const d = await getPositionDetail(rec.tokenId, ctxOf(rec));
       const dec = d.baseDecimals;
       const curF = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec));
       const initF = rec.imported ? null : Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
@@ -1281,6 +1283,8 @@ async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
 /** Langkah 3/4 — pilih nominal ETH. */
 /** Base asset yang dipilih di wizard (weth/usdg/usdt). */
 const wizardBase = (flow: AddFlow): BaseAsset => baseOf(getChain(flow.chain), flow.base ?? 'weth');
+/** ctx wizard = chain + venue pool yang DIPILIH (Uniswap v3 di BSC punya factory sendiri). */
+const wizardCtx = (flow: AddFlow): ChainCtx => venueCtx(getChain(flow.chain), flow.selected?.venue);
 
 /** Konteks nominal base-aware: preset (dari /size per-aset), simbol, batas, contoh. */
 function amountCtx(flow: AddFlow) {
@@ -1340,7 +1344,7 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
 /** Langkah 4/4 — hitung & tampilkan rencana + konfirmasi. */
 async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   if (flow.selected?.protocol === 'v4') return renderPlanStepV4(ctx, flow, edit);
-  const cc = getChain(flow.chain);
+  const cc = wizardCtx(flow);
   const base = baseOf(cc, flow.base ?? 'weth');
   // plan + estimasi biaya paralel (saling independen).
   const tokenSide = flow.strategy === 'token';
@@ -1509,8 +1513,10 @@ async function continueAddlp(
         )
       : null;
   const kIds = new Set(kPools.map(poolIdOf).filter(Boolean) as string[]);
-  // v3 tak punya poolId; dedup-nya per (base+fee) — satu token+base+fee = satu pool v3.
-  const v3Key = (p: explore.TokenPool) => `v3:${p.base}:${p.fee}`;
+  // v3 tak punya poolId; dedup-nya per (venue+base+fee) — satu token+DEX+base+fee =
+  // satu pool v3. Venue WAJIB ikut: Uniswap v3 & PancakeSwap v3 di BSC bisa punya
+  // base+fee sama tapi itu dua pool berbeda di dua factory berbeda.
+  const v3Key = (p: explore.TokenPool) => `v3:${p.venue ?? ''}:${p.base}:${p.fee}`;
   const kV3 = new Set(kPools.filter((p) => p.protocol === 'v3').map(v3Key));
 
   // Gateway: v3 tetap disaring fee-tier standar; v4 poolKey-nya divalidasi/di-resolve
@@ -1521,7 +1527,8 @@ async function continueAddlp(
   const gwFixed = (
     await Promise.all(
       gwPools
-        .filter((p) => (p.protocol === 'v4' ? true : cc.feeTiers.includes(p.fee)))
+        // feeTiers diuji terhadap VENUE pool itu (Uniswap 3000 vs PancakeSwap 2500).
+        .filter((p) => (p.protocol === 'v4' ? true : venueCtx(cc, p.venue).feeTiers.includes(p.fee)))
         .map(async (p) => {
           if (p.protocol !== 'v4' || !p.poolKey) {
             return kV3.has(v3Key(p)) ? null : p; // v3 sudah ada di Krystal → skip
@@ -1816,7 +1823,9 @@ bot.action('addok', async (ctx) => {
     // jauh kemudian, tick & harga sudah basi → mint revert (gas hangus) atau posisi
     // mendarat di rentang yang tak relevan. Hitung ulang tepat sebelum kirim tx.
     // (Jalur v4 sudah melakukan ini; ini menyamakan v3.)
-    const ccAdd = getChain(flow.chain);
+    // Pool bisa berasal dari DEX non-bawaan chain (mis. Uniswap v3 di BSC) — kontrak
+    // yang dipakai HARUS milik venue-nya, bukan cc.factory chain.
+    const ccAdd = wizardCtx(flow);
     // Sisi setoran HARUS sama dengan yang dipilih di langkah strategi. Selalu
     // memakai planAddSingleSided di sini membuat pilihan "sisi token" berubah jadi
     // setoran base saat dikonfirmasi — nominal token dibaca sbg nominal ETH.
@@ -1840,6 +1849,7 @@ bot.action('addok', async (ctx) => {
     store.add({
       tokenId,
       chain: flow.chain,
+      venue: flow.selected?.venue,
       ca: flow.token,
       fee: flow.fee,
       symbol: plan.otherSymbol,
@@ -3012,7 +3022,7 @@ async function sendProfitCard(
   if (!rec) return;
   const stable = isStableBase(rec.baseKind ?? 'weth');
   const dec = baseDecimalsOf(rec.chain, rec.baseKind);
-  const baseSym = baseSymbolOf(rec.baseKind, getChain(rec.chain));
+  const baseSym = baseSymbolOf(rec.baseKind, ctxOf(rec));
   const baseIn = Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
   const baseOut = Number(ethers.formatUnits(baseOutWei, dec));
   const pnl = baseOut - baseIn;
@@ -3021,7 +3031,7 @@ async function sendProfitCard(
   let usd: number | null = null;
   if (stable) usd = pnl;
   else {
-    const cc = getChain(rec.chain);
+    const cc = ctxOf(rec);
     const eu = await getEthUsd(cc.wethAddress, cc);
     usd = eu !== null ? pnl * eu : null;
   }

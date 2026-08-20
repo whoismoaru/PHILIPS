@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { config } from './config.js';
-import type { ChainCtx } from './chains.js';
+import { venueCtx, venuesFor, type ChainCtx } from './chains.js';
 import type { TokenPool } from './explore.js';
 import type { PoolKeyV4 } from './uniswapV4.js';
 
@@ -94,8 +94,19 @@ async function resolveV4PoolKey(cc: ChainCtx, p: any): Promise<PoolKeyV4 | null>
   return null;
 }
 
-/** Protokol v3 asli chain ini (samakan dgn cc.factory): PancakeSwap→pancakev3, selain itu uniswapv3. */
+/** Protokol v3 BAWAAN chain (yang cc.factory tunjuk). */
 const chainV3Protocol = (cc: ChainCtx): string => (cc.dexLabel === 'PancakeSwap' ? 'pancakev3' : 'uniswapv3');
+
+/**
+ * Venue untuk sebuah protokol v3 di chain ini, atau null bila bot tak punya
+ * kontraknya. Protokol bawaan → undefined (pakai kontrak chain apa adanya);
+ * protokol lain → nama venue bila terdaftar di VENUES (mis. 'uniswapv3' di BSC,
+ * yang punya factory sendiri terpisah dari PancakeSwap).
+ */
+function venueForProtocol(cc: ChainCtx, proto: string): { venue?: string } | null {
+  if (proto === chainV3Protocol(cc)) return {};
+  return venuesFor(cc.key).includes(proto) ? { venue: proto } : null;
+}
 
 /** base bot dari sepasang currency (ETH-native/WETH/WBNB, USDG, atau USDT). null = tak didukung. */
 function baseOfPair(
@@ -165,13 +176,17 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
       }
 
       if (V3_PROTOCOLS.has(proto)) {
-        // Hanya v3 dari DEX ASLI chain ini (yang cc.factory tunjuk). Pool uniswapv3 di
-        // BSC pakai factory berbeda dari PancakeSwap → factory.getPool gagal saat buka.
-        if (proto !== chainV3Protocol(cc)) return null;
+        // Hanya v3 yang kontraknya BOT PUNYA: DEX bawaan chain, atau venue terdaftar
+        // (mis. uniswapv3 di BSC — factory-nya beda dari PancakeSwap, jadi harus
+        // dibuka lewat kontrak Uniswap, bukan cc.factory).
+        const vn = venueForProtocol(cc, proto);
+        if (!vn) return null;
+        const vcc = venueCtx(cc, vn.venue);
         const b = baseOfPair(cc, t0.address, t1.address);
         if (!b) return null;
         const fee = Number(p.feeTier);
-        if (!cc.feeTiers.includes(fee)) return null; // fee tak terdaftar di factory → tak bisa dibuka
+        // feeTiers-nya milik VENUE: Uniswap punya 3000, PancakeSwap 2500.
+        if (!vcc.feeTiers.includes(fee)) return null;
         const otherSym = (b.baseIsCurrency0 ? t1.symbol : t0.symbol) ?? '?';
         const baseSym = (b.baseIsCurrency0 ? t0.symbol : t1.symbol) ?? (b.base === 'weth' ? 'ETH' : b.base.toUpperCase());
         return {
@@ -183,6 +198,7 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
           tvlUsd: Number(p.tvl) || 0,
           vol24hUsd: p.stats24h?.volume != null ? Number(p.stats24h.volume) : 0,
           aprPct: p.stats24h?.apr != null ? Number(p.stats24h.apr) : null,
+          ...(vn.venue ? { venue: vn.venue } : {}),
         };
       }
       return null;

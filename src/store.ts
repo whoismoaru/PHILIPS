@@ -19,6 +19,7 @@ export function writeJson(file: string, data: unknown): void {
 export type PosRecord = {
   tokenId: string;
   chain?: string; // kunci chain ('robinhood' dst); kosong = robinhood (posisi lama)
+  venue?: string; // DEX non-bawaan chain (mis. 'uniswapv3' di BSC); kosong = DEX bawaan
   ca: string; // alamat token (non-base)
   fee: number;
   symbol: string;
