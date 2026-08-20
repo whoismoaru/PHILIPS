@@ -91,27 +91,19 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   const main = s.books[0];
   if (!main) return null;
   const wr = journal.winrateOf(main);
-  const pf = journal.profitFactorOf(main);
-  const avgWin = main.wins > 0 ? main.grossWin / main.wins : 0;
-  const avgLoss = main.losses > 0 ? main.grossLoss / main.losses : 0;
-  // Rata-rata menang vs kalah = penjelasan langsung untuk "kok winrate tinggi tapi
-  // rugi": di BSC satu kekalahan sebesar 27x satu kemenangan. Angka gross saja tak
-  // memperlihatkan asimetri itu.
+  // Format kartu: TRADES / PROFIT / LOSS — gross-nya langsung terbaca dan kolomnya
+  // pas tanpa menabrak artwork. Profit factor & rata-rata menang/kalah dipindah ke
+  // caption + kartu teks, tempat yang memang muat.
   const stats: Array<{ label: string; value: string }> = [
-    { label: 'trades', value: `${main.wins}W / ${main.losses}L` },
-    { label: 'avg win', value: n2(avgWin, main.unit) },
-    { label: 'avg loss', value: n2(avgLoss, main.unit) },
+    { label: 'trades', value: `${main.known} (${main.wins}W/${main.losses}L)` },
+    { label: 'profit', value: n2(main.grossWin, main.unit) },
+    { label: 'loss', value: n2(main.grossLoss, main.unit) },
   ];
-  // Sengaja BERHENTI di 3: kolom teks kartu cuma muat segitu sebelum menabrak
-  // artwork. Profit factor sudah ada di baris bawah angka besar, dan buku kedua
-  // ada di caption — tak ada informasi yang hilang.
   return renderProfitCard({
     pair: `${chainLabel(chain)} · ${journal.PERIODS[key].label}`,
     positive: main.net >= 0,
     pnlBig: n2(main.net, main.unit),
-    // Winrate SENDIRIAN menyesatkan saat net negatif; profit factor ditempel di
-    // sebelahnya supaya keduanya terbaca bersama.
-    pnlPct: `${wr.toFixed(1)}% WR${pf === null ? '' : ` · PF ${pf.toFixed(2)}`}`,
+    pnlPct: `${wr.toFixed(1)}% winrate`,
     stats,
     footerLeft: `${s.known} scored${s.books.reduce((n, b) => n + b.flats, 0) ? ` · ${s.books.reduce((n, b) => n + b.flats, 0)} flat` : ''} · ${new Date().toISOString().slice(0, 10)}`,
   }).catch(() => null);

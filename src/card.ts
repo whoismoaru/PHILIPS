@@ -159,8 +159,9 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   let x = PAD;
   // Berhenti sebelum kolom teks habis: stat yang meluber akan tercetak DI ATAS
   // karakter di kanan dan jadi tak terbaca. Lebih baik satu stat tak tampil
-  // daripada semuanya kotor.
-  const STATS_MAX_X = 700;
+  // daripada semuanya kotor. Batasnya disetel agar TIGA stat normal tetap muat
+  // (pernah kesempitan sampai kolom LOSS ikut terbuang), tapi yang keempat tertahan.
+  const STATS_MAX_X = 790;
   for (const s of o.stats.slice(0, 4)) {
     const label = s.label.toUpperCase();
     ctx.font = '20px PhSansB';
