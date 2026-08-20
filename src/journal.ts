@@ -86,47 +86,82 @@ export function recentTokens(limit = 80): Array<{ ca: string; chain?: string; sy
   return out;
 }
 
-export type LifetimeStats = {
-  count: number; // total entri jurnal
-  known: number; // cashout nyata (hasil terukur) yang dihitung PnL
-  excluded: number; // entri lama tanpa hasil terukur (res=0 backfill) → diabaikan
+/** Label denominasi sebuah entri. 'weth' di BSC berarti BNB, bukan ETH. */
+export function unitOf(chain?: string, baseKind?: JournalEntry['baseKind']): string {
+  const bk = baseKind ?? 'weth';
+  if (bk === 'usdg') return 'USDG';
+  if (bk === 'usdt') return 'USDT';
+  return (chain ?? 'robinhood') === 'bsc' ? 'BNB' : 'ETH';
+}
+
+/** Satu buku PnL = satu denominasi (ETH / BNB / USDG / USDT). */
+export type Book = {
+  unit: string;
+  known: number;
   wins: number;
   losses: number;
-  netEth: number;
+  net: number;
   grossWin: number;
   grossLoss: number; // negatif
-  best?: { symbol: string; pnlEth: number };
-  worst?: { symbol: string; pnlEth: number };
+  best?: { symbol: string; pnl: number };
+  worst?: { symbol: string; pnl: number };
+};
+
+export type PeriodStats = {
+  count: number; // entri jurnal dalam periode
+  known: number; // total trade terukur (semua buku)
+  untracked: number; // gone/burned — hasil tak diketahui
+  excluded: number; // placeholder backfill lama (result 0)
+  books: Book[]; // urut: paling banyak trade dulu
 };
 
 /**
- * Rekap PnL seumur hidup dari cashout NYATA.
- * Kecualikan entri tanpa hasil terukur:
- *   - resultEthWei undefined  → posisi gone/burned (NFT hilang)
- *   - resultEthWei == 0        → placeholder backfill trade lama (posisi dimigrasi TANPA data
- *     hasil → default 0). Ini BUKAN rugi total: cashout nyata selalu kembalikan >0. Dulu 12
- *     entri semacam ini memalsukan net jadi -0.83 ETH padahal cashout riil ≈ +0.016 ETH.
- *   - baseKind != weth      → close berdenominasi stablecoin; JANGAN dijumlahkan ke net ETH.
+ * Rekap PnL untuk sebuah periode, DIPISAH PER DENOMINASI.
+ *
+ * Dulu semuanya dipaksa jadi satu angka "net ETH", lalu tiap entri non-weth /
+ * non-robinhood DIBUANG. Akibatnya 82 dari 271 entri tak pernah tampil — termasuk
+ * SELURUH 44 trade BSC (net -138,61 USDT). Buku yang paling rugi justru tak
+ * kelihatan. Menjumlahkan ETH + BNB + USDT jelas salah, jadi jawabannya bukan
+ * membuang, tapi memisah: satu baris per denominasi.
+ *
+ * Tetap dikecualikan: resultEthWei undefined (gone/burned, hasil tak diketahui) dan
+ * == 0 (placeholder backfill trade lama; cashout nyata selalu > 0).
  */
-export function lifetimeStats(): LifetimeStats {
-  const all = read(Number.MAX_SAFE_INTEGER);
-  let wins = 0, losses = 0, netEth = 0, grossWin = 0, grossLoss = 0, known = 0, excluded = 0;
-  let best: { symbol: string; pnlEth: number } | undefined;
-  let worst: { symbol: string; pnlEth: number } | undefined;
+export function statsFor(sinceMs = 0): PeriodStats {
+  const all = read(Number.MAX_SAFE_INTEGER).filter((e) => (e.closedAt ?? 0) >= sinceMs);
+  const byUnit = new Map<string, Book>();
+  let known = 0, untracked = 0, excluded = 0;
   for (const e of all) {
-    if (e.resultEthWei === undefined) continue; // gone/burned → tak terukur
-    if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; } // placeholder backfill lama
-    if ((e.baseKind ?? 'weth') !== 'weth') { excluded++; continue; } // denominasi stablecoin
-    // baseKind 'weth' di BSC berarti BNB, bukan ETH. Menjumlahkannya ke net ETH
-    // sama salahnya dengan mencampur stablecoin — kecualikan chain non-utama.
-    if ((e.chain ?? 'robinhood') !== 'robinhood') { excluded++; continue; }
+    if (e.resultEthWei === undefined) { untracked++; continue; }
+    if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; }
+    const unit = unitOf(e.chain, e.baseKind);
+    let b = byUnit.get(unit);
+    if (!b) {
+      b = { unit, known: 0, wins: 0, losses: 0, net: 0, grossWin: 0, grossLoss: 0 };
+      byUnit.set(unit, b);
+    }
     known++;
-    netEth += e.pnlEth;
-    if (e.pnlEth >= 0) { wins++; grossWin += e.pnlEth; } else { losses++; grossLoss += e.pnlEth; }
-    if (!best || e.pnlEth > best.pnlEth) best = { symbol: e.symbol, pnlEth: e.pnlEth };
-    if (!worst || e.pnlEth < worst.pnlEth) worst = { symbol: e.symbol, pnlEth: e.pnlEth };
+    b.known++;
+    b.net += e.pnlEth;
+    if (e.pnlEth >= 0) { b.wins++; b.grossWin += e.pnlEth; } else { b.losses++; b.grossLoss += e.pnlEth; }
+    if (!b.best || e.pnlEth > b.best.pnl) b.best = { symbol: e.symbol, pnl: e.pnlEth };
+    if (!b.worst || e.pnlEth < b.worst.pnl) b.worst = { symbol: e.symbol, pnl: e.pnlEth };
   }
-  return { count: all.length, known, excluded, wins, losses, netEth, grossWin, grossLoss, best, worst };
+  const books = [...byUnit.values()].sort((a, b) => b.known - a.known);
+  return { count: all.length, known, untracked, excluded, books };
+}
+
+export const PERIODS = {
+  '1d': { label: '1 Day', ms: 24 * 3600_000 },
+  '1w': { label: '1 Week', ms: 7 * 24 * 3600_000 },
+  '1m': { label: '1 Month', ms: 30 * 24 * 3600_000 },
+  all: { label: 'All Time', ms: 0 },
+} as const;
+export type PeriodKey = keyof typeof PERIODS;
+
+/** Net ETH Robinhood seumur hidup — dipakai baris "realized" di /status. */
+export function lifetimeNetEth(): number {
+  return statsFor(0).books.find((b) => b.unit === 'ETH')?.net ?? 0;
 }
 
 /** Baca N entri terbaru (terbaru dulu). */

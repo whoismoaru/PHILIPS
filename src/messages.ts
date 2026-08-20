@@ -599,48 +599,78 @@ function sgEth(n: number): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(5)} ETH`;
 }
 
+export function msgPnlPicker(): string {
+  return [
+    `📈 ${bold('PnL Recap')}`,
+    '',
+    'Pick a period to recap your closed trades.',
+    '',
+    note('Books are kept per denomination — ETH, BNB, USDG and USDT are never summed together.'),
+  ].join('\n');
+}
+
+/**
+ * Kartu rekap PnL untuk satu periode. SATU BUKU PER DENOMINASI: ETH, BNB, USDG,
+ * USDT punya baris sendiri. Menjumlahkannya jadi satu angka "net ETH" itu salah —
+ * dan versi lama menghindarinya dengan MEMBUANG buku non-ETH, sehingga seluruh
+ * riwayat BSC tak pernah kelihatan sama sekali.
+ */
 export function msgPnl(opts: {
   dryRun: boolean;
+  periodLabel: string;
   known: number;
+  count?: number;
+  untracked?: number;
   excluded?: number;
-  count?: number; // total entri jurnal (untuk baris 'tak terukur')
-  wins: number;
-  losses: number;
-  netEth: number;
-  grossWin: number;
-  grossLoss: number;
-  best?: { symbol: string; pnlEth: number };
-  worst?: { symbol: string; pnlEth: number };
+  books: Array<{
+    unit: string;
+    known: number;
+    wins: number;
+    losses: number;
+    net: number;
+    grossWin: number;
+    grossLoss: number;
+    best?: { symbol: string; pnl: number };
+    worst?: { symbol: string; pnl: number };
+  }>;
 }): string {
+  const head = `📈 ${bold('PnL Recap')} · ${bold(esc(opts.periodLabel))}`;
   if (opts.known === 0) {
-    return [`📈 ${bold('Total Lifetime PnL')}`, '', note('no closed trades yet.')].join('\n');
+    const out = [head, '', note('no closed trades with a measured result in this period.')];
+    if (opts.untracked) out.push(note(`${opts.untracked} closed outside the bot (result unknown).`));
+    out.push('', note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
+    return out.join('\n');
   }
-  const winrate = (opts.wins / opts.known) * 100;
-  const untracked = opts.count ? opts.count - opts.known - (opts.excluded ?? 0) : 0;
-  const rows: Array<[string, string]> = [
-    ['Total Trades', `${opts.known} (${opts.wins} Win / ${opts.losses} Loss)`],
-    ['Winrate', `🎯 ${bold(`${winrate.toFixed(1)}%`)}`],
-    ['Total Profit', `🟢 ${bold(sgEth(opts.grossWin))}`],
-    ['Total Loss', `🔴 ${bold(sgEth(opts.grossLoss))}`],
-    ...(untracked > 0
-      ? ([['Untracked', `${untracked} trade(s) (burned / closed outside the bot)`]] as Array<[string, string]>)
-      : []),
-  ];
-  const out = [
-    `📈 ${bold('Total Lifetime PnL')}`,
-    '',
-    `${dot(opts.netEth)} ${bold('Net Cashout:')} ${bold(sgEth(opts.netEth))}`,
-    '',
-    `📊 ${bold('Trading Statistics :')}`,
-    ...tree(rows, 12),
-  ];
-  if (opts.best)
-    out.push('', `🏆 ${bold('Best Trade')}  : ${esc(opts.best.symbol)} (${dot(opts.best.pnlEth)} ${bold(sgEth(opts.best.pnlEth))})`);
-  if (opts.worst)
-    out.push(`⚠️ ${bold('Worst Trade')} : ${esc(opts.worst.symbol)} (${dot(opts.worst.pnlEth)} ${bold(sgEth(opts.worst.pnlEth))})`);
-  if (opts.excluded && opts.excluded > 0)
-    out.push('', note(`${opts.excluded} older trade(s) without result data were excluded.`));
-  out.push('', note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
+  const num = (v: number, unit: string): string => {
+    const d = unit === 'USDG' || unit === 'USDT' ? 2 : 5;
+    return `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
+  };
+  const out = [head, ''];
+  for (const b of opts.books) {
+    const winrate = b.known > 0 ? (b.wins / b.known) * 100 : 0;
+    out.push(
+      `${dot(b.net)} ${bold(`${esc(b.unit)} book`)} : ${bold(num(b.net, b.unit))}`,
+      ...tree(
+        [
+          ['Trades', `${b.known} (${b.wins}W / ${b.losses}L)`],
+          ['Winrate', `🎯 ${bold(`${winrate.toFixed(1)}%`)}`],
+          ['Profit', `🟢 ${num(b.grossWin, b.unit)}`],
+          ['Loss', `🔴 ${num(b.grossLoss, b.unit)}`],
+          ...((b.best ? [['Best', `${b.best.symbol} (${num(b.best.pnl, b.unit)})`]] : []) as Array<[string, string]>),
+          ...((b.worst && b.worst.pnl < 0
+            ? [['Worst', `${b.worst.symbol} (${num(b.worst.pnl, b.unit)})`]]
+            : []) as Array<[string, string]>),
+        ],
+        9,
+      ),
+      '',
+    );
+  }
+  const tail: string[] = [];
+  if (opts.untracked) tail.push(`${opts.untracked} closed outside the bot (result unknown)`);
+  if (opts.excluded) tail.push(`${opts.excluded} legacy entries without result data`);
+  if (tail.length) out.push(note(`Not counted: ${tail.join(' · ')}.`));
+  out.push(note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
   return out.join('\n');
 }
 

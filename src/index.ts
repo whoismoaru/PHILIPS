@@ -526,7 +526,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       holdingsCount,
       lpUsd,
       lpFailed,
-      realizedEth: journal.lifetimeStats().netEth,
+      realizedEth: journal.lifetimeNetEth(),
       // Aset tujuan yang disarankan = base chain aktif, bukan 'WETH/USDG' kaku.
       sellInto: basesFor(getChain())
         .map((b) => b.symbol)
