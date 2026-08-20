@@ -3239,7 +3239,24 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   closingInFlight.set(key, Date.now());
   const cc = getChain();
   const tracked = v4store.getV4(tokenId); // tangkap SEBELUM removeV4
-  const beforeWei = await cc.provider.getBalance(cc.wallet.address).catch(() => null);
+  // Base dibaca dari poolKey SEBELUM close (setelah burn, info pool ikut hilang).
+  const trackedBase = await getPoolKeyV4(cc, tokenId)
+    .then((x) => (x.base === 'USDG' ? 'usdg' : 'weth'))
+    .catch(() => 'weth' as const);
+  // Hasil close diukur dari delta saldo BASE posisi. Base ETH → saldo native; base
+  // USDG → saldo token USDG. Dulu `afterWei` dipaksa null untuk non-ETH, sehingga
+  // SETIAP close v4 berpasangan USDG tercatat tanpa hasil: hilang dari /pnl dan tak
+  // pernah memunculkan profit card. Pool terbaik sering justru yang USDG.
+  const readBase = async (): Promise<bigint | null> => {
+    if (trackedBase === 'usdg') {
+      if (!cc.usdgAddress) return null;
+      return (await new ethers.Contract(cc.usdgAddress, ERC20_ABI, cc.provider)
+        .balanceOf(cc.wallet.address)
+        .catch(() => null)) as bigint | null;
+    }
+    return cc.provider.getBalance(cc.wallet.address).catch(() => null);
+  };
+  const beforeWei = await readBase();
   // Profit card v4: butuh hasil terukur + modal awal. Diisi di cabang jurnal di
   // bawah (satu-satunya tempat keduanya diketahui), dikirim setelah kartu teks.
   let cardRec: store.PosRecord | undefined;
@@ -3259,12 +3276,16 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
       // Jurnalkan sebelum berhenti melacak — tanpa ini /history & /pnl buta pada v4,
       // dan sisa token v4 tak pernah jadi kandidat sweep (ca hanya ada di jurnal).
       if (r.base === 'ETH' || r.base === 'USDG') {
-        const afterWei =
-          r.base === 'ETH' ? await cc.provider.getBalance(cc.wallet.address).catch(() => null) : null;
+        const afterWei = await readBase();
         // ponytail: hasil ETH = delta saldo native (ikut memotong gas → PnL konservatif).
         // Ledger presisi baru perlu kalau v4 jadi jalur utama.
+        // Base yang diukur harus SAMA dengan base hasil close; kalau tidak, deltanya
+        // milik aset lain → lebih baik "tak terukur" daripada angka yang salah.
+        const sameBase = trackedBase === (r.base === 'USDG' ? 'usdg' : 'weth');
         const measured =
-          beforeWei !== null && afterWei !== null && afterWei > beforeWei ? afterWei - beforeWei : undefined;
+          sameBase && beforeWei !== null && afterWei !== null && afterWei > beforeWei
+            ? afterWei - beforeWei
+            : undefined;
         const rec = {
           tokenId,
           symbol: `${r.sym0}/${r.sym1}`,

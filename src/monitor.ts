@@ -1,8 +1,8 @@
 import type { Telegraf } from 'telegraf';
 import { config } from './config.js';
 import { getPositionDetail } from './uniswap.js';
-import { getChain, CHAINS, ERC20_ABI } from './chains.js';
-import { swapTokenToEthRobust } from './relay.js';
+import { getChain, CHAINS, ERC20_ABI, baseDecimalsOf } from './chains.js';
+import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { ethers } from 'ethers';
 import * as store from './store.js';
 import * as alerts from './alerts.js';
@@ -48,7 +48,20 @@ function saveSweep() {
   }
 }
 
-/** Sapu token sisa (cash-out gagal) di wallet → swap ke ETH. Non-fatal. */
+/** Buang record STOPPED untuk token ini — sisanya sudah tak ada lagi di wallet. */
+function reapStopped(ca: string, chain?: string): void {
+  const st = store
+    .all()
+    .find(
+      (x) =>
+        x.status === 'STOPPED' &&
+        (x.chain ?? 'robinhood') === (chain ?? 'robinhood') &&
+        x.ca?.toLowerCase() === ca.toLowerCase(),
+    );
+  if (st) store.remove(st.tokenId);
+}
+
+/** Sapu token sisa (cash-out gagal) di wallet → swap ke base posisi. Non-fatal. */
 async function sweepLeftovers(bot: Telegraf) {
   if (Date.now() - lastSweepRun < SWEEP_EVERY_MS) return;
   lastSweepRun = Date.now();
@@ -60,11 +73,23 @@ async function sweepLeftovers(bot: Telegraf) {
     ...store
       .all()
       .filter((r) => r.status === 'STOPPED')
-      .map((r) => ({ ca: r.ca, chain: r.chain, symbol: r.symbol, cap: r.leftoverWei ? BigInt(r.leftoverWei) : undefined })),
+      .map((r) => ({
+        ca: r.ca,
+        chain: r.chain,
+        symbol: r.symbol,
+        baseKind: r.baseKind,
+        cap: r.leftoverWei ? BigInt(r.leftoverWei) : undefined,
+      })),
     ...journal
       .read(80)
       .filter((e) => e.ca && Date.now() - e.closedAt < SWEEP_RECENT_MS)
-      .map((e) => ({ ca: e.ca as string, chain: e.chain, symbol: e.symbol, cap: undefined as bigint | undefined })),
+      .map((e) => ({
+        ca: e.ca as string,
+        chain: e.chain,
+        symbol: e.symbol,
+        baseKind: e.baseKind,
+        cap: undefined as bigint | undefined,
+      })),
   ];
   for (const r of candidates) {
     if (!r.ca) continue;
@@ -76,7 +101,14 @@ async function sweepLeftovers(bot: Telegraf) {
     try {
       const t = new ethers.Contract(r.ca, ERC20_ABI, cc.wallet);
       const bal: bigint = await t.balanceOf(cc.wallet.address);
-      if (bal === 0n) continue;
+      if (bal === 0n) {
+        // Saldo habis (tersapu lebih dulu / dijual manual) → record STOPPED-nya sudah
+        // tak punya sisa untuk dipulihkan. Dulu cuma `continue`, jadi record mati
+        // menetap SELAMANYA di store & ikut disapu tiap ronde (terbukti: 币安城
+        // nyangkut sejak 11 Agu dengan saldo on-chain 0). Reap di sini.
+        reapStopped(r.ca, r.chain);
+        continue;
+      }
       // Jual maksimal SISA posisi ini — jangan dump bag spot token yang sama yang
       // kebetulan kamu pegang terpisah. Tanpa cap (record lama) → seluruh saldo.
       const amt = r.cap !== undefined && r.cap < bal ? r.cap : bal;
@@ -84,22 +116,31 @@ async function sweepLeftovers(bot: Telegraf) {
       nextSweep.set(key, Date.now() + SWEEP_COOLDOWN_MS);
       saveSweep();
       if (config.safety.dryRun) continue;
-      const res = await swapTokenToEthRobust(r.ca, amt, cc);
+      // Sapu ke base ASLI posisi. Dulu selalu ke native: menutup posisi USDT lalu
+      // memulihkan sisanya sebagai BNB mengubah denominasi & eksposur diam-diam,
+      // dan bikin hasilnya tak bisa dicocokkan dengan modal awal posisi itu.
+      const stableAddr = r.baseKind === 'usdg' ? cc.usdgAddress : r.baseKind === 'usdt' ? cc.usdtAddress : undefined;
+      const res = stableAddr
+        ? await swapTokenToUsdgRobust(r.ca, amt, stableAddr, cc).then((x) => ({
+            outEthWei: x.outWei,
+            route: x.route,
+            unit: r.baseKind === 'usdg' ? 'USDG' : 'USDT',
+            dec: baseDecimalsOf(r.chain, r.baseKind),
+          }))
+        : await swapTokenToEthRobust(r.ca, amt, cc).then((x) => ({
+            outEthWei: x.outEthWei,
+            route: x.route,
+            unit: cc.nativeSymbol,
+            dec: 18,
+          }));
       // Sisa sudah pulih → record STOPPED tak perlu dipertahankan (kalau tidak ia
       // menumpuk selamanya & tetap jadi kandidat sweep tiap ronde).
-      const st = store
-        .all()
-        .find(
-          (x) =>
-            x.status === 'STOPPED' &&
-            (x.chain ?? 'robinhood') === (r.chain ?? 'robinhood') &&
-            x.ca?.toLowerCase() === r.ca.toLowerCase(),
-        );
-      if (st) store.remove(st.tokenId);
-      console.log(`[sweep] ${r.symbol} (${cc.key}) → +${ethers.formatEther(res.outEthWei)} ${cc.nativeSymbol} via ${res.route}`);
+      reapStopped(r.ca, r.chain);
+      const gotLabel = `${Number(ethers.formatUnits(res.outEthWei, res.dec)).toFixed(res.dec >= 18 ? 6 : 2)} ${res.unit}`;
+      console.log(`[sweep] ${r.symbol} (${cc.key}) → +${gotLabel} via ${res.route}`);
       await bot.telegram.sendMessage(
         config.telegram.allowedUserId,
-        `♻️ Swept leftover ${r.symbol} → +${Number(ethers.formatEther(res.outEthWei)).toFixed(6)} ${cc.nativeSymbol} (${res.route})`,
+        `♻️ Swept leftover ${r.symbol} → +${gotLabel} (${res.route})`,
       );
     } catch (e) {
       const emsg = (e as Error).message ?? '';

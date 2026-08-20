@@ -175,8 +175,11 @@ async function swapViaUniswap(
   const { ERC20_ABI } = await import('./chain.js');
   const { wallet, weth } = ctx;
 
+  // Jalur ini memang khusus token→WETH/WBNB. Token yang likuiditasnya hanya di pool
+  // stablecoin akan gagal DI SINI — itu benar; pemulihannya lewat jalur 3 (stable-hop).
   const pools = (await discoverPools(tokenAddress, ctx)).filter((p) => p.baseReserve > 0n);
-  if (pools.length === 0) throw new Error('no WETH pool available for the fallback swap');
+  if (pools.length === 0)
+    throw new Error(`no ${ctx.bases.find((b) => b.kind === 'weth')?.symbol ?? 'WETH'} pool for the fallback swap`);
   const fee = pools[0].fee;
 
   const txHashes: string[] = [];
@@ -296,21 +299,23 @@ export async function swapTokenToEthRobust(
     }
   }
 
-  // Jalur 3: 2-hop token → USDG → ETH. Wajib utk token yang likuiditasnya HANYA di
-  // pool USDG (mis. GME/USDG) — tak punya pool WETH, jadi jalur 1 & 2 selalu gagal &
-  // token nyangkut. Guard: hanya bila USDG dikenal & token BUKAN USDG (hindari rekursi).
-  const usdgAddr = ctx.usdgAddress;
-  if (usdgAddr && tokenAddress.toLowerCase() !== usdgAddr.toLowerCase()) {
+  // Jalur 3: 2-hop token → stablecoin → native. Wajib utk token yang likuiditasnya
+  // HANYA di pool stablecoin (GME/USDG di Robinhood, 币安城/USDT di BSC) — tak punya
+  // pool WETH/WBNB, jadi jalur 1 & 2 selalu gagal & token nyangkut selamanya.
+  // Stablecoin-nya IKUT CHAIN: dulu digerbang `ctx.usdgAddress` saja, sehingga BSC
+  // (yang punya USDT, bukan USDG) melewati jalur ini sama sekali.
+  const stableAddr = ctx.usdgAddress ?? ctx.usdtAddress;
+  if (stableAddr && tokenAddress.toLowerCase() !== stableAddr.toLowerCase()) {
     try {
-      const u = await swapTokenToUsdgRobust(tokenAddress, amountWei, usdgAddr, ctx, maxSlipPct);
-      const eth = await swapTokenToEthRobust(usdgAddr, u.outWei, ctx, maxSlipPct); // USDG→ETH (relay/uniswap)
+      const u = await swapTokenToUsdgRobust(tokenAddress, amountWei, stableAddr, ctx, maxSlipPct);
+      const eth = await swapTokenToEthRobust(stableAddr, u.outWei, ctx, maxSlipPct); // stable→native
       return {
         txHashes: [...u.txHashes, ...eth.txHashes],
         outEthWei: eth.outEthWei,
-        route: `usdg-hop(${u.route}→${eth.route})`,
+        route: `stable-hop(${u.route}→${eth.route})`,
       };
     } catch (e) {
-      errors.push(`usdg-hop: ${(e as Error).message.slice(0, 80)}`);
+      errors.push(`stable-hop: ${(e as Error).message.slice(0, 80)}`);
     }
   }
 
