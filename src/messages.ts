@@ -599,14 +599,13 @@ function sgEth(n: number): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(5)} ETH`;
 }
 
-export function msgPnlPicker(): string {
-  return [
-    `📈 ${bold('PnL Recap')}`,
-    '',
-    'Pick a period to recap your closed trades.',
-    '',
-    note('Books are kept per denomination — ETH, BNB, USDG and USDT are never summed together.'),
-  ].join('\n');
+export function msgPnlPicker(chains: Array<{ label: string; trades: number }>): string {
+  const out = [`📈 ${bold('PnL Recap')}`, '', 'Pick a chain to recap its closed trades.', ''];
+  if (chains.length) {
+    out.push(...tree(chains.map((c) => [c.label, `${c.trades} closed trade${c.trades === 1 ? '' : 's'}`]), 12), '');
+  }
+  out.push(note('Books stay per denomination — ETH, BNB, USDG and USDT are never summed together.'));
+  return out.join('\n');
 }
 
 /**
@@ -617,6 +616,7 @@ export function msgPnlPicker(): string {
  */
 export function msgPnl(opts: {
   dryRun: boolean;
+  chainLabel: string;
   periodLabel: string;
   known: number;
   count?: number;
@@ -634,7 +634,7 @@ export function msgPnl(opts: {
     worst?: { symbol: string; pnl: number };
   }>;
 }): string {
-  const head = `📈 ${bold('PnL Recap')} · ${bold(esc(opts.periodLabel))}`;
+  const head = `📈 ${bold('PnL Recap')} · ${bold(esc(opts.chainLabel))} · ${esc(opts.periodLabel)}`;
   if (opts.known === 0) {
     const out = [head, '', note('no closed trades with a measured result in this period.')];
     if (opts.untracked) out.push(note(`${opts.untracked} closed outside the bot (result unknown).`));

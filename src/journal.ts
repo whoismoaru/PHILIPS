@@ -127,8 +127,10 @@ export type PeriodStats = {
  * Tetap dikecualikan: resultEthWei undefined (gone/burned, hasil tak diketahui) dan
  * == 0 (placeholder backfill trade lama; cashout nyata selalu > 0).
  */
-export function statsFor(sinceMs = 0): PeriodStats {
-  const all = read(Number.MAX_SAFE_INTEGER).filter((e) => (e.closedAt ?? 0) >= sinceMs);
+export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
+  const all = read(Number.MAX_SAFE_INTEGER).filter(
+    (e) => (e.closedAt ?? 0) >= sinceMs && (!chain || (e.chain ?? 'robinhood') === chain),
+  );
   const byUnit = new Map<string, Book>();
   let known = 0, untracked = 0, excluded = 0;
   for (const e of all) {
@@ -151,6 +153,23 @@ export function statsFor(sinceMs = 0): PeriodStats {
   return { count: all.length, known, untracked, excluded, books };
 }
 
+/**
+ * Chain yang punya riwayat di jurnal, urut terbanyak. Dipakai untuk bubble pemilih
+ * chain di /pnl — dibangun dari DATA, bukan daftar keras, jadi chain baru (mis.
+ * Base) muncul sendiri begitu ada trade pertamanya, dan chain lama yang sudah tak
+ * dipakai (mis. 'stable') tetap bisa dilihat riwayatnya.
+ */
+export function chainsWithHistory(): Array<{ key: string; trades: number }> {
+  const n = new Map<string, number>();
+  for (const e of read(Number.MAX_SAFE_INTEGER)) {
+    const k = e.chain ?? 'robinhood';
+    n.set(k, (n.get(k) ?? 0) + 1);
+  }
+  return [...n.entries()]
+    .map(([key, trades]) => ({ key, trades }))
+    .sort((a, b) => b.trades - a.trades);
+}
+
 export const PERIODS = {
   '1d': { label: '1 Day', ms: 24 * 3600_000 },
   '1w': { label: '1 Week', ms: 7 * 24 * 3600_000 },
@@ -161,7 +180,7 @@ export type PeriodKey = keyof typeof PERIODS;
 
 /** Net ETH Robinhood seumur hidup — dipakai baris "realized" di /status. */
 export function lifetimeNetEth(): number {
-  return statsFor(0).books.find((b) => b.unit === 'ETH')?.net ?? 0;
+  return statsFor(0, 'robinhood').books.find((b) => b.unit === 'ETH')?.net ?? 0;
 }
 
 /** Baca N entri terbaru (terbaru dulu). */
