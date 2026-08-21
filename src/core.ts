@@ -33,7 +33,15 @@ export const html = { parse_mode: 'HTML' as const };
 /** Batas ETH/tx: nilai <= 0 atau kosong berarti TANPA batas. */
 const rawMax = Number(config.safety.maxEthPerTx);
 export const maxEth = rawMax > 0 ? rawMax : Infinity;
-export const maxEthLabel = maxEth === Infinity ? 'unlimited' : `${maxEth} ETH`;
+
+/** Batas per-tx utk base stablecoin (USDT/USDG). Kosong/<=0 = TANPA batas. */
+const rawStable = Number(config.safety.maxStablePerTx);
+export const maxStable = rawStable > 0 ? rawStable : Infinity;
+
+/** Label batas yang menyebut satuan aset yang benar (ETH di Robinhood, BNB di BSC). */
+export const capLabelFor = (cap: number, sym: string) =>
+  cap === Infinity ? 'unlimited' : `${cap} ${sym}`;
+export const maxEthLabel = capLabelFor(maxEth, 'ETH');
 
 /** Posisi sudah di-burn/tak ada di chain (NFT hilang). */
 export const isGoneErr = (e: unknown) => /invalid token id/i.test(String((e as Error)?.message ?? e));

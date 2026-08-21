@@ -2,8 +2,9 @@ import { Markup, Input } from 'telegraf';
 import {
   bot,
   html,
+  capLabelFor,
   maxEth,
-  maxEthLabel,
+  maxStable,
   sleep,
   isGoneErr,
   isStaleFlow,
@@ -521,7 +522,10 @@ async function renderStatus(ctx: any, edit: boolean) {
       dryRun: config.safety.dryRun,
       chainId: network.chainId,
       positions: store.active().length,
-      limitLabel: maxEthLabel === 'unlimited' ? '∞' : maxEthLabel,
+      limitLabel: [
+        maxEth === Infinity ? null : capLabelFor(maxEth, 'ETH/BNB'),
+        maxStable === Infinity ? null : capLabelFor(maxStable, 'USD'),
+      ].filter(Boolean).join(' · ') || '∞',
       wallet: getChain().wallet.address,
       chains,
       totalUsd,
@@ -1300,10 +1304,13 @@ function amountCtx(flow: AddFlow) {
       example: '1000',
     };
   }
+  // Tiap denominasi punya batasnya sendiri: ETH/BNB pakai MAX_ETH_PER_TX,
+  // USDT/USDG pakai MAX_STABLE_PER_TX (satuan dolar, tak bisa disamakan).
+  const cap = stable ? maxStable : maxEth;
   return {
     symbol: base.symbol,
-    cap: stable ? Infinity : maxEth, // batas ETH hanya berlaku utk base WETH
-    capLabel: stable ? 'unlimited' : maxEthLabel,
+    cap,
+    capLabel: capLabelFor(cap, base.symbol),
     example: stable ? '50' : '0.02',
   };
 }
@@ -2774,16 +2781,21 @@ async function tswapQuoteConfirm(
 ) {
   const base = tflow.base!;
   const prog = prog0 ?? (await ctx.reply(msg.msgProgress('requesting the best-route quote…'), html));
-  // MAX_ETH_PER_TX dijanjikan README tapi dulu hanya ditegakkan di wizard /add —
-  // preset & ketik-nominal /buy lolos begitu saja. Base stablecoin tetap tanpa batas
-  // (konsisten dengan amountCtx).
-  if (base.wrappable && Number(ethers.formatEther(amountWei)) > maxEth) {
-    tswapFlows.delete(ctx.from!.id);
-    return editProgress(
-      ctx,
-      prog,
-      msg.msgError('swap', `Above the ${maxEthLabel}/tx limit — lower the amount.`),
-    );
+  // Batas per-tx dulu hanya ditegakkan di wizard /add — preset & ketik-nominal
+  // /buy lolos begitu saja. Sekarang KEDUA denominasi dijaga, masing-masing
+  // dengan batasnya sendiri (konsisten dengan amountCtx).
+  {
+    const stable = isStableBase(base.kind);
+    const cap = stable ? maxStable : maxEth;
+    const spend = Number(ethers.formatUnits(amountWei, base.decimals));
+    if (cap !== Infinity && spend > cap) {
+      tswapFlows.delete(ctx.from!.id);
+      return editProgress(
+        ctx,
+        prog,
+        msg.msgError('swap', `Above the ${capLabelFor(cap, base.symbol)}/tx limit — lower the amount.`),
+      );
+    }
   }
   const q = await previewSwapOut(fromAddr, toAddr, amountWei, cc);
   if (!q) {

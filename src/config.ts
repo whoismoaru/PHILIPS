@@ -48,6 +48,9 @@ export const config = {
   },
   safety: {
     maxEthPerTx: optional('MAX_ETH_PER_TX', ''), // kosong = tanpa batas (lihat index.ts)
+    // Batas terpisah utk base stablecoin (USDT/USDG): satuannya dolar, bukan ETH.
+    // Kosong = tanpa batas.
+    maxStablePerTx: optional('MAX_STABLE_PER_TX', ''),
     dryRun: optional('DRY_RUN', 'true').toLowerCase() === 'true',
   },
   // Krystal Cloud API — sumber pool yang jauh lebih lengkap dari gateway Uniswap
