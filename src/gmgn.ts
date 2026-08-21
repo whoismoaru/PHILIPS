@@ -14,7 +14,9 @@ import { execFile } from 'node:child_process';
  * Data hiasan tak boleh menghalangi keputusan.
  */
 
-const BIN = '/home/ubuntu/.npm-global/bin/gmgn-cli';
+// Jalur biner tak boleh dipatok ke satu mesin: default cari di PATH, boleh
+// ditimpa lewat GMGN_CLI_BIN kalau npm global bin tak ada di PATH service.
+const BIN = process.env.GMGN_CLI_BIN || 'gmgn-cli';
 const TIMEOUT_MS = 12_000;
 
 /** PHILIPS key → nama chain GMGN. Tak ada di peta = GMGN tak mendukung chain itu. */
@@ -66,7 +68,17 @@ function run(args: string[]): Promise<any | null> {
     execFile(
       BIN,
       [...args, '--raw'],
-      { timeout: TIMEOUT_MS, maxBuffer: 8 << 20, env: process.env },
+      // JANGAN oper process.env: itu menyerahkan PRIVATE_KEY & token bot ke
+      // proses pihak ketiga. gmgn-cli hanya butuh api key + PATH/HOME.
+      {
+        timeout: TIMEOUT_MS,
+        maxBuffer: 8 << 20,
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: process.env.HOME ?? '',
+          GMGN_API_KEY: process.env.GMGN_API_KEY ?? '',
+        },
+      },
       (err, stdout) => {
         if (err || !stdout) return resolve(null);
         try {
