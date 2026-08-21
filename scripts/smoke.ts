@@ -1,13 +1,13 @@
 import { ethers } from 'ethers';
 import { getChain, baseOf } from '../src/chains.js';
-import { priceInfo, planAddSingleSided, VALID_FEES } from '../src/uniswap.js';
+import { priceInfo, planAddSingleSided } from '../src/uniswap.js';
 import { config } from '../src/config.js';
 
 // Uji baca-saja terhadap pool WETH/USDG di Robinhood Chain.
 const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
 
 const found: number[] = [];
-for (const fee of VALID_FEES) {
+for (const fee of getChain().feeTiers) {
   const pool = await getChain().factory.getPool(config.uniswap.weth, USDG, fee);
   if (pool && pool !== ethers.ZeroAddress) {
     found.push(fee);

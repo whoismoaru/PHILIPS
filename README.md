@@ -1,11 +1,13 @@
 # PHILIPS | Single-sided LP bot for Telegram
 
-Open and manage **single-sided** liquidity positions from a Telegram chat: Uniswap v3 on
-your primary chain, PancakeSwap v3 on BSC. You decide when to open and close; the bot
-handles the wizard, token screening, valuation, alerts, and cash-out.
+Open and manage **single-sided** liquidity positions from a Telegram chat: Uniswap v3 and
+v4 on your primary chain, PancakeSwap v3 and Uniswap v3 on BSC. Pools come from the
+Uniswap gateway, Krystal, and on-chain scans, ranked by TVL and volume. You decide when
+to open and close; the bot handles the wizard, token screening, valuation, alerts, and
+cash-out.
 
 > **Self-hosted, single owner.** One running instance serves exactly one Telegram
-> account. The wallet, positions, journal, and alert settings are process-global there
+> account. The wallet, positions, journal, and alert settings are process-global — there
 > is no per-user separation. Run your own instance; do not hand the bot to friends.
 > See [Security model](#security-model) before funding it.
 
@@ -20,7 +22,7 @@ handles the wizard, token screening, valuation, alerts, and cash-out.
 ## Setup
 
 ```bash
-git clone <your-fork> philips && cd philips
+git clone https://github.com/whoismoaru/PHILIPS.git philips && cd philips
 npm install
 cp .env.example .env      # then fill it in — every field is documented inside
 npm start
@@ -98,9 +100,10 @@ Read this before putting real money in.
 - **Slippage floors.** Mints, swaps, and liquidity withdrawals all carry a minimum-output
   floor; `minOut = 0` exists nowhere. Swap previews expire after 2 minutes, and execution
   aborts if the price has moved more than 3% away from the number you approved.
-- **`MAX_ETH_PER_TX`** caps any single transaction denominated in the native asset (ETH on Robinhood, BNB on BSC). Empty means no cap.
-- **`MAX_STABLE_PER_TX`** caps any single transaction denominated in a stablecoin base (USDT/USDG), in dollars. Empty means no cap. Denominations are never summed, so each has its own limit.
-- Token-side amounts (`/add` with the token strategy) stay uncapped, they are denominated in the token itself, where no fixed number is meaningful.
+- **Per-transaction caps.** `MAX_ETH_PER_TX` limits native amounts (ETH, BNB),
+  `MAX_STABLE_PER_TX` limits stablecoin amounts in dollars. Each denomination has its own
+  limit; they are never summed. Empty means no cap. Token-side amounts stay uncapped —
+  denominated in the token itself, no fixed number is meaningful.
 
 ### Closing a position cashes out the whole wallet
 

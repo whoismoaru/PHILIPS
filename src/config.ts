@@ -9,7 +9,7 @@ import 'dotenv/config';
 function required(name: string): string {
   const v = process.env[name];
   if (!v || v.trim() === '') {
-    throw new Error(`Konfigurasi "${name}" belum diisi di file .env`);
+    throw new Error(`Missing "${name}" in your .env file — see .env.example.`);
   }
   return v.trim();
 }

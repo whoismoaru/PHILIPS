@@ -23,13 +23,17 @@ show(
     limitLabel: '∞',
     wallet: '0x1234567890abcdef1234567890abcdef12345678',
     chains: [
-      { label: 'Robinhood', amount: '0.0421', symbol: 'ETH', usd: 151.2 },
-      { label: 'Ethereum', amount: '0.0000', symbol: 'ETH', usd: 0 },
+      {
+        label: 'Robinhood',
+        amount: '0.0421',
+        symbol: 'ETH',
+        usd: 151.2,
+        stables: [{ symbol: 'USDG', amount: '12.50', usd: 12.5 }],
+      },
+      { label: 'BSC', amount: '0.0019', symbol: 'BNB', usd: 1.9 },
     ],
-    usdg: { amount: '12.50', usd: 12.5 },
     totalUsd: 163.7,
     holdingsCount: 2,
-    refreshRel: '42 detik lalu',
   }),
 );
 
@@ -77,16 +81,27 @@ show(
   'PnL',
   m.msgPnl({
     dryRun: false,
+    chainLabel: 'Robinhood',
+    periodLabel: 'All time',
     known: 106,
     excluded: 13,
     count: 138,
-    wins: 93,
-    losses: 13,
-    netEth: 0.122745,
-    grossWin: 0.2,
-    grossLoss: -0.077,
-    best: { symbol: 'VLAD', pnlEth: 0.03 },
-    worst: { symbol: 'PONS', pnlEth: -0.02 },
+    untracked: 19,
+    recovered: 0,
+    books: [
+      {
+        unit: 'ETH',
+        known: 106,
+        wins: 93,
+        losses: 13,
+        flats: 0,
+        net: 0.122745,
+        grossWin: 0.2,
+        grossLoss: -0.077,
+        best: { symbol: 'VLAD', pnl: 0.03 },
+        worst: { symbol: 'PONS', pnl: -0.02 },
+      },
+    ],
   }),
 );
 
@@ -165,52 +180,11 @@ show(
   }),
 );
 
-show(
-  'HUB TOKEN — BAHAYA, punya bag + LP',
-  m.msgTokenHub({
-    symbol: 'TENDIES',
-    chainLabel: 'Robinhood',
-    ca: '0x020bfc650a365f8bb26819deaabf3e21291018b4',
-    verdict: 'BAHAYA',
-    verdictNote: 'likuiditas $1.8K · pool 6 jam',
-    priceUsd: '0.00004312',
-    balanceLabel: '12,345.6789 TENDIES',
-    balanceUsd: 43.2,
-    lpCount: 1,
-    lpIds: ['178449'],
-    dryRun: false,
-  }),
-);
-show(
-  'HUB TOKEN — bersih, belum dipegang',
-  m.msgTokenHub({
-    symbol: 'PONS',
-    chainLabel: 'Robinhood',
-    ca: '0x92d176ccbeeffecd8089e841d09ea17b6c22d969',
-    verdict: 'AMAN',
-    verdictNote: 'likuiditas $1.2M · pool 940 jam',
-    priceUsd: '1.23',
-    dryRun: false,
-  }),
-);
-show(
-  'HUB TOKEN — screening gagal',
-  m.msgTokenHub({
-    symbol: 'FOO',
-    chainLabel: 'Base',
-    ca: '0x1111111111111111111111111111111111111111',
-    verdict: null,
-    balanceLabel: '500.0000 FOO',
-    dryRun: true,
-  }),
-);
 
-show('ALERT ANJLOK', m.msgPriceDrop('12345', 'TENDIES', 31.4, 'WETH'));
+show('ALERT ANJLOK', m.msgPriceDrop('12345', 'TENDIES', 31.4, 'WETH', 30));
 show('ERROR (revert ethers multi-baris)', m.msgError('close', 'execution reverted: STF\n  reason=STF, code=CALL_EXCEPTION\n  transaction={...}'));
-show('UNKNOWN — CA ditempel', m.msgUnknown('0x020bfc650a365f8bb26819deaabf3e21291018b4', true));
-show('SIZE', m.msgSizeList('ETH', 'ETH', [0.01, 0.05, 0.1, 0.5]));
+show('UNKNOWN — CA ditempel', m.msgUnknown('0x020bfc650a365f8bb26819deaabf3e21291018b4'));
 show('TUTUP SEMUA (v3+v4)', m.msgCloseAllPick(2, 1));
-show('BRIDGE selesai', m.msgFundDone(['0xabc1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab'], '19.29 USDT0', false));
 
 console.log(out.join('\n'));
 
