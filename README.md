@@ -1,11 +1,11 @@
-# PHILIPS — single-sided LP bot for Telegram
+# PHILIPS | Single-sided LP bot for Telegram
 
 Open and manage **single-sided** liquidity positions from a Telegram chat: Uniswap v3 on
 your primary chain, PancakeSwap v3 on BSC. You decide when to open and close; the bot
 handles the wizard, token screening, valuation, alerts, and cash-out.
 
 > **Self-hosted, single owner.** One running instance serves exactly one Telegram
-> account. The wallet, positions, journal, and alert settings are process-global — there
+> account. The wallet, positions, journal, and alert settings are process-global there
 > is no per-user separation. Run your own instance; do not hand the bot to friends.
 > See [Security model](#security-model) before funding it.
 
@@ -13,7 +13,7 @@ handles the wizard, token screening, valuation, alerts, and cash-out.
 
 - Node 20+, npm
 - A Telegram bot token (@BotFather) and your numeric Telegram id (@userinfobot)
-- An RPC endpoint for your chain (a keyed one — public endpoints rate-limit)
+- An RPC endpoint for your chain (a keyed one public endpoints rate-limit)
 - A wallet you are willing to dedicate to this bot
 - Optional: `npm i -g gmgn-cli` for the full token-security card
 
@@ -100,7 +100,7 @@ Read this before putting real money in.
   aborts if the price has moved more than 3% away from the number you approved.
 - **`MAX_ETH_PER_TX`** caps any single transaction denominated in the native asset (ETH on Robinhood, BNB on BSC). Empty means no cap.
 - **`MAX_STABLE_PER_TX`** caps any single transaction denominated in a stablecoin base (USDT/USDG), in dollars. Empty means no cap. Denominations are never summed, so each has its own limit.
-- Token-side amounts (`/add` with the token strategy) stay uncapped — they are denominated in the token itself, where no fixed number is meaningful.
+- Token-side amounts (`/add` with the token strategy) stay uncapped, they are denominated in the token itself, where no fixed number is meaningful.
 
 ### Closing a position cashes out the whole wallet
 
