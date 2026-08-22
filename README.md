@@ -64,7 +64,6 @@ WantedBy=multi-user.target
 | `/status` | Portfolio: equity, per-chain balances, idle tokens |
 | `/positions` | Active LP positions (pair, chain, PnL, range, status) |
 | `/pnl` | Lifetime PnL recap from closed trades |
-| `/pools` | Top pools by APR for a token |
 | `/add_lp` | Open a single-side LP — or paste a contract address directly |
 | `/claim_fees` | Collect fees without closing the position |
 | `/remove_lp` | Withdraw 25 / 50 / 75 / 100% of a position |

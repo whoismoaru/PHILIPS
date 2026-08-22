@@ -387,7 +387,6 @@ bot.action('howto:add', async (ctx) => {
   await ctx.reply(msg.msgAddHowTo(), {
     ...html,
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('📊 View Top Pools', 'explore')],
       [Markup.button.callback('❌ Cancel', 'dismiss')],
     ]),
   });
@@ -398,7 +397,7 @@ bot.action('howto:add', async (ctx) => {
 const helpKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('💰 Balance & Equity', 'status'), Markup.button.callback('📊 Active LPs', 'positions')],
-    [Markup.button.callback('🧾 PnL & Journal', 'pnl'), Markup.button.callback('📊 Top Pools', 'explore')],
+    [Markup.button.callback('🧾 PnL & Journal', 'pnl')],
     [Markup.button.callback('⛔ Emergency Close All', 'closeall_confirm')],
   ]);
 
@@ -1042,44 +1041,6 @@ bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
 });
 
 // /history — riwayat trade tertutup, dari file jurnal khusus (tak muncul di /positions).
-// /explore — top 5 pool by APR (single-sided ETH/USDG), sinkron REAL-TIME Uniswap.
-// Kartu EXPLORE dulu buntu: hanya Refresh, sementara CA-nya tak dibawa ke mana pun.
-// Tombol membawa chain asal: daftar gabungan berisi pool dari beberapa chain,
-// dan membuka wizard di chain yang salah = pool tak ketemu / posisi salah tempat.
-const exploreKb = (pools: explore.ExplorePool[]) =>
-  Markup.inlineKeyboard([
-    ...pools
-      .filter((p) => p.otherAddr)
-      .slice(0, 4)
-      .map((p) => [
-        Markup.button.callback(
-          `${explore.chainDot(p.chain)} Add LP: ${p.pair.split('/')[0]}`,
-          `x:${p.chain ?? getChain().key}:${p.otherAddr}`,
-        ),
-      ]),
-    [Markup.button.callback('🔄 Refresh Data', 'explore:refresh')],
-    [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
-  ]);
-
-/** Pool ter-ramai dari SEMUA chain aktif, diambil paralel. */
-async function loadExplore(): Promise<{ text: string; pools: explore.ExplorePool[] }> {
-  const chains = Object.values(CHAINS);
-  const groups = await Promise.all(
-    chains.map(async (cc) => ({
-      ctx: cc,
-      // Satu chain gagal (RPC/gateway down) tak boleh mengosongkan seluruh kartu.
-      pools: await explore.fetchHotPools(cc, 3).catch((e) => {
-        console.error(`[pools] ${cc.key} gagal:`, (e as Error).message);
-        return [] as explore.ExplorePool[];
-      }),
-    })),
-  );
-  // Sudah terurut per chain by volume 1 jam di fetchHotPools.
-  // Tombol: yang paling ramai lintas chain, bukan semua dari satu chain.
-  const flat = groups.flatMap((g) => g.pools).sort((a, b) => (b.vol1hUsd ?? 0) - (a.vol1hUsd ?? 0));
-  return { text: explore.renderExploreAll(groups), pools: flat };
-}
-
 // Tombol pool → wizard /add penuh (screening & preview tetap jalan).
 bot.action(/^x:([a-z0-9_-]+):(0x[0-9a-fA-F]{40})$/i, async (ctx: any) => {
   await ctx.answerCbQuery();
@@ -1093,24 +1054,6 @@ bot.action(/^x:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   return continueAddlp(ctx, ctx.match[1], getChain().key, null);
 });
 
-async function cmdExplore(ctx: any) {
-  const loading = await ctx.reply('🔥 loading hot pools across all chains…');
-  try {
-    const { text, pools } = await loadExplore();
-    await ctx.telegram.editMessageText(loading.chat.id, loading.message_id, undefined, text, {
-      ...html,
-      ...exploreKb(pools),
-    });
-  } catch (e) {
-    await ctx.telegram.editMessageText(
-      loading.chat.id,
-      loading.message_id,
-      undefined,
-      msg.msgError('explore', (e as Error).message),
-      html,
-    );
-  }
-}
 /** Langkah 1 /add_lp tanpa CA — pair dari pool ber-APR teratas + opsi cari sendiri. */
 async function pairPicker(ctx: any) {
   const prog = await ctx.reply(msg.msgProgress('loading top pools…'), html);
@@ -1129,26 +1072,13 @@ bot.action('pair:custom', async (ctx) => {
   await ctx.editMessageText(msg.msgPairCustom(), html);
 });
 
-bot.command('pools', cmdExplore);
+// /pools DIHAPUS sementara (permintaan pemilik). Modul src/explore.ts TETAP dipakai
+// wizard /add_lp (poolsForToken, fetchTopPools), jadi jangan ikut dibuang. Untuk
+// menghidupkan lagi: kembalikan cmdExplore + exploreKb + loadExplore, daftarkan
+// bot.command('pools') & action 'explore'/'explore:refresh', dan entri menu.
 
 // Audit keamanan token: tempel CA telanjang di chat → startTokenHub. Command
 // /token_info dihapus — jalurnya sama persis, jadi cuma pintu kedua ke kartu yang sama.
-// Tombol '📊 Explore Pool' di kartu /help.
-bot.action('explore', async (ctx) => {
-  await ctx.answerCbQuery();
-  return cmdExplore(ctx);
-});
-
-bot.action('explore:refresh', async (ctx) => {
-  await ctx.answerCbQuery('Loading…');
-  try {
-    const { text, pools } = await loadExplore();
-    await ctx.editMessageText(text, { ...html, ...exploreKb(pools) });
-  } catch (e) {
-    if (/not modified/i.test((e as Error).message)) return; // data sama — bukan error
-    await ctx.reply(msg.msgError('explore', (e as Error).message), html);
-  }
-});
 
 bot.action(/^detail:(\d+)$/, async (ctx) => {
   const rec = store.get(ctx.match[1]);
@@ -3575,7 +3505,6 @@ const BOT_COMMANDS = [
   { command: 'positions', description: 'Active LP positions (live)' },
   { command: 'pnl', description: 'Lifetime PnL summary' },
   // Riset
-  { command: 'pools', description: 'Top pools by APR for a token' },
   // LP
   { command: 'add_lp', description: 'Open a single-side LP (or /add_lp <CA>)' },
   { command: 'claim_fees', description: 'Collect fees without closing' },

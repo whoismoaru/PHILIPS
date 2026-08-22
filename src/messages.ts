@@ -223,7 +223,6 @@ function cockpitLines(dryRun: boolean): string[] {
       ['/status', 'Balance, equity & wallet breakdown'],
       ['/positions', 'Live monitoring of active LPs'],
       ['/pnl', 'PnL recap & closed-trade journal'],
-      ['/pools', 'Highest-APR pools right now'],
       ['/alerts', 'Position notification settings'],
     ]),
     '',
@@ -317,9 +316,6 @@ export function msgAddHowTo(): string {
     // Tanpa disebut, satu-satunya cara menemukannya adalah tak sengaja.
     `• ${bold('No CA? ->')} Type ${code('/add_lp')} on its own to pick from the top pools.`,
     '',
-    `💡 ${bold('No target token in mind?')}`,
-    `Use ${code('/pools')} to explore top Uniswap pools by APR.`,
-    '',
     note(nowWib()),
   ].join('\n');
 }
@@ -363,7 +359,7 @@ export function msgHowItWorks(): string {
     '',
     `1️⃣ ${bold('Connect your wallet')} — import it from /settings. The key is stored encrypted on this bot's server so PHILIPS can sign transactions for you.`,
     '',
-    `2️⃣ ${bold('Pick a token')} — /pools for the highest-APR pools, or paste a contract address (CA) straight into the chat. Every token is audited first: honeypot, buy/sell tax, locked liquidity, holder spread.`,
+    `2️⃣ ${bold('Pick a token')} — paste a contract address (CA) straight into the chat. Every token is audited first: honeypot, buy/sell tax, locked liquidity, holder spread.`,
     '',
     `3️⃣ ${bold('Open a single-side LP')} — /add_lp. You deposit only one token; the position works like a passive limit order that keeps earning fees while it waits for your price.`,
     '',
