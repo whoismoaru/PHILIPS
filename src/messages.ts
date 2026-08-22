@@ -953,6 +953,7 @@ export function msgPositionCard(opts: {
   invest: string;
   pnlText: string;
   range: string;
+  mcRange?: string; // rentang yang sama dibaca sebagai kapitalisasi pasar
   inRange: boolean;
   age: string;
   dryRun: boolean;
@@ -992,6 +993,7 @@ export function msgPositionCard(opts: {
     `🎯 ${bold('Strategy:')} ${strategy}`,
     `💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`,
     `${tokenSide ? '📈' : '📉'} ${bold('Target Range:')} ${range}`,
+    ...(opts.mcRange ? [italic(`↳ market cap ${esc(opts.mcRange)}`)] : []),
     `📈 ${bold('Current PnL:')} ${esc(opts.pnlText)}`,
     `${opts.inRange ? '🟢' : '🔴'} ${bold('Status:')} ${status}`,
     '',

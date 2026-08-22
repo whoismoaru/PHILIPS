@@ -630,6 +630,20 @@ async function buildPositionCard(
   const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
   const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
   const range = `${msg.fmtPct(pcts[0])} ⇄ ${msg.fmtPct(pcts[1])}`;
+  // Rentang yang sama, dibaca sebagai kapitalisasi pasar. MC berskala LINIER
+  // terhadap harga (suplai tetap), jadi MC di batas = MC sekarang × (harga batas
+  // ÷ harga sekarang). Rasio itu tanpa satuan, jadi harga boleh tetap dalam base.
+  const mcRange = await (async () => {
+    const now = Number(d.currentPrice);
+    if (!(now > 0)) return undefined;
+    const mcNow = await explore.tokenMarketCap(cc, d.otherAddress).catch(() => null);
+    if (mcNow === null) return undefined;
+    const at = (p: string) => explore.usdShort((mcNow * Number(p)) / now);
+    const [hi, lo] = Number(d.priceUpper) >= Number(d.priceLower)
+      ? [d.priceUpper, d.priceLower]
+      : [d.priceLower, d.priceUpper];
+    return `${at(hi)} ⇄ ${at(lo)}`;
+  })();
   const invest = rec.imported
     ? '—'
     : (rec.nominalEth ?? msg.cleanUnits(BigInt(rec.initialWethWei), baseDecimalsOf(rec.chain, rec.baseKind)));
@@ -640,6 +654,7 @@ async function buildPositionCard(
     invest,
     pnlText,
     range,
+    mcRange,
     inRange: d.inRange,
     age: msg.fmtAge(Date.now() - rec.openedAt),
     dryRun: config.safety.dryRun,

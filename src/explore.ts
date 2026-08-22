@@ -483,3 +483,47 @@ async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePo
   pools.sort((a, b) => b.apr - a.apr);
   return pools.slice(0, limit).map((p) => ({ ...p, chain: ctx.key, chainLabel: ctx.label }));
 }
+
+// ─── kapitalisasi pasar (utk menerjemahkan rentang harga jadi rentang MC) ──
+
+const mcapCache = new Map<string, { t: number; v: number | null }>();
+const MCAP_TTL_MS = 120_000;
+
+/**
+ * Kapitalisasi pasar token dari DexScreener. null = tak terbaca (JANGAN 0 — nol
+ * terbaca sebagai fakta "token tak bernilai"). Di-cache 2 menit: kartu posisi
+ * bisa di-refresh berkali-kali dan MC tak berubah secepat itu.
+ */
+export async function tokenMarketCap(ctx: ChainCtx, token: string): Promise<number | null> {
+  const key = `${ctx.dexKey}:${token.toLowerCase()}`;
+  const hit = mcapCache.get(key);
+  if (hit && Date.now() - hit.t < MCAP_TTL_MS) return hit.v;
+  let v: number | null = null;
+  try {
+    const res = await fetch(`${DEXSCREENER_TOKENS}/${token}`, { signal: AbortSignal.timeout(10_000) });
+    if (res.ok) {
+      const j: any = await res.json();
+      for (const p of j?.pairs ?? []) {
+        if (p?.chainId !== ctx.dexKey) continue;
+        const n = Number(p?.marketCap ?? p?.fdv ?? NaN);
+        if (Number.isFinite(n) && n > 0) {
+          v = n;
+          break;
+        }
+      }
+    }
+  } catch {
+    /* gagal → null, kartu menulis '?' */
+  }
+  mcapCache.set(key, { t: Date.now(), v });
+  return v;
+}
+
+/** Angka USD ringkas: $1.2M / $340K / $820. */
+export function usdShort(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (a >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+  return '$' + n.toFixed(0);
+}
