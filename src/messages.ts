@@ -536,17 +536,17 @@ export function msgStatus(opts: {
     bold('PORTFOLIO'),
     '',
     `💰 ${bold('Equity Summary :')}`,
-    `• Total Equity: ${bold(equity)}`,
-    `• Unstaked Balance: ${bold(usdCol(opts.totalUsd))}${assetNames.length ? ` ${italic(`(${assetNames.join(', ')})`)}` : ''}`,
+    `• Total Equity = ${bold(equity)}`,
+    `• Unstaked Balance = ${bold(usdCol(opts.totalUsd))}${assetNames.length ? ` ${italic(`(${assetNames.join(', ')})`)}` : ''}`,
   ];
   if (opts.lpUsd !== undefined) {
     parts.push(
-      `• Active in LP: ${bold(usdCol(opts.lpUsd))} ${italic(`(${opts.positions} Position${opts.positions === 1 ? '' : 's'})`)}`,
+      `• Active in LP = ${bold(usdCol(opts.lpUsd))} ${italic(`(${opts.positions} Position${opts.positions === 1 ? '' : 's'})`)}`,
     );
   }
   if (opts.realizedEth !== undefined) {
     parts.push(
-      `• Realized PnL: ${dot(opts.realizedEth)} ${bold(`${opts.realizedEth >= 0 ? '+' : ''}${opts.realizedEth.toFixed(5)} ETH`)}`,
+      `• Realized PnL = ${bold(`${opts.realizedEth >= 0 ? '+' : ''}${opts.realizedEth.toFixed(5)} ETH`)}`,
     );
   }
 
@@ -562,7 +562,7 @@ export function msgStatus(opts: {
       for (const t of c.stables ?? []) {
         cells.push(`${esc(t.amount)} ${esc(t.symbol)}${t.usd === null ? '' : ` (${usdPlain(t.usd)})`}`);
       }
-      parts.push(`• ${bold(`${c.label}:`)} ${cells.join(' | ')}`);
+      parts.push(`• ${bold(c.label)} = ${cells.join(' | ')}`);
     }
   }
 
@@ -584,7 +584,10 @@ export function msgStatus(opts: {
     : `<code>${short}</code>`;
   parts.push(
     '',
-    `🔗 ${bold('Wallet:')} ${link} · ${opts.dryRun ? '⚪ DRY RUN' : '🟢 LIVE'} · max/tx ${esc(opts.limitLabel)}`,
+    `🔗 ${bold('Wallet')} → ${link}`,
+    `<code>${esc(opts.wallet)}</code>`,
+    '',
+    `${opts.dryRun ? '⚪ DRY RUN' : '🟢 LIVE'} · max/tx ${esc(opts.limitLabel)}`,
     `<i>Last Updated: ${nowWib()}</i>`,
   );
 
