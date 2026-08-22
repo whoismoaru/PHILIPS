@@ -304,7 +304,7 @@ export async function swapTokenToEthRobust(
   // pool WETH/WBNB, jadi jalur 1 & 2 selalu gagal & token nyangkut selamanya.
   // Stablecoin-nya IKUT CHAIN: dulu digerbang `ctx.usdgAddress` saja, sehingga BSC
   // (yang punya USDT, bukan USDG) melewati jalur ini sama sekali.
-  const stableAddr = ctx.usdgAddress ?? ctx.usdtAddress;
+  const stableAddr = ctx.usdgAddress ?? ctx.usdtAddress ?? ctx.usdcAddress;
   if (stableAddr && tokenAddress.toLowerCase() !== stableAddr.toLowerCase()) {
     try {
       const u = await swapTokenToUsdgRobust(tokenAddress, amountWei, stableAddr, ctx, maxSlipPct);

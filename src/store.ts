@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { BaseKind } from './chains.js';
 
 /**
  * Tulis JSON atomik: file sementara → rename (atomik di POSIX).
@@ -23,7 +24,7 @@ export type PosRecord = {
   ca: string; // alamat token (non-base)
   fee: number;
   symbol: string;
-  baseKind?: 'weth' | 'usdg' | 'usdt'; // aset pasangan; kosong = weth (posisi lama)
+  baseKind?: BaseKind; // aset pasangan; kosong = weth (posisi lama)
   initialWethWei: string; // modal awal (base disetor) dalam unit base (WETH 18-dec / USDG 6-dec)
   nominalEth?: string; // nominal yang dipilih user (tampilan bersih)
   rangeLowPct?: number; // % ujung terjauh dari harga saat buka
@@ -103,7 +104,7 @@ export function addImported(rec: {
   ca: string;
   fee: number;
   symbol: string;
-  baseKind: 'weth' | 'usdg' | 'usdt';
+  baseKind: BaseKind;
 }): void {
   if (records.some((r) => r.tokenId === rec.tokenId)) return;
   records.push({

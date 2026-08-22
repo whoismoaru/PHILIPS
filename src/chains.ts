@@ -33,6 +33,7 @@ export type ChainCtx = {
   hasWethBase: boolean; // apakah WETH boleh jadi base LP di chain ini
   usdgAddress?: string; // hanya chain yg punya USDG (Global Dollar). undefined = tak ada.
   usdtAddress?: string; // hanya chain yg punya USDT. undefined = tak ada.
+  usdcAddress?: string; // hanya chain yg punya USDC (mis. Base). undefined = tak ada.
   /** Aset pasangan LP yang tersedia di chain ini — desimal & simbolnya milik CHAIN,
    *  bukan konstanta global: USDG di Robinhood 6 desimal, USDT di BSC 18. */
   bases: BaseAsset[];
@@ -51,7 +52,7 @@ export type ChainCtx = {
 
 // --- Base asset (aset pasangan LP). Per chain: WETH (bila hasWethBase), USDG dan/atau
 // USDT (stablecoin 6-desimal). Chain stablecoin-native (mis. Stable) = USDT saja. ---
-export type BaseKind = 'weth' | 'usdg' | 'usdt';
+export type BaseKind = 'weth' | 'usdg' | 'usdt' | 'usdc';
 export type BaseAsset = {
   kind: BaseKind;
   address: string;
@@ -60,8 +61,9 @@ export type BaseAsset = {
   wrappable: boolean; // WETH: bisa wrap dari ETH native. Stablecoin: ERC20 biasa, harus sudah dipegang.
 };
 
-/** true bila base ini stablecoin dolar (USDG/USDT ≈ $1, 6-desimal, non-wrappable). */
-export const isStableBase = (kind: BaseKind): boolean => kind === 'usdg' || kind === 'usdt';
+/** true bila base ini stablecoin dolar (USDG/USDT/USDC ≈ $1, non-wrappable). */
+export const isStableBase = (kind: BaseKind): boolean =>
+  kind === 'usdg' || kind === 'usdt' || kind === 'usdc';
 
 /**
  * Simbol tampilan sebuah base kind. Beri `ctx` bila tersedia: simbol wrapped-native
@@ -73,7 +75,7 @@ export const baseSymbolOf = (kind: BaseKind | undefined, ctx?: ChainCtx): string
     const b = ctx.bases.find((x) => x.kind === (kind ?? 'weth'));
     if (b) return b.symbol;
   }
-  return kind === 'usdg' ? 'USDG' : kind === 'usdt' ? 'USDT' : 'WETH';
+  return kind === 'usdg' ? 'USDG' : kind === 'usdt' ? 'USDT' : kind === 'usdc' ? 'USDC' : 'WETH';
 };
 
 /** Daftar base asset yang tersedia di chain ini. */
@@ -124,6 +126,8 @@ type Def = {
   weth: string;
   usdg?: string;
   usdt?: string;
+  usdc?: string;
+  usdcDecimals?: number; // default 6 (USDC di semua chain besar)
   hasWethBase?: boolean; // default true; false utk chain stablecoin-native
   wrappedSymbol?: string; // simbol wrapped-native (default 'WETH'; BSC 'WBNB')
   stableDecimals?: number; // desimal USDG/USDT di chain ini (default 6; BSC USDT 18)
@@ -192,6 +196,31 @@ const DEFS: Record<string, Def> = {
         },
       }
     : {}),
+  ...(config.base.enabled
+    ? {
+        base: {
+          label: 'Base',
+          chainId: 8453,
+          nativeSymbol: 'ETH',
+          dexKey: 'base',
+          // Base tak punya Blockscout publik yang dipakai bot: screening holders
+          // /verified jatuh ke GMGN + DexScreener seperti BSC.
+          blockscout: null,
+          rpc: config.base.rpcUrl,
+          // Uniswap v3 di Base — SEMUA alamat diverifikasi on-chain:
+          // PM.factory() & PM.WETH9() cocok, keenam kontrak punya bytecode.
+          factory: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
+          pm: '0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1',
+          router: '0x2626664c2603336E57B271c5C0b26F421741e481', // SwapRouter02
+          quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a', // QuoterV2
+          weth: '0x4200000000000000000000000000000000000006',
+          // Stablecoin utama di Base adalah USDC (6 desimal, terverifikasi on-chain),
+          // bukan USDT/USDG — likuiditasnya jauh lebih dalam.
+          usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          fallbackRpc: ['https://mainnet.base.org'],
+        },
+      }
+    : {}),
 };
 
 function basesOf(d: Def): BaseAsset[] {
@@ -201,6 +230,7 @@ function basesOf(d: Def): BaseAsset[] {
     out.push({ kind: 'weth', address: d.weth, decimals: 18, symbol: d.wrappedSymbol ?? 'WETH', wrappable: true });
   if (d.usdg) out.push({ kind: 'usdg', address: d.usdg, decimals: stableDec, symbol: 'USDG', wrappable: false });
   if (d.usdt) out.push({ kind: 'usdt', address: d.usdt, decimals: stableDec, symbol: 'USDT', wrappable: false });
+  if (d.usdc) out.push({ kind: 'usdc', address: d.usdc, decimals: d.usdcDecimals ?? 6, symbol: 'USDC', wrappable: false });
   return out;
 }
 
@@ -268,6 +298,7 @@ function build(key: string, d: Def): ChainCtx {
     hasWethBase: d.hasWethBase ?? true,
     usdgAddress: d.usdg,
     usdtAddress: d.usdt,
+    usdcAddress: d.usdc,
     pmAddress: d.pm,
     routerAddress: d.router,
     quoterAddress: d.quoter,

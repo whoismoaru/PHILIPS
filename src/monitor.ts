@@ -130,12 +130,19 @@ async function sweepLeftovers(bot: Telegraf) {
       // Sapu ke base ASLI posisi. Dulu selalu ke native: menutup posisi USDT lalu
       // memulihkan sisanya sebagai BNB mengubah denominasi & eksposur diam-diam,
       // dan bikin hasilnya tak bisa dicocokkan dengan modal awal posisi itu.
-      const stableAddr = r.baseKind === 'usdg' ? cc.usdgAddress : r.baseKind === 'usdt' ? cc.usdtAddress : undefined;
+      const stableAddr =
+        r.baseKind === 'usdg'
+          ? cc.usdgAddress
+          : r.baseKind === 'usdt'
+            ? cc.usdtAddress
+            : r.baseKind === 'usdc'
+              ? cc.usdcAddress
+              : undefined;
       const res = stableAddr
         ? await swapTokenToUsdgRobust(r.ca, amt, stableAddr, cc).then((x) => ({
             outEthWei: x.outWei,
             route: x.route,
-            unit: r.baseKind === 'usdg' ? 'USDG' : 'USDT',
+            unit: r.baseKind === 'usdg' ? 'USDG' : r.baseKind === 'usdt' ? 'USDT' : 'USDC',
             dec: baseDecimalsOf(r.chain, r.baseKind),
           }))
         : await swapTokenToEthRobust(r.ca, amt, cc).then((x) => ({

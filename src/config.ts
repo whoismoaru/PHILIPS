@@ -34,6 +34,10 @@ export const config = {
     enabled: (process.env.BSC_ENABLED ?? 'false').toLowerCase() === 'true',
     rpcUrl: process.env.BSC_RPC_URL || 'https://bsc-dataseed.binance.org',
   },
+  base: {
+    enabled: (process.env.BASE_ENABLED ?? 'false').toLowerCase() === 'true',
+    rpcUrl: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
+  },
   wallet: {
     // Opsional sejak /connect ada: dipakai sekali untuk mengadopsi pemasangan
     // lama jadi keystore terenkripsi (walletStore.ts), lalu boleh dihapus.

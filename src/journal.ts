@@ -1,7 +1,7 @@
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ethers } from 'ethers';
-import { baseDecimalsOf } from './chains.js';
+import { baseDecimalsOf, type BaseKind } from './chains.js';
 
 /**
  * Jurnal riwayat trade (append-only, file khusus `data/journal.jsonl`).
@@ -14,7 +14,7 @@ export type JournalEntry = {
   symbol: string;
   ca?: string; // alamat token (untuk sweep sisa token yang belum ter-swap)
   chain?: string;
-  baseKind?: 'weth' | 'usdg' | 'usdt'; // denominasi modal & hasil; kosong = weth (entri lama)
+  baseKind?: BaseKind; // denominasi modal & hasil; kosong = weth (entri lama)
   openedAt: number;
   closedAt: number;
   initialWethWei: string;
@@ -76,7 +76,7 @@ export function recordClose(
     symbol: string;
     ca?: string;
     chain?: string;
-    baseKind?: 'weth' | 'usdg' | 'usdt';
+    baseKind?: BaseKind;
     openedAt: number;
     initialWethWei: string;
   },
@@ -138,6 +138,7 @@ export function unitOf(chain?: string, baseKind?: JournalEntry['baseKind']): str
 const FLAT_EPS: Record<string, number> = {
   USDT: 0.1,
   USDG: 0.1,
+  USDC: 0.1,
   ETH: 0.00005, // ~$0,11 @ $2.300
   BNB: 0.0002, // ~$0,13 @ $650
 };

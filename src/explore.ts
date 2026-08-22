@@ -11,7 +11,8 @@
  *
  * Read-only murni: tak menyentuh wallet/on-chain. Aman gagal (throw → kartu error).
  */
-import { getChain, venueCtx, venuesFor, type ChainCtx } from './chains.js';
+import { getChain, venueCtx, venuesFor, type BaseKind, type ChainCtx } from './chains.js';
+import { v4Supported } from './uniswapV4.js';
 import type { PoolKeyV4 } from './uniswapV4.js';
 import { ethers } from 'ethers';
 import * as m from './messages.js';
@@ -151,7 +152,7 @@ export async function fetchTopPools(
 /** Kandidat pool untuk 1 token — dipakai wizard /add. Cerminan app.uniswap.org. */
 export type TokenPool = {
   protocol: 'v3' | 'v4';
-  base: 'weth' | 'usdg' | 'usdt'; // sisi base bot (WETH/ETH, USDG, atau USDT)
+  base: BaseKind; // sisi base bot (WETH/ETH, USDG, atau USDT)
   baseSymbol: string; // 'ETH' | 'WETH' | 'USDG' (apa adanya dari Uniswap)
   otherSymbol: string; // simbol token target
   fee: number;
@@ -186,7 +187,7 @@ const baseKindOf = (
   sym: string | null | undefined,
   addr: string | null | undefined,
   ctx: ChainCtx,
-): 'weth' | 'usdg' | 'usdt' | null => {
+): BaseKind | null => {
   const s = (sym ?? '').toUpperCase();
   const a = (addr ?? '').toLowerCase();
   for (const b of ctx.bases) {
@@ -238,6 +239,10 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
     const tvl = p.totalLiquidity?.value ?? 0;
     if (fee <= 0) return;
     if (protocol === 'v4' && p.hook) return; // ber-hook → skip (aman)
+    // v4 hanya di chain yang bot dukung PENUH (V4_PM + Blockscout utk enumerasi).
+    // Di chain lain gateway tetap mengembalikan pool v4, tapi posisi yang dibuka
+    // takkan bisa dipantau atau ditutup — jangan tawarkan sama sekali.
+    if (protocol === 'v4' && !v4Supported(ctx)) return;
 
     const baseIsCurrency0 = !!b0;
     const base = (b0 ?? b1)!;

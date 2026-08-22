@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { config } from './config.js';
-import { venueCtx, venuesFor, type ChainCtx } from './chains.js';
+import { venueCtx, venuesFor, type BaseKind, type ChainCtx } from './chains.js';
 import type { TokenPool } from './explore.js';
 import type { PoolKeyV4 } from './uniswapV4.js';
 
@@ -18,7 +18,7 @@ import type { PoolKeyV4 } from './uniswapV4.js';
  *    jadi tak perlu rekonstruksi. fee wajib termasuk feeTiers chain.
  */
 
-const CHAIN_ID: Record<string, number> = { robinhood: 4663, bsc: 56 };
+const CHAIN_ID: Record<string, number> = { robinhood: 4663, bsc: 56, base: 8453 };
 const API = 'https://cloud-api.krystal.app/v1';
 const V3_PROTOCOLS = new Set(['uniswapv3', 'pancakev3', 'sushiv3']);
 
@@ -113,7 +113,7 @@ function baseOfPair(
   cc: ChainCtx,
   c0: string,
   c1: string,
-): { base: 'weth' | 'usdg' | 'usdt'; baseIsCurrency0: boolean } | null {
+): { base: BaseKind; baseIsCurrency0: boolean } | null {
   const isEth = (a: string) =>
     cc.hasWethBase && (a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase());
   const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();

@@ -10,6 +10,7 @@
  *  • Deposit · 0.09 WETH
  */
 import { ethers } from 'ethers';
+import type { BaseKind } from './chains.js';
 
 // ─── primitives ────────────────────────────────────────────────────
 
@@ -1161,7 +1162,7 @@ export function msgJournal(
     reason: 'cashed' | 'gone' | 'burned' | 'recovery';
     ca?: string;
     chain?: string;
-    baseKind?: 'weth' | 'usdg' | 'usdt';
+    baseKind?: BaseKind;
     closedAt?: number;
   }>,
   totalInJournal?: number,
