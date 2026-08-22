@@ -642,7 +642,9 @@ async function buildPositionCard(
     const [hi, lo] = Number(d.priceUpper) >= Number(d.priceLower)
       ? [d.priceUpper, d.priceLower]
       : [d.priceLower, d.priceUpper];
-    return `${at(hi)} ⇄ ${at(lo)}`;
+    // MC sekarang ikut ditulis: tanpa itu rentangnya tak punya titik acuan —
+    // pembaca tak tahu ia sedang di mana di antara kedua batas.
+    return `${at(hi)} ⇄ ${at(lo)} · now ${explore.usdShort(mcNow)}`;
   })();
   const invest = rec.imported
     ? '—'
