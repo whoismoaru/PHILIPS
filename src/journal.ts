@@ -1,7 +1,7 @@
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ethers } from 'ethers';
-import { baseDecimalsOf, type BaseKind } from './chains.js';
+import { baseDecimalsOf, getChain, type BaseKind } from './chains.js';
 
 /**
  * Jurnal riwayat trade (append-only, file khusus `data/journal.jsonl`).
@@ -22,6 +22,7 @@ export type JournalEntry = {
   pnlEth: number;
   pnlPct: number;
   reason: 'cashed' | 'gone' | 'burned' | 'recovery';
+  wallet?: string; // alamat pemilik (huruf kecil). Kosong = entri sebelum field ini ada.
 };
 
 const FILE = join(process.cwd(), 'data', 'journal.jsonl');
@@ -60,10 +61,22 @@ export function recordRecovery(r: {
   });
 }
 
+/** Alamat wallet yang sedang dipakai, huruf kecil. undefined bila belum tersambung. */
+export function currentWallet(): string | undefined {
+  try {
+    return getChain().wallet.address.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
 export function record(e: JournalEntry): void {
   try {
     mkdirSync(join(process.cwd(), 'data'), { recursive: true });
-    appendFileSync(FILE, JSON.stringify(e) + '\n');
+    // Cap alamat pemilik: ganti wallet TIDAK boleh membuat riwayat wallet lama
+    // ikut terhitung di /pnl. Sekali tercatat, entri terikat ke pemiliknya.
+    const stamped: JournalEntry = { ...e, wallet: e.wallet ?? currentWallet() };
+    appendFileSync(FILE, JSON.stringify(stamped) + '\n');
   } catch (err) {
     console.error('[journal] gagal menulis:', (err as Error).message);
   }
@@ -189,8 +202,14 @@ export type PeriodStats = {
  * == 0 (placeholder backfill trade lama; cashout nyata selalu > 0).
  */
 export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
+  const me = currentWallet();
   const all = read(Number.MAX_SAFE_INTEGER).filter(
-    (e) => (e.closedAt ?? 0) >= sinceMs && (!chain || (e.chain ?? 'robinhood') === chain),
+    (e) =>
+      (e.closedAt ?? 0) >= sinceMs &&
+      (!chain || (e.chain ?? 'robinhood') === chain) &&
+      // Hanya trade wallet yang SEDANG dipakai. Entri tanpa cap pemilik dianggap
+      // milik wallet lain — mencampurnya membuat PnL berbohong setelah ganti wallet.
+      (!me || e.wallet === me),
   );
   const byUnit = new Map<string, Book>();
   let known = 0, untracked = 0, excluded = 0, recovered = 0;
@@ -237,8 +256,10 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
  * dipakai (mis. 'stable') tetap bisa dilihat riwayatnya.
  */
 export function chainsWithHistory(): Array<{ key: string; trades: number }> {
+  const me = currentWallet();
   const n = new Map<string, number>();
   for (const e of read(Number.MAX_SAFE_INTEGER)) {
+    if (me && e.wallet !== me) continue; // bubble chain ikut wallet yang dipakai
     const k = e.chain ?? 'robinhood';
     n.set(k, (n.get(k) ?? 0) + 1);
   }
