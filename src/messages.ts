@@ -64,10 +64,6 @@ export function kv(label: string, valueHtml: string): string {
   return `${esc(label)} · ${valueHtml}`;
 }
 
-export function section(name: string): string {
-  return bold(name);
-}
-
 export function note(text: string): string {
   return italic(text);
 }
@@ -77,10 +73,6 @@ export function quoteHtml(innerHtml: string): string {
 }
 
 /** Blok 'label · value' (teks biasa). */
-export function sheet(rows: Array<[string, string]>): string {
-  return rows.map(([k, v]) => `${k} · ${v}`).join('\n');
-}
-
 /** Daftar baris; tiap baris = sel-sel digabung ' · '. Header dibuang (tak ada kolom). */
 export function alignTable(header: string[], rows: string[][], _right: boolean[] = []): string {
   return rows.map((cells) => cells.filter((c) => c !== '' && c != null).join(' · ')).join('\n');
