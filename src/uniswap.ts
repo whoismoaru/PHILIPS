@@ -1,11 +1,17 @@
 import { ethers } from 'ethers';
 import sdkCore from '@uniswap/sdk-core';
-import v3sdk, { type FeeAmount } from '@uniswap/v3-sdk';
+import {
+  Pool,
+  Position,
+  TICK_SPACINGS,
+  nearestUsableTick,
+  tickToPrice,
+  type FeeAmount,
+} from '@uniswap/v3-sdk';
 import type { Token as TToken } from '@uniswap/sdk-core';
 import type { Pool as TPool, Position as TPosition } from '@uniswap/v3-sdk';
 // SDK Uniswap masih CommonJS → impor default lalu ambil isinya.
 const { Token, Percent, CurrencyAmount } = sdkCore;
-const { Pool, Position, TICK_SPACINGS, nearestUsableTick, tickToPrice } = v3sdk;
 
 // SDK Uniswap tak mengenal fee tier 2500 (khas PancakeSwap v3): Pool.tickSpacing
 // mengembalikan undefined, lalu invariant Position gagal / lebar rentang jadi NaN.

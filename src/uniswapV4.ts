@@ -1,10 +1,9 @@
 import { ethers } from 'ethers';
-import v3sdk from '@uniswap/v3-sdk';
+import { TickMath, nearestUsableTick } from '@uniswap/v3-sdk';
 import type { ChainCtx } from './chains.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { allV4 } from './v4store.js';
 
-const { TickMath, nearestUsableTick } = v3sdk;
 const Q96 = 2n ** 96n;
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 // PoolManager singleton v4 per chain.
