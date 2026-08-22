@@ -45,7 +45,8 @@ export type ExplorePool = {
   otherAddr?: string; // CA sisi non-base → tombol "➕ LP <TOKEN>"
   chain?: string; // key chain asal — WAJIB saat daftar menggabung banyak chain
   chainLabel?: string; // label tampilan chain asal
-  vol1hUsd?: number; // volume 1 jam (DexScreener). undefined = tak terbaca.
+  vol1hUsd?: number; // volume 1 jam. undefined = tak terbaca.
+  mcapUsd?: number; // kapitalisasi pasar sisi token. undefined = tak terbaca.
 };
 
 type ApiPool = {
@@ -567,7 +568,7 @@ export function renderExploreAll(groups: Array<{ ctx: ChainCtx; pools: ExplorePo
       const risk = !p.otherAddr ? '✅' : p.apr >= 40 ? '⚠️' : '•';
       return [
         `${i + 1}. ${m.bold(p.pair.replace('/', ' / '))} ${m.italic(`(${p.ver.toUpperCase()}, ${m.feeLabel(p.feeTier)})`)}`,
-        `   ${risk} 1h ${usdCompact(p.vol1hUsd ?? 0)} · 24h ${usdCompact(p.vol1dUsd)} · TVL ${usdCompact(p.tvlUsd)} · APR ${aprLabel(p.apr)}`,
+        `   ${risk} 1h ${usdCompact(p.vol1hUsd ?? 0)} · MC ${p.mcapUsd ? usdCompact(p.mcapUsd) : '?'} · TVL ${usdCompact(p.tvlUsd)} · APR ${aprLabel(p.apr)}`,
       ].join('\n');
     });
     return [`${chainDot(ctx.key)} ${m.bold(ctx.label.toUpperCase())} ${m.italic(`· ${ctx.dexLabel} · ${bases}`)}`, ...rows].join('\n');
@@ -581,7 +582,7 @@ export function renderExploreAll(groups: Array<{ ctx: ChainCtx; pools: ExplorePo
     sections.join('\n\n'),
     '',
     m.note(
-      `sorted by 1h volume · 1h ≥ $${(MIN_VOL_1H_USD / 1000).toFixed(0)}K · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · stablecoin pairs excluded`,
+      `sorted by 1h volume · 1h ≥ $${(MIN_VOL_1H_USD / 1000).toFixed(0)}K · MC ≤ $${(MAX_MCAP_USD / 1e6).toFixed(0)}M · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · no stablecoin pairs`,
     ),
     m.italic(m.nowWib()),
   ].join('\n');
@@ -591,6 +592,9 @@ export function renderExploreAll(groups: Array<{ ctx: ChainCtx; pools: ExplorePo
 
 /** Ambang ramai: pool harus benar-benar ditukar SEKARANG, bukan kemarin. */
 export const MIN_VOL_1H_USD = 80_000;
+
+/** Batas kapitalisasi: token raksasa (cbBTC, WBTC, dst) bukan sasaran LP single-side. */
+export const MAX_MCAP_USD = 50_000_000;
 
 /**
  * Simbol yang dianggap stablecoin. Pool TOKEN/BASE yang sisi tokennya stablecoin
@@ -647,6 +651,40 @@ async function enrichHourlyVolume(ctx: ChainCtx, pools: ExplorePool[]): Promise<
   }
 }
 
+/**
+ * Isi mcapUsd dari DexScreener (Krystal tak memberi kapitalisasi). Satu panggilan
+ * per token unik, paralel. Token yang tak dikenal DexScreener dibiarkan undefined —
+ * biasanya token yang baru lahir, dan justru itu sasaran daftar ini.
+ */
+async function enrichMarketCap(ctx: ChainCtx, pools: ExplorePool[]): Promise<void> {
+  const tokens = [...new Set(pools.map((p) => p.otherAddr).filter(Boolean) as string[])];
+  const mc = new Map<string, number>();
+  await Promise.all(
+    tokens.map(async (t) => {
+      try {
+        const res = await fetch(`${DEXSCREENER_TOKENS}/${t}`, { signal: AbortSignal.timeout(12_000) });
+        if (!res.ok) return;
+        const j: any = await res.json();
+        for (const p of j?.pairs ?? []) {
+          if (p?.chainId !== ctx.dexKey) continue;
+          const v = Number(p?.marketCap ?? p?.fdv ?? NaN);
+          if (Number.isFinite(v) && v > 0) {
+            mc.set(t.toLowerCase(), v);
+            break;
+          }
+        }
+      } catch {
+        /* tak terbaca → biarkan undefined, pool tetap boleh tampil */
+      }
+    }),
+  );
+  for (const p of pools) {
+    if (!p.otherAddr) continue;
+    const v = mc.get(p.otherAddr.toLowerCase());
+    if (v !== undefined) p.mcapUsd = v;
+  }
+}
+
 /** Pool yang benar-benar ramai 1 jam terakhir, bukan pool stablecoin. */
 export async function fetchHotPools(ctx: ChainCtx, limit = 3): Promise<ExplorePool[]> {
   // Sumber utama Krystal: satu-satunya yang memberi volume 1 JAM asli (stats1h)
@@ -681,7 +719,11 @@ export async function fetchHotPools(ctx: ChainCtx, limit = 3): Promise<ExplorePo
     });
   }
   if (pools.length > 0) {
-    return pools.sort((a, b) => (b.vol1hUsd ?? 0) - (a.vol1hUsd ?? 0)).slice(0, limit);
+    const top = pools.sort((a, b) => (b.vol1hUsd ?? 0) - (a.vol1hUsd ?? 0)).slice(0, 15);
+    await enrichMarketCap(ctx, top);
+    // Buang HANYA yang terbukti melebihi batas. Mcap tak terbaca = token baru,
+    // dan itu justru sasaran daftar ini — jangan ikut terbuang diam-diam.
+    return top.filter((p) => (p.mcapUsd ?? 0) <= MAX_MCAP_USD).slice(0, limit);
   }
 
   // Krystal mati / chain tak didukung → jalur lama (gateway + volume 1 jam DexScreener).
@@ -689,8 +731,10 @@ export async function fetchHotPools(ctx: ChainCtx, limit = 3): Promise<ExplorePo
     .filter((p) => p.otherAddr)
     .filter((p) => !isStableSymbol(otherSymbolOf(p.pair)));
   await enrichHourlyVolume(ctx, cand);
-  return cand
+  const hot = cand
     .filter((p) => (p.vol1hUsd ?? 0) >= MIN_VOL_1H_USD)
     .sort((a, b) => (b.vol1hUsd ?? 0) - (a.vol1hUsd ?? 0))
-    .slice(0, limit);
+    .slice(0, 15);
+  await enrichMarketCap(ctx, hot);
+  return hot.filter((p) => (p.mcapUsd ?? 0) <= MAX_MCAP_USD).slice(0, limit);
 }
