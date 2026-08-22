@@ -71,11 +71,25 @@ export function cmdPnl(ctx: any) {
 }
 bot.command('pnl', cmdPnl);
 
-/** Ganti isi kartu di tempat; "not modified" bukan error. */
-const swap = (ctx: any, text: string, extra: any) =>
-  ctx.editMessageText(text, extra).catch((e: Error) => {
-    if (!/not modified/i.test(e.message)) throw e;
-  });
+/**
+ * Ganti isi kartu di tempat dengan TEKS.
+ *
+ * Kartu PnL adalah dokumen PNG — dokumen punya caption, bukan text, jadi
+ * editMessageText padanya ditolak Telegram: "there is no text in the message to
+ * edit". Itu yang terjadi saat menekan Back dari kartu gambar ke pemilih chain.
+ * Kalau pesan yang ada tak bisa dijadikan teks, ganti utuh: hapus lalu kirim baru.
+ */
+const swap = async (ctx: any, text: string, extra: any) => {
+  try {
+    return await ctx.editMessageText(text, extra);
+  } catch (e) {
+    const m = (e as Error).message;
+    if (/not modified/i.test(m)) return;
+    if (!/no text in the message|message can't be edited|MESSAGE_ID_INVALID/i.test(m)) throw e;
+    await ctx.deleteMessage().catch(() => {});
+    return ctx.reply(text, extra);
+  }
+};
 
 const n2 = (v: number, unit: string): string => {
   const d = unit === 'USDG' || unit === 'USDT' ? 2 : 5;
