@@ -521,10 +521,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       dryRun: config.safety.dryRun,
       chainId: network.chainId,
       positions: store.active().length,
-      limitLabel: [
-        maxEth === Infinity ? null : capLabelFor(maxEth, 'ETH/BNB'),
-        maxStable === Infinity ? null : capLabelFor(maxStable, 'USD'),
-      ].filter(Boolean).join(' · ') || '∞',
+      limitLabel: `${capLabelFor(maxEth, 'ETH/BNB')} · ${capLabelFor(maxStable, 'USD')}`,
       wallet: getChain().wallet.address,
       chains,
       totalUsd,
@@ -1249,12 +1246,13 @@ const wizardCtx = (flow: AddFlow): ChainCtx => venueCtx(getChain(flow.chain), fl
 function amountCtx(flow: AddFlow) {
   const base = wizardBase(flow);
   const stable = isStableBase(base.kind);
-  // Sisi token: satuannya token itu sendiri — batas MAX_ETH_PER_TX tak berlaku
-  // (batas itu menjaga ETH yang keluar, sementara sisi token tak menyetor ETH).
+  // Sisi token: satuannya token itu sendiri, jadi angka tetap tak bermakna —
+  // MAX_ETH_PER_TX tak berlaku di sini. Tapi batasnya TETAP ADA: saldo token yang
+  // benar-benar dipegang, dibaca saat nominal diketik (lihat penegakan di bawah).
   if (flow.strategy === 'token') {
     return {
       symbol: flow.selected?.otherSymbol ?? 'TOKEN',
-      cap: Infinity,
+      cap: Infinity, // diganti saldo nyata sebelum ditegakkan
       capLabel: 'your full balance',
       example: '1000',
     };
@@ -2743,7 +2741,7 @@ async function tswapQuoteConfirm(
     const stable = isStableBase(base.kind);
     const cap = stable ? maxStable : maxEth;
     const spend = Number(ethers.formatUnits(amountWei, base.decimals));
-    if (cap !== Infinity && spend > cap) {
+    if (spend > cap) {
       tswapFlows.delete(ctx.from!.id);
       return editProgress(
         ctx,
@@ -3457,7 +3455,23 @@ bot.on(message('text'), async (ctx) => {
     const w = parseAmt(raw, dec);
     if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
     const num = Number(ethers.formatUnits(w, dec));
-    if (num > a.cap) return ctx.reply(msg.msgOverLimit(a.capLabel), html);
+    // Sisi token tak punya angka tetap yang masuk akal, tapi tak boleh tanpa batas:
+    // atapnya = saldo token yang benar-benar dipegang. Pembacaan gagal → pakai
+    // batas dari amountCtx, jangan memblokir langkah hanya karena RPC ngadat.
+    let cap = a.cap;
+    let capLabel = a.capLabel;
+    if (flow.strategy === 'token') {
+      const cc = wizardCtx(flow);
+      const bal = await new ethers.Contract(flow.token, ERC20_ABI, cc.provider)
+        .balanceOf(cc.wallet.address)
+        .then((b: bigint) => Number(ethers.formatUnits(b, dec)))
+        .catch(() => null);
+      if (bal !== null) {
+        cap = bal;
+        capLabel = `${bal.toLocaleString("en-US", { maximumFractionDigits: 6 })} ${a.symbol}`;
+      }
+    }
+    if (num > cap) return ctx.reply(msg.msgOverLimit(capLabel), html);
     flow.awaitingAmount = false;
     flow.ethAmount = ethers.formatUnits(w, dec); // sudah dinormalisasi (desimal dipotong)
     await renderRangeStep(ctx, flow, false);

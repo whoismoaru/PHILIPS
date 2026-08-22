@@ -30,17 +30,25 @@ const originalCommand = bot.command.bind(bot);
 
 export const html = { parse_mode: 'HTML' as const };
 
-/** Batas ETH/tx: nilai <= 0 atau kosong berarti TANPA batas. */
-const rawMax = Number(config.safety.maxEthPerTx);
-export const maxEth = rawMax > 0 ? rawMax : Infinity;
+/**
+ * Batas per-transaksi TIDAK PERNAH tak terhingga.
+ *
+ * Dulu `.env` kosong berarti unlimited — dan itu diam-diam: kartu menulis
+ * "unlimited", tak ada yang menahan satu digit kelebihan. Sekarang kosong jatuh
+ * ke bawaan yang masuk akal. Untuk menaikkan batas, isi angkanya di `.env`;
+ * tak ada lagi cara MEMATIKANNYA sama sekali.
+ */
+const DEFAULT_MAX_ETH = 0.1;
+const DEFAULT_MAX_STABLE = 250;
 
-/** Batas per-tx utk base stablecoin (USDT/USDG). Kosong/<=0 = TANPA batas. */
+const rawMax = Number(config.safety.maxEthPerTx);
+export const maxEth = rawMax > 0 ? rawMax : DEFAULT_MAX_ETH;
+
 const rawStable = Number(config.safety.maxStablePerTx);
-export const maxStable = rawStable > 0 ? rawStable : Infinity;
+export const maxStable = rawStable > 0 ? rawStable : DEFAULT_MAX_STABLE;
 
 /** Label batas yang menyebut satuan aset yang benar (ETH di Robinhood, BNB di BSC). */
-export const capLabelFor = (cap: number, sym: string) =>
-  cap === Infinity ? 'unlimited' : `${cap} ${sym}`;
+export const capLabelFor = (cap: number, sym: string) => `${cap} ${sym}`;
 export const maxEthLabel = capLabelFor(maxEth, 'ETH');
 
 /** Posisi sudah di-burn/tak ada di chain (NFT hilang). */

@@ -101,8 +101,9 @@ Read this before putting real money in.
   aborts if the price has moved more than 3% away from the number you approved.
 - **Per-transaction caps.** `MAX_ETH_PER_TX` limits native amounts (ETH, BNB),
   `MAX_STABLE_PER_TX` limits stablecoin amounts in dollars. Each denomination has its own
-  limit; they are never summed. Empty means no cap. Token-side amounts stay uncapped —
-  denominated in the token itself, no fixed number is meaningful.
+  limit; they are never summed. Empty falls back to a built-in default — a cap can be
+  raised, never switched off. Token-side amounts have no fixed number that would mean
+  anything, so their ceiling is the wallet's actual balance of that token.
 
 ### Closing a position cashes out the whole wallet
 
