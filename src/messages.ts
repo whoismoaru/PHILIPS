@@ -1001,6 +1001,7 @@ export function msgPositionCard(opts: {
     // explain sudah berisi tag <b> & teks ter-escape → JANGAN lewat italic()
     // (yang meng-escape lagi dan menampilkan "&lt;b&gt;" mentah ke user).
     `<i>${explain}</i>`,
+    '',
     footerMode(opts.dryRun),
   ].join('\n');
 }
