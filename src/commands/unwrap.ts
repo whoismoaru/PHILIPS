@@ -10,7 +10,7 @@ import * as msg from '../messages.js';
 /**
  * /unwrap — kembalikan WETH nyangkut ke ETH native, on demand.
  *
- * Monitor sudah menyapu WETH otomatis, tapi cuma tiap 30 menit dan hanya saat
+ * Monitor sudah menyapu WETH otomatis, tapi cuma tiap 1 menit dan hanya saat
  * tak ada operasi uang berjalan — jadi tepat setelah close/open yang separuh
  * gagal, saldonya nongkrong sebagai WETH sampai sapuan berikutnya. Ini jalur
  * manualnya: baca saldo, konfirmasi, satu tx withdraw().

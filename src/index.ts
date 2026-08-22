@@ -2823,7 +2823,7 @@ async function tswapQuoteConfirm(
 /** Umur maksimum angka di kartu Preview /buy & /sell (sama dgn /bridge). */
 /**
  * Unwrap WETH nyasar → native. Dipanggil setelah add/close gagal separuh jalan, supaya
- * tak perlu /unwrap manual atau menunggu sweep monitor (siklus 30 menit).
+ * tak perlu /unwrap manual atau menunggu sweep monitor (siklus 1 menit).
  * Aman diulang: saldo 0 → tak ada transaksi sama sekali.
  */
 async function recoverStrayWeth(cc: ChainCtx, why: string): Promise<void> {
@@ -3027,7 +3027,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
   closingInFlight.set(tokenId, Date.now());
   const closingRec = store.get(tokenId); // tangkap SEBELUM finalizeClose menghapus
   // Close = remove + collect + swap + unwrap, bisa 1–2 menit. Tanpa penanda ini
-  // sweep monitor (tiap 30 menit) boleh jalan di tengahnya dari dompet yang sama:
+  // sweep monitor (tiap 1 menit) boleh jalan di tengahnya dari dompet yang sama:
   // tabrakan nonce, atau WETH milik close ini ikut disapu.
   store.beginMoneyOp();
   try {
@@ -3078,7 +3078,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       await ctx.reply(msg.msgAlreadyClosed(tokenId), html);
     } else {
       // Close gagal separuh jalan biasanya menyisakan WETH hasil remove. Dulu itu
-      // berarti /unwrap manual (atau menunggu sweep monitor sampai 30 menit). Rapikan
+      // berarti /unwrap manual (atau menunggu sweep monitor sampai 1 menit). Rapikan
       // di sini juga: withdraw() aman & idempoten — tak ada WETH, tak ada tx.
       await recoverStrayWeth(getChain(closingRec?.chain), 'close').catch(() => {});
       await ctx.reply(msg.msgError('close', (err as Error).message), html);

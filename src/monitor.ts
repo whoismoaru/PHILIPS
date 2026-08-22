@@ -28,7 +28,7 @@ const DROP_HYSTERESIS_PCT = 5; // pulih 5% di atas ambang → tangga di-arm ulan
 function dropLadder(base: number): number[] {
   return [...new Set([base, 30, 50, 75].filter((t) => t >= base))].sort((a, b) => a - b);
 }
-const SWEEP_EVERY_MS = 30 * 60_000; // sapu sisa token tiap 30 menit
+const SWEEP_EVERY_MS = 60_000; // sapu sisa token tiap 1 menit (= tiap tick monitor)
 const SWEEP_COOLDOWN_MS = 6 * 3_600_000; // per token max 1 percobaan / 6 jam
 const SWEEP_RECENT_MS = 24 * 3_600_000; // sisa cash-out selalu muncul di jam-jam pertama
 const DUST_COOLDOWN_MS = 7 * 24 * 3_600_000; // token "terlalu kecil" → mundur 7 hari
