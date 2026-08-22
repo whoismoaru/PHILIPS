@@ -1269,37 +1269,83 @@ function amountCtx(flow: AddFlow) {
 }
 
 async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
-  // Tanpa bubble preset: nominal SELALU diketik di chat.
+  // Nominal boleh diketik ATAU dipilih sebagai persentase saldo. Persentase
+  // dihitung dari saldo YANG BISA DIPAKAI, bukan saldo mentah — lihat usableFor().
   flow.awaitingAmount = true;
   const a = amountCtx(flow);
   const rows: any[] = [];
-  // v4 lewati step rentang → "Kembali" ke pemilihan pool; v3 kembali ke rentang.
-  const backTo = 'back:strategy';
-  rows.push([Markup.button.callback('⬅️ Back', backTo)], [Markup.button.callback('❌ Cancel', 'cancel')]);
-  // Saldo base (1 RPC, gagal → '?': jangan pernah memblokir langkah ini).
-  const cc = getChain(flow.chain);
-  const base = wizardBase(flow);
-  if (flow.strategy === 'token') {
-    const dec = flow.tokenDec ?? 18;
-    const bal = await new ethers.Contract(flow.token, ERC20_ABI, cc.provider)
-      .balanceOf(cc.wallet.address)
-      .then((b: bigint) => `${msg.cleanUnits(b, dec)} ${a.symbol}`)
-      .catch(() => '?');
-    const textT = msg.msgAmountStep(a.symbol, a.capLabel, bal, a.example);
-    const extraT = { ...html, ...Markup.inlineKeyboard(rows) };
-    await (edit ? ctx.editMessageText(textT, extraT) : ctx.reply(textT, extraT));
-    return;
-  }
-  const balLabel = await (base.wrappable
-    ? cc.provider.getBalance(cc.wallet.address).then((b) => `${msg.cleanUnits(b, 18)} ${cc.nativeSymbol}`)
-    : new ethers.Contract(base.address, ERC20_ABI, cc.provider)
-        .balanceOf(cc.wallet.address)
-        .then((b: bigint) => `${msg.cleanUnits(b, base.decimals)} ${base.symbol}`)
-  ).catch(() => '?');
+  rows.push(AMOUNT_PCTS.map((p) => Markup.button.callback(`${p}%`, `amt:${p}`)));
+  rows.push([Markup.button.callback('⬅️ Back', 'back:strategy')], [Markup.button.callback('❌ Cancel', 'cancel')]);
+  // Saldo (1 RPC, gagal → '?': jangan pernah memblokir langkah ini).
+  const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
+  const raw = await rawBalanceFor(flow).catch(() => null);
+  const balLabel = raw === null ? '?' : `${msg.cleanUnits(raw, dec)} ${a.symbol}`;
   const text = msg.msgAmountStep(a.symbol, a.capLabel, balLabel, a.example);
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
+
+/** Persentase saldo yang ditawarkan di langkah nominal. */
+const AMOUNT_PCTS = [30, 50, 70, 90] as const;
+
+/** Saldo mentah sisi yang sedang dipilih (token / native / stablecoin). */
+async function rawBalanceFor(flow: AddFlow): Promise<bigint> {
+  const cc = wizardCtx(flow);
+  if (flow.strategy === 'token') {
+    return new ethers.Contract(flow.token, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address);
+  }
+  const base = wizardBase(flow);
+  return base.wrappable
+    ? cc.provider.getBalance(cc.wallet.address)
+    : new ethers.Contract(base.address, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address);
+}
+
+/**
+ * Saldo yang BENAR-BENAR bisa disetor. Untuk aset native, ongkos gas dipotong
+ * lebih dulu: 90% dari saldo mentah akan menghabiskan gas, wrap berhasil lalu
+ * mint gagal, dan dana terjebak sebagai WETH. Sisi token & stablecoin tak
+ * membayar gas dari dirinya sendiri, jadi dipakai utuh.
+ */
+async function usableFor(flow: AddFlow): Promise<bigint> {
+  const raw = await rawBalanceFor(flow);
+  if (flow.strategy === 'token' || !wizardBase(flow).wrappable) return raw;
+  const buf = await gasBuffer(wizardCtx(flow));
+  return raw > buf ? raw - buf : 0n;
+}
+
+bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
+  await ctx.answerCbQuery();
+  const flow = getFlow(ctx);
+  if (!flow?.awaitingAmount) return;
+  if (isStaleFlow(flow.startedAt)) {
+    flows.delete(ctx.from.id);
+    return ctx.reply(msg.msgSessionExpired(), html);
+  }
+  const pct = Number(ctx.match[1]);
+  if (!AMOUNT_PCTS.includes(pct as (typeof AMOUNT_PCTS)[number])) return;
+
+  const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
+  const usable = await usableFor(flow).catch(() => null);
+  if (usable === null) return ctx.reply(msg.msgError('amount', 'Balance read failed — type the amount instead.'), html);
+  if (usable <= 0n) {
+    return ctx.reply(
+      msg.msgError('amount', 'Nothing available to deposit on this side after the gas reserve.'),
+      html,
+    );
+  }
+
+  let wei = (usable * BigInt(pct)) / 100n;
+
+  // Batas per-tx tetap berlaku pada tombol, persis seperti pada nominal ketikan.
+  const a = amountCtx(flow);
+  const capWei = a.cap === Infinity ? null : ethers.parseUnits(String(a.cap), dec);
+  if (capWei !== null && wei > capWei) wei = capWei;
+  if (wei <= 0n) return ctx.reply(msg.msgError('amount', 'That percentage rounds to zero.'), html);
+
+  flow.awaitingAmount = false;
+  flow.ethAmount = ethers.formatUnits(wei, dec);
+  await renderRangeStep(ctx, flow, false);
+});
 
 /** Langkah 4/4 — hitung & tampilkan rencana + konfirmasi. */
 async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {

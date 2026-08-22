@@ -1282,8 +1282,10 @@ export function msgAmountStep(
     `• Balance -> ${bold(balanceLabel ?? '?')}`,
     `• Max Tx Limit -> ${bold(maxLabel)}`,
     '',
-    `Please type the amount of ${bold(symbol)} you want to deposit directly in the chat below.`,
+    `Tap a percentage below, or type the exact amount of ${bold(symbol)} in the chat.`,
     italic(`Example: ${example}`),
+    '',
+    note('percentages are taken from your usable balance — the gas reserve is kept aside'),
   ].join('\n');
 }
 
