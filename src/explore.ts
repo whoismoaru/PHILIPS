@@ -42,6 +42,8 @@ export type ExplorePool = {
   vol1dUsd: number;
   apr: number; // persen
   otherAddr?: string; // CA sisi non-base → tombol "➕ LP <TOKEN>"
+  chain?: string; // key chain asal — WAJIB saat daftar menggabung banyak chain
+  chainLabel?: string; // label tampilan chain asal
 };
 
 type ApiPool = {
@@ -108,7 +110,9 @@ export async function fetchTopPools(
 
   const raw: ApiPool[] = [
     ...(json?.data?.topV3Pools ?? []),
-    ...(json?.data?.topV4Pools ?? []),
+    // v4 hanya di chain yang bot dukung PENUH — di chain lain posisi v4 tak bisa
+    // dipantau atau ditutup, jadi jangan dipajang sebagai peluang.
+    ...(v4Supported(ctx) ? (json?.data?.topV4Pools ?? []) : []),
   ];
   const out: ExplorePool[] = [];
   for (const p of raw) {
@@ -144,7 +148,7 @@ export async function fetchTopPools(
     });
   }
   out.sort((a, b) => b.apr - a.apr);
-  return out.slice(0, limit);
+  return out.slice(0, limit).map((p) => ({ ...p, chain: ctx.key, chainLabel: ctx.label }));
 }
 
 // ─── discovery per-token (untuk /add) ──────────────────────────────
@@ -468,7 +472,7 @@ async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePo
     }),
   );
   pools.sort((a, b) => b.apr - a.apr);
-  return pools.slice(0, limit);
+  return pools.slice(0, limit).map((p) => ({ ...p, chain: ctx.key, chainLabel: ctx.label }));
 }
 
 // ─── format ────────────────────────────────────────────────────────
@@ -524,5 +528,49 @@ export function renderExplore(pools: ExplorePool[], chainLabel: string, dexLabel
     '',
     m.note(`top ${pools.length} by APR · single-sided ${baseLabel} · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · APR = 24h fees annualised`),
     m.italic(`${chainLabel} · ${m.nowWib()}`),
+  ].join('\n');
+}
+
+/** Penanda warna per chain — pembeda cepat di daftar gabungan. */
+export const chainDot = (key?: string): string =>
+  key === 'bsc' ? '🟡' : key === 'base' ? '🔵' : '🟣';
+
+/**
+ * Daftar pool "lagi rame" dari SEMUA chain sekaligus, dikelompokkan per chain.
+ * Urutan di dalam grup: volume 24 jam (itu arti ramai), bukan APR — APR tinggi
+ * di pool sepi cuma angka, tak ada yang menukar di sana.
+ */
+export function renderExploreAll(groups: Array<{ ctx: ChainCtx; pools: ExplorePool[] }>): string {
+  const live = groups.filter((g) => g.pools.length > 0);
+  if (live.length === 0) {
+    return [
+      `🔥 ${m.bold('Hot Pools (24H)')}`,
+      '',
+      m.note('No pool meets the criteria on any chain right now. Try again later.'),
+      m.italic(m.nowWib()),
+    ].join('\n');
+  }
+
+  const sections = live.map(({ ctx, pools }) => {
+    const bases = ctx.bases.map((b) => b.symbol).join('/');
+    const rows = pools.map((p, i) => {
+      const risk = !p.otherAddr ? '✅' : p.apr >= 40 ? '⚠️' : '•';
+      return [
+        `${i + 1}. ${m.bold(p.pair.replace('/', ' / '))} ${m.italic(`(${p.ver.toUpperCase()}, ${m.feeLabel(p.feeTier)})`)}`,
+        `   ${risk} Vol ${usdCompact(p.vol1dUsd)} · TVL ${usdCompact(p.tvlUsd)} · APR ${aprLabel(p.apr)}`,
+      ].join('\n');
+    });
+    return [`${chainDot(ctx.key)} ${m.bold(ctx.label.toUpperCase())} ${m.italic(`· ${ctx.dexLabel} · ${bases}`)}`, ...rows].join('\n');
+  });
+
+  return [
+    `🔥 ${m.bold('Hot Pools (24H)')}`,
+    '',
+    'Busiest single-sided pools across your chains right now:',
+    '',
+    sections.join('\n\n'),
+    '',
+    m.note(`sorted by 24h volume · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · APR = 24h fees annualised`),
+    m.italic(m.nowWib()),
   ].join('\n');
 }

@@ -1044,24 +1044,50 @@ bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
 // /history — riwayat trade tertutup, dari file jurnal khusus (tak muncul di /positions).
 // /explore — top 5 pool by APR (single-sided ETH/USDG), sinkron REAL-TIME Uniswap.
 // Kartu EXPLORE dulu buntu: hanya Refresh, sementara CA-nya tak dibawa ke mana pun.
+// Tombol membawa chain asal: daftar gabungan berisi pool dari beberapa chain,
+// dan membuka wizard di chain yang salah = pool tak ketemu / posisi salah tempat.
 const exploreKb = (pools: explore.ExplorePool[]) =>
   Markup.inlineKeyboard([
     ...pools
       .filter((p) => p.otherAddr)
-      .slice(0, 3)
-      .map((p) => [Markup.button.callback(`💧 Add LP: ${p.pair.split('/')[0]}`, `x:${p.otherAddr}`)]),
+      .slice(0, 4)
+      .map((p) => [
+        Markup.button.callback(
+          `${explore.chainDot(p.chain)} Add LP: ${p.pair.split('/')[0]}`,
+          `x:${p.chain ?? getChain().key}:${p.otherAddr}`,
+        ),
+      ]),
     [Markup.button.callback('🔄 Refresh Data', 'explore:refresh')],
     [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
   ]);
 
+/** Pool ter-ramai dari SEMUA chain aktif, diambil paralel. */
 async function loadExplore(): Promise<{ text: string; pools: explore.ExplorePool[] }> {
-  const cc = getChain();
-  const pools = await explore.fetchTopPools(cc, 5);
-  const baseLabel = cc.bases.map((b) => b.symbol).join('/');
-  return { text: explore.renderExplore(pools, cc.label, cc.dexLabel, baseLabel), pools };
+  const chains = Object.values(CHAINS);
+  const groups = await Promise.all(
+    chains.map(async (cc) => ({
+      ctx: cc,
+      // Satu chain gagal (RPC/gateway down) tak boleh mengosongkan seluruh kartu.
+      pools: await explore.fetchTopPools(cc, 3).catch((e) => {
+        console.error(`[pools] ${cc.key} gagal:`, (e as Error).message);
+        return [] as explore.ExplorePool[];
+      }),
+    })),
+  );
+  // Ramai = volume 24 jam. APR tinggi di pool sepi cuma angka.
+  for (const g of groups) g.pools.sort((a, b) => b.vol1dUsd - a.vol1dUsd);
+  // Tombol: yang paling ramai lintas chain, bukan semua dari satu chain.
+  const flat = groups.flatMap((g) => g.pools).sort((a, b) => b.vol1dUsd - a.vol1dUsd);
+  return { text: explore.renderExploreAll(groups), pools: flat };
 }
 
 // Tombol pool → wizard /add penuh (screening & preview tetap jalan).
+bot.action(/^x:([a-z0-9_-]+):(0x[0-9a-fA-F]{40})$/i, async (ctx: any) => {
+  await ctx.answerCbQuery();
+  resetFlows(ctx.from!.id);
+  return continueAddlp(ctx, ctx.match[2], ctx.match[1], null);
+});
+// Bentuk lama tanpa chain — tombol di pesan yang sudah terkirim sebelum ini.
 bot.action(/^x:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   await ctx.answerCbQuery();
   resetFlows(ctx.from!.id);
@@ -1069,7 +1095,7 @@ bot.action(/^x:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
 });
 
 async function cmdExplore(ctx: any) {
-  const loading = await ctx.reply('📈 loading top pools from Uniswap…');
+  const loading = await ctx.reply('🔥 loading hot pools across all chains…');
   try {
     const { text, pools } = await loadExplore();
     await ctx.telegram.editMessageText(loading.chat.id, loading.message_id, undefined, text, {
