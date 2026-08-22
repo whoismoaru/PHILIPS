@@ -13,6 +13,7 @@
  */
 import { getChain, venueCtx, venuesFor, type BaseKind, type ChainCtx } from './chains.js';
 import { v4Supported } from './uniswapV4.js';
+import { krystalPools } from './krystal.js';
 import type { PoolKeyV4 } from './uniswapV4.js';
 import { ethers } from 'ethers';
 import * as m from './messages.js';
@@ -44,6 +45,7 @@ export type ExplorePool = {
   otherAddr?: string; // CA sisi non-base → tombol "➕ LP <TOKEN>"
   chain?: string; // key chain asal — WAJIB saat daftar menggabung banyak chain
   chainLabel?: string; // label tampilan chain asal
+  vol1hUsd?: number; // volume 1 jam (DexScreener). undefined = tak terbaca.
 };
 
 type ApiPool = {
@@ -162,7 +164,9 @@ export type TokenPool = {
   fee: number;
   tvlUsd: number;
   vol24hUsd?: number; // volume 24 jam (USD) — untuk ranking "terbesar" & tampilan
+  vol1hUsd?: number; // volume 1 jam (USD) — Krystal stats1h; untuk daftar "lagi rame"
   aprPct?: number | null; // fee 24 jam disetahunkan; null = volume tak terbaca
+  otherAddr?: string; // alamat sisi token — dibutuhkan tombol "Add LP" di daftar lintas-chain
   venue?: string; // DEX non-bawaan chain (mis. 'uniswapv3' di BSC); kosong = bawaan
   poolKey?: PoolKeyV4; // v4 saja — currency0/1, fee, tickSpacing, hooks
   baseIsCurrency0?: boolean; // v4 saja
@@ -301,6 +305,7 @@ type DexPair = {
   pairAddress: string;
   liquidityUsd: number;
   vol24hUsd: number;
+  vol1hUsd?: number;
   /** alamat(lowercase) → simbol. DexScreener memakai base/quote miliknya sendiri,
    *  yang TIDAK selalu sama urutannya dengan token0/token1 pool — jadi simbol
    *  harus dicocokkan lewat alamat, bukan lewat posisi. */
@@ -334,6 +339,7 @@ async function dexPairs(ctx: ChainCtx, tokenAddress: string): Promise<DexPair[]>
       pairAddress: p.pairAddress,
       liquidityUsd: liq,
       vol24hUsd: Number(p?.volume?.h24 ?? 0),
+      vol1hUsd: Number(p?.volume?.h1 ?? 0),
       symByAddr,
     });
   }
@@ -439,8 +445,11 @@ async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePo
     .flat()
     .filter((p) => (seen.has(p.pairAddress.toLowerCase()) ? false : seen.add(p.pairAddress.toLowerCase())))
     .filter((p) => p.liquidityUsd >= MIN_TVL_USD && p.vol24hUsd > 0)
-    .sort((a, b) => b.liquidityUsd - a.liquidityUsd)
-    .slice(0, 15); // batasi verifikasi on-chain
+    // Urut by volume 24 jam, bukan likuiditas: pool TERLIKUID di BSC selalu
+    // USDT/WBNB, jadi memilih by likuiditas membuat daftar habis oleh stablecoin
+    // dan token yang benar-benar ramai tak pernah sampai ke kandidat.
+    .sort((a, b) => b.vol24hUsd - a.vol24hUsd)
+    .slice(0, 25); // batasi verifikasi on-chain
   const pools: ExplorePool[] = [];
   await Promise.all(
     cand.map(async (p) => {
@@ -466,6 +475,7 @@ async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePo
         feeTier: v.fee,
         tvlUsd: p.liquidityUsd,
         vol1dUsd: p.vol24hUsd,
+        vol1hUsd: p.vol1hUsd,
         apr,
         otherAddr,
       });
@@ -544,9 +554,9 @@ export function renderExploreAll(groups: Array<{ ctx: ChainCtx; pools: ExplorePo
   const live = groups.filter((g) => g.pools.length > 0);
   if (live.length === 0) {
     return [
-      `🔥 ${m.bold('Hot Pools (24H)')}`,
+      `🔥 ${m.bold('Hot Pools (1H)')}`,
       '',
-      m.note('No pool meets the criteria on any chain right now. Try again later.'),
+      m.note(`No pool traded ≥ $${(MIN_VOL_1H_USD / 1000).toFixed(0)}K in the last hour on any chain. Try again later.`),
       m.italic(m.nowWib()),
     ].join('\n');
   }
@@ -557,20 +567,130 @@ export function renderExploreAll(groups: Array<{ ctx: ChainCtx; pools: ExplorePo
       const risk = !p.otherAddr ? '✅' : p.apr >= 40 ? '⚠️' : '•';
       return [
         `${i + 1}. ${m.bold(p.pair.replace('/', ' / '))} ${m.italic(`(${p.ver.toUpperCase()}, ${m.feeLabel(p.feeTier)})`)}`,
-        `   ${risk} Vol ${usdCompact(p.vol1dUsd)} · TVL ${usdCompact(p.tvlUsd)} · APR ${aprLabel(p.apr)}`,
+        `   ${risk} 1h ${usdCompact(p.vol1hUsd ?? 0)} · 24h ${usdCompact(p.vol1dUsd)} · TVL ${usdCompact(p.tvlUsd)} · APR ${aprLabel(p.apr)}`,
       ].join('\n');
     });
     return [`${chainDot(ctx.key)} ${m.bold(ctx.label.toUpperCase())} ${m.italic(`· ${ctx.dexLabel} · ${bases}`)}`, ...rows].join('\n');
   });
 
   return [
-    `🔥 ${m.bold('Hot Pools (24H)')}`,
+    `🔥 ${m.bold('Hot Pools (1H)')}`,
     '',
-    'Busiest single-sided pools across your chains right now:',
+    'Single-sided pools actually being traded right now:',
     '',
     sections.join('\n\n'),
     '',
-    m.note(`sorted by 24h volume · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · APR = 24h fees annualised`),
+    m.note(
+      `sorted by 1h volume · 1h ≥ $${(MIN_VOL_1H_USD / 1000).toFixed(0)}K · TVL ≥ $${(MIN_TVL_USD / 1000).toFixed(0)}K · stablecoin pairs excluded`,
+    ),
     m.italic(m.nowWib()),
   ].join('\n');
+}
+
+// ─── daftar "lagi rame": volume 1 JAM, tanpa pool stablecoin ────────
+
+/** Ambang ramai: pool harus benar-benar ditukar SEKARANG, bukan kemarin. */
+export const MIN_VOL_1H_USD = 80_000;
+
+/**
+ * Simbol yang dianggap stablecoin. Pool TOKEN/BASE yang sisi tokennya stablecoin
+ * bukan peluang LP single-side — tak ada token yang mau dibeli di harga bawah,
+ * cuma dolar ditukar dolar.
+ */
+const STABLE_SYMBOLS = new Set([
+  'USDT', 'USDC', 'USDG', 'USDE', 'USD1', 'USDS', 'USDP', 'USDD', 'USDX',
+  'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'FRAX', 'LUSD', 'GUSD', 'EURC',
+  'USDT0', 'USDBC', 'CBBTC-USD',
+]);
+const isStableSymbol = (sym?: string): boolean => {
+  if (!sym) return false;
+  const u = sym.toUpperCase().replace(/^W/, '');
+  return STABLE_SYMBOLS.has(u) || /^[A-Z]{0,3}USD[A-Z0-9]{0,2}$/.test(u);
+};
+
+/** Sisi non-base sebuah pool (pair ditulis "TOKEN/BASE"). */
+const otherSymbolOf = (pair: string): string => pair.split('/')[0] ?? '';
+
+/**
+ * Isi vol1hUsd dari DexScreener. Gateway Uniswap hanya menyediakan volume 24 jam
+ * (`duration: HOUR` ditolak server), jadi angka 1 jam harus dari sumber lain.
+ * Pencocokan: pair DexScreener untuk token yang sama, versi sama, likuiditas
+ * paling dekat dengan TVL gateway.
+ */
+async function enrichHourlyVolume(ctx: ChainCtx, pools: ExplorePool[]): Promise<void> {
+  const tokens = [...new Set(pools.map((p) => p.otherAddr).filter(Boolean) as string[])];
+  const byToken = new Map<string, any[]>();
+  await Promise.all(
+    tokens.map(async (t) => {
+      try {
+        const res = await fetch(`${DEXSCREENER_TOKENS}/${t}`, { signal: AbortSignal.timeout(12_000) });
+        if (!res.ok) return;
+        const j: any = await res.json();
+        byToken.set(t.toLowerCase(), (j?.pairs ?? []).filter((x: any) => x?.chainId === ctx.dexKey));
+      } catch {
+        /* satu token gagal → pool itu saja yang tak dapat angka 1 jam */
+      }
+    }),
+  );
+  for (const p of pools) {
+    if (!p.otherAddr) continue;
+    const cands = (byToken.get(p.otherAddr.toLowerCase()) ?? []).filter((x: any) =>
+      (x?.labels ?? []).some((l: string) => l.toLowerCase() === p.ver.toLowerCase()),
+    );
+    if (!cands.length) continue;
+    // TVL gateway vs likuiditas DexScreener: pool yang sama pasti paling dekat.
+    const best = cands.reduce((a: any, b: any) =>
+      Math.abs((a?.liquidity?.usd ?? 0) - p.tvlUsd) <= Math.abs((b?.liquidity?.usd ?? 0) - p.tvlUsd) ? a : b,
+    );
+    const v = Number(best?.volume?.h1 ?? NaN);
+    if (Number.isFinite(v)) p.vol1hUsd = v;
+  }
+}
+
+/** Pool yang benar-benar ramai 1 jam terakhir, bukan pool stablecoin. */
+export async function fetchHotPools(ctx: ChainCtx, limit = 3): Promise<ExplorePool[]> {
+  // Sumber utama Krystal: satu-satunya yang memberi volume 1 JAM asli (stats1h)
+  // untuk ketiga chain. Gateway Uniswap menolak `duration: HOUR`, dan DexScreener
+  // hanya membalas ~30 pair terlikuid per token — di BSC itu stablecoin semua.
+  const fromKrystal = (
+    await Promise.all(
+      ctx.bases.map((b) => krystalPools(ctx, b.address, 2).catch(() => [] as TokenPool[])),
+    )
+  ).flat();
+
+  const seen = new Set<string>();
+  const pools: ExplorePool[] = [];
+  for (const p of fromKrystal) {
+    if (isStableSymbol(p.otherSymbol)) continue; // dolar ditukar dolar — bukan peluang LP
+    if ((p.vol1hUsd ?? 0) < MIN_VOL_1H_USD) continue;
+    if (p.tvlUsd < MIN_TVL_USD) continue;
+    const k = `${p.protocol}:${p.venue ?? ''}:${p.baseSymbol}/${p.otherSymbol}:${p.fee}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    pools.push({
+      ver: p.protocol,
+      pair: `${p.otherSymbol}/${p.baseSymbol}`,
+      feeTier: p.fee,
+      tvlUsd: p.tvlUsd,
+      vol1dUsd: p.vol24hUsd ?? 0,
+      vol1hUsd: p.vol1hUsd,
+      apr: p.aprPct ?? 0,
+      otherAddr: p.otherAddr,
+      chain: ctx.key,
+      chainLabel: ctx.label,
+    });
+  }
+  if (pools.length > 0) {
+    return pools.sort((a, b) => (b.vol1hUsd ?? 0) - (a.vol1hUsd ?? 0)).slice(0, limit);
+  }
+
+  // Krystal mati / chain tak didukung → jalur lama (gateway + volume 1 jam DexScreener).
+  const cand = (await fetchTopPools(ctx, 40))
+    .filter((p) => p.otherAddr)
+    .filter((p) => !isStableSymbol(otherSymbolOf(p.pair)));
+  await enrichHourlyVolume(ctx, cand);
+  return cand
+    .filter((p) => (p.vol1hUsd ?? 0) >= MIN_VOL_1H_USD)
+    .sort((a, b) => (b.vol1hUsd ?? 0) - (a.vol1hUsd ?? 0))
+    .slice(0, limit);
 }

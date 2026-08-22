@@ -133,10 +133,12 @@ function baseOfPair(
  * USDT. Diurut TVL turun. Tak dikonfigurasi / gagal → []. Pemanggil tetap menjalankan
  * filter kesehatan (activeLiq>0 utk v4).
  */
-export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPool[]> {
+export async function krystalPools(cc: ChainCtx, token: string, sortBy = 0): Promise<TokenPool[]> {
   if (!krystalConfigured(cc)) return [];
   const cid = CHAIN_ID[cc.key];
-  const list = await fetchJson(`${API}/pools?chainId=${cid}&token=${token}&sortBy=0&limit=50`).catch(() => null);
+  const list = await fetchJson(
+    `${API}/pools?chainId=${cid}&token=${token}&sortBy=${sortBy}&limit=50`,
+  ).catch(() => null);
   if (!Array.isArray(list)) return [];
   const out = await Promise.all(
     list.map(async (p: any): Promise<TokenPool | null> => {
@@ -169,7 +171,9 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
           fee: pk.fee,
           tvlUsd: Number(p.tvl) || 0,
           vol24hUsd: p.stats24h?.volume != null ? Number(p.stats24h.volume) : 0,
+          vol1hUsd: p.stats1h?.volume != null ? Number(p.stats1h.volume) : 0,
           aprPct: p.stats24h?.apr != null ? Number(p.stats24h.apr) : null,
+          otherAddr: b.baseIsCurrency0 ? t1.address : t0.address,
           poolKey: pk,
           baseIsCurrency0: b.baseIsCurrency0,
         };
@@ -197,7 +201,9 @@ export async function krystalPools(cc: ChainCtx, token: string): Promise<TokenPo
           fee,
           tvlUsd: Number(p.tvl) || 0,
           vol24hUsd: p.stats24h?.volume != null ? Number(p.stats24h.volume) : 0,
+          vol1hUsd: p.stats1h?.volume != null ? Number(p.stats1h.volume) : 0,
           aprPct: p.stats24h?.apr != null ? Number(p.stats24h.apr) : null,
+          otherAddr: b.baseIsCurrency0 ? t1.address : t0.address,
           ...(vn.venue ? { venue: vn.venue } : {}),
         };
       }

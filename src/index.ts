@@ -1068,16 +1068,15 @@ async function loadExplore(): Promise<{ text: string; pools: explore.ExplorePool
     chains.map(async (cc) => ({
       ctx: cc,
       // Satu chain gagal (RPC/gateway down) tak boleh mengosongkan seluruh kartu.
-      pools: await explore.fetchTopPools(cc, 3).catch((e) => {
+      pools: await explore.fetchHotPools(cc, 3).catch((e) => {
         console.error(`[pools] ${cc.key} gagal:`, (e as Error).message);
         return [] as explore.ExplorePool[];
       }),
     })),
   );
-  // Ramai = volume 24 jam. APR tinggi di pool sepi cuma angka.
-  for (const g of groups) g.pools.sort((a, b) => b.vol1dUsd - a.vol1dUsd);
+  // Sudah terurut per chain by volume 1 jam di fetchHotPools.
   // Tombol: yang paling ramai lintas chain, bukan semua dari satu chain.
-  const flat = groups.flatMap((g) => g.pools).sort((a, b) => b.vol1dUsd - a.vol1dUsd);
+  const flat = groups.flatMap((g) => g.pools).sort((a, b) => (b.vol1hUsd ?? 0) - (a.vol1hUsd ?? 0));
   return { text: explore.renderExploreAll(groups), pools: flat };
 }
 
