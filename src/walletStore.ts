@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, chmodSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { config } from './config.js';
 
 /**
@@ -31,13 +31,26 @@ let loaded = false;
 
 /** Adopsi PRIVATE_KEY dari .env sekali saja, supaya pemasangan lama tetap jalan. */
 function adoptEnvKey(): void {
-  const pk = config.wallet.privateKey;
+  const pk = config.wallet.privateKey?.trim();
   if (!pk) return;
+  // Bentuknya divalidasi DI SINI, sebelum menyentuh ethers. Alasannya konkret:
+  // ethers menyensor nilai hanya pada galat "invalid private key". Kalau panjang
+  // atau karakternya salah — persis kasus salah tempel — ia melempar "invalid
+  // BytesLike value" DENGAN NILAI MENTAH di pesannya, dan pesan itu dulu ikut
+  // tercetak ke journald secara permanen.
+  if (!/^(0x)?[a-fA-F0-9]{64}$/.test(pk)) {
+    console.error(
+      '[wallet] PRIVATE_KEY di .env diabaikan: bentuknya bukan 64 karakter heksadesimal. ' +
+        'Perbaiki nilainya, atau hapus barisnya dan sambungkan lewat /settings.',
+    );
+    return;
+  }
   try {
-    save(new ethers.Wallet(pk));
+    save(new ethers.Wallet(pk.startsWith('0x') ? pk : `0x${pk}`));
     console.log('[wallet] PRIVATE_KEY dari .env diadopsi jadi keystore terenkripsi');
-  } catch (e) {
-    console.error('[wallet] gagal mengadopsi PRIVATE_KEY:', (e as Error).message);
+  } catch {
+    // Pesan galat ethers TIDAK BOLEH dicetak di sini — ia bisa memuat kuncinya.
+    console.error('[wallet] gagal mengadopsi PRIVATE_KEY dari .env (kunci tak dicetak).');
   }
 }
 
@@ -58,6 +71,9 @@ function load(): ethers.HDNodeWallet | ethers.Wallet | null {
 }
 
 function save(w: ethers.HDNodeWallet | ethers.Wallet): void {
+  // Jangan menumpang efek samping impor store.ts: kalau urutan impor berubah,
+  // data/ belum ada dan penyimpanan kunci gagal senyap.
+  mkdirSync(dirname(FILE), { recursive: true });
   writeFileSync(FILE, w.encryptSync(passphrase()), { mode: 0o600 });
   chmodSync(FILE, 0o600);
   cached = w;

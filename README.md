@@ -1,10 +1,10 @@
 # PHILIPS | Single-sided LP bot for Telegram
 
-Open and manage **single-sided** liquidity positions from a Telegram chat: Uniswap v3 and
-v4 on your primary chain, PancakeSwap v3 and Uniswap v3 on BSC. Pools come from the
-Uniswap gateway, Krystal, and on-chain scans, ranked by TVL and volume. You decide when
-to open and close; the bot handles the wizard, token screening, valuation, alerts, and
-cash-out.
+Open and manage **single-sided** liquidity positions from a Telegram chat. Three chains
+ship configured: Uniswap v3 and v4 on your primary chain, PancakeSwap v3 and Uniswap v3
+on BSC, and Uniswap v3 on Base. Pools come from the Uniswap gateway, Krystal, and
+on-chain scans, ranked by TVL and volume. You decide when to open and close; the bot
+handles the wizard, token screening, valuation, alerts, and cash-out.
 
 > **Self-hosted, single owner.** One running instance serves exactly one Telegram
 > account. The wallet, positions, journal, and alert settings are process-global — there
@@ -15,7 +15,7 @@ cash-out.
 
 - Node 20+, npm
 - A Telegram bot token (@BotFather) and your numeric Telegram id (@userinfobot)
-- An RPC endpoint for your chain (a keyed one public endpoints rate-limit)
+- An RPC endpoint for your chain — use a keyed one; public endpoints rate-limit
 - A wallet you are willing to dedicate to this bot
 - Optional: `npm i -g gmgn-cli` for the full token-security card
 

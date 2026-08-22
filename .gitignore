@@ -7,8 +7,6 @@ data.bak*
 report.md
 perbaikan.md
 FLOW.md
-docs/*
-!docs/HARDENING.md
 scripts/*
 !scripts/smoke*.ts
 docs/
