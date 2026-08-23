@@ -1,6 +1,5 @@
 import * as m from '../src/messages.js';
 
-/** Render semua kartu utama dengan data contoh — cek HTML & tata letak tanpa jaringan. */
 const out: string[] = [];
 const show = (name: string, text: string) => out.push(`\n══════ ${name} ══════\n${text}`);
 
@@ -188,7 +187,6 @@ show('TUTUP SEMUA (v3+v4)', m.msgCloseAllPick(2, 1));
 
 console.log(out.join('\n'));
 
-// Cek dasar: tak boleh ada tag HTML rusak / escape ganda di semua kartu.
 const all = out.join('\n');
 const bad = all.match(/&lt;(b|i|code|pre|blockquote)&gt;/g);
 if (bad) {
