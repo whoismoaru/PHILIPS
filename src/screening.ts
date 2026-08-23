@@ -291,6 +291,24 @@ export async function screenToken(
     });
   }
 
+  // Buta BUKAN berarti aman. Flag hanya ditambahkan saat data ADA dan buruk;
+  // kalau sumbernya diam (Blockscout tak tersedia di BSC, GMGN kena rate-limit),
+  // semua pemeriksaan itu lewat tanpa suara dan vonisnya jadi "SAFE TO LP" —
+  // padahal justru tak ada yang diperiksa. Turunkan vonisnya dan sebutkan apa
+  // yang tak terbaca, supaya user memutuskan dengan tahu ia sedang buta.
+  const takTerbaca = [
+    top10Concentration === null && 'holder concentration',
+    verified === null && 'contract verification',
+    (gmgn?.buyTaxPct ?? null) === null && 'buy/sell tax',
+    (gmgn?.lpLockedPct ?? null) === null && 'liquidity lock',
+  ].filter(Boolean) as string[];
+  if (takTerbaca.length >= 3) {
+    flags.push({
+      level: 'HATI-HATI',
+      msg: `${takTerbaca.length} safety checks unreadable (${takTerbaca.slice(0, 2).join(', ')}…) — not verified as safe`,
+    });
+  }
+
   return {
     ok: true,
     name,
