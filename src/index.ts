@@ -19,7 +19,7 @@ import {
 import { renderProfitCard } from './card.js';
 import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
-import { config } from './config.js';
+import { config, EXIT_CONFIG } from './config.js';
 import { provider, ERC20_ABI } from './chain.js';
 import { retryOnce } from './retry.js';
 import * as walletStore from './walletStore.js';
@@ -3713,7 +3713,7 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
               '  Open @BotFather, send /mybots, pick your bot, then "API Token".\n' +
               '  Copy the whole line (it looks like 1234567890:AA...) into .env and restart.',
           );
-          process.exit(1);
+          process.exit(EXIT_CONFIG);
           return;
         }
 

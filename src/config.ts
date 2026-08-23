@@ -70,11 +70,20 @@ export const config = {
   },
 };
 
+/**
+ * Kode keluar utk galat KONFIGURASI (EX_CONFIG). Unit systemd memakai
+ * RestartPreventExitStatus=78, jadi kesalahan yang takkan sembuh dengan menunggu
+ * tidak diulang tiap 10 detik selamanya — cukup sekali, lalu berhenti dan
+ * menunggu manusia memperbaiki .env.
+ */
+export const EXIT_CONFIG = 78;
+
 if (missing.length > 0) {
-  throw new Error(
+  console.error(
     `Missing ${missing.length} required field${missing.length === 1 ? '' : 's'} in your .env file:\n` +
       missing.map((m) => `  - ${m}`).join('\n') +
       '\nEvery field is documented in .env.example.',
   );
+  process.exit(EXIT_CONFIG);
 }
 

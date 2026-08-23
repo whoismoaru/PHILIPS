@@ -192,6 +192,9 @@ ExecStart=$APP_DIR/node_modules/.bin/tsx src/index.ts
 Restart=always
 RestartSec=10
 TimeoutStopSec=15
+# 78 = galat konfigurasi (.env salah / token tak sah). Mengulangnya tiap 10 detik
+# hanya membanjiri log — berhenti, dan tunggu manusia memperbaiki.
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=multi-user.target
@@ -202,10 +205,11 @@ EOF
   sleep 3
   if systemctl is-active --quiet "$SERVICE"; then
     ok "Bot jalan. Buka Telegram, kirim /start ke botmu."
-  else
-    warn "Bot gagal menyala. Lihat sebabnya:"
-    sudo journalctl -u "$SERVICE" -n 20 --no-pager
+    return 0
   fi
+  warn "Bot gagal menyala. Sebabnya:"
+  sudo journalctl -u "$SERVICE" -n 15 --no-pager | grep -vE "^\s*at |systemd\[1\]" | tail -8
+  return 1
 }
 
 # Sebelum menyentuh service, pastikan ia memang milik folder ini.
@@ -237,7 +241,15 @@ function install_all() {
   install_node
   clone_repo
   setup_env
-  setup_service
+  # Jangan mengaku selesai kalau botnya tak menyala — menyuruh orang membuka
+  # Telegram saat bot mati adalah cara tercepat membuatnya menyerah.
+  if ! setup_service; then
+    echo
+    warn "Pemasangan berhenti di sini. Perbaiki sebab di atas, lalu:"
+    echo "      - ubah konfigurasi : jalankan skrip ini lagi, pilih 3"
+    echo "      - coba nyalakan    : pilih 5"
+    return 1
+  fi
   echo
   ok "Selesai. Langkah berikutnya di Telegram:"
   echo "      1. /start"
@@ -264,13 +276,15 @@ while true; do
   print_menu
   read -r opt
   case "$opt" in
-    1) install_all ;;
-    2) clone_repo && restart_bot ;;
-    3) setup_env && restart_bot ;;
-    4) show_logs ;;
-    5) restart_bot ;;
-    6) go_live ;;
-    7) stop_bot ;;
+    # '|| true': kegagalan satu opsi mengembalikan user ke MENU, bukan menendangnya
+    # keluar dari skrip (set -e). Sebabnya sudah dicetak masing-masing fungsi.
+    1) install_all || true ;;
+    2) { clone_repo && restart_bot; } || true ;;
+    3) { setup_env && restart_bot; } || true ;;
+    4) show_logs || true ;;
+    5) restart_bot || true ;;
+    6) go_live || true ;;
+    7) stop_bot || true ;;
     0) echo "Sampai jumpa."; exit 0 ;;
     *) warn "Opsi tak dikenal." ;;
   esac
