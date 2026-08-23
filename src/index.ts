@@ -3696,19 +3696,36 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
       registerBotCommands().catch((e) => console.error('[menu]', (e as Error).message));
     })
     .then(
-      () => console.log('PHILIPS berhenti'),
-    (err) => {
-      const is409 =
-        (err as any)?.response?.error_code === 409 ||
-        /409|conflict|terminated by other getUpdates/i.test(String((err as Error)?.message ?? err));
-      console.error(
-        `Launch gagal (percobaan ${attempt}/${maxTries})${is409 ? ' [409 — instance lain masih polling]' : ''}:`,
-        err,
-      );
-      if (attempt >= maxTries) {
-        process.exit(1);
-        return;
-      }
+      () => console.log('PHILIPS stopped'),
+      (err) => {
+        const code = (err as any)?.response?.error_code;
+        const text = String((err as Error)?.message ?? err);
+        const is409 = code === 409 || /409|conflict|terminated by other getUpdates/i.test(text);
+
+        // Token salah TIDAK akan sembuh dengan menunggu. Telegram membalas 401
+        // (dicabut) atau 404 pada getMe (tak dikenal) — mencoba ulang enam kali lalu
+        // keluar membuat systemd mengulangnya selamanya, dengan pesan "404: Not Found"
+        // yang tak menyebut penyebabnya sama sekali. Berhenti, dan katakan apa adanya.
+        const badToken = code === 401 || (code === 404 && /getMe/i.test(JSON.stringify((err as any)?.on ?? '')));
+        if (badToken) {
+          console.error(
+            'TELEGRAM_BOT_TOKEN is not valid — Telegram does not recognise it.\n' +
+              '  Open @BotFather, send /mybots, pick your bot, then "API Token".\n' +
+              '  Copy the whole line (it looks like 1234567890:AA...) into .env and restart.',
+          );
+          process.exit(1);
+          return;
+        }
+
+        console.error(
+          `Launch failed (attempt ${attempt}/${maxTries})${is409 ? ' [409 — another instance is still polling]' : ''}:`,
+          text.slice(0, 200),
+        );
+        if (attempt >= maxTries) {
+          console.error('Giving up. Check the network, the RPC, and TELEGRAM_BOT_TOKEN.');
+          process.exit(1);
+          return;
+        }
         setTimeout(() => launchWithRetry(attempt + 1, maxTries), is409 ? 5000 : 2000);
       },
     );

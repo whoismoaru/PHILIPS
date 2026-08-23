@@ -6,10 +6,16 @@ import 'dotenv/config';
  * supaya kita tahu persis apa yang belum diisi.
  */
 
+// Dulu melempar pada field kosong PERTAMA: pemasang baru harus jalankan-gagal-edit
+// empat kali berturut-turut untuk menemukan keempat field yang kurang. Sekarang
+// semuanya dikumpulkan dan dilaporkan sekali.
+const missing: string[] = [];
+
 function required(name: string): string {
   const v = process.env[name];
   if (!v || v.trim() === '') {
-    throw new Error(`Missing "${name}" in your .env file — see .env.example.`);
+    missing.push(name);
+    return '';
   }
   return v.trim();
 }
@@ -63,3 +69,12 @@ export const config = {
     apiKey: optional('KRYSTAL_API_KEY', ''),
   },
 };
+
+if (missing.length > 0) {
+  throw new Error(
+    `Missing ${missing.length} required field${missing.length === 1 ? '' : 's'} in your .env file:\n` +
+      missing.map((m) => `  - ${m}`).join('\n') +
+      '\nEvery field is documented in .env.example.',
+  );
+}
+

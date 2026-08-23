@@ -17,7 +17,7 @@ set -e
 
 APP_DIR="${APP_DIR:-$HOME/philips}"
 REPO="https://github.com/whoismoaru/PHILIPS.git"
-SERVICE="philips-bot"
+SERVICE="${SERVICE:-philips-bot}"
 
 ok()   { echo -e "[✓] $*"; }
 info() { echo -e "[+] $*"; }
@@ -140,8 +140,43 @@ EOF
 }
 
 # ── 4. systemd ──────────────────────────────────────────────────────
+
+# Folder kerja service yang sudah terpasang; kosong bila belum ada.
+function service_dir() {
+  local u="/etc/systemd/system/$1.service"
+  [ -f "$u" ] || return 0
+  grep -oP '(?<=^WorkingDirectory=).*' "$u" 2>/dev/null | head -1
+}
+
+# Menolak menimpa instalasi LAIN. Satu server boleh menjalankan beberapa PHILIPS
+# (dompet berbeda), tapi menimpa unit milik instalasi lain berarti bot itu diam
+# -diam berhenti memantau posisi yang masih memegang uang.
+function ensure_free_service() {
+  local existing; existing="$(service_dir "$SERVICE")"
+  [ -z "$existing" ] && return 0
+  [ "$existing" = "$APP_DIR" ] && return 0
+
+  echo
+  warn "Service '$SERVICE' SUDAH dipakai instalasi lain:"
+  warn "  folder terpasang : $existing"
+  warn "  folder sekarang  : $APP_DIR"
+  warn "Menimpanya akan menghentikan bot itu — termasuk pemantauan posisinya."
+  echo
+  echo "    1) Pakai nama service lain (aman, keduanya jalan berdampingan)"
+  echo "    2) Batalkan"
+  ask "Pilih" "1"
+  [ "$REPLY_VAL" = "1" ] || die "Dibatalkan. Instalasi lama tak disentuh."
+
+  local suggest; suggest="philips-bot-$(basename "$APP_DIR")"
+  ask "Nama service baru" "$suggest"
+  SERVICE="$REPLY_VAL"
+  [ -z "$(service_dir "$SERVICE")" ] || die "Nama '$SERVICE' juga sudah dipakai. Jalankan lagi dengan nama lain."
+  ok "Memakai service '$SERVICE'."
+}
+
 function setup_service() {
-  info "Membuat service systemd..."
+  ensure_free_service
+  info "Membuat service systemd '$SERVICE'..."
   sudo tee "/etc/systemd/system/$SERVICE.service" >/dev/null <<EOF
 [Unit]
 Description=PHILIPS LP Bot
@@ -173,9 +208,16 @@ EOF
   fi
 }
 
-function show_logs()   { sudo journalctl -u "$SERVICE" -f; }
-function restart_bot() { sudo systemctl restart "$SERVICE"; ok "Bot di-restart."; }
-function stop_bot()    { sudo systemctl stop "$SERVICE"; ok "Bot dihentikan."; }
+# Sebelum menyentuh service, pastikan ia memang milik folder ini.
+function assert_ours() {
+  local d; d="$(service_dir "$SERVICE")"
+  [ -z "$d" ] && die "Service '$SERVICE' belum ada — jalankan opsi 1 dulu."
+  [ "$d" = "$APP_DIR" ] || die "Service '$SERVICE' milik $d, bukan $APP_DIR. Set SERVICE=<nama> saat menjalankan skrip ini."
+}
+
+function show_logs()   { assert_ours; sudo journalctl -u "$SERVICE" -f; }
+function restart_bot() { assert_ours; sudo systemctl restart "$SERVICE"; ok "Bot di-restart."; }
+function stop_bot()    { assert_ours; sudo systemctl stop "$SERVICE"; ok "Bot dihentikan."; }
 
 function go_live() {
   local f="$APP_DIR/.env"
@@ -185,6 +227,7 @@ function go_live() {
   warn "Pastikan /status, /positions, dan satu /add_lp kering sudah kamu periksa."
   ask "Lanjut? ketik LIVE untuk konfirmasi" ""
   [ "$REPLY_VAL" = "LIVE" ] || { ok "Dibatalkan, tetap DRY RUN."; return; }
+  assert_ours
   sed -i 's/^DRY_RUN=.*/DRY_RUN=false/' "$f"
   sudo systemctl restart "$SERVICE"
   ok "Mode LIVE aktif. Mulai dari nominal kecil."
