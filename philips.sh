@@ -213,10 +213,19 @@ EOF
 }
 
 # Sebelum menyentuh service, pastikan ia memang milik folder ini.
+# Mengembalikan 1 (bukan keluar): pilihan yang salah harus mengembalikan user ke
+# MENU, bukan menendangnya keluar dari skrip.
 function assert_ours() {
   local d; d="$(service_dir "$SERVICE")"
-  [ -z "$d" ] && die "Service '$SERVICE' belum ada — jalankan opsi 1 dulu."
-  [ "$d" = "$APP_DIR" ] || die "Service '$SERVICE' milik $d, bukan $APP_DIR. Set SERVICE=<nama> saat menjalankan skrip ini."
+  if [ -z "$d" ]; then
+    warn "Service '$SERVICE' belum ada — jalankan opsi 1 dulu."
+    return 1
+  fi
+  if [ "$d" != "$APP_DIR" ]; then
+    warn "Service '$SERVICE' milik $d, bukan $APP_DIR."
+    warn "Jalankan ulang dengan: SERVICE=<nama-service-mu> bash philips.sh"
+    return 1
+  fi
 }
 
 function show_logs()   { assert_ours; sudo journalctl -u "$SERVICE" -f; }
