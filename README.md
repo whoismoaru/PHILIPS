@@ -1,136 +1,220 @@
-# PHILIPS | Single-sided LP bot for Telegram
+# PHILIPS
 
-Open and manage **single-sided** liquidity positions from a Telegram chat. Three chains
-ship configured: Uniswap v3 and v4 on your primary chain, PancakeSwap v3 and Uniswap v3
-on BSC, and Uniswap v3 on Base. Pools come from the Uniswap gateway, Krystal, and
-on-chain scans, ranked by TVL and volume. You decide when to open and close; the bot
-handles the wizard, token screening, valuation, alerts, and cash-out.
+**A Telegram bot that opens single-sided liquidity positions for you.**
 
-> **Self-hosted, single owner.** One running instance serves exactly one Telegram
-> account. The wallet, positions, journal, and alert settings are process-global — there
-> is no per-user separation. Run your own instance; do not hand the bot to friends.
-> See [Security model](#security-model) before funding it.
+You deposit one token. The position sits there like a limit order, earning trading
+fees while it waits for your price. When price arrives, your deposit converts into
+the other token — and you were paid to wait.
 
-## Requirements
+No dashboards, no browser wallet. You tap buttons in a Telegram chat.
 
-- Node 20+, npm
-- A Telegram bot token (@BotFather) and your numeric Telegram id (@userinfobot)
-- An RPC endpoint for your chain — use a keyed one; public endpoints rate-limit
-- A wallet you are willing to dedicate to this bot
-- Optional: `npm i -g gmgn-cli` for the full token-security card
+```
+📊 Position Details: #7235308
 
-## Setup
+🔗 Pair: WBNB / Bicat (1.00% Fee) · BSC
+🎯 Strategy: WBNB Side (Buy the dip)
+💰 Principal: 0.0400 WBNB
+📉 Target Range: +434.1% ⇄ -47.5%
+↳ market cap $6.18M ⇄ $607.3K · now $1.16M
+📈 Current PnL: 🟢 +$0.08 (+2.4%)
+🟢 Status: IN RANGE
+```
+
+---
+
+## Install in one command
+
+On a fresh Ubuntu server:
 
 ```bash
-git clone https://github.com/whoismoaru/PHILIPS.git philips && cd philips
-npm install
-cp .env.example .env      # then fill it in — every field is documented inside
-npm start
+curl -fsSL https://raw.githubusercontent.com/whoismoaru/PHILIPS/main/philips.sh -o philips.sh && bash philips.sh
 ```
 
-In Telegram: `/start`, then `/settings` → **Connect Wallet** and paste a private key or
-seed phrase. The message containing your key is deleted from the chat immediately and the
-key is stored as an encrypted keystore (`data/keystore.json`, scrypt + AES, chmod 600).
+Pick **option 1**. The script installs Node, downloads the code, asks you a few
+questions, and starts the bot as a system service. It never asks for your private
+key — that happens inside Telegram, later.
 
-Keep `DRY_RUN=true` until `/status`, `/positions`, and a dry `/add_lp` all look right.
-Then set `DRY_RUN=false` and start with a small amount.
+You will need two things before you start:
 
-### Running under systemd
+| What | Where to get it |
+|---|---|
+| A bot token | Message [@BotFather](https://t.me/BotFather), send `/newbot` |
+| Your Telegram id | Message [@userinfobot](https://t.me/userinfobot) |
 
-```ini
-[Unit]
-After=network-online.target
-Wants=network-online.target
-StartLimitIntervalSec=0          # do not let a transient outage wedge the unit in "failed"
+An RPC endpoint helps too. Use a keyed one (Alchemy, your own node) — free public
+endpoints rate-limit and then every read fails at once.
 
-[Service]
-Type=simple
-User=youruser
-WorkingDirectory=/home/youruser/philips
-ExecStart=/home/youruser/philips/node_modules/.bin/tsx src/index.ts
-Restart=always
-RestartSec=10
-TimeoutStopSec=15
+---
 
-[Install]
-WantedBy=multi-user.target
-```
+## First run
+
+After the installer finishes, open Telegram and talk to your bot:
+
+**1.** Send `/start`. You should see a welcome card. If nothing happens, your
+Telegram id in `.env` is wrong — only that one account can use the bot.
+
+**2.** Send `/settings` → **Connect Wallet** → paste a private key or seed phrase.
+The message is deleted from the chat immediately, and the key is stored encrypted
+on your server (`data/keystore.json`, scrypt + AES, file mode 600).
+
+**3.** Send `/status`. Your balances should appear. If they do, the bot can read
+the chain correctly.
+
+**4.** Try `/add_lp` and walk through the wizard without confirming. The bot starts
+in **DRY RUN** — it simulates everything and sends no transactions.
+
+**5.** When all of that looks right, run `bash philips.sh` again and pick
+**option 6** to switch to LIVE. Start with a small amount.
+
+---
+
+## Opening a position
+
+Send `/add_lp`, or just paste a token's contract address into the chat.
+
+**Step 0 — the bot screens the token first.** Contract verified or proxy, how
+concentrated the holders are, how deep the liquidity is, how old the pool is, and
+a simulated sell to catch honeypots. The verdict is one of three:
+
+- ✅ **Safe to LP**
+- ⚠️ **Proceed with caution**
+- 🚫 **Do not LP** — and this one **stops the wizard**. There is no button to
+  override it.
+
+**Step 1 — pick a pool.** Up to three, ranked by liquidity and volume, gathered
+from the Uniswap gateway, Krystal, and on-chain scans.
+
+**Step 2 — pick which side you deposit.**
+
+- **Base side** — you deposit ETH / BNB / a stablecoin. The position waits *below*
+  the current price. It's a limit buy that earns fees while it waits.
+- **Token side** — you deposit the token itself. The position waits *above* the
+  price. A limit sell that earns fees while it waits.
+
+**Step 3 — pick how wide the range is.** From conservative to extreme.
+
+**Step 4 — how much.** Tap 30% / 50% / 70% / 90% of your balance, or type an exact
+number. Percentages are taken from your *usable* balance — the gas reserve is kept
+aside, so 90% never leaves you unable to pay for the transaction.
+
+**Step 5 — review and confirm.** The card shows the real price range, what you're
+depositing, and the estimated gas. Nothing is signed until you tap confirm.
+
+---
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/start` · `/help` | Menu, bot mode, command list |
-| `/status` | Portfolio: equity, per-chain balances, idle tokens |
-| `/positions` | Active LP positions (pair, chain, PnL, range, status) |
-| `/pnl` | Lifetime PnL recap from closed trades |
-| `/add_lp` | Open a single-side LP — or paste a contract address directly |
-| `/claim_fees` | Collect fees without closing the position |
-| `/remove_lp` | Withdraw 25 / 50 / 75 / 100% of a position |
+| `/start` · `/help` | Menu and bot mode |
+| `/status` | Equity, balances per chain, idle tokens |
+| `/positions` | Your live positions — tap one for full detail |
+| `/pnl` | Profit recap from closed trades, as a picture card |
+| `/add_lp` | Open a position (or `/add_lp <contract address>`) |
+| `/claim_fees` | Take the fees, leave the position running |
+| `/remove_lp` | Withdraw 25 / 50 / 75% |
 | `/stop` | Close a position and cash out |
-| `/buy` · `/sell` | Swap a token via the best of Uniswap / Relay |
-| `/unwrap` | Convert stuck wrapped native (WETH/WBNB) back to native |
-| `/bridge` | Move native funds between chains via Relay |
-| `/settings` | Wallet connect/disconnect, transaction preferences |
-| `/alerts` | Range, price-drop, and net-loss notification toggles |
+| `/buy` · `/sell` | Swap a token via the best available route |
+| `/unwrap` | Turn stuck WETH / WBNB back into gas |
+| `/bridge` | Move funds between chains |
+| `/settings` | Connect or disconnect your wallet |
+| `/alerts` | Which notifications you want |
 
-Every step has **Back** and **Cancel**. Money actions always take one explicit
-confirmation tap and are guarded against double-taps.
+Every step has **Back** and **Cancel**. Anything that moves money takes one
+explicit confirmation tap and is guarded against double-taps.
 
-## Token screening
+---
 
-Before you LP, the bot screens the token via the chain explorer, DexScreener, and
-optionally GMGN: contract verified / proxy, holder concentration (top-1 / top-10),
-liquidity and 24h volume, buy-vs-sell ratio, pool age, and a simulated sell (honeypot
-check). Verdict: **safe / proceed with caution / do not LP** — a heuristic, not a
-guarantee. A "do not LP" verdict blocks the position rather than warning about it.
+## Chains
 
-## Security model
+Three are configured out of the box:
 
-Read this before putting real money in.
+| Chain | DEX | You can deposit |
+|---|---|---|
+| Robinhood | Uniswap v3 + v4 | ETH · USDG |
+| BSC | PancakeSwap v3 + Uniswap v3 | BNB · USDT |
+| Base | Uniswap v3 | ETH · USDC |
 
-- **Single owner.** `TELEGRAM_ALLOWED_USER_ID` is the entire access control. Anyone who
-  gets into that Telegram account controls the wallet.
-- **The bot holds a hot key.** It signs unattended: the monitor sweeps leftover tokens and
-  unwraps stray wrapped native on its own. Fund it like a hot wallet, not a vault.
-- **Keystore at rest.** Encrypted with `WALLET_SECRET`. If you leave that empty, the bot
-  token is used instead — and rotating your bot token then makes the key unrecoverable.
-  Anyone who can read both the disk and `.env` can open the keystore.
-- **Slippage floors.** Mints, swaps, and liquidity withdrawals all carry a minimum-output
-  floor; `minOut = 0` exists nowhere. Swap previews expire after 2 minutes, and execution
-  aborts if the price has moved more than 3% away from the number you approved.
-- **Per-transaction caps.** `MAX_ETH_PER_TX` limits native amounts (ETH, BNB),
-  `MAX_STABLE_PER_TX` limits stablecoin amounts in dollars. Each denomination has its own
-  limit; they are never summed. Empty falls back to a built-in default — a cap can be
-  raised, never switched off. Token-side amounts have no fixed number that would mean
-  anything, so their ceiling is the wallet's actual balance of that token.
+The primary chain is whatever you put in `.env`. It was built and tested against
+Robinhood Chain — pointing it at a different EVM chain works, but you'll need to
+edit `src/chains.ts` (the explorer URL and the stablecoin address are set there).
 
-### Closing a position cashes out the whole wallet
+---
 
-By design, `/stop` does not stop at the position's own output: it swaps **every** unit of
-that token held by the wallet into native, and unwraps **all** wrapped native. This is
-deliberate — closing means ending up in ETH, not carrying a leftover bag. If you keep a
-spot position in the same token outside the LP, close the LP first or move that bag to
-another wallet.
+## Read this before you fund it
 
-## Data
+This bot holds a hot wallet key and signs transactions on its own. Treat it like
+a hot wallet, not a vault.
 
-Everything lives in `data/` (git-ignored): `keystore.json` (encrypted key),
-`positions.json`, `journal.jsonl`, `settings.json`, `alerts.json`, `v4positions.json`.
-Back this directory up — `journal.jsonl` and `positions.json` are the only record of your
-cost basis. If `positions.json` is ever corrupt the bot moves it aside and refuses to
-start rather than silently overwriting it.
+- **One owner.** Your Telegram id is the entire access control. Anyone who gets
+  into that Telegram account controls the wallet. Don't share the bot.
+- **It signs unattended.** A background loop sweeps leftover tokens and unwraps
+  stray WETH by itself, once a minute.
+- **There is no stop-loss.** A position that moves against you keeps running until
+  you close it. Alerts tell you; they don't act.
+- **Closing cashes out your whole bag.** `/stop` doesn't stop at the position's own
+  output — it swaps **every** unit of that token in the wallet. If you hold the same
+  token outside the LP, move it elsewhere first.
+- **Per-transaction caps** (`MAX_ETH_PER_TX`, `MAX_STABLE_PER_TX`) can be raised in
+  `.env`, but never switched off.
+- **Your keystore is only as strong as `WALLET_SECRET`.** The installer generates a
+  random one. Anyone who can read both your disk and your `.env` can open the wallet.
 
-## Read-only checks
+---
+
+## Your data
+
+Everything lives in `data/`, which is never committed to git:
+
+`keystore.json` (your encrypted key) · `positions.json` · `journal.jsonl` ·
+`settings.json` · `alerts.json`
+
+**Back up that folder.** `journal.jsonl` and `positions.json` are the only record
+of what you paid for each position. If `positions.json` is ever corrupt, the bot
+moves it aside and refuses to start rather than quietly overwriting it.
+
+---
+
+## Running it yourself
+
+If you'd rather not use the installer:
+
+```bash
+git clone https://github.com/whoismoaru/PHILIPS.git philips && cd philips
+npm ci
+cp .env.example .env      # every field is documented inside
+npm start
+```
+
+Needs Node 20 or newer.
+
+**Read-only checks** — none of these send a transaction:
 
 ```bash
 npm run check                        # typecheck
-npx tsx scripts/smoke.ts             # read prices and build an LP plan, no tx
-npx tsx scripts/smoke-journal.ts     # accounting
-npx tsx scripts/smoke-amount.ts      # amount parser
+npx tsx scripts/smoke.ts             # read prices, build a plan
+npx tsx scripts/smoke-journal.ts     # accounting sanity
 ```
+
+---
+
+## When something breaks
+
+| Symptom | Fix |
+|---|---|
+| Bot doesn't reply | `sudo journalctl -u philips-bot -n 50` — usually a wrong Telegram id |
+| "Missing X in your .env file" | That field is empty. `bash philips.sh` → option 3 |
+| Every read fails at once | Your RPC is rate-limiting. Use a keyed endpoint |
+| Transaction says insufficient funds | Not enough native token left for gas — try `/unwrap` |
+| Position won't close | Check `journalctl`; the bot holds tokens rather than dumping them at any price |
+
+---
 
 ## Not supported
 
-Multiple users on one instance, non-custodial signing, Solana, and automatic position
-opening. The bot proposes; you tap.
+Multiple users on one instance · non-custodial signing · automatic position opening ·
+Solana. The bot proposes; you tap.
+
+---
+
+MIT licensed. Run your own instance.
