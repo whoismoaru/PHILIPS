@@ -22,7 +22,6 @@ SERVICE="${SERVICE:-philips-bot}"
 ok()   { echo -e "[✓] $*"; }
 info() { echo -e "[+] $*"; }
 warn() { echo -e "[!] $*"; }
-die()  { echo -e "[x] $*" >&2; exit 1; }
 
 ask() { # ask "Pertanyaan" "default" -> jawaban di $REPLY_VAL
   local q="$1" def="$2" a
@@ -71,9 +70,9 @@ function setup_env() {
   echo "  --- Telegram ---"
   echo "  Token dari @BotFather, dan id numerikmu dari @userinfobot."
   ask "TELEGRAM_BOT_TOKEN" ""; local TOKEN="$REPLY_VAL"
-  [ -n "$TOKEN" ] || die "Token tak boleh kosong."
+  [ -n "$TOKEN" ] || { warn "Token tak boleh kosong."; return 1; }
   ask "TELEGRAM_ALLOWED_USER_ID" ""; local UID_TG="$REPLY_VAL"
-  [ -n "$UID_TG" ] || die "Telegram id tak boleh kosong."
+  [ -n "$UID_TG" ] || { warn "Telegram id tak boleh kosong."; return 1; }
 
   echo
   echo "  --- Chain utama ---"
@@ -102,7 +101,22 @@ function setup_env() {
   fi
 
   # Frasa sandi keystore dibuat acak — jauh lebih kuat daripada yang diketik manual.
-  local SECRET; SECRET="$(head -c 32 /dev/urandom | base64 | tr -d '\n=/+' | head -c 40)"
+  #
+  # TAPI: kalau .env lama punya WALLET_SECRET, PERTAHANKAN. Mengacaknya ulang
+  # membuat data/keystore.json yang sudah ada tak bisa dibuka SELAMANYA — dompet
+  # yang sudah tersambung hilang, dan posisi yang dipegangnya tak lagi bisa
+  # dikelola bot sampai user menyambungkan ulang dari seed.
+  local SECRET="" SECRET_NOTE="WALLET_SECRET diacak otomatis."
+  for old in "$f" "$f".bak-*; do
+    [ -f "$old" ] || continue
+    SECRET="$(grep -m1 '^WALLET_SECRET=' "$old" 2>/dev/null | cut -d= -f2-)"
+    [ -n "$SECRET" ] && break
+  done
+  if [ -n "$SECRET" ]; then
+    SECRET_NOTE="WALLET_SECRET lama dipertahankan — keystore tetap bisa dibuka."
+  else
+    SECRET="$(head -c 32 /dev/urandom | base64 | tr -d '\n=/+' | head -c 40)"
+  fi
 
   umask 077
   cat > "$f" <<EOF
@@ -135,7 +149,7 @@ GMGN_API_KEY=
 KRYSTAL_API_KEY=
 EOF
   chmod 600 "$f"
-  ok ".env dibuat (izin 600). WALLET_SECRET diacak otomatis."
+  ok ".env dibuat (izin 600). $SECRET_NOTE"
   warn "DRY_RUN=true — bot menyimulasi, belum mengirim transaksi."
 }
 
@@ -165,17 +179,17 @@ function ensure_free_service() {
   echo "    1) Pakai nama service lain (aman, keduanya jalan berdampingan)"
   echo "    2) Batalkan"
   ask "Pilih" "1"
-  [ "$REPLY_VAL" = "1" ] || die "Dibatalkan. Instalasi lama tak disentuh."
+  [ "$REPLY_VAL" = "1" ] || { warn "Dibatalkan. Instalasi lama tak disentuh."; return 1; }
 
   local suggest; suggest="philips-bot-$(basename "$APP_DIR")"
   ask "Nama service baru" "$suggest"
   SERVICE="$REPLY_VAL"
-  [ -z "$(service_dir "$SERVICE")" ] || die "Nama '$SERVICE' juga sudah dipakai. Jalankan lagi dengan nama lain."
+  [ -z "$(service_dir "$SERVICE")" ] || { warn "Nama '$SERVICE' juga sudah dipakai. Coba nama lain."; return 1; }
   ok "Memakai service '$SERVICE'."
 }
 
 function setup_service() {
-  ensure_free_service
+  ensure_free_service || return 1
   info "Membuat service systemd '$SERVICE'..."
   sudo tee "/etc/systemd/system/$SERVICE.service" >/dev/null <<EOF
 [Unit]
@@ -202,12 +216,19 @@ EOF
   sudo systemctl daemon-reload
   sudo systemctl enable "$SERVICE" >/dev/null 2>&1
   sudo systemctl restart "$SERVICE"
+  verify_running "Bot jalan. Buka Telegram, kirim /start ke botmu."
+}
+
+# Menyalakan service TIDAK berarti botnya hidup: proses bisa keluar sedetik
+# kemudian (token salah, .env cacat). Beri jeda, lalu laporkan keadaan SEBENARNYA
+# — mengaku sukses saat bot mati membuat user mencari masalah di tempat yang salah.
+function verify_running() {
   sleep 3
   if systemctl is-active --quiet "$SERVICE"; then
-    ok "Bot jalan. Buka Telegram, kirim /start ke botmu."
+    ok "${1:-Bot jalan.}"
     return 0
   fi
-  warn "Bot gagal menyala. Sebabnya:"
+  warn "Bot TIDAK jalan. Sebabnya:"
   sudo journalctl -u "$SERVICE" -n 15 --no-pager | grep -vE "^\s*at |systemd\[1\]" | tail -8
   return 1
 }
@@ -229,21 +250,21 @@ function assert_ours() {
 }
 
 function show_logs()   { assert_ours; sudo journalctl -u "$SERVICE" -f; }
-function restart_bot() { assert_ours; sudo systemctl restart "$SERVICE"; ok "Bot di-restart."; }
+function restart_bot() { assert_ours && sudo systemctl restart "$SERVICE" && verify_running "Bot di-restart dan jalan."; }
 function stop_bot()    { assert_ours; sudo systemctl stop "$SERVICE"; ok "Bot dihentikan."; }
 
 function go_live() {
   local f="$APP_DIR/.env"
-  [ -f "$f" ] || die ".env belum ada — jalankan opsi 1 dulu."
+  [ -f "$f" ] || { warn ".env belum ada — jalankan opsi 1 dulu."; return 1; }
   echo
   warn "LIVE artinya bot mengirim transaksi SUNGGUHAN dengan uangmu."
   warn "Pastikan /status, /positions, dan satu /add_lp kering sudah kamu periksa."
   ask "Lanjut? ketik LIVE untuk konfirmasi" ""
   [ "$REPLY_VAL" = "LIVE" ] || { ok "Dibatalkan, tetap DRY RUN."; return; }
-  assert_ours
+  assert_ours || return 1
   sed -i 's/^DRY_RUN=.*/DRY_RUN=false/' "$f"
   sudo systemctl restart "$SERVICE"
-  ok "Mode LIVE aktif. Mulai dari nominal kecil."
+  verify_running "Mode LIVE aktif. Mulai dari nominal kecil."
 }
 
 function install_all() {
