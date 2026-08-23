@@ -1,6 +1,4 @@
 #!/bin/bash
-# PHILIPS — installer satu kali jalan.
-# Pasang, konfigurasi, dan jalankan bot LP single-sided di Telegram.
 
 clear
 HEADER_WIDTH=52
@@ -100,12 +98,6 @@ function setup_env() {
     BASE="true"; ask "BASE_RPC_URL (Enter = mainnet.base.org)" ""; BASE_RPC="$REPLY_VAL"
   fi
 
-  # Frasa sandi keystore dibuat acak — jauh lebih kuat daripada yang diketik manual.
-  #
-  # TAPI: kalau .env lama punya WALLET_SECRET, PERTAHANKAN. Mengacaknya ulang
-  # membuat data/keystore.json yang sudah ada tak bisa dibuka SELAMANYA — dompet
-  # yang sudah tersambung hilang, dan posisi yang dipegangnya tak lagi bisa
-  # dikelola bot sampai user menyambungkan ulang dari seed.
   local SECRET="" SECRET_NOTE="WALLET_SECRET diacak otomatis."
   for old in "$f" "$f".bak-*; do
     [ -f "$old" ] || continue
@@ -154,17 +146,12 @@ EOF
 }
 
 # ── 4. systemd ──────────────────────────────────────────────────────
-
-# Folder kerja service yang sudah terpasang; kosong bila belum ada.
 function service_dir() {
   local u="/etc/systemd/system/$1.service"
   [ -f "$u" ] || return 0
   grep -oP '(?<=^WorkingDirectory=).*' "$u" 2>/dev/null | head -1
 }
 
-# Menolak menimpa instalasi LAIN. Satu server boleh menjalankan beberapa PHILIPS
-# (dompet berbeda), tapi menimpa unit milik instalasi lain berarti bot itu diam
-# -diam berhenti memantau posisi yang masih memegang uang.
 function ensure_free_service() {
   local existing; existing="$(service_dir "$SERVICE")"
   [ -z "$existing" ] && return 0
@@ -219,9 +206,6 @@ EOF
   verify_running "Bot jalan. Buka Telegram, kirim /start ke botmu."
 }
 
-# Menyalakan service TIDAK berarti botnya hidup: proses bisa keluar sedetik
-# kemudian (token salah, .env cacat). Beri jeda, lalu laporkan keadaan SEBENARNYA
-# — mengaku sukses saat bot mati membuat user mencari masalah di tempat yang salah.
 function verify_running() {
   sleep 3
   if systemctl is-active --quiet "$SERVICE"; then
@@ -233,9 +217,6 @@ function verify_running() {
   return 1
 }
 
-# Sebelum menyentuh service, pastikan ia memang milik folder ini.
-# Mengembalikan 1 (bukan keluar): pilihan yang salah harus mengembalikan user ke
-# MENU, bukan menendangnya keluar dari skrip.
 function assert_ours() {
   local d; d="$(service_dir "$SERVICE")"
   if [ -z "$d" ]; then
@@ -271,8 +252,7 @@ function install_all() {
   install_node
   clone_repo
   setup_env
-  # Jangan mengaku selesai kalau botnya tak menyala — menyuruh orang membuka
-  # Telegram saat bot mati adalah cara tercepat membuatnya menyerah.
+  
   if ! setup_service; then
     echo
     warn "Pemasangan berhenti di sini. Perbaiki sebab di atas, lalu:"
@@ -306,8 +286,6 @@ while true; do
   print_menu
   read -r opt
   case "$opt" in
-    # '|| true': kegagalan satu opsi mengembalikan user ke MENU, bukan menendangnya
-    # keluar dari skrip (set -e). Sebabnya sudah dicetak masing-masing fungsi.
     1) install_all || true ;;
     2) { clone_repo && restart_bot; } || true ;;
     3) { setup_env && restart_bot; } || true ;;
