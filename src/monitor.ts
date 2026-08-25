@@ -383,7 +383,13 @@ async function tick(bot: Telegraf) {
         v4store.removeV4(rec.tokenId); // tunggal & ditutup di luar bot → buang
         continue;
       }
-      if (st.inRange !== null && v4store.setV4InRange(rec.tokenId, st.inRange)) {
+      // setV4InRange PUNYA EFEK SAMPING (menyimpan status terakhir) — panggil
+      // duluan supaya status tetap segar walau notifikasi mati. Kalau di-skip,
+      // menyalakan /alerts lagi akan membandingkan dgn status basi → alert palsu.
+      const berubah = st.inRange !== null && v4store.setV4InRange(rec.tokenId, st.inRange);
+      // Hormati /alerts sama seperti jalur v3. Dulu blok ini tak memeriksa
+      // setelan sama sekali → rangeNotify=false tetap membanjiri Telegram.
+      if (berubah && st.inRange !== null && alerts.get().rangeNotify) {
         const label = rec.groupId ? `${msgV4Range(rec.tokenId, st.inRange)} (ladder ${rec.legCount ?? '?'} leg)` : msgV4Range(rec.tokenId, st.inRange);
         await bot.telegram.sendMessage(config.telegram.allowedUserId, label, html);
       }
