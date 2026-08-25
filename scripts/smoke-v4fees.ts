@@ -1,5 +1,3 @@
-/** Cek fee v4: feesBaseWei dari storage HARUS cocok dgn simulasi burn+take.
- *  Read-only. Gagal = akuntansi fee melenceng lagi. */
 import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { ethers } from 'ethers';
@@ -45,8 +43,6 @@ for (const chainKey of Object.keys(PM)) {
     const got0 = BigInt(sim[0].calls[1].returnData) - before[0];
     const got1 = BigInt(sim[0].calls[2].returnData) - before[1];
 
-    // Nilai hasil simulasi dalam base memakai harga pool yang sama (slot0),
-    // supaya perbandingannya setara dengan valueBaseWei+feesBaseWei.
     const mgrAddr = '0x8366a39CC670B4001A1121B8F6A443A643e40951';
     const coder2 = ethers.AbiCoder.defaultAbiCoder();
     const poolId = ethers.keccak256(coder2.encode(['tuple(address,address,uint24,int24,address)'],
