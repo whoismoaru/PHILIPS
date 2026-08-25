@@ -23,13 +23,10 @@ assert.equal(gained(ethers.parseEther('0.5'), ethers.parseEther('0.4')), 0n,
 
 console.log('OK — PnL: desimal ikut chain, hasil = pertambahan saldo.');
 
-// --- penjaga: setiap valuasi posisi WAJIB menyertakan fee (v3 & v4) ---
-// Regresi nyata: v4 dulu memakai valueBaseWei saja → PnL #920574 tampil -0.0%
-// padahal +4.0%, karena 6.09 USDG fee tak terhitung.
 import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 const lolos = new Set([
-  // baris ini memang menampilkan nilai & fee TERPISAH — bukan PnL.
+  
   'const valF = Number(ethers.formatUnits(d.valueBaseWei, d.baseDecimals));',
   '`${msg.cleanUnits(d.valueBaseWei, d.baseDecimals)} ${d.baseSymbol}` +',
 ]);
@@ -43,10 +40,6 @@ const nakal = src.split('\n').filter((l) => {
 assert.deepEqual(nakal, [],
   'valuasi posisi tanpa feesBaseWei — PnL akan understate:\n' + nakal.join('\n'));
 
-// --- penjaga: loop LINTAS-CHAIN tak boleh pakai harga chain utama ---
-// Regresi nyata: /status & /positions mengalikan nilai LP semua chain dengan harga
-// ETH chain utama → LP BSC 3.5x, LP HyperEVM 30x terlalu tinggi. Di dalam loop
-// atas store.active() (posisi tersebar di 5 chain), konversi WAJIB lewat ctxOf(rec).
 for (const [nama, mulai, selesai] of [
   ['renderStatus/LP', 'const vals = await mapLimit(store.active()', 'const v4 = v4Supported'],
   ['cmdPositions/v3', 'const v3rows = await mapLimit(active', 'const rows: PosRow[] = v3rows'],
