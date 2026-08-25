@@ -21,10 +21,23 @@ src.forEach((line, i) => {
 assert.deepEqual(bocor, [],
   'notifikasi monitor tanpa pagar /alerts (user mematikan alert tapi tetap dikirimi):\n' + bocor.join('\n'));
 
-// setV4InRange PUNYA efek samping — harus dipanggil walau notifikasi mati,
-// kalau tidak status jadi basi dan alert palsu muncul saat dinyalakan lagi.
-const v4 = src.join('\n');
-assert.ok(/const berubah = [^\n]*setV4InRange/.test(v4),
-  'setV4InRange harus dipanggil sebelum pagar alert (status wajib tetap segar)');
+// --- penjaga: state alert tak boleh BEKU saat notifikasi dimatikan ---
+// Kalau penanda (lastInRange / dropTier / ilAlerted) hanya diperbarui di dalam
+// pagar cfg, mematikan lalu menyalakan /alerts membuat perbandingan memakai
+// status basi: v4 dulu mengirim alert palsu, v3 malah BUNGKAM sampai ambang
+// lama tertembus lagi.
+const teks = src.join('\n');
+for (const [nama, pola] of [
+  ['v3 lastInRange diperbarui tanpa syarat',
+   /store\.update\(rec\.tokenId, \{ lastInRange: d\.inRange \}\);\n\s*\} catch/],
+  ['v3 dropTier di-reset saat dropPct mati',
+   /\} else if \(rec\.dropTier \|\| rec\.dropAlerted\) \{/],
+  ['v3 ilAlerted di-reset saat ilPct mati',
+   /\} else if \(rec\.ilAlerted\) \{/],
+  ['v4 setV4InRange dipanggil sebelum pagar',
+   /const berubah = [^\n]*setV4InRange/],
+] as const) {
+  assert.ok(pola.test(teks), `state alert bisa beku — ${nama}`);
+}
 
 console.log('smoke-alerts: LULUS');

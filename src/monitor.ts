@@ -323,6 +323,11 @@ async function tick(bot: Telegraf) {
           // Pulih di atas ambang (minus histeresis) → seluruh tangga di-arm ulang.
           store.update(rec.tokenId, { dropTier: 0, dropAlerted: false });
         }
+      } else if (rec.dropTier || rec.dropAlerted) {
+        // Alert MATI → kosongkan tangga yang terlanjur ter-arm. Kalau dibiarkan,
+        // menyalakan /alerts lagi mewarisi tier lama dan alert berikutnya BUNGKAM
+        // sampai harga menembus tangga itu lagi (cabang re-arm ikut mati di sini).
+        store.update(rec.tokenId, { dropTier: 0, dropAlerted: false });
       }
       // Alert rugi bersih (IL setelah fee): nilai posisi + fee vs modal saat buka.
       // Sekali per crossing, dipulihkan lewat penanda yang sama seperti alert anjlok.
@@ -347,6 +352,8 @@ async function tick(bot: Telegraf) {
             store.update(rec.tokenId, { ilAlerted: false });
           }
         }
+      } else if (rec.ilAlerted) {
+        store.update(rec.tokenId, { ilAlerted: false }); // alasan sama spt dropTier
       }
       store.update(rec.tokenId, { lastInRange: d.inRange });
     } catch (e) {
