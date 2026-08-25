@@ -33,6 +33,8 @@ export type PosRecord = {
   status: 'ACTIVE' | 'STOPPED';
   lastInRange?: boolean; // untuk notifikasi auto-monitor
   entryPrice?: string; // harga token dalam base saat buka (untuk alert anjlok); kosong = posisi lama
+  entryMcap?: number; // market cap USD saat buka — batas mcap kartu dipatok ke sini (biar diam)
+  entryEthUsd?: number; // harga base(USD) saat buka — PnL USD ala LP Agent dipatok ke sini (weth: harga ETH; stable: 1)
   convertedAlerted?: boolean; // sudah kirim alert terkonversi penuh? (reset saat in range lagi)
   ilAlerted?: boolean; // sudah kirim alert rugi bersih? (reset saat pulih)
   dropAlerted?: boolean; // LAMA: sudah kirim alert anjlok? (dimigrasi ke dropTier)
@@ -43,7 +45,16 @@ export type PosRecord = {
   leftoverWei?: string; // sisa token dari posisi ini yang belum ke-cash-out (batas jual auto-sweep — lindungi bag spot)
   side?: 'base' | 'token'; // sisi setoran saat buka; kosong = base (posisi lama)
   nominalToken?: string; // nominal token yang disetor (sisi token)
+  groupId?: string; // ladder Bid-Ask/Spot: N leg berbagi groupId = 1 posisi logis; kosong = posisi tunggal
+  legIndex?: number; // urutan leg dalam grup (0 = terdekat harga)
+  legCount?: number; // total leg dalam grup
+  shape?: 'spot' | 'bidask'; // bentuk distribusi modal ladder
 };
+
+/** Semua leg dalam satu grup ladder (urut legIndex). groupId kosong = array kosong. */
+export function group(groupId: string): PosRecord[] {
+  return records.filter((r) => r.groupId === groupId).sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
+}
 
 const FILE = join(process.cwd(), 'data', 'positions.json');
 

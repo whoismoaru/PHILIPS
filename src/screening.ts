@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import { bold, code, esc, italic, nowWib } from './messages.js';
 import { getChain, basesFor, type ChainCtx } from './chains.js';
-import { gmgnExtra, type GmgnExtra } from './gmgn.js';
+import { gmgnExtra, gmgnPrice, type GmgnExtra } from './gmgn.js';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
@@ -371,32 +371,52 @@ export async function getTokenEthPrice(tokenAddress: string, ctx: ChainCtx = get
   return best;
 }
 
-/** Harga native (ETH/BNB) dalam USD via DexScreener, per chain (cache 60 dtk). */
+/** Harga native (ETH/BNB) dalam USD. DexScreener UTAMA (HTTP ~60ms), GMGN FALLBACK
+ *  (subprocess ~470ms — cuma dipakai kalau DexScreener gagal, biar command gak molor).
+ *  Cache 60 dtk. */
 export async function getEthUsd(
   wethAddress: string,
   ctx: ChainCtx = getChain(),
 ): Promise<number | null> {
   const cached = ethUsdCache.get(ctx.key);
   if (cached && Date.now() - cached.t < 60_000) return cached.v;
-  const dex = await fetchJson(`${DEXSCREENER}/${wethAddress}`);
-  const pairs: any[] = (dex?.pairs ?? []).filter((p: any) => p.chainId === ctx.dexKey);
   const w = wethAddress.toLowerCase();
-  let best: number | null = null;
-  let bestLiq = -1;
-  for (const p of pairs) {
-    const liq = p.liquidity?.usd ?? 0;
-    let eu: number | null = null;
-    if ((p.baseToken?.address || '').toLowerCase() === w) {
-      eu = Number(p.priceUsd);
-    } else if ((p.quoteToken?.address || '').toLowerCase() === w) {
-      const pn = Number(p.priceNative);
-      const pu = Number(p.priceUsd);
-      if (pn > 0) eu = pu / pn;
+  // Harga WETH dari pool ter-likuid: base=WETH → priceUsd; quote=WETH → priceUsd/priceNative.
+  const pick = (pairs: any[]): number | null => {
+    let best: number | null = null;
+    let bestLiq = -1;
+    for (const p of pairs) {
+      const liq = p.liquidity?.usd ?? 0;
+      let eu: number | null = null;
+      if ((p.baseToken?.address || '').toLowerCase() === w) {
+        eu = Number(p.priceUsd);
+      } else if ((p.quoteToken?.address || '').toLowerCase() === w) {
+        const pn = Number(p.priceNative);
+        const pu = Number(p.priceUsd);
+        if (pn > 0) eu = pu / pn;
+      }
+      if (eu && isFinite(eu) && eu > 0 && liq > bestLiq) {
+        best = eu;
+        bestLiq = liq;
+      }
     }
-    if (eu && isFinite(eu) && eu > 0 && liq > bestLiq) {
-      best = eu;
-      bestLiq = liq;
-    }
+    return best;
+  };
+  // 1) Endpoint CHAIN-SCOPED: cuma pair chain ini → anti-tabrakan alamat. WETH OP-stack
+  //    (0x4200..0006) sama di Base/Ink/Soneium; endpoint tokens/ lintas-chain bikin
+  //    pair chain kecil (Ink) kegencet keluar → harga null. Chain-scoped menghindarinya.
+  const scoped = await fetchJson(`https://api.dexscreener.com/token-pairs/v1/${ctx.dexKey}/${wethAddress}`);
+  let best = pick(Array.isArray(scoped) ? scoped : (scoped?.pairs ?? []));
+  // 2) Fallback: endpoint tokens/ lama, difilter dexKey (mis. Robinhood yg tak ada di
+  //    token-pairs/v1). Menjaga chain yang sebelumnya sudah benar tetap benar.
+  if (best === null) {
+    const dex = await fetchJson(`${DEXSCREENER}/${wethAddress}`);
+    best = pick((dex?.pairs ?? []).filter((p: any) => p.chainId === ctx.dexKey));
+  }
+  // FALLBACK: DexScreener kosong/down → GMGN (chain didukung: robinhood/bsc/base).
+  if (best === null) {
+    const g = await gmgnPrice(wethAddress, ctx.key).catch(() => null);
+    if (g && g.priceUsd > 0) best = g.priceUsd;
   }
   ethUsdCache.set(ctx.key, { v: best, t: Date.now() });
   return best;

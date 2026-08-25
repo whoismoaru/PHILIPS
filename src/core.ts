@@ -56,6 +56,34 @@ export const isGoneErr = (e: unknown) => /invalid token id/i.test(String((e as E
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Kirim tx dengan pemulihan tabrakan NONCE. Operasi write beruntun (mis. Permit2
+ * approve → modifyLiquidities, atau rute swap yang gagal lalu diulang) kadang
+ * memakai nonce yang sama karena hitungan "pending" RPC telat → "nonce has already
+ * been used" dan seluruh langkah gagal. Saat kena error nonce, ambil nonce SEGAR
+ * dari chain lalu ulang (bukan NonceManager yang bisa "kejauhan" saat tx gagal).
+ */
+export async function sendTxNonceSafe(
+  wallet: ethers.Wallet,
+  txReq: ethers.TransactionRequest,
+): Promise<ethers.TransactionResponse> {
+  let nonce: number | undefined;
+  for (let attempt = 0; attempt <= 3; attempt++) {
+    try {
+      return await wallet.sendTransaction(nonce === undefined ? txReq : { ...txReq, nonce });
+    } catch (e) {
+      const msg = (e as Error).message ?? '';
+      if (attempt < 3 && /nonce|already been used|nonce too low|replacement/i.test(msg)) {
+        await sleep(800);
+        nonce = await wallet.provider!.getTransactionCount(wallet.address, 'pending');
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error('unreachable');
+}
+
 /** Umur maksimum sebuah alur wizard sebelum ketikan lama dianggap kedaluwarsa. */
 export const FLOW_TTL_MS = 15 * 60_000;
 export const isStaleFlow = (startedAt: number): boolean => Date.now() - startedAt > FLOW_TTL_MS;

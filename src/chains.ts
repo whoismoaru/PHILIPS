@@ -6,6 +6,8 @@ import {
   WETH_ABI,
   FACTORY_ABI,
   POSITION_MANAGER_ABI,
+  FACTORY_ABI_SLIP,
+  POSITION_MANAGER_ABI_SLIP,
 } from './chain.js';
 
 /**
@@ -48,6 +50,9 @@ export type ChainCtx = {
    *  PancakeSwap). SwapRouter02 Uniswap membuangnya — struct yang salah = revert
    *  tanpa data, terbukti lewat staticCall di kedua bentuk. */
   routerHasDeadline: boolean;
+  /** Venue = Velodrome Slipstream (fork Uni v3): pool per-tickSpacing, mint ber-sqrtPriceX96.
+   *  Swap/close dialihkan ke agregator (Relay/LI.FI); router/quoter DEX tak dipakai. */
+  slipstream: boolean;
 };
 
 // --- Base asset (aset pasangan LP). Per chain: WETH (bila hasWethBase), USDG dan/atau
@@ -130,10 +135,12 @@ type Def = {
   usdcDecimals?: number; // default 6 (USDC di semua chain besar)
   hasWethBase?: boolean; // default true; false utk chain stablecoin-native
   wrappedSymbol?: string; // simbol wrapped-native (default 'WETH'; BSC 'WBNB')
+  usdtSymbol?: string; // simbol token USDT di chain ini (default 'USDT'; HyperEVM 'USDT0')
   stableDecimals?: number; // desimal USDG/USDT di chain ini (default 6; BSC USDT 18)
   feeTiers?: number[]; // default fee tier Uniswap v3
   tickSpacing?: Record<number, number>; // default pemetaan Uniswap v3
   noBatch?: boolean; // RPC publik yang menolak JSON-RPC batch (mis. bsc-dataseed)
+  slipstream?: boolean; // venue Velodrome Slipstream (ABI int24 tickSpacing + mint sqrtPriceX96)
   routerHasDeadline?: boolean; // default false (SwapRouter02 Uniswap)
   fallbackRpc?: string[]; // RPC cadangan bila `rpc` utama down (FallbackProvider, prioritas)
   privateRpc?: string; // relay privat utk broadcast tx (proteksi MEV/sandwich)
@@ -221,6 +228,70 @@ const DEFS: Record<string, Def> = {
         },
       }
     : {}),
+  ...(config.hyperevm.enabled
+    ? {
+        hyperevm: {
+          label: 'HyperEVM',
+          chainId: 999,
+          nativeSymbol: 'HYPE',
+          dexKey: 'hyperevm', // key chain versi DexScreener (BUKAN 'hyperliquid')
+          dexLabel: 'HyperSwap',
+          // HyperEVM tak punya Blockscout publik yang dipakai bot: screening
+          // holders/verified jatuh ke GMGN + DexScreener seperti BSC/Base.
+          blockscout: null,
+          rpc: config.hyperevm.rpcUrl,
+          // HyperSwap v3 (fork Uniswap v3) — SEMUA alamat diverifikasi on-chain:
+          // NFPM.factory() = factory & NFPM.WETH9() = WHYPE; router = ISwapRouter
+          // (selector exactInputSingle ber-deadline 0x414bf389); quoter = QuoterV2.
+          factory: '0xB1c0fa0B789320044A6F623cFe5eBda9562602E3',
+          pm: '0x6eDA206207c09e5428F281761DdC0D300851fBC8',
+          router: '0x4e2960a8cd19b467b82d26d83facb0fae26b094d',
+          quoter: '0x03A918028f22D9E1473B7959C927AD7425A45C7C',
+          weth: '0x5555555555555555555555555555555555555555', // WHYPE (18 desimal)
+          wrappedSymbol: 'WHYPE',
+          // Stablecoin dominan di HyperEVM: USDT0 (USD₮0), 6 desimal — terverifikasi on-chain.
+          usdt: '0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb',
+          usdtSymbol: 'USDT0',
+          // Fee tier factory: 100/500/3000/10000 dengan tick-spacing Uniswap standar
+          // (dibaca dari feeAmountTickSpacing) → default UNI_FEES/UNI_SPACING cocok.
+          routerHasDeadline: true, // ISwapRouter (bukan SwapRouter02) — struct ber-deadline
+          fallbackRpc: ['https://rpc.hyperliquid.xyz/evm'],
+        },
+      }
+    : {}),
+  ...(config.ink.enabled
+    ? {
+        ink: {
+          label: 'Ink',
+          chainId: 57073,
+          nativeSymbol: 'ETH',
+          dexKey: 'ink', // key chain versi DexScreener
+          dexLabel: 'Velodrome',
+          // Ink punya Blockscout publik → screening holders/verified bisa jalan.
+          blockscout: 'https://explorer.inkonchain.com/api/v2',
+          rpc: config.ink.rpcUrl,
+          // Velodrome SLIPSTREAM (CL) deployment v1.2 — LIVE & berisi likuiditas.
+          // BUKAN alamat repo resmi (yg kosong). Semua diverifikasi on-chain:
+          // NFPM.factory()=factory & WETH9()=WETH; NFPM = "Slipstream Position NFT v1.2".
+          // `fee` di seluruh kode = tickSpacing (int24) untuk venue ini.
+          factory: '0x04625B046C69577EfC40e6c0Bb83CDBAfab5a55F', // CLFactory
+          pm: '0x991d5546C4B442B4c5fdc4c8B8b8d131DEB24702', // NonfungiblePositionManager v1.2
+          // Router & quoter Velodrome TIDAK dipakai: swap/close lewat Relay/LI.FI
+          // (keduanya dukung Ink). Diisi router liquid utk kelengkapan; quoter kosong.
+          router: '0x63951637d667f23D5251DEdc0f9123D22d8595be',
+          quoter: '0x0000000000000000000000000000000000000000',
+          weth: '0x4200000000000000000000000000000000000006', // WETH (gas Ink = ETH)
+          usdt: '0x0200C29006150606B650577BBE7B6248F58470c1', // USDT0 (6 desimal) — stable terdalam
+          usdtSymbol: 'USDT0',
+          slipstream: true,
+          // tickSpacing yang aktif di CLFactory (bukan fee-tier). Map identitas:
+          // "fee" di kode = tickSpacing itu sendiri.
+          feeTiers: [1, 10, 50, 100, 200, 2000],
+          tickSpacing: { 1: 1, 10: 10, 50: 50, 100: 100, 200: 200, 2000: 2000 },
+          fallbackRpc: ['https://rpc-qnd.inkonchain.com'],
+        },
+      }
+    : {}),
 };
 
 function basesOf(d: Def): BaseAsset[] {
@@ -229,7 +300,7 @@ function basesOf(d: Def): BaseAsset[] {
   if (d.hasWethBase ?? true)
     out.push({ kind: 'weth', address: d.weth, decimals: 18, symbol: d.wrappedSymbol ?? 'WETH', wrappable: true });
   if (d.usdg) out.push({ kind: 'usdg', address: d.usdg, decimals: stableDec, symbol: 'USDG', wrappable: false });
-  if (d.usdt) out.push({ kind: 'usdt', address: d.usdt, decimals: stableDec, symbol: 'USDT', wrappable: false });
+  if (d.usdt) out.push({ kind: 'usdt', address: d.usdt, decimals: stableDec, symbol: d.usdtSymbol ?? 'USDT', wrappable: false });
   if (d.usdc) out.push({ kind: 'usdc', address: d.usdc, decimals: d.usdcDecimals ?? 6, symbol: 'USDC', wrappable: false });
   return out;
 }
@@ -291,8 +362,8 @@ function build(key: string, d: Def): ChainCtx {
     blockscout: d.blockscout,
     provider,
     wallet,
-    factory: new ethers.Contract(d.factory, FACTORY_ABI, wallet),
-    positionManager: new ethers.Contract(d.pm, POSITION_MANAGER_ABI, wallet),
+    factory: new ethers.Contract(d.factory, d.slipstream ? FACTORY_ABI_SLIP : FACTORY_ABI, wallet),
+    positionManager: new ethers.Contract(d.pm, d.slipstream ? POSITION_MANAGER_ABI_SLIP : POSITION_MANAGER_ABI, wallet),
     weth: new ethers.Contract(d.weth, WETH_ABI, wallet),
     wethAddress: d.weth,
     hasWethBase: d.hasWethBase ?? true,
@@ -303,6 +374,7 @@ function build(key: string, d: Def): ChainCtx {
     routerAddress: d.router,
     quoterAddress: d.quoter,
     routerHasDeadline: d.routerHasDeadline ?? false,
+    slipstream: d.slipstream ?? false,
     bases: basesOf(d),
     feeTiers: d.feeTiers ?? UNI_FEES,
     tickSpacing: d.tickSpacing ?? UNI_SPACING,

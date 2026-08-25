@@ -51,11 +51,7 @@ export async function swapTokenViaRelay(
       if (value > 0n) {
         throw new Error(`relay step unexpectedly requires ${value} native on a token sell — aborted for safety`);
       }
-      const tx = await wallet.sendTransaction({
-        to: d.to,
-        data: d.data,
-        value,
-      });
+      const tx = await sendTxNonceSafe(wallet as ethers.Wallet, { to: d.to, data: d.data, value });
       const rc = await tx.wait();
       if (rc) txHashes.push(rc.hash);
     }
@@ -114,6 +110,35 @@ export async function relayQuoteOut(
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Kirim tx dengan pemulihan tabrakan NONCE. Rute swap yang gagal kadang sudah
+ * MENGIRIM tx (memakai nonce) sebelum revert; kirim berikutnya lalu memakai nonce
+ * yang sama ("nonce has already been used") → seluruh cash-out gagal & token
+ * tertinggal (PnL jadi salah, lihat kasus LIGER #774283). Saat kena error nonce,
+ * ambil nonce segar dari chain lalu ulang — beberapa kali dengan jeda kecil untuk
+ * memberi RPC waktu menyusul.
+ */
+async function sendTxNonceSafe(
+  wallet: ethers.Wallet,
+  req: { to: string; data: string; value: bigint },
+): Promise<ethers.TransactionResponse> {
+  let nonce: number | undefined;
+  for (let attempt = 0; attempt <= 3; attempt++) {
+    try {
+      return await wallet.sendTransaction(nonce === undefined ? req : { ...req, nonce });
+    } catch (e) {
+      const msg = (e as Error).message ?? '';
+      if (attempt < 3 && /nonce|already been used|nonce too low|replacement/i.test(msg)) {
+        await sleep(800);
+        nonce = await wallet.provider!.getTransactionCount(wallet.address, 'pending');
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error('unreachable');
+}
 
 // Dua bentuk struct exactInputSingle yang beredar. Uniswap SwapRouter02 membuang
 // `deadline`; SwapRouter v3 asli (dipakai PancakeSwap) tetap memakainya. Memanggil
@@ -273,6 +298,36 @@ async function relayVerified(
   return { ...r, outEthWei: measured > 0n ? measured : r.outEthWei };
 }
 
+/** Batas waktu LI.FI: kalau quote/tx belum kelar dalam tempo ini → anggap "lambat"
+ *  dan mundur ke Relay/Uniswap. Sama untuk sisi jual & preview. */
+const LIFI_TIMEOUT_MS = 12_000;
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out (${ms}ms)`)), ms)),
+  ]);
+}
+
+/** LI.FI token → ETH native, terverifikasi (saldo token benar-benar berkurang). */
+async function lifiVerifiedToEth(
+  tokenAddress: string,
+  amountWei: bigint,
+  ctx: ChainCtx,
+  maxSlipPct?: number,
+): Promise<{ txHashes: string[]; outEthWei: bigint }> {
+  const { swapViaLifi } = await import('./lifi.js'); // dynamic → hindari circular import
+  const before = await tokenBalance(tokenAddress, ctx);
+  const ethBefore = await ctx.provider.getBalance(ctx.wallet.address).catch(() => null);
+  const r = await withTimeout(swapViaLifi(tokenAddress, NATIVE, amountWei, ctx, maxSlipPct ?? 5), LIFI_TIMEOUT_MS, 'lifi');
+  const after = await tokenBalance(tokenAddress, ctx);
+  if (before - after < (amountWei * 9n) / 10n) {
+    throw new Error(`lifi did not reduce the token balance (before=${before} after=${after})`);
+  }
+  const ethAfter = await ctx.provider.getBalance(ctx.wallet.address).catch(() => null);
+  const measured = ethBefore !== null && ethAfter !== null && ethAfter > ethBefore ? ethAfter - ethBefore : 0n;
+  return { txHashes: r.txHashes, outEthWei: measured > 0n ? measured : r.outWei };
+}
+
 export async function swapTokenToEthRobust(
   tokenAddress: string,
   amountWei: bigint,
@@ -280,6 +335,15 @@ export async function swapTokenToEthRobust(
   maxSlipPct?: number,
 ): Promise<{ txHashes: string[]; outEthWei: bigint; route: string }> {
   const errors: string[] = [];
+
+  // Jalur 0 (UTAMA): LI.FI — agregator DEX terdalam & tercepat. Relay & Uniswap jadi
+  // cadangan bila LI.FI tak mendukung chain, rate-nya jelek, atau kelamaan (timeout).
+  try {
+    const r = await lifiVerifiedToEth(tokenAddress, amountWei, ctx, maxSlipPct);
+    return { ...r, route: 'lifi' };
+  } catch (e) {
+    errors.push(`lifi: ${(e as Error).message.slice(0, 80)}`);
+  }
 
   // Jalur 1: Relay (agregator, hasil ETH native langsung) — terverifikasi.
   try {
@@ -290,7 +354,8 @@ export async function swapTokenToEthRobust(
   }
 
   // Jalur 2: langsung Uniswap router (exactInputSingle → swap FULL amountIn), slippage naik.
-  for (const slip of slipLadder(maxSlipPct)) {
+  // Slipstream (Ink/Velodrome): router/quoter DEX tak dipakai — lewati, andalkan agregator.
+  for (const slip of ctx.slipstream ? [] : slipLadder(maxSlipPct)) {
     try {
       const r = await swapViaUniswap(tokenAddress, amountWei, slip, ctx);
       return { ...r, route: `uniswap(slip ${slip}%)` };
@@ -374,7 +439,8 @@ export async function swapTokenToUsdgRobust(
   // lewat WETH dll. Dulu di sini ada `throw` — akibatnya fallback Relay TAK PERNAH
   // tercapai dan /sell ke base stablecoin selalu gagal utk token yang cuma
   // berpasangan dgn WETH. Lewati saja bagian pool langsung, jangan berhenti.
-  const hasDirectPool = bestReserve >= 0n;
+  // Slipstream: quoter DEX tak tersedia → paksa lewat Relay/agregator (hasDirectPool=false).
+  const hasDirectPool = !ctx.slipstream && bestReserve >= 0n;
 
   const routerAddr = ctx.routerAddress;
   const txHashes: string[] = [];
@@ -479,7 +545,7 @@ export type BridgeQuote = {
   impactPct: number | null; // selisih nilai USD masuk vs keluar
   feeUsd: number | null; // biaya relayer
   etaSec: number | null;
-  steps: Array<{ to: string; data: string; value: string }>;
+  steps: Array<{ to: string; data: string; value: string; approvalAddress?: string }>;
 };
 
 /**
@@ -491,14 +557,17 @@ export async function getBridgeQuote(
   from: ChainCtx,
   to: ChainCtx,
   amountWei: bigint,
+  opts: { originCurrency?: string; destinationCurrency?: string } = {},
 ): Promise<BridgeQuote> {
+  const originCurrency = opts.originCurrency ?? NATIVE;
+  const destinationCurrency = opts.destinationCurrency ?? NATIVE;
   const body = {
     user: from.wallet.address,
     recipient: from.wallet.address, // dompet yang sama di kedua chain (EVM)
     originChainId: from.chainId,
     destinationChainId: to.chainId,
-    originCurrency: NATIVE,
-    destinationCurrency: NATIVE,
+    originCurrency: originCurrency === NATIVE ? NATIVE : ethers.getAddress(originCurrency),
+    destinationCurrency: destinationCurrency === NATIVE ? NATIVE : ethers.getAddress(destinationCurrency),
     amount: amountWei.toString(),
     tradeType: 'EXACT_INPUT',
   };
@@ -544,8 +613,9 @@ export async function executeBridge(
   to: ChainCtx,
   amountWei: bigint,
   minOutWei: bigint,
+  opts: { originCurrency?: string; destinationCurrency?: string } = {},
 ): Promise<{ txHashes: string[]; outWei: bigint }> {
-  const fresh = await getBridgeQuote(from, to, amountWei);
+  const fresh = await getBridgeQuote(from, to, amountWei, opts);
   if (fresh.outWei < minOutWei) {
     throw new Error(
       `Route moved: now ${fresh.outLabel}, below the confirmed minimum. Nothing was sent — try again.`,
@@ -553,7 +623,7 @@ export async function executeBridge(
   }
   const txHashes: string[] = [];
   for (const st of fresh.steps) {
-    const tx = await from.wallet.sendTransaction({
+    const tx = await sendTxNonceSafe(from.wallet as ethers.Wallet, {
       to: st.to,
       data: st.data,
       value: st.value ? BigInt(st.value) : 0n,

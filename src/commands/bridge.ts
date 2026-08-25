@@ -2,8 +2,10 @@ import { Markup } from 'telegraf';
 import { ethers } from 'ethers';
 import { config } from '../config.js';
 import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset } from '../core.js';
-import { CHAINS, getChain, type ChainCtx } from '../chains.js';
-import { getBridgeQuote, executeBridge } from '../relay.js';
+import { CHAINS, getChain, isStableBase, type ChainCtx, type BaseKind } from '../chains.js';
+import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridgeRoute.js';
+import { NATIVE } from '../relay.js';
+import { ERC20_ABI } from '../chain.js';
 import * as store from '../store.js';
 import * as msg from '../messages.js';
 
@@ -26,17 +28,71 @@ const GAS_RESERVE_WEI = ethers.parseEther('0.0005');
 type BridgeFlow = {
   fromKey: string;
   toKey: string;
+  kind?: BaseKind; // aset sumber yang dipilih (weth→native, atau stablecoin)
+  originCurrency?: string; // alamat aset dikirim (NATIVE utk native)
+  destinationCurrency?: string; // alamat aset diterima di chain tujuan
+  srcDecimals?: number;
+  dstDecimals?: number;
+  srcSymbol?: string;
   awaitingAmount?: boolean;
   amountWei?: bigint;
   minOutWei?: bigint;
   inLabel?: string;
   outLabel?: string;
+  provider?: BridgeProvider; // penyedia terpilih (Relay / LI.FI) — dieksekusi ulang saat konfirmasi
   quotedAt?: number;
   startedAt: number;
 };
 const flows = new Map<number, BridgeFlow>();
 const inFlight = new Set<number>();
 registerFlowReset((uid) => flows.delete(uid));
+
+/** Simbol tampilan aset sumber: native pakai simbol native, stablecoin pakai simbolnya. */
+const assetLabel = (cc: ChainCtx, kind: BaseKind): string =>
+  kind === 'weth' ? cc.nativeSymbol : (cc.bases.find((b) => b.kind === kind)?.symbol ?? kind.toUpperCase());
+
+/**
+ * Petakan aset sumber (kind di chain asal) ke aset tujuan di chain tujuan:
+ *  - native (weth) → native chain tujuan,
+ *  - stablecoin → stablecoin sejenis di tujuan, atau stablecoin pertama yang ada.
+ * Lempar bila chain tujuan tak punya penerima yang cocok.
+ */
+function resolveAssets(from: ChainCtx, to: ChainCtx, kind: BaseKind) {
+  const srcBase = from.bases.find((b) => b.kind === kind);
+  if (!srcBase) throw new Error(`${from.label} tidak punya ${kind.toUpperCase()}`);
+  if (kind === 'weth') {
+    return {
+      originCurrency: NATIVE,
+      destinationCurrency: NATIVE,
+      srcDecimals: 18,
+      dstDecimals: 18,
+      srcSymbol: from.nativeSymbol,
+      dstSymbol: to.nativeSymbol,
+    };
+  }
+  const dstBase = to.bases.find((b) => b.kind === kind) ?? to.bases.find((b) => isStableBase(b.kind));
+  if (!dstBase) throw new Error(`${to.label} has no stablecoin to receive ${srcBase.symbol}.`);
+  return {
+    originCurrency: srcBase.address,
+    destinationCurrency: dstBase.address,
+    srcDecimals: srcBase.decimals,
+    dstDecimals: dstBase.decimals,
+    srcSymbol: srcBase.symbol,
+    dstSymbol: dstBase.symbol,
+  };
+}
+
+/** Saldo aset sumber (native atau ERC20), diformat sesuai desimalnya. */
+async function assetBalance(cc: ChainCtx, kind: BaseKind): Promise<{ wei: bigint; label: string }> {
+  if (kind === 'weth') {
+    const wei = await cc.provider.getBalance(cc.wallet.address).catch(() => 0n);
+    return { wei, label: `${Number(ethers.formatEther(wei)).toFixed(6)} ${cc.nativeSymbol}` };
+  }
+  const b = cc.bases.find((x) => x.kind === kind)!;
+  const erc = new ethers.Contract(b.address, ERC20_ABI, cc.provider);
+  const wei: bigint = await erc.balanceOf(cc.wallet.address).catch(() => 0n);
+  return { wei, label: `${Number(ethers.formatUnits(wei, b.decimals)).toFixed(4)} ${b.symbol}` };
+}
 
 /** Semua pasangan arah antar chain aktif. Satu chain = tak ada yang bisa dijembatani. */
 function routes(): Array<{ from: ChainCtx; to: ChainCtx }> {
@@ -61,20 +117,54 @@ async function cmdBridge(ctx: any) {
 }
 bot.command('bridge', cmdBridge);
 
+// Setelah rute dipilih → tampilkan bubble ASET yang bisa dijembatani dari chain asal
+// (native + tiap stablecoin yang dimiliki chain itu).
 bot.action(/^br:(\w+):(\w+)$/, async (ctx) => {
   const [fromKey, toKey] = [ctx.match[1], ctx.match[2]];
   const from = CHAINS[fromKey];
   const to = CHAINS[toKey];
   if (!from || !to) return ctx.answerCbQuery('Chain unavailable.');
   await ctx.answerCbQuery();
-  flows.set(ctx.from!.id, { fromKey, toKey, awaitingAmount: true, startedAt: Date.now() });
-  const bal = await from.provider
-    .getBalance(from.wallet.address)
-    .then((b) => `${Number(ethers.formatEther(b)).toFixed(6)} ${from.nativeSymbol}`)
-    .catch(() => '?');
-  await ctx.editMessageText(msg.msgBridgeAmount(from.label, to.label, bal, from.nativeSymbol), {
+  flows.set(ctx.from!.id, { fromKey, toKey, startedAt: Date.now() });
+  const rows = from.bases.map((b) => [
+    Markup.button.callback(assetLabel(from, b.kind), `bra:${fromKey}:${toKey}:${b.kind}`),
+  ]);
+  rows.push([Markup.button.callback('⬅️ Back', 'br:back'), Markup.button.callback('❌ Cancel', 'cancel')]);
+  await ctx.editMessageText(msg.msgBridgeAsset(from.label, to.label), { ...html, ...Markup.inlineKeyboard(rows) });
+});
+
+// Aset dipilih → minta nominal.
+bot.action(/^bra:(\w+):(\w+):(\w+)$/, async (ctx) => {
+  const [fromKey, toKey, kind] = [ctx.match[1], ctx.match[2], ctx.match[3] as BaseKind];
+  const from = CHAINS[fromKey];
+  const to = CHAINS[toKey];
+  if (!from || !to) return ctx.answerCbQuery('Chain unavailable.');
+  await ctx.answerCbQuery();
+  let a: ReturnType<typeof resolveAssets>;
+  try {
+    a = resolveAssets(from, to, kind);
+  } catch (e) {
+    return ctx.editMessageText(msg.msgError('bridge', (e as Error).message), html);
+  }
+  flows.set(ctx.from!.id, {
+    fromKey,
+    toKey,
+    kind,
+    originCurrency: a.originCurrency,
+    destinationCurrency: a.destinationCurrency,
+    srcDecimals: a.srcDecimals,
+    dstDecimals: a.dstDecimals,
+    srcSymbol: a.srcSymbol,
+    awaitingAmount: true,
+    startedAt: Date.now(),
+  });
+  const bal = await assetBalance(from, kind);
+  await ctx.editMessageText(msg.msgBridgeAmount(from.label, to.label, bal.label, a.srcSymbol), {
     ...html,
-    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'br:back')], [Markup.button.callback('❌ Cancel', 'cancel')]]),
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('⬅️ Back', `br:${fromKey}:${toKey}`)],
+      [Markup.button.callback('❌ Cancel', 'cancel')],
+    ]),
   });
 });
 
@@ -95,30 +185,42 @@ export async function handleBridgeAmount(ctx: any, raw: string): Promise<boolean
   }
   const from = CHAINS[flow.fromKey];
   const to = CHAINS[flow.toKey];
-  const wei = parseAmt(raw, 18);
+  const kind = flow.kind ?? 'weth';
+  const isNative = kind === 'weth';
+  const wei = parseAmt(raw, flow.srcDecimals ?? 18);
   if (wei === null) {
     await ctx.reply(msg.msgInvalidAmount(), html);
     return true;
   }
   const prog = await ctx.reply(msg.msgProgress('requesting bridge quote…'), html);
   try {
-    const bal: bigint = await from.provider.getBalance(from.wallet.address);
-    // Gas dibayar di chain ASAL. Mengirim seluruh saldo membuat tx-nya sendiri gagal
-    // — lebih baik ditolak di sini daripada gas hangus tanpa dana berpindah.
-    if (wei + GAS_RESERVE_WEI > bal) {
-      await editProgress(
-        ctx,
-        prog,
-        msg.msgError(
-          'bridge',
-          `Amount plus gas exceeds your balance (${ethers.formatEther(bal)} ${from.nativeSymbol}). Leave ~${ethers.formatEther(GAS_RESERVE_WEI)} for gas.`,
-        ),
-      );
-      return true;
+    // Native: sisakan gas (dibayar di chain asal). Stablecoin: cek saldo token cukup,
+    // DAN masih ada native buat bayar gas — kalau tidak, tx-nya sendiri gagal.
+    const nativeBal: bigint = await from.provider.getBalance(from.wallet.address);
+    if (isNative) {
+      if (wei + GAS_RESERVE_WEI > nativeBal) {
+        await editProgress(ctx, prog, msg.msgError('bridge',
+          `Amount plus gas exceeds your balance (${ethers.formatEther(nativeBal)} ${from.nativeSymbol}). Leave ~${ethers.formatEther(GAS_RESERVE_WEI)} for gas.`));
+        return true;
+      }
+    } else {
+      const tokBal = (await assetBalance(from, kind)).wei;
+      if (wei > tokBal) {
+        await editProgress(ctx, prog, msg.msgError('bridge',
+          `Amount exceeds your ${flow.srcSymbol} balance (${Number(ethers.formatUnits(tokBal, flow.srcDecimals ?? 18)).toFixed(4)}).`));
+        return true;
+      }
+      if (nativeBal < GAS_RESERVE_WEI) {
+        await editProgress(ctx, prog, msg.msgError('bridge',
+          `Not enough ${from.nativeSymbol} for gas on ${from.label} (need ~${ethers.formatEther(GAS_RESERVE_WEI)}).`));
+        return true;
+      }
     }
-    const q = await getBridgeQuote(from, to, wei);
+    const assets = { originCurrency: flow.originCurrency, destinationCurrency: flow.destinationCurrency };
+    const { provider, quote: q } = await bestBridgeQuote(from, to, wei, assets);
     flow.awaitingAmount = false;
     flow.amountWei = wei;
+    flow.provider = provider;
     // Lantai minimum = hasil yang BENAR-BENAR dilihat user, dikurangi toleransi 1%.
     flow.minOutWei = (q.outWei * 99n) / 100n;
     flow.inLabel = q.inLabel;
@@ -162,7 +264,7 @@ bot.action('br:go', async (ctx) => {
   }
   if (inFlight.has(uid)) return ctx.answerCbQuery('Processing…');
   inFlight.add(uid);
-  const { fromKey, toKey, amountWei, minOutWei, inLabel, outLabel } = flow;
+  const { fromKey, toKey, amountWei, minOutWei, inLabel, outLabel, provider, originCurrency, destinationCurrency } = flow;
   flows.delete(uid); // idempotency: hapus SEBELUM eksekusi (double-tap tak bridge dobel)
   const from = CHAINS[fromKey];
   const to = CHAINS[toKey];
@@ -177,14 +279,16 @@ bot.action('br:go', async (ctx) => {
       return;
     }
     await ctx.editMessageText(msg.msgProgress(`bridging ${from.label} → ${to.label}…`), html).catch(() => {});
-    const r = await executeBridge(from, to, amountWei!, minOutWei!);
-    console.log(`[bridge] ${from.key}→${to.key} ${inLabel} → ${outLabel} tx ${r.txHashes.join(',')}`);
+    const r = await executeBridgeVia(provider ?? 'relay', from, to, amountWei!, minOutWei!, { originCurrency, destinationCurrency });
+    console.log(`[bridge] via ${provider ?? 'relay'} ${from.key}→${to.key} ${inLabel} → ${outLabel} tx ${r.txHashes.join(',')}`);
     await ctx.editMessageText(
       msg.msgBridgeDone({
         fromLabel: from.label,
         toLabel: to.label,
         inLabel: inLabel!,
-        outLabel: `${Number(ethers.formatEther(r.outWei)).toFixed(6)} ${to.nativeSymbol}`,
+        // Pakai label out yang sudah dikonfirmasi (simbol+desimal aset tujuan benar);
+        // outWei mentah tanpa desimal tujuan bisa salah tampil utk stablecoin 6-desimal.
+        outLabel: outLabel!,
         txHashes: r.txHashes,
         dryRun: false,
       }),
