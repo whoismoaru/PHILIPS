@@ -877,12 +877,19 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   const tracked = v4store.getV4(p.tokenId);
   // Range % DIPATOK ke tick ENTRY (bila tersimpan) → angkanya diam, tak goyang tiap
   // refresh. Fallback ke live (relatif harga sekarang) untuk posisi tanpa entryTick.
-  const anchoredPcts = ((): [number, number] | null => {
+  // Batas rentang DAN harga sekarang dihitung di SATU ruang: tick pool, dipatok
+  // ke entryTick. Dulu "now" diambil dari DexScreener sementara batasnya dari
+  // tick → kartu bisa bilang IN RANGE padahal "now" tampak di luar batas.
+  const anchored = ((): { pcts: [number, number]; nowPct: number | null } | null => {
     if (tracked?.entryTick === undefined) return null;
     const sgn = tracked.baseIsCurrency0 ? -1 : 1;
     const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - tracked.entryTick!)) - 1) * 100;
-    return [pctOf(p.tickUpper), pctOf(p.tickLower)].sort((a, b) => b - a) as [number, number];
+    return {
+      pcts: [pctOf(p.tickUpper), pctOf(p.tickLower)].sort((a, b) => b - a) as [number, number],
+      nowPct: p.currentTick !== null ? pctOf(p.currentTick) : null,
+    };
   })();
+  const anchoredPcts = anchored?.pcts ?? null;
   const rangeLabel = anchoredPcts
     ? `${msg.fmtPct(anchoredPcts[0])} / ${msg.fmtPct(anchoredPcts[1])}`
     : p.rangePctHigh !== null && p.rangePctLow !== null
@@ -912,36 +919,41 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   // harga PASAR (DexScreener pool terdalam). Selisih besar = pool tipis, harga &
   // range di kartu tak bisa dipercaya (persis kasus PEPE di pool liq $25).
   let priceWarn: string | null = null;
-  if (p.base === 'ETH' && p.impliedTokenEthPrice) {
-    const tokenAddr = p.poolKey.currency0 === ethers.ZeroAddress ? p.poolKey.currency1 : p.poolKey.currency0;
-    const mkt = await getTokenEthPrice(tokenAddr, cc).catch(() => null);
-    if (mkt && mkt > 0) {
-      const ratio = p.impliedTokenEthPrice / mkt;
-      if (ratio > 1.25 || ratio < 0.8) {
-        const x = ratio >= 1 ? ratio : 1 / ratio;
-        priceWarn = `harga pool ini ${x.toFixed(1)}× dari harga pasar — likuiditas dangkal, nilai & range di atas mengikuti pool ini, bukan pasar.`;
-      }
-    }
-  }
   const baseSymbol = p.base === 'USDG' ? 'USDG' : p.base === 'ETH' ? 'ETH' : undefined;
   const tokenSymbol = baseSymbol ? [p.sym0, p.sym1].find((s) => s !== baseSymbol) : undefined;
   // Market cap: kapitalisasi sekarang + di batas rentang (MC ∝ harga, jadi
   // MC@batas = MC_now × (1 + pct/100)). Samakan dengan sub-baris mcap kartu V3.
   let mcRange: string | undefined;
+  let mcPool: number | null = null;
+  let mcMarket: number | null = null;
   {
     const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
     const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
     const tokenAddr = [p.poolKey.currency0, p.poolKey.currency1].find((a) => !isEth(a) && !isUsdg(a));
     const mcNow = tokenAddr ? await explore.tokenMarketCap(cc, tokenAddr).catch(() => null) : null;
+    mcMarket = mcNow;
     // Batas mcap DIPATOK ke entryMcap + range% dari entry → diam. mcNow ditampilkan
     // sebagai "now" (referensi hidup). Fallback ke live bila entry tak tersimpan.
     if (anchoredPcts && tracked?.entryMcap) {
       const at = (pct: number) => explore.usdShort(tracked.entryMcap! * (1 + pct / 100));
-      const nowStr = mcNow !== null ? ` · now ${explore.usdShort(mcNow)}` : '';
+      // "now" dari tick pool → sebaris dengan batas rentang, status IN RANGE, dan PnL.
+      mcPool = anchored?.nowPct != null ? tracked.entryMcap * (1 + anchored.nowPct / 100) : null;
+      const shown = mcPool ?? mcNow;
+      const nowStr = shown !== null ? ` · now ${explore.usdShort(shown)}` : '';
       mcRange = `${at(anchoredPcts[0])} ⇄ ${at(anchoredPcts[1])}${nowStr}`;
     } else if (mcNow !== null && p.rangePctHigh !== null && p.rangePctLow !== null) {
       const at = (pct: number) => explore.usdShort(mcNow * (1 + pct / 100));
       mcRange = `${at(p.rangePctHigh)} ⇄ ${at(p.rangePctLow)} · now ${explore.usdShort(mcNow)}`;
+    }
+  }
+  // Guard pool sekarat: bandingkan mcap versi pool (dipakai kartu) dgn mcap pasar.
+  // Menggantikan cek lama yang hanya jalan utk pasangan ETH — pasangan USDG dulu
+  // lolos tanpa pemeriksaan sama sekali.
+  if (mcPool !== null && mcMarket !== null && mcPool > 0 && mcMarket > 0) {
+    const ratio = mcPool / mcMarket;
+    if (ratio > 1.25 || ratio < 0.8) {
+      const x = ratio >= 1 ? ratio : 1 / ratio;
+      priceWarn = `harga pool ini ${x.toFixed(1)}× dari harga pasar (pasar ${explore.usdShort(mcMarket)}) — likuiditas dangkal, nilai & range di atas mengikuti pool ini, bukan pasar.`;
     }
   }
   const text = msg.msgV4Position({

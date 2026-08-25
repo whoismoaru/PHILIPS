@@ -74,6 +74,7 @@ export type V4Position = {
   rangePctHigh: number | null; // % ujung terdekat dari harga sekarang
   rangePctLow: number | null;
   inRange: boolean | null;
+  currentTick: number | null; // tick pool saat ini — kartu memakainya utk mcap "now"
   converted: boolean; // out-of-range & 100% token seberang (target tercapai)
   impliedTokenEthPrice: number | null; // harga token dlm ETH menurut slot0 pool INI (buat cek pool sekarat)
 };
@@ -414,6 +415,7 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
           poolKey,
           valueBaseWei: val ? val.valueBaseWei : null,
           feesBaseWei: val ? val.feesBaseWei : null,
+          currentTick: val ? val.currentTick : null,
           rangePctHigh: val ? val.rangePctHigh : null,
           rangePctLow: val ? val.rangePctLow : null,
           inRange: val ? val.inRange : null,
