@@ -19,9 +19,21 @@ export type V4Record = {
   base: 'ETH' | 'USDG' | null;
   baseIsCurrency0: boolean;
   entryBaseWei: string; // base disetor saat open (raw, desimal base)
+  entryEthUsd?: number; // harga base(USD) saat open — PnL USD ala LP Agent (ETH: harga ETH; USDG: 1)
+  entryTick?: number; // tick pool saat open — range % kartu dipatok ke sini (biar diam)
+  entryMcap?: number; // market cap USD saat open — batas mcap kartu dipatok ke sini
+  groupId?: string; // ladder Bid-Ask v4: N leg berbagi groupId = 1 posisi logis
+  legIndex?: number;
+  legCount?: number;
+  shape?: 'spot' | 'bidask';
   openedAt: number;
   lastInRange?: boolean;
 };
+
+/** Semua leg satu grup ladder v4 (urut legIndex). */
+export function groupV4(groupId: string): V4Record[] {
+  return records.filter((r) => r.groupId === groupId).sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
+}
 
 const FILE = join(process.cwd(), 'data', 'v4positions.json');
 

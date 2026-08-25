@@ -12,6 +12,7 @@
  * Read-only murni: tak menyentuh wallet/on-chain. Aman gagal (throw → kartu error).
  */
 import { getChain, venueCtx, venuesFor, type BaseKind, type ChainCtx } from './chains.js';
+import { gmgnPrice } from './gmgn.js';
 import { v4Supported } from './uniswapV4.js';
 import type { PoolKeyV4 } from './uniswapV4.js';
 import { ethers } from 'ethers';
@@ -514,6 +515,11 @@ export async function tokenMarketCap(ctx: ChainCtx, token: string): Promise<numb
     }
   } catch {
     /* gagal → null, kartu menulis '?' */
+  }
+  // FALLBACK: DexScreener kosong/down → GMGN (mcap = harga × supply).
+  if (v === null) {
+    const g = await gmgnPrice(token, ctx.key).catch(() => null);
+    if (g && g.mcapUsd && g.mcapUsd > 0) v = g.mcapUsd;
   }
   mcapCache.set(key, { t: Date.now(), v });
   return v;

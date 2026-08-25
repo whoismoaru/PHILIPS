@@ -371,21 +371,60 @@ export function msgV4Position(p: {
   pnlText?: string; // hanya bila dikelola bot (entry diketahui)
   tracked: boolean;
   priceWarn?: string | null; // pool sekarat: harga on-chain melenceng dari pasar
+  baseSymbol?: string; // ETH | USDG
+  tokenSymbol?: string; // sisi token (non-base)
+  age?: string;
+  chain?: string;
+  mcRange?: string; // rentang yang sama dibaca sebagai kapitalisasi pasar
+  converted?: boolean; // out-of-range & 100% token seberang (target tercapai)
+  ladder?: { legIndex: number; legCount: number; shape: string; groupDeposit?: string }; // leg dari grup ladder
 }): string {
-  const emoji = p.inRange === null ? '🔷' : p.inRange ? '🟢' : '🔴';
-  const body: string[] = [
-    code(`${p.pair} · ${p.feeLabel}`),
+  // Samakan layout dengan kartu V3 (msgPositionCard): satu fakta satu baris,
+  // status di barisnya sendiri, ada strategi + penjelasan uang.
+  const base = esc(p.baseSymbol ?? 'ETH');
+  const sym = esc(p.tokenSymbol ?? p.pair.split('/').map((s) => s.trim()).find((s) => s !== p.baseSymbol) ?? 'token');
+  const statusEmoji = p.inRange === null ? '🔷' : p.inRange ? '🟢' : '🔴';
+  const status =
+    p.inRange === null
+      ? bold('UNKNOWN')
+      : p.inRange
+        ? bold('IN RANGE')
+        : p.converted
+          ? `${bold('OUT OF RANGE')} — fully converted`
+          : `${bold('OUT OF RANGE')} — waiting`;
+  const explain =
+    p.inRange === null
+      ? `Range status couldn't be read right now — the value above may be stale.`
+      : p.inRange
+        ? `Your liquidity is ${bold('active')} and earning fees right now. As long as ${sym} stays inside this range, fees keep accruing.`
+        : p.converted
+          ? `Price dropped through this ${p.ladder && p.ladder.legCount > 1 ? 'leg' : 'position'}'s entire range, so it is now ${bold(`100% ${sym}`)} — the buy-dip target here is done. The value above is that ${sym} priced back in ${base}; it falls further if ${sym} keeps dropping. Hold and wait for a bounce, or close.`
+          : `Your liquidity is currently inactive. It will automatically convert to ${sym} and start earning fees once the token price ${bold('drops')} into your target range (${esc(p.rangeLabel)}).`;
+
+  const isLeg = p.ladder && p.ladder.legCount > 1;
+  const lines = [
+    `📊 ${bold(`Position Details: #${esc(p.tokenId)}`)}`,
     '',
-    ...hrows([
-      ['Value', p.valueLabel],
-      ['Range', p.rangeLabel],
-    ]),
+    `🔗 ${bold('Pair:')} ${esc(p.pair)} ${italic(`(${esc(p.feeLabel)} Fee)`)}${p.chain ? ` · ${esc(p.chain)}` : ''}`,
+    `🎯 ${bold('Strategy:')} ${base} Side (Buy the dip)${isLeg ? ` · ${bold(`◣ ${p.ladder!.shape === 'bidask' ? 'Bid-Ask' : 'Spot'} ladder`)}` : ''}`,
+    ...(isLeg ? [`🪜 ${bold('Ladder leg:')} ${p.ladder!.legIndex + 1} / ${p.ladder!.legCount}`] : []),
+    ...(isLeg && p.ladder!.groupDeposit ? [`💰 ${bold('Ladder deposit:')} ${esc(p.ladder!.groupDeposit)} ${base} ${italic('(all legs)')}`] : []),
+    `💰 ${bold(isLeg ? 'Leg Value:' : 'Value:')} ${esc(p.valueLabel)}`,
+    `📉 ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${esc(p.rangeLabel)}`,
+    ...(p.mcRange ? [italic(`↳ market cap ${esc(p.mcRange)}`)] : []),
+    ...(p.pnlText ? [`📈 ${bold('Current PnL:')} ${esc(p.pnlText)}`] : []),
+    `${statusEmoji} ${bold('Status:')} ${status}`,
   ];
-  if (p.priceWarn) body.push('', `⚠️ ${bold('Pool tipis')} — ${p.priceWarn}`);
-  if (p.pnlText) body.push('', bold(`PnL  ${p.pnlText}`));
-  if (p.inRange !== null) body.push('', p.inRange ? `🟢 ${bold('IN RANGE')} — fee mengalir` : `🔴 ${bold('OUT OF RANGE')}`);
-  body.push('', note(p.tracked ? 'Uniswap v4 · dikelola bot' : 'Uniswap v4 · baca-saja (dibuka di luar bot)'));
-  return card(`${emoji} ${title('V4', `#${p.tokenId}`)}`, body);
+  if (p.priceWarn) lines.push('', `⚠️ ${bold('Pool tipis')} — ${esc(p.priceWarn)}`);
+  lines.push(
+    '',
+    `⏱️ <i>${p.age ? `Age ${esc(p.age)} · ` : ''}Updated Live: ${nowWib()}</i>`,
+    '',
+    `<i>${explain}</i>`,
+    '',
+    note(p.tracked ? 'Uniswap v4 · dikelola bot' : 'Uniswap v4 · baca-saja (dibuka di luar bot)'),
+  );
+  return lines.join('\n');
 }
 
 /** Hasil tutup posisi v4 (atau simulasi dry-run). */
@@ -953,6 +992,8 @@ export function msgPositionCard(opts: {
   baseSymbol?: string; // WETH (default, posisi lama) | USDG
   side?: 'base' | 'token'; // sisi setoran; kosong = base (posisi lama)
   converted?: boolean; // harga menembus seluruh rentang → posisi 100% aset seberang
+  feeIsTickSpacing?: boolean; // Velodrome Slipstream: `fee` = tickSpacing (fee-nya dinamis)
+  ladder?: { legIndex: number; legCount: number; shape: string; groupInvest?: string }; // leg dari grup ladder
 }): string {
   const base = esc(opts.baseSymbol ?? 'WETH');
   const sym = esc(opts.symbol);
@@ -978,12 +1019,18 @@ export function msgPositionCard(opts: {
       ? `Your liquidity is currently inactive. It will automatically convert to ${base} and start earning fees once the ${sym} price ${bold('rises')} into your target range (${range}).`
       : `Your liquidity is currently inactive. It will automatically convert to ${sym} and start earning fees once the token price ${bold('drops')} into your target range (${range}).`;
 
+  const isLeg = opts.ladder && opts.ladder.legCount > 1;
   return [
     `📊 ${bold(`Position Details: #${esc(opts.tokenId)}`)}`,
     '',
-    `🔗 ${bold('Pair:')} ${base} / ${sym} ${italic(`(${feeLabel(opts.fee)} Fee)`)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
-    `🎯 ${bold('Strategy:')} ${strategy}`,
-    `💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`,
+    `🔗 ${bold('Pair:')} ${base} / ${sym} ${italic(opts.feeIsTickSpacing ? `(ts ${opts.fee} · dynamic fee)` : `(${feeLabel(opts.fee)} Fee)`)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
+    `🎯 ${bold('Strategy:')} ${strategy}${isLeg ? ` · ${bold(`◣ ${opts.ladder!.shape === 'bidask' ? 'Bid-Ask' : 'Spot'} ladder`)}` : ''}`,
+    ...(isLeg ? [`🪜 ${bold('Ladder leg:')} ${opts.ladder!.legIndex + 1} / ${opts.ladder!.legCount}`] : []),
+    // Ladder: tampilkan modal SEGRUP (total), bukan cuma leg ini — biar tak terlihat
+    // seperti posisi tunggal kecil. Leg ini sendiri diberi label "this leg".
+    isLeg && opts.ladder!.groupInvest
+      ? `💰 ${bold('Principal:')} ${esc(opts.ladder!.groupInvest)} ${investUnit} ${italic(`(ladder total; this leg ${esc(opts.invest)})`)}`
+      : `💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`,
     `${tokenSide ? '📈' : '📉'} ${bold('Target Range:')} ${range}`,
     ...(opts.mcRange ? [italic(`↳ market cap ${esc(opts.mcRange)}`)] : []),
     `📈 ${bold('Current PnL:')} ${esc(opts.pnlText)}`,
@@ -1258,6 +1305,43 @@ export function msgRangeStep(tokenSide = false): string {
     tokenSide
       ? 'A wider range means slower conversion back to the base asset, but a longer duration to earn trading fees.'
       : 'A wider range means slower conversion to the token, but a longer duration to earn trading fees.',
+  ].join('\n');
+}
+
+export function msgShapeStep(tokenSym: string, rangePct: number): string {
+  return [
+    bold('OPEN LP · Choose Distribution'),
+    '',
+    `How should your capital be spread across the −${rangePct}% range?`,
+    '',
+    `${bold('▬ SPOT')} — one position near price. Harvests the most fees, standard strategy.`,
+    `${bold('◣ BID-ASK')} — multi-leg ladder, capital heaviest at the lowest prices.`,
+    `Buys more ${esc(tokenSym)} the deeper it dips, protects capital, but earns less fee.`,
+  ].join('\n');
+}
+
+export function msgLegStep(tokenSym: string, rangePct: number): string {
+  return [
+    bold('OPEN LP · Bid-Ask · How many legs?'),
+    '',
+    `More legs = smoother ladder across the −${rangePct}% range, more ${esc(tokenSym)} bought as it dips.`,
+    'All legs open in one batched transaction (auto-split if large).',
+    '',
+    `${bold('8–10 = sweet spot')} (free-tier RPC). ~95% of the Bid-Ask benefit, fast /positions.`,
+    `${bold('69')} needs a ${bold('paid RPC')} — on free-tier it makes /positions & monitor slow.`,
+    '',
+    italic('Legs are auto-capped to what the pool tick-spacing allows.'),
+  ].join('\n');
+}
+
+export function msgLadderOpened(opened: number, total: number, pair: string, deposit: string): string {
+  return [
+    `✅ ${bold('BID-ASK LADDER OPENED')} · ${opened}/${total} legs`,
+    '',
+    `${bold(esc(pair))}`,
+    `Deposit · ${bold(esc(deposit))} (split across ${opened} legs)`,
+    '',
+    italic('Each leg is one position; managed together as one ladder.'),
   ].join('\n');
 }
 
@@ -1947,6 +2031,16 @@ export function msgBridgePick(routes: Array<{ from: string; to: string }>): stri
     ...routes.map((r) => `• ${esc(r.from)} → ${esc(r.to)}`),
     '',
     note('a bridge cannot be undone — funds land on the destination chain and only another bridge brings them back.'),
+  ].join('\n');
+}
+
+export function msgBridgeAsset(fromLabel: string, toLabel: string): string {
+  return [
+    `🌉 ${bold('Bridge')} · ${esc(fromLabel)} → ${esc(toLabel)}`,
+    '',
+    `🪙 ${bold('Which asset do you want to bridge?')}`,
+    '',
+    note('a stablecoin arrives as the matching stablecoin on the destination chain; native arrives as native.'),
   ].join('\n');
 }
 
