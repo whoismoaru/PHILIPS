@@ -538,9 +538,12 @@ async function renderStatus(ctx: any, edit: boolean) {
       const ccLp = getChain();
       const vals = await mapLimit(store.active(), POS_CARD_CONCURRENCY, async (rec) => {
         try {
-          const d = await getPositionDetail(rec.tokenId, ctxOf(rec));
+          const rcc = ctxOf(rec);
+          const d = await getPositionDetail(rec.tokenId, rcc);
           const v = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
-          return isStableBase(d.baseKind) ? v : ethUsd !== null ? v * ethUsd : null;
+          // Harga native dari CHAIN POSISI ITU: BNB dihargai WBNB, HYPE dihargai
+          // WHYPE. Dulu semua dikali harga ETH chain utama → LP HyperEVM 30x lipat.
+          return baseToUsd(d.baseKind, v, rcc);
         } catch {
           return undefined;
         }
@@ -1066,7 +1069,8 @@ async function cmdPositions(ctx: any, edit = false) {
   // v3 (RPC paralel, urutan stabil). Posisi hilang (NFT burned) → finalize & buang.
   const v3rows = await mapLimit(active, POS_CARD_CONCURRENCY, async (rec): Promise<PosRow | null> => {
     try {
-      const d = await getPositionDetail(rec.tokenId, ctxOf(rec));
+      const rcc = ctxOf(rec); // chain POSISI, bukan chain utama
+      const d = await getPositionDetail(rec.tokenId, rcc);
       const dec = d.baseDecimals;
       const curF = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec));
       const initF = rec.imported ? null : Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
@@ -1075,7 +1079,7 @@ async function cmdPositions(ctx: any, edit = false) {
       if (initF !== null && initF > 0) {
         // PnL USD ala LP Agent bila entryEthUsd tersimpan; kalau tidak, view ETH lama.
         if (rec.entryEthUsd && rec.entryEthUsd > 0) {
-          const nowUsdPer = isStableBase(d.baseKind) ? 1 : ethUsd;
+          const nowUsdPer = isStableBase(d.baseKind) ? 1 : await getEthUsd(rcc.wethAddress, rcc).catch(() => null);
           if (nowUsdPer !== null) {
             const entryUsd = initF * rec.entryEthUsd;
             pnlUsd = curF * nowUsdPer - entryUsd;
@@ -1084,10 +1088,11 @@ async function cmdPositions(ctx: any, edit = false) {
         } else {
           const pnlF = curF - initF;
           pnlPct = (pnlF / initF) * 100;
-          pnlUsd = await baseToUsd(d.baseKind, pnlF, cc);
+          pnlUsd = await baseToUsd(d.baseKind, pnlF, rcc);
         }
       }
       const investNum = initF ?? curF;
+      const nativeUsd = await getEthUsd(rcc.wethAddress, rcc).catch(() => null);
       return {
         id: rec.tokenId,
         groupId: rec.groupId ?? null,
@@ -1099,8 +1104,10 @@ async function cmdPositions(ctx: any, edit = false) {
         pnlUsd,
         pnlPct,
         inRange: d.inRange,
-        wethEq: d.baseKind === 'weth' ? investNum : ethUsd ? investNum / ethUsd : 0,
-        natSym: cc.nativeSymbol,
+        // Setara-native utk baris TOTAL: stable dibagi harga native CHAIN INI
+        // (USDT BSC → BNB), bukan harga ETH chain utama.
+        wethEq: d.baseKind === 'weth' ? investNum : (nativeUsd ? investNum / nativeUsd : 0),
+        natSym: rcc.nativeSymbol,
         // tickLower/Upper dalam istilah TICK; dalam istilah HARGA TOKEN urutannya
         // bisa terbalik (tergantung sisi base di pool) → urutkan menaik dulu.
         // Dibaca kembali oleh kartu untuk menentukan sisi — pakai penanda stabil
@@ -1119,7 +1126,7 @@ async function cmdPositions(ctx: any, edit = false) {
         feesLabel: `${Number(ethers.formatUnits(d.feesBaseWei, dec)).toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`,
         // Fee dalam USD (design memakai satuan dolar). Harga tak terbaca → null,
         // dan kartu jatuh ke satuan base; JANGAN tampilkan $0.00 palsu.
-        feesUsdLabel: await baseToUsd(d.baseKind, Number(ethers.formatUnits(d.feesBaseWei, dec)), cc)
+        feesUsdLabel: await baseToUsd(d.baseKind, Number(ethers.formatUnits(d.feesBaseWei, dec)), rcc)
           .then((v) => (v === null ? null : `+${msg.usdPlain(v)}`))
           .catch(() => null),
         feesBase: Number(ethers.formatUnits(d.feesBaseWei, dec)),

@@ -43,4 +43,24 @@ const nakal = src.split('\n').filter((l) => {
 assert.deepEqual(nakal, [],
   'valuasi posisi tanpa feesBaseWei — PnL akan understate:\n' + nakal.join('\n'));
 
+// --- penjaga: loop LINTAS-CHAIN tak boleh pakai harga chain utama ---
+// Regresi nyata: /status & /positions mengalikan nilai LP semua chain dengan harga
+// ETH chain utama → LP BSC 3.5x, LP HyperEVM 30x terlalu tinggi. Di dalam loop
+// atas store.active() (posisi tersebar di 5 chain), konversi WAJIB lewat ctxOf(rec).
+for (const [nama, mulai, selesai] of [
+  ['renderStatus/LP', 'const vals = await mapLimit(store.active()', 'const v4 = v4Supported'],
+  ['cmdPositions/v3', 'const v3rows = await mapLimit(active', 'const rows: PosRow[] = v3rows'],
+] as const) {
+  const i = src.indexOf(mulai);
+  assert.ok(i > 0, `blok ${nama} tak ditemukan — penjaga usang, perbarui penanda`);
+  const blok = src.slice(i, src.indexOf(selesai, i));
+  const jahat = blok.split('\n').filter((l) => {
+    const t = l.trim();
+    if (t.startsWith('//')) return false;
+    return /\bethUsd\b/.test(t) || /,\s*cc\)/.test(t) || /\bcc\.(wethAddress|nativeSymbol|label)\b/.test(t);
+  });
+  assert.deepEqual(jahat, [],
+    `${nama}: memakai chain utama di loop lintas-chain (pakai ctxOf(rec)/rcc):\n` + jahat.join('\n'));
+}
+
 console.log('smoke-pnl: LULUS');
