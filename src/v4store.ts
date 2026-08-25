@@ -28,6 +28,9 @@ export type V4Record = {
   shape?: 'spot' | 'bidask';
   openedAt: number;
   lastInRange?: boolean;
+  dropTier?: number; // tangga alert anjlok yang sudah bunyi (setara v3)
+  dropAlerted?: boolean;
+  ilAlerted?: boolean; // alert rugi bersih sudah bunyi (re-arm saat pulih)
 };
 
 /** Semua leg satu grup ladder v4 (urut legIndex). */
@@ -60,6 +63,14 @@ export const getV4 = (tokenId: string): V4Record | undefined => records.find((r)
 export function trackV4(rec: Omit<V4Record, 'openedAt' | 'lastInRange'> & { openedAt?: number }): void {
   if (records.some((r) => r.tokenId === rec.tokenId)) return;
   records.push({ ...rec, openedAt: rec.openedAt ?? Date.now() });
+  persist();
+}
+
+/** Tambal sebagian record (penanda alert). Tak ada = no-op. */
+export function updateV4(tokenId: string, patch: Partial<V4Record>): void {
+  const r = records.find((x) => x.tokenId === tokenId);
+  if (!r) return;
+  Object.assign(r, patch);
   persist();
 }
 

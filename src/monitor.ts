@@ -25,6 +25,35 @@ const DROP_HYSTERESIS_PCT = 5; // pulih 5% di atas ambang → tangga di-arm ulan
  * Anak tangga alert anjlok, dari ambang user ke bawah. Satu bunyi per tangga, jadi
  * penurunan yang makin dalam tetap memberi kabar tanpa membanjiri notifikasi.
  */
+/**
+ * Penurunan harga token (%) dari tick pool, tanpa sumber harga luar.
+ * Harga token per base = 1.0001^(sgn·tick); sgn -1 bila base = currency0.
+ * Positif = turun (dip), negatif = naik.
+ */
+export function dropPctFromTick(tick: number, entryTick: number, baseIsCurrency0: boolean): number {
+  const sgn = baseIsCurrency0 ? -1 : 1;
+  return (1 - Math.pow(1.0001, sgn * (tick - entryTick))) * 100;
+}
+
+/**
+ * Satu-satunya pintu notifikasi monitor. `flag` = kunci di /alerts yang
+ * mengatur pesan ini; null = laporan AKSI (bot memindahkan uang) yang memang
+ * selalu dikirim. Dibuat wajib supaya pagar tak bisa terlupa — dulu jalur v4
+ * mengirim langsung lewat bot.telegram dan mengabaikan setelan sepenuhnya.
+ */
+async function notify(
+  bot: Telegraf,
+  flag: 'rangeNotify' | 'dropPct' | 'ilPct' | null,
+  text: string,
+  extra: Record<string, unknown> = html,
+): Promise<void> {
+  if (flag !== null) {
+    const v = alerts.get()[flag];
+    if (v === null || v === false) return;
+  }
+  await bot.telegram.sendMessage(config.telegram.allowedUserId, text, extra);
+}
+
 function dropLadder(base: number): number[] {
   return [...new Set([base, 30, 50, 75].filter((t) => t >= base))].sort((a, b) => a - b);
 }
@@ -166,10 +195,7 @@ async function sweepLeftovers(bot: Telegraf) {
       });
       const gotLabel = `${Number(ethers.formatUnits(res.outEthWei, res.dec)).toFixed(res.dec >= 18 ? 6 : 2)} ${res.unit}`;
       console.log(`[sweep] ${r.symbol} (${cc.key}) → +${gotLabel} via ${res.route}`);
-      await bot.telegram.sendMessage(
-        config.telegram.allowedUserId,
-        `♻️ Swept leftover ${r.symbol} → +${gotLabel} (${res.route})`,
-      );
+      await notify(bot, null, `♻️ Swept leftover ${r.symbol} → +${gotLabel} (${res.route})`, {});
     } catch (e) {
       const emsg = (e as Error).message ?? '';
       // Token debu (nilai terlalu kecil utk di-swap) → mundur lama, jangan ulang tiap 6j.
@@ -202,10 +228,7 @@ async function sweepStuckWeth(bot: Telegraf) {
       await tx.wait();
       const wrapped = cc.bases.find((b) => b.kind === 'weth')?.symbol ?? 'WETH';
       console.log(`[sweep-weth] unwrap ${ethers.formatEther(bal)} ${wrapped} → ${cc.nativeSymbol} (${cc.key})`);
-      await bot.telegram.sendMessage(
-        config.telegram.allowedUserId,
-        `♻️ Swept ${Number(ethers.formatEther(bal)).toFixed(6)} stuck ${wrapped} → ${cc.nativeSymbol} (${cc.label})`,
-      );
+      await notify(bot, null, `♻️ Swept ${Number(ethers.formatEther(bal)).toFixed(6)} stuck ${wrapped} → ${cc.nativeSymbol} (${cc.label})`, {});
     } catch (e) {
       console.log(`[sweep-weth] ${cc.key} gagal: ${(e as Error).message.slice(0, 80)}`);
     }
@@ -243,8 +266,7 @@ async function tick(bot: Telegraf) {
       const cfg = alerts.get();
       if (cfg.rangeNotify && rec.lastInRange !== undefined && rec.lastInRange !== d.inRange) {
         if (d.inRange) {
-          await bot.telegram.sendMessage(
-            config.telegram.allowedUserId,
+          await notify(bot, 'rangeNotify',
             msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol, rec.side === 'token'),
             {
               ...html,
@@ -258,8 +280,7 @@ async function tick(bot: Telegraf) {
             },
           );
         } else {
-          await bot.telegram.sendMessage(
-            config.telegram.allowedUserId,
+          await notify(bot, 'rangeNotify',
             msgRangeExit(rec.tokenId, rec.symbol, d.side === 'above' ? 'above' : 'below', d.baseSymbol),
             html,
           );
@@ -272,8 +293,7 @@ async function tick(bot: Telegraf) {
       // sebelum harga balik. Sekali per crossing; re-arm saat kembali in range.
       const converted = !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below');
       if (cfg.rangeNotify && converted && !rec.convertedAlerted) {
-        await bot.telegram.sendMessage(
-          config.telegram.allowedUserId,
+        await notify(bot, 'rangeNotify',
           msgConverted(rec.tokenId, d.baseSymbol, rec.symbol, rec.side === 'token'),
           {
             ...html,
@@ -308,8 +328,7 @@ async function tick(bot: Telegraf) {
         if (reached > tier) {
           // Tombol menuju kartu KONFIRMASI tutup (stop:), bukan kirim tx — invariant
           // §8.5 utuh, tapi user tak perlu mengetik command saat harga jatuh.
-          await bot.telegram.sendMessage(
-            config.telegram.allowedUserId,
+          await notify(bot, 'dropPct',
             msgPriceDrop(rec.tokenId, rec.symbol, dropPct, d.baseSymbol, ladder[reached - 1]),
             {
               ...html,
@@ -337,8 +356,7 @@ async function tick(bot: Telegraf) {
         if (init > 0) {
           const lossPct = (1 - now / init) * 100;
           if (lossPct >= cfg.ilPct && !rec.ilAlerted) {
-            await bot.telegram.sendMessage(
-              config.telegram.allowedUserId,
+            await notify(bot, 'ilPct',
               msgIlAlert(rec.tokenId, rec.symbol, lossPct, cfg.ilPct),
               {
                 ...html,
@@ -398,7 +416,69 @@ async function tick(bot: Telegraf) {
       // setelan sama sekali → rangeNotify=false tetap membanjiri Telegram.
       if (berubah && st.inRange !== null && alerts.get().rangeNotify) {
         const label = rec.groupId ? `${msgV4Range(rec.tokenId, st.inRange)} (ladder ${rec.legCount ?? '?'} leg)` : msgV4Range(rec.tokenId, st.inRange);
-        await bot.telegram.sendMessage(config.telegram.allowedUserId, label, html);
+        await notify(bot, 'rangeNotify', label);
+      }
+
+      const cfgV4 = alerts.get();
+      const sym = rec.groupId ? `#${rec.tokenId} (ladder)` : `#${rec.tokenId}`;
+
+      // --- Alert ANJLOK (setara v3). Harga dari TICK: rasio 1.0001^Δtick, jadi
+      // tak perlu sumber harga luar dan nol RPC tambahan (tick sudah dibaca). ---
+      if (cfgV4.dropPct !== null && st.tick !== null && rec.entryTick !== undefined) {
+        const dropPct = dropPctFromTick(st.tick, rec.entryTick, rec.baseIsCurrency0);
+        const ladder = dropLadder(cfgV4.dropPct);
+        const tier = rec.dropTier ?? 0;
+        let reached = 0;
+        for (const t of ladder) if (dropPct >= t) reached++;
+        if (reached > tier) {
+          await notify(bot, 'dropPct',
+            msgPriceDrop(rec.tokenId, sym, dropPct, rec.base ?? 'base', ladder[reached - 1]),
+            { ...html, reply_markup: { inline_keyboard: [[{ text: '⛔ Close Now', callback_data: `closev4:${rec.tokenId}` }]] } },
+          );
+          v4store.updateV4(rec.tokenId, { dropTier: reached, dropAlerted: true });
+        } else if (tier > 0 && dropPct < ladder[0] - DROP_HYSTERESIS_PCT) {
+          v4store.updateV4(rec.tokenId, { dropTier: 0, dropAlerted: false });
+        }
+      } else if (rec.dropTier || rec.dropAlerted) {
+        v4store.updateV4(rec.tokenId, { dropTier: 0, dropAlerted: false }); // mati → arm ulang bersih
+      }
+
+      // --- Alert RUGI BERSIH (setara v3): nilai + fee vs modal masuk. Untuk
+      // ladder dijumlah SELURUH leg (bobot tiap leg beda, wakil tak mewakili). ---
+      if (cfgV4.ilPct !== null && st.val) {
+        const legs = rec.groupId ? v4store.groupV4(rec.groupId) : [rec];
+        // ponytail: ladder besar dilewati — tiap leg butuh ~3 RPC dan monitor
+        // jalan tiap menit. Naikkan batas ini kalau sudah pakai RPC berbayar.
+        if (legs.length <= 25) {
+          let nowSum = 0n;
+          let initSum = 0n;
+          let gagal = false;
+          for (const leg of legs) {
+            const v = leg.tokenId === rec.tokenId
+              ? st.val
+              : (await checkV4Status(getChain(leg.chain), leg.tokenId)).val;
+            if (!v) { gagal = true; break; }
+            nowSum += v.valueBaseWei + v.feesBaseWei;
+            initSum += BigInt(leg.entryBaseWei || '0');
+          }
+          if (!gagal && initSum > 0n) {
+            const dec = baseDecimalsOf(rec.chain, rec.base === 'USDG' ? 'usdg' : 'weth');
+            const now = Number(ethers.formatUnits(nowSum, dec));
+            const init = Number(ethers.formatUnits(initSum, dec));
+            const lossPct = (1 - now / init) * 100;
+            if (lossPct >= cfgV4.ilPct && !rec.ilAlerted) {
+              await notify(bot, 'ilPct',
+                msgIlAlert(rec.tokenId, sym, lossPct, cfgV4.ilPct),
+                { ...html, reply_markup: { inline_keyboard: [[{ text: '⛔ Close Now', callback_data: `closev4:${rec.tokenId}` }]] } },
+              );
+              v4store.updateV4(rec.tokenId, { ilAlerted: true });
+            } else if (rec.ilAlerted && lossPct < cfgV4.ilPct - 5) {
+              v4store.updateV4(rec.tokenId, { ilAlerted: false });
+            }
+          }
+        }
+      } else if (rec.ilAlerted) {
+        v4store.updateV4(rec.tokenId, { ilAlerted: false }); // alasan sama spt dropTier
       }
     } catch (e) {
       console.log(`[monitor:v4] #${rec.tokenId} dilewati ronde ini:`, (e as Error).message.slice(0, 120));

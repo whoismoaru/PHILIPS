@@ -922,24 +922,26 @@ export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: nu
 export async function checkV4Status(
   cc: ChainCtx,
   tokenId: string,
-): Promise<{ exists: boolean; inRange: boolean | null }> {
+): Promise<{ exists: boolean; inRange: boolean | null; tick: number | null; val: V4Valuation | null }> {
   // inRange null = TAK TAHU (RPC gagal / chain tanpa PM). Jangan dipetakan ke false:
   // itu memicu alert "OUT OF RANGE" palsu yang mendorong keputusan uang.
   const pmAddr = V4_PM[cc.key];
-  if (!pmAddr) return { exists: true, inRange: null };
+  if (!pmAddr) return { exists: true, inRange: null, tick: null, val: null };
   const pm = new ethers.Contract(pmAddr, V4_ABI, cc.provider);
   try {
     const [pk, info] = await pm.getPoolAndPositionInfo(tokenId);
     const liquidity: bigint = await pm.getPositionLiquidity(tokenId);
     if (liquidity === 0n || (pk.currency0 === ethers.ZeroAddress && pk.currency1 === ethers.ZeroAddress)) {
-      return { exists: false, inRange: false };
+      return { exists: false, inRange: false, tick: null, val: null };
     }
     const tickLower = signExt24((info >> 8n) & 0xffffffn);
     const tickUpper = signExt24((info >> 32n) & 0xffffffn);
     const poolKey: PoolKeyV4 = { currency0: pk.currency0, currency1: pk.currency1, fee: Number(pk.fee), tickSpacing: Number(pk.tickSpacing), hooks: pk.hooks };
-    const { tick } = await readPoolState(cc, poolKey);
-    return { exists: true, inRange: tick >= tickLower && tick < tickUpper };
+    // valuePositionV4 memakai SATU extsload yang juga berisi slot0 → tick, nilai,
+    // dan fee didapat dengan RPC yang sama banyaknya seperti readPoolState dulu.
+    const val = await valuePositionV4(cc, poolKey, tickLower, tickUpper, liquidity, tokenId);
+    return { exists: true, inRange: val.inRange, tick: val.currentTick, val };
   } catch {
-    return { exists: true, inRange: null }; // error transien → jangan hapus & jangan alert
+    return { exists: true, inRange: null, tick: null, val: null }; // transien → jangan hapus & jangan alert
   }
 }
