@@ -81,6 +81,15 @@ from the Uniswap gateway, Krystal, and on-chain scans.
 
 **Step 3. Pick how wide the range is.** From conservative to extreme.
 
+**Step 3b. Pick the shape** (base side only).
+
+- **Spot.** One position near the price. Simplest, and it harvests the most fees.
+- **Bid-Ask.** A ladder of several positions, with more money placed at the lower
+  prices. It buys more of the token the deeper it dips and protects your capital,
+  but earns less in fees. You pick how many legs — **8 to 10 is the sweet spot**.
+  More legs is smoother but needs a paid RPC; on a free endpoint it makes the bot
+  slow. All the legs open in one batched transaction and are managed as one position.
+
 **Step 4. How much.** Tap 30% / 50% / 70% / 90% of your balance, or type an exact
 number. Percentages are taken from your *usable* balance. The gas reserve is kept
 aside, so 90% never leaves you unable to pay for the transaction.
@@ -115,13 +124,15 @@ explicit confirmation tap and is guarded against double-taps.
 
 ## Chains
 
-Three are configured out of the box:
+Five are configured out of the box. Turn the extra ones on in `.env`:
 
 | Chain | DEX | You can deposit |
 |---|---|---|
 | Robinhood | Uniswap v3 + v4 | ETH · USDG |
 | BSC | PancakeSwap v3 + Uniswap v3 | BNB · USDT |
 | Base | Uniswap v3 | ETH · USDC |
+| HyperEVM | HyperSwap v3 | HYPE · USDT0 |
+| Ink | Velodrome Slipstream | ETH · USDT0 |
 
 The primary chain is whatever you put in `.env`. It was built and tested against
 Robinhood Chain. Pointing it at a different EVM chain works, but you'll need to
