@@ -19,6 +19,7 @@ const { Token, Percent, CurrencyAmount } = sdkCore;
 // factory.feeAmountTickSpacing(2500) = 50.
 (TICK_SPACINGS as Record<number, number>)[2500] = 50;
 import { ERC20_ABI } from './chain.js';
+import { sendTxNonceSafe } from './core.js';
 import { getChain, baseOf, basesFor, detectBase, type ChainCtx, type BaseAsset, type BaseKind } from './chains.js';
 
 const MAX_UINT128 = (1n << 128n) - 1n;
@@ -32,6 +33,20 @@ function spacingOf(fee: number, ctx: ChainCtx): number {
   if (!s) throw new Error(`Fee tier ${fee} is not available on ${ctx.label}.`);
   return s;
 }
+
+/** Fee untuk objek SDK Uniswap. Slipstream memakai tickSpacing arbitrer yang tak ada
+ *  di TICK_SPACINGS SDK → paksa 100 (spacing 1). Math jumlah token TIDAK memakai
+ *  tickSpacing, dan tick kita (kelipatan spacing asli) tetap kelipatan 1, jadi
+ *  invariant Position (tick % spacing === 0) lolos & jumlahnya tetap benar. */
+const sdkFee = (fee: number, ctx: ChainCtx): FeeAmount => (ctx.slipstream ? 100 : fee) as FeeAmount;
+
+/** Fragmen slot0(). CLPool Velodrome Slipstream mengembalikan 6 field (tanpa
+ *  `feeProtocol uint8` milik Uniswap v3) → decode 7-field gagal. Keduanya menaruh
+ *  sqrtPriceX96 di [0] & tick di [1], jadi kode pembaca tak berubah. */
+const slot0Abi = (ctx: ChainCtx): string =>
+  ctx.slipstream
+    ? 'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, bool)'
+    : 'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)';
 
 // Cache metadata token per chain (alamat sama bisa ada di banyak chain).
 const tokenMetaCache = new Map<string, { symbol: string; decimals: number }>();
@@ -85,7 +100,7 @@ export async function loadPool(
   }
 
   const poolAbi = [
-    'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)',
+    slot0Abi(ctx),
     'function liquidity() view returns (uint128)',
     'function token0() view returns (address)',
     'function token1() view returns (address)',
@@ -106,7 +121,7 @@ export async function loadPool(
   const sdkPool = new Pool(
     sdkToken0,
     sdkToken1,
-    fee as FeeAmount,
+    sdkFee(fee, ctx),
     sqrtPriceX96.toString(),
     liquidity.toString(),
     currentTick,
@@ -255,6 +270,113 @@ export async function planAddSingleSided(
     tokenDecimals: st.tokenOther.decimals,
     position,
   };
+}
+
+/** Bentuk distribusi modal ladder. spot = rata; bidask = numpuk di harga terjauh (paling turun). */
+export type LadderShape = 'spot' | 'bidask';
+
+/** Bobot per-leg (index 0 = terdekat harga, N-1 = terjauh/paling turun). Jumlah = 1. */
+export function ladderWeights(n: number, shape: LadderShape): number[] {
+  if (n <= 1) return [1];
+  // bidask linear: bobot ∝ (index+1) → leg terjauh paling berat. spot: rata.
+  const raw = shape === 'bidask' ? Array.from({ length: n }, (_, i) => i + 1) : Array.from({ length: n }, () => 1);
+  const sum = raw.reduce((a, b) => a + b, 0);
+  return raw.map((w) => w / sum);
+}
+
+/**
+ * Rencana LADDER single-sided sisi BASE (buy-the-dip): pecah rentang [sekarang …
+ * −X%] jadi N leg bersebelahan, tiap leg posisi terkonsentrasi sendiri dengan
+ * modal berbobot. spot = modal rata; bidask = modal makin besar di harga makin
+ * rendah. Tiap leg = AddPlan utuh → di-mint lewat executeAdd biasa (satu tokenId
+ * per leg, dikelompokkan oleh groupId di store). Hanya sisi base — sisi token
+ * tetap SPOT tunggal.
+ */
+export async function planLadderSingleSided(
+  tokenAddress: string,
+  fee: number,
+  totalAmount: string,
+  rangePercent: number,
+  legs: number,
+  shape: LadderShape,
+  base: BaseAsset,
+  ctx: ChainCtx = getChain(),
+): Promise<AddPlan[]> {
+  const st = await loadPool(tokenAddress, fee, base, ctx);
+  const spacing = spacingOf(fee, ctx);
+  const fullWidth = widthInTicks(rangePercent, spacing);
+  // Auto-cap: tiap leg butuh ≥1 tick-spacing. Pool kasar (spacing besar) tak muat
+  // banyak leg dalam rentang → potong N ke jumlah spacing yang tersedia (maks 69).
+  const maxLegs = Math.max(1, Math.floor(fullWidth / spacing));
+  const n = Math.max(1, Math.min(legs, 69, maxLegs));
+  // Lebar tiap leg = porsi spacing dari total, minimal 1 spacing.
+  const legWidth = Math.max(spacing, Math.round(fullWidth / n / spacing) * spacing);
+  const weights = ladderWeights(n, shape);
+  const totalWei = ethers.parseUnits(totalAmount, base.decimals);
+  const currentPrice = st.sdkPool.priceOf(st.tokenOther).toSignificant(8);
+  const cur = Number(currentPrice);
+
+  // Tick pangkal (mepet harga sekarang), sama seperti planAddSingleSided.
+  let anchor: number;
+  if (st.baseIsToken0) {
+    anchor = Math.ceil(st.currentTick / spacing) * spacing;
+    if (anchor <= st.currentTick) anchor += spacing;
+  } else {
+    anchor = Math.floor(st.currentTick / spacing) * spacing;
+    if (anchor >= st.currentTick) anchor -= spacing;
+  }
+
+  const plans: AddPlan[] = [];
+  let allocated = 0n;
+  for (let k = 0; k < n; k++) {
+    // Modal leg: bobot × total; leg terakhir menyapu sisa (hindari debu pembulatan).
+    const legWei = k === n - 1 ? totalWei - allocated : (totalWei * BigInt(Math.round(weights[k] * 1e9))) / 1_000_000_000n;
+    allocated += legWei;
+
+    let tickLower: number;
+    let tickUpper: number;
+    let position: TPosition;
+    if (st.baseIsToken0) {
+      // Rentang DI ATAS: leg k makin jauh ke atas = harga token makin turun.
+      tickLower = anchor + k * legWidth;
+      tickUpper = tickLower + legWidth;
+      position = Position.fromAmount0({ pool: st.sdkPool, tickLower, tickUpper, amount0: legWei.toString(), useFullPrecision: true });
+    } else {
+      // Rentang DI BAWAH: leg k makin jauh ke bawah = harga token makin turun.
+      tickUpper = anchor - k * legWidth;
+      tickLower = tickUpper - legWidth;
+      position = Position.fromAmount1({ pool: st.sdkPool, tickLower, tickUpper, amount1: legWei.toString() });
+    }
+
+    const mint = position.mintAmounts;
+    const amount0 = BigInt(mint.amount0.toString());
+    const amount1 = BigInt(mint.amount1.toString());
+    const pLower = tickToPrice(st.tokenOther, st.sdkBase, tickLower).toSignificant(6);
+    const pUpper = tickToPrice(st.tokenOther, st.sdkBase, tickUpper).toSignificant(6);
+    const [priceLower, priceUpper] = Number(pLower) <= Number(pUpper) ? [pLower, pUpper] : [pUpper, pLower];
+
+    plans.push({
+      baseKind: base.kind,
+      baseSymbol: base.symbol,
+      baseDecimals: base.decimals,
+      baseIsToken0: st.baseIsToken0,
+      tickLower,
+      tickUpper,
+      priceLower,
+      priceUpper,
+      baseAmountWei: st.baseIsToken0 ? amount0 : amount1,
+      otherAmountWei: st.baseIsToken0 ? amount1 : amount0,
+      otherSymbol: st.tokenOther.symbol!,
+      currentPrice,
+      pctLow: cur > 0 ? (Number(priceLower) / cur - 1) * 100 : 0,
+      pctHigh: cur > 0 ? (Number(priceUpper) / cur - 1) * 100 : 0,
+      side: 'base',
+      tokenAmountWei: 0n,
+      tokenDecimals: st.tokenOther.decimals,
+      position,
+    });
+  }
+  return plans;
 }
 
 /**
@@ -490,6 +612,10 @@ export async function executeAdd(
     amount1Min: BigInt(withSlip.amount1.toString()),
     recipient: wallet.address,
     deadline: Math.floor(Date.now() / 1000) + 600,
+    // Slipstream: mint butuh sqrtPriceX96 (0 = pool sudah ada, jangan buat baru).
+    // Field `fee` di params ini = tickSpacing (ABI Slipstream menamainya `fee`).
+    // ABI Uniswap v3 mengabaikan key ekstra ini, jadi aman diisi selalu.
+    ...(ctx.slipstream ? { sqrtPriceX96: 0n } : {}),
   };
 
   let receipt;
@@ -540,6 +666,134 @@ export async function executeAdd(
   return { tokenId: tokenId!.toString(), notes };
 }
 
+/** Batas leg per multicall — jaga di bawah block gas limit (~400k gas/mint). */
+export const MAX_LEGS_PER_MULTICALL = 25;
+
+/**
+ * BATCH mint ladder via multicall: N leg (sisi base) dalam SATU tx atomik per
+ * chunk. Approve+wrap base SEKALI untuk total, lalu multicall([mint,mint,…]).
+ * Tutup kelemahan "N tx" v3 — 69 leg jadi ~3 tx (chunk 25), bukan 69. tokenId
+ * tiap leg dibaca dari event Transfer(0x0→wallet) berurutan di receipt.
+ */
+export async function executeAddBatch(
+  plans: AddPlan[],
+  tokenAddress: string,
+  fee: number,
+  ctx: ChainCtx = getChain(),
+): Promise<{ tokenIds: string[]; notes: string[] }> {
+  const { positionManager, wallet } = ctx;
+  const base = baseOf(ctx, plans[0].baseKind);
+  const totalBase = plans.reduce((s, p) => s + p.baseAmountWei, 0n);
+  const notes = await ensureBaseReady(base, totalBase, ctx); // wrap+approve total sekali
+  const iface = positionManager.interface;
+  const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
+  const pmAddr = String(positionManager.target).toLowerCase();
+  const tokenIds: string[] = [];
+
+  for (let off = 0; off < plans.length; off += MAX_LEGS_PER_MULTICALL) {
+    const chunk = plans.slice(off, off + MAX_LEGS_PER_MULTICALL);
+    const deadline = Math.floor(Date.now() / 1000) + 600;
+    const calls = chunk.map((plan) => {
+      const withSlip = plan.position.mintAmountsWithSlippage(SLIPPAGE);
+      const params = {
+        token0: plan.baseIsToken0 ? base.address : tokenAddress,
+        token1: plan.baseIsToken0 ? tokenAddress : base.address,
+        fee,
+        tickLower: plan.tickLower,
+        tickUpper: plan.tickUpper,
+        amount0Desired: BigInt(plan.position.mintAmounts.amount0.toString()),
+        amount1Desired: BigInt(plan.position.mintAmounts.amount1.toString()),
+        amount0Min: BigInt(withSlip.amount0.toString()),
+        amount1Min: BigInt(withSlip.amount1.toString()),
+        recipient: wallet.address,
+        deadline,
+        ...(ctx.slipstream ? { sqrtPriceX96: 0n } : {}),
+      };
+      return iface.encodeFunctionData('mint', [params]);
+    });
+    // PRE-FLIGHT: simulasi multicall dulu (saldo & approval sudah siap dari
+    // ensureBaseReady di atas). Kalau ada leg yang bakal revert, gagal DI SINI dengan
+    // alasan asli (bukan 'require(false)' opaque saat kirim), dan SEBELUM tx dikirim.
+    try {
+      await positionManager.multicall.staticCall(calls);
+    } catch (e) {
+      throw new Error(`Ladder batch would revert (${chunk.length} legs): ${(e as Error).message.slice(0, 140)}`);
+    }
+    const tx = await sendTxNonceSafe(wallet as ethers.Wallet, await positionManager.multicall.populateTransaction(calls));
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error('batch mint tx has no receipt');
+    // Semua Transfer(0x0→wallet) di receipt = tokenId tiap leg, urut eksekusi.
+    for (const log of receipt.logs ?? []) {
+      if (
+        log.address.toLowerCase() === pmAddr &&
+        log.topics[0] === TRANSFER_TOPIC &&
+        log.topics.length === 4 &&
+        BigInt(log.topics[1]) === 0n &&
+        BigInt(log.topics[2]) === BigInt(wallet.address)
+      ) {
+        tokenIds.push(BigInt(log.topics[3]).toString());
+      }
+    }
+    notes.push(`Batch mint ${chunk.length} legs (tx ${receipt.hash})`);
+  }
+  return { tokenIds, notes };
+}
+
+/**
+ * BATCH remove+collect+burn ladder via multicall: seluruh leg dikosongkan &
+ * di-burn dalam ~1 tx per chunk. Aset (base + token) mendarat di wallet; swap
+ * token→base dilakukan pemanggil SEKALI (agregat), bukan per-leg.
+ */
+export async function executeRemoveBatch(
+  tokenIds: string[],
+  ctx: ChainCtx = getChain(),
+): Promise<{ notes: string[] }> {
+  const { positionManager, wallet } = ctx;
+  const iface = positionManager.interface;
+  const notes: string[] = [];
+  for (let off = 0; off < tokenIds.length; off += MAX_LEGS_PER_MULTICALL) {
+    const chunk = tokenIds.slice(off, off + MAX_LEGS_PER_MULTICALL);
+    const deadline = Math.floor(Date.now() / 1000) + 600;
+    const calls: string[] = [];
+    let live = 0;
+    for (const tokenId of chunk) {
+      // Leg yang sudah hangus (positions() throw) atau sudah ter-burn → LEWATI, jangan
+      // masukkan ke multicall (burn ganda me-revert seluruh batch & bikin close macet).
+      let liquidity: bigint;
+      try {
+        liquidity = BigInt((await positionManager.positions(tokenId)).liquidity);
+      } catch {
+        continue;
+      }
+      if (liquidity > 0n) {
+        const mins = await withdrawMins(positionManager, tokenId, liquidity, deadline, ctx);
+        calls.push(iface.encodeFunctionData('decreaseLiquidity', [{ tokenId, liquidity, ...mins, deadline }]));
+      }
+      calls.push(
+        iface.encodeFunctionData('collect', [
+          { tokenId, recipient: wallet.address, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 },
+        ]),
+      );
+      calls.push(iface.encodeFunctionData('burn', [tokenId]));
+      live++;
+    }
+    if (calls.length === 0) {
+      notes.push('Batch close: all legs already closed on-chain.');
+      continue;
+    }
+    // PRE-FLIGHT: simulasi dulu → gagal dengan alasan asli sebelum kirim tx.
+    try {
+      await positionManager.multicall.staticCall(calls);
+    } catch (e) {
+      throw new Error(`Ladder close batch would revert (${live} legs): ${(e as Error).message.slice(0, 140)}`);
+    }
+    const tx = await sendTxNonceSafe(wallet as ethers.Wallet, await positionManager.multicall.populateTransaction(calls));
+    const receipt = await tx.wait();
+    notes.push(`Batch close ${live} legs (tx ${receipt?.hash ?? tx.hash})`);
+  }
+  return { notes };
+}
+
 export type PositionInfo = {
   tokenId: string;
   token0: string; // alamat (untuk deteksi base/ca saat sinkron)
@@ -567,7 +821,7 @@ export async function listPositions(ctx: ChainCtx = getChain()): Promise<Positio
       const poolAddr: string = await ctx.factory.getPool(p.token0, p.token1, p.fee);
       const pool = new ethers.Contract(
         poolAddr,
-        ['function slot0() view returns (uint160, int24, uint16, uint16, uint16, uint8, bool)'],
+        [slot0Abi(ctx)],
         ctx.provider,
       );
       const slot0 = await pool.slot0();
@@ -649,13 +903,13 @@ async function expectedBurnAmounts(
   const poolAddr: string = await ctx.factory.getPool(p.token0, p.token1, fee);
   const pool = new ethers.Contract(
     poolAddr,
-    ['function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint8,bool)', 'function liquidity() view returns (uint128)'],
+    [slot0Abi(ctx), 'function liquidity() view returns (uint128)'],
     ctx.provider,
   );
   const [slot0, liq] = await Promise.all([pool.slot0(), pool.liquidity()]);
   const t0 = new Token(ctx.chainId, ethers.getAddress(p.token0), m0.decimals, m0.symbol);
   const t1 = new Token(ctx.chainId, ethers.getAddress(p.token1), m1.decimals, m1.symbol);
-  const sdkPool = new Pool(t0, t1, fee as FeeAmount, slot0[0].toString(), liq.toString(), Number(slot0[1]));
+  const sdkPool = new Pool(t0, t1, sdkFee(fee, ctx), slot0[0].toString(), liq.toString(), Number(slot0[1]));
   const pos = new Position({ pool: sdkPool, liquidity: liquidity.toString(), tickLower: Number(p.tickLower), tickUpper: Number(p.tickUpper) });
   return { amount0: BigInt(pos.amount0.quotient.toString()), amount1: BigInt(pos.amount1.quotient.toString()) };
 }
@@ -874,7 +1128,7 @@ export async function getPositionDetail(
   const pool = new ethers.Contract(
     poolAddress,
     [
-      'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)',
+      slot0Abi(ctx),
       'function liquidity() view returns (uint128)',
     ],
     ctx.provider,
@@ -885,7 +1139,7 @@ export async function getPositionDetail(
 
   const sdkToken0 = new Token(ctx.chainId, ethers.getAddress(p.token0), m0.decimals, m0.symbol);
   const sdkToken1 = new Token(ctx.chainId, ethers.getAddress(p.token1), m1.decimals, m1.symbol);
-  const sdkPool = new Pool(sdkToken0, sdkToken1, fee as FeeAmount, sqrtPriceX96.toString(), poolLiq.toString(), currentTick);
+  const sdkPool = new Pool(sdkToken0, sdkToken1, sdkFee(fee, ctx), sqrtPriceX96.toString(), poolLiq.toString(), currentTick);
   const position = new Position({ pool: sdkPool, liquidity: liquidity.toString(), tickLower, tickUpper });
 
   const tokenOther = baseIsToken0 ? sdkToken1 : sdkToken0;

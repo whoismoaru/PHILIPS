@@ -25,6 +25,10 @@ import { retryOnce } from './retry.js';
 import * as walletStore from './walletStore.js';
 import {
   planAddSingleSided,
+  planLadderSingleSided,
+  ladderWeights,
+  executeAddBatch,
+  executeRemoveBatch,
   planAddTokenSide,
   ADD_GAS_UNITS,
   gasBuffer,
@@ -38,7 +42,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, openPositionV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position } from './uniswapV4.js';
+import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
@@ -147,6 +151,23 @@ async function sweepTokenToBase(
       }
     } catch (e) {
       notes.push(`Swap attempt ${attempt} failed: ${(e as Error).message.slice(0, 140)}`);
+      // ORPHAN GUARD: error swap kadang PALSU — tx-nya (mis. nonce bentrok) diam-diam
+      // TERKIRIM & mendarat beberapa blok kemudian (kasus LIGER #774283: token kejual
+      // tapi bot ngira gagal → PnL salah). Jangan langsung nyerah: tunggu & cek apakah
+      // token benar-benar KELUAR dari wallet. Kalau turun → swap sebenarnya jalan,
+      // lanjut loop supaya sisa & hasil kebaca; kalau tidak → memang gagal, berhenti.
+      let landed = false;
+      for (let probe = 0; probe < 4; probe++) {
+        await sleep(4000);
+        const nowBal: bigint = await otherC.balanceOf(cc.wallet.address);
+        const nowSell = nowBal > keepFloor ? nowBal - keepFloor : 0n;
+        if (nowSell < bal) {
+          landed = true;
+          notes.push(`↳ but the token left the wallet — the swap actually landed (orphaned tx). Recounting.`);
+          break;
+        }
+      }
+      if (landed) continue; // token bergerak → ukur ulang di iterasi berikutnya
       break;
     }
     await sleep(1500); // beri waktu saldo settle di RPC sebelum verifikasi ulang
@@ -154,6 +175,25 @@ async function sweepTokenToBase(
   const finalTotal: bigint = await otherC.balanceOf(cc.wallet.address);
   const leftoverWei = finalTotal > keepFloor ? finalTotal - keepFloor : 0n;
   return { baseOut, txHashes, leftover: leftoverWei > 0n, leftoverWei };
+}
+
+/**
+ * Pre-flight gas untuk ladder N leg: pastikan saldo native cukup buat gas
+ * (+ deposit bila base native/wrappable). Gagal → pesan ramah "top up", bukan
+ * revert 'insufficient funds' mentah. ~350k gas/leg + buffer 20%.
+ */
+async function ensureGasForLegs(cc: ChainCtx, legs: number, nativeValueWei: bigint): Promise<void> {
+  const [feeData, nativeBal] = await Promise.all([cc.provider.getFeeData(), cc.provider.getBalance(cc.wallet.address)]);
+  const gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
+  const gasWei = (BigInt(Math.max(1, legs)) * 350_000n * gasPrice * 12n) / 10n;
+  const need = gasWei + nativeValueWei;
+  if (nativeBal < need) {
+    throw new Error(
+      `Not enough ${cc.nativeSymbol} on ${cc.label} for gas: need ~${ethers.formatEther(need)} ` +
+        `(${legs} legs${nativeValueWei > 0n ? ' + deposit' : ''}), have ${ethers.formatEther(nativeBal)}. ` +
+        `Top up ${cc.nativeSymbol} for gas.`,
+    );
+  }
 }
 
 /** Hitung biaya jaringan (est) + kebutuhan untuk buka LP, base-aware.
@@ -211,6 +251,10 @@ type AddFlow = {
   ethAmount?: string;
   awaitingAmount?: boolean; // menunggu user mengetik nominal
   plan?: AddPlan;
+  shape?: 'spot' | 'bidask'; // bentuk ladder (sisi base); default spot = 1 leg (perilaku lama)
+  legs?: number; // jumlah leg ladder (bidask); spot = 1
+  ladderPlans?: AddPlan[]; // rencana per-leg v3 (dihitung di step plan, dipakai saat confirm)
+  v4LadderLegs?: V4LadderLeg[]; // rencana per-leg v4 (batch modifyLiquidities)
   startedAt: number; // epoch ms — untuk kadaluarsa sesi (anti "angka lama termakan")
 };
 const flows = new Map<number, AddFlow>();
@@ -248,6 +292,10 @@ const RANGE_OPTIONS = [
   { pct: 70, label: 'Very Aggressive' },
   { pct: 90, label: 'Extreme' },
 ];
+
+/** Pilihan jumlah leg ladder Bid-Ask. 8-10 = sweet spot free-tier; 69 butuh RPC
+ *  berbayar (free-tier + VM 2-core → /positions & monitor berat). Auto-cap ke spacing. */
+const LADDER_LEG_OPTIONS = [8, 9, 10, 69];
 
 
 /** Edit pesan progress existing, atau kirim baru bila gagal/tidak ada. */
@@ -596,6 +644,20 @@ async function positionPnlText(
   }
   const initF = rec ? Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec)) : 0;
   const curF = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec));
+  // PnL USD ala LP Agent: modal awal dinilai USD pada harga base SAAT ENTRY,
+  // nilai sekarang pada harga base SEKARANG. Gerak harga base (ETH) ikut terhitung
+  // — beda dari view ETH lama yang cuma mengalikan selisih WETH dg harga now.
+  if (rec?.entryEthUsd && rec.entryEthUsd > 0) {
+    const nowUsdPer = isStableBase(d.baseKind) ? 1 : await getEthUsd(cc.wethAddress, cc);
+    if (nowUsdPer !== null) {
+      const entryUsd = initF * rec.entryEthUsd;
+      const curUsd = curF * nowUsdPer;
+      const pnlUsd = curUsd - entryUsd;
+      const pct = entryUsd > 0 ? (pnlUsd / entryUsd) * 100 : 0;
+      return `${msg.usdSigned(pnlUsd)} (${msg.fmtPct(pct)})`;
+    }
+  }
+  // Fallback (posisi lama tanpa entryEthUsd): view ETH-denominated.
   const pnlF = curF - initF;
   const pct = initF > 0 ? (pnlF / initF) * 100 : 0;
   const usd = await baseToUsd(d.baseKind, pnlF, cc);
@@ -625,30 +687,63 @@ async function buildPositionCard(
   // Warm ethUsd cache sekali per chain (getEthUsd sudah TTL 60s).
   if (d.baseKind === 'weth') await getEthUsd(cc.wethAddress, cc);
   const pnlText = await positionPnlText(rec, d, cc);
-  // Jarak batas range dari HARGA SEKARANG (live) — bukan konfigurasi saat buka.
-  const sgn = d.baseIsToken0 ? -1 : 1;
-  const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
-  const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
-  const range = `${msg.fmtPct(pcts[0])} ⇄ ${msg.fmtPct(pcts[1])}`;
+  // Jarak batas range dari HARGA ENTRY (dipatok saat buka) — jadi angkanya diam,
+  // tak goyang tiap refresh. Batas posisi memang terkunci; acuannya pun harus tetap.
+  // Fallback ke harga live (currentTick) hanya utk posisi lama tanpa entryPrice.
+  const entry = rec.entryPrice ? Number(rec.entryPrice) : 0;
+  const range = (() => {
+    if (entry > 0) {
+      const pf = (p: string) => (Number(p) / entry - 1) * 100;
+      const [a, b] = [pf(d.priceUpper), pf(d.priceLower)].sort((x, y) => y - x);
+      return `${msg.fmtPct(a)} ⇄ ${msg.fmtPct(b)}`;
+    }
+    const sgn = d.baseIsToken0 ? -1 : 1;
+    const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
+    const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
+    return `${msg.fmtPct(pcts[0])} ⇄ ${msg.fmtPct(pcts[1])}`;
+  })();
   // Rentang yang sama, dibaca sebagai kapitalisasi pasar. MC berskala LINIER
   // terhadap harga (suplai tetap), jadi MC di batas = MC sekarang × (harga batas
   // ÷ harga sekarang). Rasio itu tanpa satuan, jadi harga boleh tetap dalam base.
   const mcRange = await (async () => {
-    const now = Number(d.currentPrice);
-    if (!(now > 0)) return undefined;
     const mcNow = await explore.tokenMarketCap(cc, d.otherAddress).catch(() => null);
-    if (mcNow === null) return undefined;
-    const at = (p: string) => explore.usdShort((mcNow * Number(p)) / now);
     const [hi, lo] = Number(d.priceUpper) >= Number(d.priceLower)
       ? [d.priceUpper, d.priceLower]
       : [d.priceLower, d.priceUpper];
-    // MC sekarang ikut ditulis: tanpa itu rentangnya tak punya titik acuan —
-    // pembaca tak tahu ia sedang di mana di antara kedua batas.
+    // Batas mcap DIPATOK ke ENTRY: mcEntry × (hargaBatas ÷ hargaEntry). Keduanya
+    // nilai TERSIMPAN, jadi angka batas benar-benar diam. Dulu dipakai mcNow ÷ hargaNow
+    // yang mencampur mcap DexScreener & harga on-chain (dua sumber, tak sinkron) →
+    // batas ikut bergoyang tiap refresh walau tick posisi tetap.
+    if (rec.entryMcap && rec.entryPrice && Number(rec.entryPrice) > 0) {
+      const e = Number(rec.entryPrice);
+      const at = (p: string) => explore.usdShort((rec.entryMcap! * Number(p)) / e);
+      const nowStr = mcNow !== null ? ` · now ${explore.usdShort(mcNow)}` : '';
+      return `${at(hi)} ⇄ ${at(lo)}${nowStr}`;
+    }
+    // Posisi lama tanpa entryMcap: jatuh ke perhitungan live (bergoyang, tapi ada acuan).
+    const now = Number(d.currentPrice);
+    if (mcNow === null || !(now > 0)) return undefined;
+    const at = (p: string) => explore.usdShort((mcNow * Number(p)) / now);
     return `${at(hi)} ⇄ ${at(lo)} · now ${explore.usdShort(mcNow)}`;
   })();
   const invest = rec.imported
     ? '—'
     : (rec.nominalEth ?? msg.cleanUnits(BigInt(rec.initialWethWei), baseDecimalsOf(rec.chain, rec.baseKind)));
+  // Ladder: total modal SEGRUP (jumlah semua leg) supaya kartu leg tak terlihat
+  // seperti posisi tunggal kecil.
+  const ladder = rec.groupId
+    ? (() => {
+        const legs = store.group(rec.groupId!);
+        if (legs.length < 2) return undefined;
+        const groupWei = legs.reduce((s, l) => s + BigInt(l.initialWethWei || '0'), 0n);
+        return {
+          legIndex: rec.legIndex ?? 0,
+          legCount: rec.legCount ?? legs.length,
+          shape: rec.shape ?? 'bidask',
+          groupInvest: msg.cleanUnits(groupWei, baseDecimalsOf(rec.chain, rec.baseKind)),
+        };
+      })()
+    : undefined;
   const text = msg.msgPositionCard({
     tokenId: rec.tokenId,
     symbol: rec.symbol,
@@ -664,6 +759,8 @@ async function buildPositionCard(
     baseSymbol: d.baseSymbol,
     side: rec.side,
     converted: !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below'),
+    feeIsTickSpacing: cc.slipstream,
+    ladder,
   });
   // Tautan explorer menunjuk NFT posisinya (Blockscout: /token/<pm>/instance/<id>),
   // bukan sekadar alamat dompet — itu yang benar-benar dimaksud "lihat posisi ini".
@@ -777,19 +874,39 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   } else if (p.valueBaseWei !== null && p.base === 'USDG') {
     valueLabel = `${Number(ethers.formatUnits(p.valueBaseWei, 6)).toFixed(2)} USDG`;
   }
-  const rangeLabel =
-    p.rangePctHigh !== null && p.rangePctLow !== null ? `${msg.fmtPct(p.rangePctHigh)} / ${msg.fmtPct(p.rangePctLow)}` : '—';
   const tracked = v4store.getV4(p.tokenId);
+  // Range % DIPATOK ke tick ENTRY (bila tersimpan) → angkanya diam, tak goyang tiap
+  // refresh. Fallback ke live (relatif harga sekarang) untuk posisi tanpa entryTick.
+  const anchoredPcts = ((): [number, number] | null => {
+    if (tracked?.entryTick === undefined) return null;
+    const sgn = tracked.baseIsCurrency0 ? -1 : 1;
+    const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - tracked.entryTick!)) - 1) * 100;
+    return [pctOf(p.tickUpper), pctOf(p.tickLower)].sort((a, b) => b - a) as [number, number];
+  })();
+  const rangeLabel = anchoredPcts
+    ? `${msg.fmtPct(anchoredPcts[0])} / ${msg.fmtPct(anchoredPcts[1])}`
+    : p.rangePctHigh !== null && p.rangePctLow !== null
+      ? `${msg.fmtPct(p.rangePctHigh)} / ${msg.fmtPct(p.rangePctLow)}`
+      : '—';
   let pnlText: string | undefined;
   if (tracked && p.valueBaseWei !== null && p.base) {
     const curF = Number(ethers.formatUnits(p.valueBaseWei, dec));
     const entF = Number(ethers.formatUnits(BigInt(tracked.entryBaseWei), dec));
-    const pnlF = curF - entF;
-    const pct = entF > 0 ? (pnlF / entF) * 100 : 0;
-    pnlText =
-      p.base === 'ETH' && ethUsdV4 !== null
-        ? `${msg.usdSigned(pnlF * ethUsdV4)} (${msg.fmtPct(pct)})`
-        : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${p.base} (${msg.fmtPct(pct)})`;
+    // PnL USD ala LP Agent bila entryEthUsd tersimpan (gerak harga base ikut kehitung).
+    const nowUsdPer = p.base === 'USDG' ? 1 : ethUsdV4;
+    if (tracked.entryEthUsd && tracked.entryEthUsd > 0 && nowUsdPer !== null) {
+      const entryUsd = entF * tracked.entryEthUsd;
+      const pnlUsd = curF * nowUsdPer - entryUsd;
+      const pct = entryUsd > 0 ? (pnlUsd / entryUsd) * 100 : 0;
+      pnlText = `${msg.usdSigned(pnlUsd)} (${msg.fmtPct(pct)})`;
+    } else {
+      const pnlF = curF - entF;
+      const pct = entF > 0 ? (pnlF / entF) * 100 : 0;
+      pnlText =
+        p.base === 'ETH' && ethUsdV4 !== null
+          ? `${msg.usdSigned(pnlF * ethUsdV4)} (${msg.fmtPct(pct)})`
+          : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${p.base} (${msg.fmtPct(pct)})`;
+    }
   }
   // Guard pool sekarat: bandingkan harga token menurut slot0 pool INI dengan
   // harga PASAR (DexScreener pool terdalam). Selisih besar = pool tipis, harga &
@@ -806,6 +923,27 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       }
     }
   }
+  const baseSymbol = p.base === 'USDG' ? 'USDG' : p.base === 'ETH' ? 'ETH' : undefined;
+  const tokenSymbol = baseSymbol ? [p.sym0, p.sym1].find((s) => s !== baseSymbol) : undefined;
+  // Market cap: kapitalisasi sekarang + di batas rentang (MC ∝ harga, jadi
+  // MC@batas = MC_now × (1 + pct/100)). Samakan dengan sub-baris mcap kartu V3.
+  let mcRange: string | undefined;
+  {
+    const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
+    const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
+    const tokenAddr = [p.poolKey.currency0, p.poolKey.currency1].find((a) => !isEth(a) && !isUsdg(a));
+    const mcNow = tokenAddr ? await explore.tokenMarketCap(cc, tokenAddr).catch(() => null) : null;
+    // Batas mcap DIPATOK ke entryMcap + range% dari entry → diam. mcNow ditampilkan
+    // sebagai "now" (referensi hidup). Fallback ke live bila entry tak tersimpan.
+    if (anchoredPcts && tracked?.entryMcap) {
+      const at = (pct: number) => explore.usdShort(tracked.entryMcap! * (1 + pct / 100));
+      const nowStr = mcNow !== null ? ` · now ${explore.usdShort(mcNow)}` : '';
+      mcRange = `${at(anchoredPcts[0])} ⇄ ${at(anchoredPcts[1])}${nowStr}`;
+    } else if (mcNow !== null && p.rangePctHigh !== null && p.rangePctLow !== null) {
+      const at = (pct: number) => explore.usdShort(mcNow * (1 + pct / 100));
+      mcRange = `${at(p.rangePctHigh)} ⇄ ${at(p.rangePctLow)} · now ${explore.usdShort(mcNow)}`;
+    }
+  }
   const text = msg.msgV4Position({
     tokenId: p.tokenId,
     pair: `${p.sym0} / ${p.sym1}`,
@@ -816,6 +954,24 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     pnlText,
     tracked: !!tracked,
     priceWarn,
+    baseSymbol,
+    tokenSymbol,
+    age: tracked ? msg.fmtAge(Date.now() - tracked.openedAt) : undefined,
+    chain: cc.label,
+    mcRange,
+    converted: p.converted,
+    ladder: tracked?.groupId
+      ? (() => {
+          const legs = v4store.groupV4(tracked.groupId!);
+          const depWei = legs.reduce((s, l) => s + BigInt(l.entryBaseWei || '0'), 0n);
+          return {
+            legIndex: tracked.legIndex ?? 0,
+            legCount: tracked.legCount ?? legs.length,
+            shape: tracked.shape ?? 'bidask',
+            groupDeposit: legs.length > 1 ? msg.cleanUnits(depWei, dec) : undefined,
+          };
+        })()
+      : undefined,
   });
   // Tombol "➕ <size> ETH" dihapus: jalur uang tanpa screening/preview/cap dengan
   // rentang default ~170% yang tak pernah ditampilkan. Tambah modal lewat /add.
@@ -847,7 +1003,38 @@ type PosRow = {
   convertedInto?: string | null;
   feesBase?: number; // fee belum diklaim dalam base, utk total di footer
   natSym?: string; // simbol native chain posisi ini — total hanya sah bila seragam
+  groupId?: string | null; // ladder: baris legs digabung jadi satu
+  legShape?: string | null; // 'bidask' | 'spot'
 };
+
+/** Gabung baris leg satu grup ladder jadi SATU baris agregat (mutasi array). */
+function collapseLadderRows(rows: PosRow[]): void {
+  const groups = new Map<string, PosRow[]>();
+  for (const r of rows) if (r.groupId) groups.set(r.groupId, [...(groups.get(r.groupId) ?? []), r]);
+  for (const [gid, legs] of groups) {
+    if (legs.length < 2) continue;
+    const base = legs[0];
+    const unit = base.investLabel.replace(/^[\d.]+\s*/, '');
+    const sumInvest = legs.reduce((s, r) => s + (parseFloat(r.investLabel) || 0), 0);
+    const pnlVals = legs.map((r) => r.pnlUsd).filter((x): x is number => x !== null);
+    const sumPnlUsd = pnlVals.length ? pnlVals.reduce((a, b) => a + b, 0) : null;
+    const sumWethEq = legs.reduce((s, r) => s + r.wethEq, 0);
+    const wsum = legs.reduce((s, r) => s + r.wethEq, 0) || 1;
+    const pct = legs.reduce((s, r) => s + (r.pnlPct ?? 0) * r.wethEq, 0) / wsum;
+    base.pair = `${base.pair}  ◣×${legs.length}`;
+    base.investLabel = `${sumInvest.toFixed(sumInvest >= 1 ? 4 : 6)} ${unit}`.trim();
+    base.pnlUsd = sumPnlUsd;
+    base.pnlPct = pnlVals.length ? pct : null;
+    base.wethEq = sumWethEq;
+    base.inRange = legs.some((r) => r.inRange);
+    base.rangeLabel = `${legs.length}-leg ${base.legShape ?? 'ladder'} · ${base.rangeLabel ?? ''}`;
+    // Buang leg selain yang pertama dari array.
+    for (const r of legs.slice(1)) {
+      const i = rows.indexOf(r);
+      if (i >= 0) rows.splice(i, 1);
+    }
+  }
+}
 
 // /positions — SATU pesan konsolidasi: ringkasan + pohon per-posisi (v3 + v4).
 async function cmdPositions(ctx: any, edit = false) {
@@ -874,13 +1061,25 @@ async function cmdPositions(ctx: any, edit = false) {
       let pnlUsd: number | null = null;
       let pnlPct: number | null = null;
       if (initF !== null && initF > 0) {
-        const pnlF = curF - initF;
-        pnlPct = (pnlF / initF) * 100;
-        pnlUsd = await baseToUsd(d.baseKind, pnlF, cc);
+        // PnL USD ala LP Agent bila entryEthUsd tersimpan; kalau tidak, view ETH lama.
+        if (rec.entryEthUsd && rec.entryEthUsd > 0) {
+          const nowUsdPer = isStableBase(d.baseKind) ? 1 : ethUsd;
+          if (nowUsdPer !== null) {
+            const entryUsd = initF * rec.entryEthUsd;
+            pnlUsd = curF * nowUsdPer - entryUsd;
+            pnlPct = entryUsd > 0 ? (pnlUsd / entryUsd) * 100 : 0;
+          }
+        } else {
+          const pnlF = curF - initF;
+          pnlPct = (pnlF / initF) * 100;
+          pnlUsd = await baseToUsd(d.baseKind, pnlF, cc);
+        }
       }
       const investNum = initF ?? curF;
       return {
         id: rec.tokenId,
+        groupId: rec.groupId ?? null,
+        legShape: rec.shape ?? null,
         pair: `${d.baseSymbol} / ${rec.symbol}`,
         protocol: 'V3',
         investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${d.baseSymbol}`,
@@ -946,14 +1145,23 @@ async function cmdPositions(ctx: any, edit = false) {
       const entF = Number(ethers.formatUnits(BigInt(tracked.entryBaseWei), dec));
       investNum = entF;
       if (curF !== null && entF > 0) {
-        const pnlF = curF - entF;
-        pnlPct = (pnlF / entF) * 100;
-        pnlUsd = p.base === 'ETH' ? (ethUsd !== null ? pnlF * ethUsd : null) : pnlF; // USDG ≈ $1
+        const nowUsdPer = p.base === 'USDG' ? 1 : ethUsd;
+        if (tracked.entryEthUsd && tracked.entryEthUsd > 0 && nowUsdPer !== null) {
+          const entryUsd = entF * tracked.entryEthUsd;
+          pnlUsd = curF * nowUsdPer - entryUsd;
+          pnlPct = entryUsd > 0 ? (pnlUsd / entryUsd) * 100 : 0;
+        } else {
+          const pnlF = curF - entF;
+          pnlPct = (pnlF / entF) * 100;
+          pnlUsd = p.base === 'ETH' ? (ethUsd !== null ? pnlF * ethUsd : null) : pnlF; // USDG ≈ $1
+        }
       }
     }
     const sym = p.base === 'USDG' ? 'USDG' : 'ETH';
     rows.push({
       id: p.tokenId,
+      groupId: tracked?.groupId ?? null,
+      legShape: tracked?.shape ?? null,
       pair: `${p.sym0} / ${p.sym1}`,
       protocol: 'V4',
       investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${sym}`,
@@ -966,6 +1174,7 @@ async function cmdPositions(ctx: any, edit = false) {
     });
   }
 
+  collapseLadderRows(rows);
   const totalWethEq = rows.reduce((s, r) => s + r.wethEq, 0);
   // Menjumlahkan ETH dengan BNB lalu melabelinya "WETH" adalah angka fiksi. Total
   // hanya ditampilkan bila SEMUA posisi berdenominasi native yang sama; kalau
@@ -1369,18 +1578,41 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   if (flow.selected?.protocol === 'v4') return renderPlanStepV4(ctx, flow, edit);
   const cc = wizardCtx(flow);
   const base = baseOf(cc, flow.base ?? 'weth');
+  const isLadder = flow.strategy === 'base' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1;
   // plan + estimasi biaya paralel (saling independen).
   const tokenSide = flow.strategy === 'token';
   const [planSettled, costSettled] = await Promise.allSettled([
     tokenSide
       ? planAddTokenSide(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc)
-      : planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc),
+      : isLadder
+        ? planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc).then((legs) => legs[0])
+        : planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc),
     // Sisi token tak menyetor base: yang perlu dicek cuma gas, bukan saldo base.
     estimateAddCost(cc, base, tokenSide ? '0' : flow.ethAmount!),
   ]);
   if (planSettled.status === 'rejected') throw planSettled.reason;
   const plan = planSettled.value;
   flow.plan = plan;
+  // Ladder: hitung SEMUA leg untuk preview & simpan buat confirm. pctHigh = leg
+  // terdekat, pctLow = leg terjauh → preview menampilkan rentang gabungan.
+  let ladderNote: string | undefined;
+  if (isLadder) {
+    const legPlans = await planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc);
+    flow.ladderPlans = legPlans;
+    const w = ladderWeights(legPlans.length, 'bidask');
+    plan.pctHigh = legPlans[0].pctHigh;
+    plan.pctLow = legPlans[legPlans.length - 1].pctLow;
+    plan.priceLower = legPlans[legPlans.length - 1].priceLower;
+    plan.priceUpper = legPlans[0].priceUpper;
+    ladderNote =
+      `\n\n◣ <b>BID-ASK ladder · ${legPlans.length} leg</b>\n` +
+      legPlans
+        .map((lp, i) => `  ${i + 1}. ${msg.fmtPct(lp.pctHigh)}…${msg.fmtPct(lp.pctLow)} · ${(w[i] * 100).toFixed(0)}% modal`)
+        .join('\n') +
+      `\n<i>Modal makin besar di harga makin rendah (buy-dip).</i>`;
+  } else {
+    flow.ladderPlans = undefined;
+  }
   let cost: Awaited<ReturnType<typeof estimateAddCost>> | null = null;
   if (costSettled.status === 'fulfilled') cost = costSettled.value;
   else console.log('[estimateAddCost] gagal:', String(costSettled.reason).slice(0, 120));
@@ -1407,14 +1639,15 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
     priceUpper: plan.priceUpper,
     dryRun: config.safety.dryRun,
   });
+  const fullText = ladderNote ? text + ladderNote : text;
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
       [Markup.button.callback('✅ Confirm & Sign', 'addok')],
-      [Markup.button.callback('⬅️ Back', 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
+      [Markup.button.callback('⬅️ Back', isLadder ? 'back:legs' : 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
     ]),
   };
-  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+  await (edit ? ctx.editMessageText(fullText, extra) : ctx.reply(fullText, extra));
 }
 
 // Petakan lebar rentang (persen PENURUNAN harga token) → jumlah tick-spacing utk
@@ -1437,12 +1670,33 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
   const pool = flow.selected!;
   const pk = pool.poolKey!;
   const amountWei = v4AmountWei(flow);
-  const widthSpacings = rangePctToSpacings(flow.rangePct!, pk.tickSpacing);
-  // Dry-run selalu (walau mode live) → staticCall memvalidasi mint sebelum konfirmasi.
-  const sim = await openPositionV4(cc, pk, pool.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: true });
-  const val = await valuePositionV4(cc, pk, sim.tickLower, sim.tickUpper, sim.liquidity);
+  const isLadder = flow.shape === 'bidask' && (flow.legs ?? 1) > 1;
+  let rangePctHigh: number;
+  let rangePctLow: number;
+  let ladderNote: string | undefined;
+  if (isLadder) {
+    // Ladder v4: hitung leg (batch modifyLiquidities) untuk preview + simpan.
+    const legs = await planLadderV4(cc, pk, pool.baseIsCurrency0!, amountWei, flow.rangePct!, flow.legs!, 'bidask');
+    flow.v4LadderLegs = legs;
+    const total = legs.reduce((s, l) => s + l.baseAmountWei, 0n);
+    rangePctHigh = legs[0].pctHigh;
+    rangePctLow = legs[legs.length - 1].pctLow;
+    ladderNote =
+      `\n\n◣ <b>BID-ASK ladder v4 · ${legs.length} leg · 1 tx atomik</b>\n` +
+      legs
+        .map((l, i) => `  ${i + 1}. ${msg.fmtPct(l.pctHigh)}…${msg.fmtPct(l.pctLow)} · ${((Number(l.baseAmountWei) / Number(total)) * 100).toFixed(0)}% modal`)
+        .join('\n') +
+      `\n<i>Modal makin besar di harga makin rendah (buy-dip).</i>`;
+  } else {
+    flow.v4LadderLegs = undefined;
+    const widthSpacings = rangePctToSpacings(flow.rangePct!, pk.tickSpacing);
+    const sim = await openPositionV4(cc, pk, pool.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: true });
+    const val = await valuePositionV4(cc, pk, sim.tickLower, sim.tickUpper, sim.liquidity);
+    rangePctHigh = val.rangePctHigh;
+    rangePctLow = val.rangePctLow;
+  }
   const depositUsd = (await baseToUsd(wizardBase(flow).kind, Number(flow.ethAmount!), cc)) ?? undefined;
-  const text = msg.msgPlanStepV4({
+  const text0 = msg.msgPlanStepV4({
     screenDanger: flow.screenBahaya,
     screenFailed: flow.screenFailed,
     baseSymbol: pool.baseSymbol,
@@ -1451,15 +1705,16 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
     tvlUsd: pool.tvlUsd,
     depositAmount: flow.ethAmount!,
     depositUsd,
-    rangePctHigh: val.rangePctHigh,
-    rangePctLow: val.rangePctLow,
+    rangePctHigh,
+    rangePctLow,
     dryRun: config.safety.dryRun,
   });
+  const text = ladderNote ? text0 + ladderNote : text0;
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
       [Markup.button.callback('✅ Confirm & Sign', 'addok')],
-      [Markup.button.callback('⬅️ Back', 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
+      [Markup.button.callback('⬅️ Back', isLadder ? 'back:legs' : 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
     ]),
   };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
@@ -1733,6 +1988,75 @@ bot.action(/^rng:(\d+)$/, async (ctx) => {
   if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
   flow.rangePct = Number(ctx.match[1]);
   flow.plan = undefined;
+  flow.ladderPlans = undefined;
+  // Ladder Bid-Ask sisi BASE (buy-dip) — v3 (multicall) & v4 (batch modifyLiquidities).
+  // Sisi token → preview SPOT tunggal (perilaku lama).
+  if (flow.strategy === 'base') {
+    await ctx.answerCbQuery();
+    return renderShapeStep(ctx, flow, true);
+  }
+  flow.shape = 'spot';
+  flow.legs = 1;
+  await ctx.answerCbQuery('Calculating preview…');
+  try {
+    await renderPlanStep(ctx, flow, true);
+  } catch (err) {
+    await ctx.reply(msg.msgError('plan', (err as Error).message), html);
+  }
+});
+
+/** Langkah pilih BENTUK distribusi: SPOT (rata, 1 posisi) atau BID-ASK (ladder buy-dip). */
+async function renderShapeStep(ctx: any, flow: AddFlow, edit: boolean) {
+  const text = msg.msgShapeStep(flow.selected?.otherSymbol ?? 'token', flow.rangePct ?? 0);
+  const extra = {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('▬ SPOT (1 posisi, panen fee)', 'shape:spot')],
+      [Markup.button.callback('◣ BID-ASK ladder (buy-dip) →', 'shape:bidask')],
+      [Markup.button.callback('⬅️ Back', 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
+    ]),
+  };
+  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+}
+
+/** Pilih jumlah leg untuk ladder Bid-Ask (auto-cap ke spacing pool saat plan). */
+async function renderLegStep(ctx: any, flow: AddFlow, edit: boolean) {
+  const text = msg.msgLegStep(flow.selected?.otherSymbol ?? 'token', flow.rangePct ?? 0);
+  const opts = LADDER_LEG_OPTIONS.map((n) =>
+    Markup.button.callback(n >= 15 ? `${n} legs · 💸 RPC berbayar` : `${n} legs`, `leg:${n}`),
+  );
+  // 8/9/10 sebaris, 69 (berbayar) barisnya sendiri biar gak asal kepencet.
+  const rows = [opts.slice(0, 3), opts.slice(3), [Markup.button.callback('⬅️ Back', 'back:shape'), Markup.button.callback('❌ Cancel', 'cancel')]];
+  const extra = { ...html, ...Markup.inlineKeyboard(rows) };
+  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
+}
+
+bot.action(/^shape:(spot|bidask)$/, async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  flow.shape = ctx.match[1] as 'spot' | 'bidask';
+  flow.plan = undefined;
+  flow.ladderPlans = undefined;
+  if (flow.shape === 'bidask') {
+    await ctx.answerCbQuery();
+    return renderLegStep(ctx, flow, true);
+  }
+  flow.legs = 1;
+  await ctx.answerCbQuery('Calculating preview…');
+  try {
+    await renderPlanStep(ctx, flow, true);
+  } catch (err) {
+    await ctx.reply(msg.msgError('plan', (err as Error).message), html);
+  }
+});
+
+bot.action(/^leg:(\d+)$/, async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  flow.shape = 'bidask';
+  flow.legs = Math.max(2, Math.min(69, Number(ctx.match[1])));
+  flow.plan = undefined;
+  flow.ladderPlans = undefined;
   await ctx.answerCbQuery('Calculating preview…');
   try {
     await renderPlanStep(ctx, flow, true);
@@ -1762,6 +2086,24 @@ bot.action('back:range', async (ctx) => {
   await renderRangeStep(ctx, flow, true);
 });
 
+bot.action('back:shape', async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  flow.plan = undefined;
+  flow.ladderPlans = undefined;
+  await ctx.answerCbQuery();
+  await renderShapeStep(ctx, flow, true);
+});
+
+bot.action('back:legs', async (ctx) => {
+  const flow = getFlow(ctx);
+  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  flow.plan = undefined;
+  flow.ladderPlans = undefined;
+  await ctx.answerCbQuery();
+  await renderLegStep(ctx, flow, true);
+});
+
 bot.action('back:amount', async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow || flow.strategy === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
@@ -1774,6 +2116,63 @@ bot.action('back:amount', async (ctx) => {
 
 bot.action('addok', async (ctx) => {
   const flow = getFlow(ctx);
+  // --- Jalur LADDER v4 (batch modifyLiquidities: N leg dalam 1 tx atomik) ---
+  if (flow?.selected?.protocol === 'v4' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1) {
+    if (!flow.ethAmount || flow.rangePct === undefined || !flow.v4LadderLegs?.length)
+      return ctx.answerCbQuery('Expired — start again with /add_lp.');
+    const { selected, ethAmount, chain } = flow;
+    flows.delete(ctx.from!.id);
+    await ctx.answerCbQuery('Processing…');
+    if (config.safety.dryRun) return void (await ctx.editMessageText(msg.msgDryRunAddDone(), html));
+    store.beginMoneyOp();
+    const groupId = `V${Date.now()}`;
+    try {
+      const cc = getChain(chain);
+      const pk = selected.poolKey!;
+      const base = baseOf(cc, selected.base);
+      // Re-plan segar sebelum kirim (tick tak basi).
+      const legs = await planLadderV4(cc, pk, selected.baseIsCurrency0!, ethers.parseUnits(ethAmount, base.decimals), flow.rangePct, flow.legs!, 'bidask');
+      await ensureGasForLegs(cc, legs.length, base.wrappable ? legs.reduce((s, l) => s + l.baseAmountWei, 0n) : 0n);
+      await ctx.editMessageText(msg.msgProgress(`opening ${legs.length}-leg v4 ladder (1 atomic tx)…`), html);
+      const entryEthUsd = selected.base === 'usdg' ? 1 : ((await getEthUsd(cc.wethAddress, cc).catch(() => null)) ?? undefined);
+      const tokenAddr = selected.baseIsCurrency0! ? pk.currency1 : pk.currency0;
+      const [entryTick, entryMcap] = await Promise.all([
+        currentTickV4(cc, pk).catch(() => undefined),
+        explore.tokenMarketCap(cc, tokenAddr).catch(() => null),
+      ]);
+      const r = await openLadderV4(cc, pk, selected.baseIsCurrency0!, legs, { dryRun: false });
+      for (let i = 0; i < r.tokenIds.length; i++) {
+        v4store.trackV4({
+          tokenId: r.tokenIds[i],
+          chain: cc.key,
+          currency0: pk.currency0,
+          currency1: pk.currency1,
+          fee: pk.fee,
+          tickSpacing: pk.tickSpacing,
+          hooks: pk.hooks,
+          base: selected.base === 'usdg' ? 'USDG' : 'ETH',
+          baseIsCurrency0: selected.baseIsCurrency0!,
+          entryBaseWei: legs[i].baseAmountWei.toString(),
+          entryEthUsd,
+          entryTick,
+          entryMcap: entryMcap ?? undefined,
+          groupId,
+          legIndex: i,
+          legCount: r.tokenIds.length,
+          shape: 'bidask',
+        });
+      }
+      invalidateV4ListCache(); // posisi baru → /positions harus segar
+      await ctx.editMessageText(msg.msgLadderOpened(r.tokenIds.length, legs.length, `${selected.baseSymbol} / ${selected.otherSymbol}`, ethAmount), html);
+    } catch (err) {
+      console.error('[open v4 ladder] gagal:', (err as Error).message.slice(0, 200));
+      await recoverStrayWeth(getChain(chain), 'add v4 ladder').catch(() => {});
+      await ctx.reply(msg.msgError('add v4 ladder', (err as Error).message), html);
+    } finally {
+      store.endMoneyOp();
+    }
+    return;
+  }
   // --- Jalur v4 (buka posisi single-sided ETH di pool v4) ---
   if (flow?.selected?.protocol === 'v4') {
     if (!flow.ethAmount || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
@@ -1797,6 +2196,11 @@ bot.action('addok', async (ctx) => {
         { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
       );
       if (r.tokenId) {
+        const tokenAddr = r.baseIsCurrency0 ? pk.currency1 : pk.currency0;
+        const [entryTick, entryMcap] = await Promise.all([
+          currentTickV4(cc, pk).catch(() => undefined),
+          explore.tokenMarketCap(cc, tokenAddr).catch(() => null),
+        ]);
         v4store.trackV4({
           tokenId: r.tokenId,
           chain: cc.key,
@@ -1808,8 +2212,15 @@ bot.action('addok', async (ctx) => {
           base: selected.base === 'usdg' ? 'USDG' : 'ETH',
           baseIsCurrency0: r.baseIsCurrency0,
           entryBaseWei: amountWei.toString(),
+          entryEthUsd:
+            selected.base === 'usdg'
+              ? 1
+              : (await getEthUsd(cc.wethAddress, cc).catch(() => null)) ?? undefined,
+          entryTick,
+          entryMcap: entryMcap ?? undefined,
         });
       }
+      invalidateV4ListCache();
       await ctx.editMessageText(
         msg.msgV4Added({
           tokenId: r.tokenId,
@@ -1823,6 +2234,71 @@ bot.action('addok', async (ctx) => {
     } catch (err) {
       await recoverStrayWeth(getChain(chain), 'add v4').catch(() => {});
       await ctx.reply(msg.msgError('add v4', (err as Error).message), html);
+    } finally {
+      store.endMoneyOp();
+    }
+    return;
+  }
+  // --- Jalur LADDER Bid-Ask (v3, sisi base): mint N leg berbagi groupId ---
+  if (flow?.shape === 'bidask' && (flow.legs ?? 1) > 1 && flow.strategy === 'base') {
+    if (flow.fee === undefined || !flow.ethAmount || flow.rangePct === undefined)
+      return ctx.answerCbQuery('Expired — start again with /add_lp.');
+    flows.delete(ctx.from!.id);
+    await ctx.answerCbQuery('Processing…');
+    if (config.safety.dryRun) return void (await ctx.editMessageText(msg.msgDryRunAddDone(), html));
+    store.beginMoneyOp();
+    const groupId = `L${Date.now()}`;
+    const opened: string[] = [];
+    try {
+      const ccAdd = wizardCtx(flow);
+      const base = baseOf(ccAdd, flow.base ?? 'weth');
+      // Plan segar tepat sebelum mint (tick tak basi). Metadata entry dihitung sekali.
+      const legPlans = await planLadderSingleSided(flow.token, flow.fee, flow.ethAmount, flow.rangePct, flow.legs!, 'bidask', base, ccAdd);
+      const entryMcap = (await explore.tokenMarketCap(ccAdd, flow.token).catch(() => null)) ?? undefined;
+      const entryEthUsd = isStableBase(base.kind) ? 1 : ((await getEthUsd(ccAdd.wethAddress, ccAdd).catch(() => null)) ?? undefined);
+      const usable = legPlans.filter((lp) => lp.baseAmountWei > 0n); // buang leg debu (pembulatan)
+      // Base WETH wrappable disetor dari native → butuh native = deposit + gas; base
+      // stable → native cuma buat gas. ensureBaseReady di executeAddBatch urus wrap,
+      // tapi cek dulu supaya gagalnya ramah ("top up ETH"), bukan revert mentah.
+      await ensureGasForLegs(ccAdd, usable.length, base.wrappable ? usable.reduce((s, lp) => s + lp.baseAmountWei, 0n) : 0n);
+      await ctx.editMessageText(msg.msgProgress(`opening ${usable.length}-leg ladder (batched)…`), html);
+      // BATCH multicall: semua leg dalam ~1 tx atomik per chunk (tutup kelemahan N-tx).
+      const { tokenIds } = await executeAddBatch(usable, flow.token, flow.fee, ccAdd);
+      for (let i = 0; i < tokenIds.length; i++) {
+        const lp = usable[i];
+        store.add({
+          tokenId: tokenIds[i],
+          chain: flow.chain,
+          venue: flow.selected?.venue,
+          ca: flow.token,
+          fee: flow.fee,
+          symbol: lp.otherSymbol,
+          baseKind: lp.baseKind,
+          initialWethWei: lp.baseAmountWei.toString(),
+          side: 'base',
+          rangeLowPct: lp.pctLow,
+          rangeHighPct: lp.pctHigh,
+          entryPrice: lp.currentPrice,
+          entryMcap,
+          entryEthUsd,
+          groupId,
+          legIndex: i,
+          legCount: tokenIds.length,
+          shape: 'bidask',
+          openedAt: Date.now(),
+          status: 'ACTIVE',
+          lastInRange: false,
+        });
+        opened.push(tokenIds[i]);
+      }
+      await ctx.editMessageText(msg.msgLadderOpened(opened.length, usable.length, `${legPlans[0].baseSymbol} / ${legPlans[0].otherSymbol}`, flow.ethAmount), html);
+      const first = opened[0] ? store.get(opened[0]) : undefined;
+      if (first) await renderPositionCard(ctx, first, false).catch(() => {});
+    } catch (err) {
+      console.error('[open ladder] gagal:', (err as Error).message.slice(0, 200));
+      await recoverStrayWeth(getChain(flow.chain), 'add ladder').catch(() => {});
+      const note = opened.length ? ` (${opened.length} leg sudah terbuka, tersimpan)` : '';
+      await ctx.reply(msg.msgError('add ladder', (err as Error).message + note), html);
     } finally {
       store.endMoneyOp();
     }
@@ -1893,6 +2369,13 @@ bot.action('addok', async (ctx) => {
       rangeLowPct: plan.pctLow,
       rangeHighPct: plan.pctHigh,
       entryPrice: plan.currentPrice, // harga token saat buka → basis alert anjlok
+      // Market cap saat buka — batas mcap kartu dipatok ke sini supaya diam (tak
+      // bergoyang karena mcNow DexScreener & harga on-chain dari sumber berbeda).
+      entryMcap: (await explore.tokenMarketCap(ccAdd, flow.token!).catch(() => null)) ?? undefined,
+      // Harga base(USD) saat buka → PnL USD ala LP Agent dipatok ke sini. Stable = 1.
+      entryEthUsd: isStableBase(plan.baseKind)
+        ? 1
+        : (await getEthUsd(ccAdd.wethAddress, ccAdd).catch(() => null)) ?? undefined,
       openedAt: Date.now(),
       status: 'ACTIVE',
       lastInRange: false,
@@ -3082,8 +3565,153 @@ async function sendProfitCard(
   await ctx.replyWithDocument(Input.fromBuffer(buf, `philips-${tokenId}.png`));
 }
 
+/**
+ * Tutup seluruh leg satu grup ladder secara BATCH: remove+collect+burn semua leg
+ * via multicall (~1 tx/chunk), lalu SATU swap token→base agregat. Hasil dibagi
+ * proporsional ke tiap leg (sesuai modal) supaya jurnal PnL per-leg tetap benar.
+ */
+async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
+  await ctx.answerCbQuery('Closing ladder…');
+  if (config.safety.dryRun) return void (await ctx.editMessageText(msg.msgDryRunClose(groupId), html));
+  const cc = ctxOf(legs[0]);
+  const tokenIds = legs.map((l) => l.tokenId);
+  for (const l of legs) closingInFlight.set(l.tokenId, Date.now());
+  store.beginMoneyOp();
+  try {
+    // Semua leg satu pool → base & token sama. Baca dari leg pertama yang MASIH ada
+    // (leg 0 bisa sudah ke-burn duluan → positions() throw; jangan gagalkan close).
+    let p: { token0: string; token1: string } | null = null;
+    for (const id of tokenIds) {
+      try {
+        const q = await cc.positionManager.positions(id);
+        p = { token0: q.token0, token1: q.token1 };
+        break;
+      } catch {
+        /* leg hangus → coba berikutnya */
+      }
+    }
+    if (!p) throw new Error('All ladder legs already closed on-chain.');
+    const base = detectBase(cc, p.token0, p.token1);
+    if (!base) throw new Error('This pool is not paired with WETH/USDG/USDT — close manually at app.uniswap.org.');
+    const otherAddr = base.address.toLowerCase() === p.token0.toLowerCase() ? p.token1 : p.token0;
+    const otherC = new ethers.Contract(otherAddr, ERC20_ABI, cc.wallet);
+    const baseC = base.wrappable ? cc.weth : new ethers.Contract(base.address, ERC20_ABI, cc.wallet);
+    const baseBefore: bigint = await baseC.balanceOf(cc.wallet.address);
+    const otherBefore: bigint = await otherC.balanceOf(cc.wallet.address).catch(() => 0n);
+
+    await ctx.editMessageText(msg.msgProgress(`closing ${legs.length}-leg ladder (batched)…`), html);
+    const notes: string[] = [];
+    notes.push(...(await executeRemoveBatch(tokenIds, cc)).notes);
+    await sleep(1500);
+    const sw = await sweepTokenToBase(otherAddr, otherC, base, cc, notes, otherBefore).catch(() => ({
+      baseOut: 0n,
+      txHashes: [] as string[],
+      leftover: true,
+      leftoverWei: 0n,
+    }));
+
+    let totalOut: bigint;
+    if (base.wrappable) {
+      // WETH: pokok + hasil swap semuanya mendarat sbg WETH → ukur kenaikan lalu unwrap.
+      const wethBal: bigint = await cc.weth.balanceOf(cc.wallet.address).catch(() => 0n);
+      totalOut = wethBal > baseBefore ? wethBal - baseBefore : sw.baseOut;
+      if (wethBal > 0n) {
+        try {
+          await (await cc.weth.withdraw(wethBal)).wait();
+        } catch (e) {
+          console.error(`[unwrap] gagal close ladder ${groupId}: ${(e as Error).message.slice(0, 120)}`);
+        }
+      }
+    } else {
+      const baseAfter: bigint = await baseC.balanceOf(cc.wallet.address);
+      totalOut = baseAfter > baseBefore ? baseAfter - baseBefore : sw.baseOut;
+    }
+
+    // Bagi hasil proporsional ke modal tiap leg → jurnal PnL per-leg tetap masuk akal.
+    const totalInit = legs.reduce((s, l) => s + BigInt(l.initialWethWei || '0'), 0n);
+    let attributed = 0n;
+    legs.forEach((l, i) => {
+      const share = i === legs.length - 1 ? totalOut - attributed : totalInit > 0n ? (totalOut * BigInt(l.initialWethWei || '0')) / totalInit : 0n;
+      attributed += share;
+      finalizeClose(l.tokenId, {
+        ...(share > 0n ? { resultEthWei: share } : {}),
+        reason: 'cashed',
+        keep: i === 0 && sw.leftover,
+        leftoverWei: i === 0 ? sw.leftoverWei : 0n,
+      });
+    });
+
+    const baseSym = base.wrappable ? cc.nativeSymbol : base.symbol;
+    const outLabel = base.wrappable ? `${msg.fmtEth(totalOut)} ${baseSym}` : `${msg.cleanUnits(totalOut, base.decimals)} ${baseSym}`;
+    await ctx.reply(
+      `✅ ${msg.bold('LADDER CLOSED')} · ${legs.length} legs\n\nTotal cashed out · ${msg.bold(msg.esc(outLabel))}`,
+      { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
+    );
+  } catch (err) {
+    await recoverStrayWeth(cc, 'close ladder').catch(() => {});
+    await ctx.reply(msg.msgError('close ladder', (err as Error).message), html);
+  } finally {
+    for (const l of legs) closingInFlight.delete(l.tokenId);
+    store.endMoneyOp();
+  }
+}
+
+/** Tutup grup ladder v4 batch (BURN×N + TAKE_PAIR 1 tx) + swap agregat; jurnal per-leg. */
+async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.js').V4Record[]) {
+  await ctx.answerCbQuery('Closing v4 ladder…');
+  if (config.safety.dryRun) return void (await ctx.editMessageText(msg.msgDryRunClose(groupId), html));
+  const cc = getChain(legs[0].chain);
+  const tokenIds = legs.map((l) => l.tokenId);
+  for (const l of legs) closingInFlight.set(`v4:${l.tokenId}`, Date.now());
+  store.beginMoneyOp();
+  try {
+    await ctx.editMessageText(msg.msgProgress(`closing ${legs.length}-leg v4 ladder (batched)…`), html);
+    const r = await closeLadderV4(tokenIds, cc, { dryRun: false });
+    // Bagi hasil proporsional ke modal tiap leg → jurnal PnL per-leg benar.
+    const totalInit = legs.reduce((s, l) => s + BigInt(l.entryBaseWei || '0'), 0n);
+    let attributed = 0n;
+    legs.forEach((l, i) => {
+      const share = i === legs.length - 1 ? r.baseOutWei - attributed : totalInit > 0n ? (r.baseOutWei * BigInt(l.entryBaseWei || '0')) / totalInit : 0n;
+      attributed += share;
+      journal.recordClose(
+        {
+          tokenId: l.tokenId,
+          symbol: `${r.sym0}/${r.sym1}`,
+          ca: r.other,
+          chain: cc.key,
+          baseKind: (r.base === 'USDG' ? 'usdg' : 'weth') as store.PosRecord['baseKind'],
+          openedAt: l.openedAt,
+          initialWethWei: l.entryBaseWei || '0',
+        },
+        { ...(share > 0n ? { resultEthWei: share } : {}), reason: 'cashed' },
+      );
+      v4store.removeV4(l.tokenId);
+    });
+    invalidateV4ListCache();
+    const dec = baseDecimalsOf(cc.key, r.base === 'USDG' ? 'usdg' : 'weth');
+    const sym = r.base === 'USDG' ? 'USDG' : cc.nativeSymbol;
+    await ctx.reply(
+      `✅ ${msg.bold('V4 LADDER CLOSED')} · ${legs.length} legs\n\nTotal cashed out · ${msg.bold(msg.esc(`${msg.cleanUnits(r.baseOutWei, dec)} ${sym}`))}`,
+      { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
+    );
+  } catch (err) {
+    await recoverStrayWeth(cc, 'close v4 ladder').catch(() => {});
+    await ctx.reply(msg.msgError('close v4 ladder', (err as Error).message), html);
+  } finally {
+    for (const l of legs) closingInFlight.delete(`v4:${l.tokenId}`);
+    store.endMoneyOp();
+  }
+}
+
 bot.action(/^close:(\d+)$/, async (ctx) => {
   const tokenId = ctx.match[1];
+  const tappedRec = store.get(tokenId);
+  // Ladder: menutup satu leg = menutup SELURUH grup (satu posisi logis). Tutup tiap
+  // leg berurutan, jumlahkan hasil, tampilkan satu ringkasan.
+  if (tappedRec?.groupId) {
+    const legs = store.group(tappedRec.groupId).filter((r) => !closeLocked(r.tokenId));
+    if (legs.length > 1) return closeGroup(ctx, tappedRec.groupId, legs);
+  }
   if (closeLocked(tokenId)) return ctx.answerCbQuery('Processing…');
   closingInFlight.set(tokenId, Date.now());
   const closingRec = store.get(tokenId); // tangkap SEBELUM finalizeClose menghapus
@@ -3291,6 +3919,12 @@ bot.action(/^closev4:(\d+)$/, async (ctx) => {
 
 bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   const tokenId = ctx.match[1];
+  // Ladder v4: tutup SELURUH grup dalam 1 tx batch (BURN×N + TAKE_PAIR).
+  const trk = v4store.getV4(tokenId);
+  if (trk?.groupId) {
+    const legs = v4store.groupV4(trk.groupId);
+    if (legs.length > 1) return closeGroupV4(ctx, trk.groupId, legs);
+  }
   const key = `v4:${tokenId}`;
   if (closeLocked(key)) return ctx.answerCbQuery('Processing…');
   closingInFlight.set(key, Date.now());
@@ -3361,6 +3995,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
         }
       }
       v4store.removeV4(tokenId); // berhenti dilacak setelah tertutup
+      invalidateV4ListCache();
     }
     await ctx.reply(
       msg.msgV4Closed({

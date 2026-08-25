@@ -17,7 +17,10 @@ import { execFile } from 'node:child_process';
 // Jalur biner tak boleh dipatok ke satu mesin: default cari di PATH, boleh
 // ditimpa lewat GMGN_CLI_BIN kalau npm global bin tak ada di PATH service.
 const BIN = process.env.GMGN_CLI_BIN || 'gmgn-cli';
-const TIMEOUT_MS = 12_000;
+// 4 dtk: GMGN dipakai di jalur kritis harga (getEthUsd/mcap). Timeout lama bikin
+// command Telegram nge-freeze saat GMGN lambat; 4 dtk cukup buat respons normal
+// (~0.5s) dan cepat mundur ke DexScreener kalau ngadat.
+const TIMEOUT_MS = 4_000;
 
 /** PHILIPS key → nama chain GMGN. Tak ada di peta = GMGN tak mendukung chain itu. */
 const CHAIN: Record<string, string> = { robinhood: 'robinhood', bsc: 'bsc' };
@@ -89,6 +92,32 @@ function run(args: string[]): Promise<any | null> {
       },
     );
   });
+}
+
+/** Chain yang GMGN `token info` dukung untuk HARGA. hyperevm/ink TAK ada → DexScreener. */
+const PRICE_CHAIN: Record<string, string> = { robinhood: 'robinhood', bsc: 'bsc', base: 'base' };
+const priceCache = new Map<string, { t: number; v: { priceUsd: number; mcapUsd: number | null } | null }>();
+
+/**
+ * Harga & market cap dari GMGN `token info` (realtime). null = GMGN tak dukung
+ * chain / gagal / harga 0 → pemanggil WAJIB fallback ke DexScreener. mcap = harga
+ * × circulating supply (GMGN kembalikan keduanya).
+ */
+export async function gmgnPrice(ca: string, chainKey: string): Promise<{ priceUsd: number; mcapUsd: number | null } | null> {
+  const chain = PRICE_CHAIN[chainKey];
+  if (!chain || !process.env.GMGN_API_KEY) return null;
+  const key = `${chain}:${ca.toLowerCase()}`;
+  const hit = priceCache.get(key);
+  if (hit && Date.now() - hit.t < TTL) return hit.v;
+  const j = await run(['token', 'info', '--chain', chain, '--address', ca.toLowerCase()]);
+  const px = Number(j?.price?.price);
+  let v: { priceUsd: number; mcapUsd: number | null } | null = null;
+  if (Number.isFinite(px) && px > 0) {
+    const supply = Number(j?.circulating_supply ?? j?.total_supply);
+    v = { priceUsd: px, mcapUsd: Number.isFinite(supply) && supply > 0 ? px * supply : null };
+  }
+  priceCache.set(key, { t: Date.now(), v });
+  return v;
 }
 
 /** Rasio GMGN datang sebagai 0..1 ("0.1672"). Kartu memakai persen. */

@@ -44,6 +44,14 @@ export const config = {
     enabled: (process.env.BASE_ENABLED ?? 'false').toLowerCase() === 'true',
     rpcUrl: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
   },
+  hyperevm: {
+    enabled: (process.env.HYPEREVM_ENABLED ?? 'false').toLowerCase() === 'true',
+    rpcUrl: process.env.HYPEREVM_RPC_URL || 'https://rpc.hyperliquid.xyz/evm',
+  },
+  ink: {
+    enabled: (process.env.INK_ENABLED ?? 'false').toLowerCase() === 'true',
+    rpcUrl: process.env.INK_RPC_URL || 'https://rpc-gel.inkonchain.com',
+  },
   wallet: {
     // Opsional sejak /connect ada: dipakai sekali untuk mengadopsi pemasangan
     // lama jadi keystore terenkripsi (walletStore.ts), lalu boleh dihapus.

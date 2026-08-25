@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { TickMath, nearestUsableTick } from '@uniswap/v3-sdk';
 import type { ChainCtx } from './chains.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
+import { sendTxNonceSafe, mapLimit } from './core.js';
 import { allV4 } from './v4store.js';
 
 const Q96 = 2n ** 96n;
@@ -72,6 +73,7 @@ export type V4Position = {
   rangePctHigh: number | null; // % ujung terdekat dari harga sekarang
   rangePctLow: number | null;
   inRange: boolean | null;
+  converted: boolean; // out-of-range & 100% token seberang (target tercapai)
   impliedTokenEthPrice: number | null; // harga token dlm ETH menurut slot0 pool INI (buat cek pool sekarat)
 };
 
@@ -90,22 +92,39 @@ export function v4Supported(cc: ChainCtx): boolean {
   return !!V4_PM[cc.key] && !!cc.blockscout;
 }
 
+// Symbol & desimal token TAK PERNAH berubah → cache permanen. Tanpa ini, /positions
+// dgn 69 leg satu pool memicu ~207 RPC berulang utk metadata yang sama → lambat.
+const symCache = new Map<string, string>();
+const decCache = new Map<string, number>();
+
 async function tokenSymbol(addr: string, cc: ChainCtx): Promise<string> {
   if (!addr || addr === ethers.ZeroAddress) return 'ETH'; // native currency0
+  const key = `${cc.key}:${addr.toLowerCase()}`;
+  const hit = symCache.get(key);
+  if (hit !== undefined) return hit;
+  let v: string;
   try {
-    return await new ethers.Contract(addr, ERC20_SYM, cc.provider).symbol();
+    v = await new ethers.Contract(addr, ERC20_SYM, cc.provider).symbol();
   } catch {
-    return addr.slice(0, 6);
+    v = addr.slice(0, 6);
   }
+  symCache.set(key, v);
+  return v;
 }
 
 async function tokenDecimals(addr: string, cc: ChainCtx): Promise<number> {
   if (!addr || addr === ethers.ZeroAddress) return 18; // native ETH
+  const key = `${cc.key}:${addr.toLowerCase()}`;
+  const hit = decCache.get(key);
+  if (hit !== undefined) return hit;
+  let v: number;
   try {
-    return Number(await new ethers.Contract(addr, ['function decimals() view returns (uint8)'], cc.provider).decimals());
+    v = Number(await new ethers.Contract(addr, ['function decimals() view returns (uint8)'], cc.provider).decimals());
   } catch {
-    return 18;
+    v = 18;
   }
+  decCache.set(key, v);
+  return v;
 }
 
 /** tokenId NFT v4 yang dipegang wallet (via Blockscout). */
@@ -122,7 +141,10 @@ async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
     let url: string | null = `${cc.blockscout}/addresses/${cc.wallet.address}/nft?type=ERC-721`;
     for (let page = 0; url && page < 10; page++) {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 8000);
+      // 3 dtk (dulu 8): Blockscout Robinhood sering 500/lambat & posisi bot sudah
+      // ada di v4store, jadi enumerasi ini cuma jaring pengaman — jangan bikin
+      // /positions nunggu lama. Gagal cepat → pakai v4store saja.
+      const t = setTimeout(() => ctrl.abort(), 3000);
       const res = await fetch(url, { headers: { accept: 'application/json' }, signal: ctrl.signal }).finally(() =>
         clearTimeout(t),
       );
@@ -206,7 +228,7 @@ export async function closePositionV4(
   await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
   if (opts.dryRun) return { dryRun: true, sym0, sym1, base, other: other ?? undefined };
 
-  const tx = await pm.modifyLiquidities(unlockData, deadline);
+  const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline));
   const rc = await tx.wait();
   const out: {
     txHash: string;
@@ -256,15 +278,90 @@ export async function closePositionV4(
   return out;
 }
 
+/**
+ * BATCH close ladder v4: burn SEMUA leg + take (N×BURN_POSITION + 1×TAKE_PAIR)
+ * dalam satu modifyLiquidities, lalu SATU swap token→base + unwrap. Mengembalikan
+ * total baseOut terukur (delta saldo base) untuk dibagi ke tiap leg di pemanggil.
+ */
+export async function closeLadderV4(
+  tokenIds: string[],
+  cc: ChainCtx,
+  opts: { dryRun: boolean },
+): Promise<{ dryRun?: boolean; txHash?: string; base: 'ETH' | 'USDG' | null; other?: string; sym0: string; sym1: string; baseOutWei: bigint; cashedOut?: string }> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
+  const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
+  const [pk] = await pm.getPoolAndPositionInfo(tokenIds[0]);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const [sym0, sym1] = await Promise.all([tokenSymbol(pk.currency0, cc), tokenSymbol(pk.currency1, cc)]);
+  const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
+  const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
+  let base: 'ETH' | 'USDG' | null = null;
+  let other: string | null = null;
+  if (isEth(pk.currency0) || isEth(pk.currency1)) { base = 'ETH'; other = isEth(pk.currency0) ? pk.currency1 : pk.currency0; }
+  else if (isUsdg(pk.currency0) || isUsdg(pk.currency1)) { base = 'USDG'; other = isUsdg(pk.currency0) ? pk.currency1 : pk.currency0; }
+
+  // Ukur saldo base SEBELUM (delta = hasil). ETH → native; USDG → token.
+  const readBase = async (): Promise<bigint> =>
+    base === 'USDG' && cc.usdgAddress
+      ? ((await new ethers.Contract(cc.usdgAddress, ['function balanceOf(address) view returns (uint256)'], cc.provider).balanceOf(cc.wallet.address).catch(() => 0n)) as bigint)
+      : ((await cc.provider.getBalance(cc.wallet.address).catch(() => 0n)) as bigint);
+  const beforeWei = await readBase();
+
+  const actionBytes = [...tokenIds.map(() => BURN_POSITION), TAKE_PAIR];
+  const params = [
+    ...tokenIds.map((id) => coder.encode(['uint256', 'uint128', 'uint128', 'bytes'], [id, 0, 0, '0x'])),
+    coder.encode(['address', 'address', 'address'], [pk.currency0, pk.currency1, cc.wallet.address]),
+  ];
+  const unlockData = coder.encode(['bytes', 'bytes[]'], [ethers.hexlify(new Uint8Array(actionBytes)), params]);
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
+  if (opts.dryRun) return { dryRun: true, base, other: other ?? undefined, sym0, sym1, baseOutWei: 0n };
+
+  const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline));
+  const rc = await tx.wait();
+  let cashedOut: string | undefined;
+  // Swap seluruh token hasil (agregat semua leg) → base sekali.
+  if (base && other && other !== ethers.ZeroAddress) {
+    try {
+      const erc = new ethers.Contract(other, ['function balanceOf(address) view returns (uint256)'], cc.provider);
+      const bal: bigint = await erc.balanceOf(cc.wallet.address);
+      if (bal > 0n) {
+        const r = base === 'ETH' ? await swapTokenToEthRobust(other, bal, cc) : await swapTokenToUsdgRobust(other, bal, cc.usdgAddress!, cc);
+        cashedOut = `${base} via ${r.route}`;
+      }
+    } catch { /* token receh tetap di wallet */ }
+  }
+  if (base === 'ETH') {
+    try {
+      const wbal: bigint = await cc.weth.balanceOf(cc.wallet.address);
+      if (wbal > 0n) await (await cc.weth.withdraw(wbal)).wait();
+    } catch { /* biarkan WETH */ }
+  }
+  const afterWei = await readBase();
+  const baseOutWei = afterWei > beforeWei ? afterWei - beforeWei : 0n;
+  return { txHash: rc?.hash ?? tx.hash, base, other: other ?? undefined, sym0, sym1, baseOutWei, cashedOut };
+}
+
+// Cache hasil list v4 per chain (TTL pendek): banyak command (/status, /positions,
+// dll) memanggilnya beruntun; tanpa cache tiap kali fetch ULANG semua leg → lambat.
+const listCache = new Map<string, { t: number; v: V4Position[] }>();
+const LIST_TTL_MS = 45_000;
+
 /** Daftar posisi v4 wallet. onlyLive=true → hanya yang liquidity > 0. */
 export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyLive?: boolean } = {}): Promise<V4Position[]> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) return [];
+  const ck = `${cc.key}:${onlyLive}`;
+  const hit = listCache.get(ck);
+  if (hit && Date.now() - hit.t < LIST_TTL_MS) return hit.v;
   const ids = await walletV4TokenIds(cc);
   if (ids.length === 0) return [];
   const pm = new ethers.Contract(pmAddr, V4_ABI, cc.provider);
-  const rows = await Promise.all(
-    ids.map(async (id): Promise<V4Position | null> => {
+  // Konkurensi DIBATASI: 69 leg × ~5 RPC via Promise.all = ~300 RPC serentak →
+  // Alchemy throttle → lambat/error. mapLimit menahan di ~8 serentak.
+  const rows = await mapLimit(ids, 8,
+    async (id): Promise<V4Position | null> => {
       try {
         const [pk, info] = await pm.getPoolAndPositionInfo(id);
         const liquidity: bigint = await pm.getPositionLiquidity(id);
@@ -318,15 +415,23 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
           rangePctHigh: val ? val.rangePctHigh : null,
           rangePctLow: val ? val.rangePctLow : null,
           inRange: val ? val.inRange : null,
+          converted: val ? val.converted : false,
           base: pb.base,
           impliedTokenEthPrice,
         };
       } catch {
         return null;
       }
-    }),
+    },
   );
-  return rows.filter((r): r is V4Position => r !== null);
+  const out = rows.filter((r): r is V4Position => r !== null);
+  listCache.set(ck, { t: Date.now(), v: out });
+  return out;
+}
+
+/** Buang cache list v4 (dipanggil setelah buka/tutup posisi supaya /positions segar). */
+export function invalidateV4ListCache(): void {
+  listCache.clear();
 }
 
 // ── Add (mint) posisi v4 single-sided ──────────────────────────────────────
@@ -405,13 +510,13 @@ export async function poolHealthV4(
 async function ensurePermit2(cc: ChainCtx, token: string, spender: string, amount: bigint): Promise<void> {
   const erc = new ethers.Contract(token, ['function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'], cc.wallet);
   if ((await erc.allowance(cc.wallet.address, PERMIT2)) < amount) {
-    await (await erc.approve(PERMIT2, ethers.MaxUint256)).wait();
+    await (await sendTxNonceSafe(cc.wallet as ethers.Wallet, await erc.approve.populateTransaction(PERMIT2, ethers.MaxUint256))).wait();
   }
   const p2 = new ethers.Contract(PERMIT2, ['function allowance(address,address,address) view returns (uint160,uint48,uint48)', 'function approve(address,address,uint160,uint48)'], cc.wallet);
   const [amt] = await p2.allowance(cc.wallet.address, token, spender);
   if (BigInt(amt) < amount) {
     const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 3600;
-    await (await p2.approve(token, spender, (1n << 160n) - 1n, exp)).wait();
+    await (await sendTxNonceSafe(cc.wallet as ethers.Wallet, await p2.approve.populateTransaction(token, spender, (1n << 160n) - 1n, exp))).wait();
   }
 }
 
@@ -502,7 +607,7 @@ export async function openPositionV4(
     await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address, value });
   }
   if (opts.dryRun) return { dryRun: true, tickLower, tickUpper, liquidity, baseIsCurrency0 };
-  const tx = await pm.modifyLiquidities(unlockData, deadline, { value });
+  const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline, { value }));
   const rc = await tx.wait();
   // tokenId NFT baru = event Transfer(from=0x0, to=wallet) dari PositionManager.
   let tokenId: string | undefined;
@@ -522,6 +627,130 @@ export async function openPositionV4(
   return { txHash: rc?.hash ?? tx.hash, tokenId, tickLower, tickUpper, liquidity, baseIsCurrency0 };
 }
 
+// ── Ladder Bid-Ask v4 (batch native: N MINT + 1 SETTLE dalam satu tx) ────────
+export type V4LadderLeg = { tickLower: number; tickUpper: number; baseAmountWei: bigint; liquidity: bigint; pctHigh: number; pctLow: number };
+
+/** Bobot per-leg (index 0 = terdekat harga, N-1 = terjauh). spot=rata, bidask=∝(i+1). */
+function ladderWeightsV4(n: number, shape: 'spot' | 'bidask'): number[] {
+  if (n <= 1) return [1];
+  const raw = shape === 'bidask' ? Array.from({ length: n }, (_, i) => i + 1) : Array.from({ length: n }, () => 1);
+  const sum = raw.reduce((a, b) => a + b, 0);
+  return raw.map((w) => w / sum);
+}
+
+/**
+ * Rencana ladder v4 single-sided (sisi base, buy-dip): pecah rentang [sekarang …
+ * −X%] jadi N leg berbobot. Mirror planLadderSingleSided v3 tapi pakai tick-math
+ * v4 (readPoolState + liqForAmount). Auto-cap N ke kapasitas spacing.
+ */
+export async function planLadderV4(
+  cc: ChainCtx,
+  poolKey: PoolKeyV4,
+  baseIsCurrency0: boolean,
+  totalBaseWei: bigint,
+  rangePercent: number,
+  legs: number,
+  shape: 'spot' | 'bidask',
+): Promise<V4LadderLeg[]> {
+  const spacing = poolKey.tickSpacing;
+  const state = await readPoolState(cc, poolKey);
+  if (state.sqrtPriceX96 === 0n) throw new Error('This v4 pool is not initialised — pick another pool.');
+  const current = state.tick;
+  const frac = Math.min(Math.max(rangePercent, 0.1), 95) / 100;
+  const fullWidth = Math.max(spacing, Math.ceil(Math.abs(Math.log(1 - frac)) / Math.log(1.0001) / spacing) * spacing);
+  const maxLegs = Math.max(1, Math.floor(fullWidth / spacing));
+  const n = Math.max(1, Math.min(legs, 69, maxLegs));
+  const legWidth = Math.max(spacing, Math.round(fullWidth / n / spacing) * spacing);
+  const weights = ladderWeightsV4(n, shape);
+  const aligned = nearestUsableTick(current, spacing);
+  const sgn = baseIsCurrency0 ? -1 : 1;
+  const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - current)) - 1) * 100;
+
+  const out: V4LadderLeg[] = [];
+  let allocated = 0n;
+  for (let k = 0; k < n; k++) {
+    const legWei = k === n - 1 ? totalBaseWei - allocated : (totalBaseWei * BigInt(Math.round(weights[k] * 1e9))) / 1_000_000_000n;
+    allocated += legWei;
+    let tickLower: number;
+    let tickUpper: number;
+    if (baseIsCurrency0) {
+      const anchor = aligned > current ? aligned : aligned + spacing;
+      tickLower = anchor + k * legWidth;
+      tickUpper = tickLower + legWidth;
+    } else {
+      const anchor = aligned < current ? aligned : aligned - spacing;
+      tickUpper = anchor - k * legWidth;
+      tickLower = tickUpper - legWidth;
+    }
+    const sqrtL = sqrtAtTick(tickLower);
+    const sqrtU = sqrtAtTick(tickUpper);
+    const liquidity = baseIsCurrency0 ? liqForAmount0(sqrtL, sqrtU, legWei) : liqForAmount1(sqrtL, sqrtU, legWei);
+    if (liquidity <= 0n) continue; // leg debu — lewati
+    const pcts = [pctOf(tickUpper), pctOf(tickLower)].sort((a, b) => b - a);
+    out.push({ tickLower, tickUpper, baseAmountWei: legWei, liquidity, pctHigh: pcts[0], pctLow: pcts[1] });
+  }
+  return out;
+}
+
+/**
+ * BATCH mint ladder v4: N leg dalam SATU modifyLiquidities atomik (N×MINT_POSITION
+ * + 1×SETTLE_PAIR, +SWEEP bila native). Paling irit — settle base sekali di akhir.
+ */
+export async function openLadderV4(
+  cc: ChainCtx,
+  poolKey: PoolKeyV4,
+  baseIsCurrency0: boolean,
+  legs: V4LadderLeg[],
+  opts: { dryRun: boolean },
+): Promise<{ dryRun?: boolean; txHash?: string; tokenIds: string[] }> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr || !V4_POOL_MANAGER[cc.key]) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const baseCurrency = baseIsCurrency0 ? poolKey.currency0 : poolKey.currency1;
+  const isNative = baseCurrency === ethers.ZeroAddress;
+  const totalBase = legs.reduce((s, l) => s + l.baseAmountWei, 0n);
+
+  const mintParams = legs.map((l) => {
+    const amount0Max = baseIsCurrency0 ? l.baseAmountWei : 0n;
+    const amount1Max = baseIsCurrency0 ? 0n : l.baseAmountWei;
+    return coder.encode(
+      ['tuple(address,address,uint24,int24,address)', 'int24', 'int24', 'uint256', 'uint128', 'uint128', 'address', 'bytes'],
+      [[poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks], l.tickLower, l.tickUpper, l.liquidity, amount0Max, amount1Max, cc.wallet.address, '0x'],
+    );
+  });
+  const settleParam = coder.encode(['address', 'address'], [poolKey.currency0, poolKey.currency1]);
+  const actionBytes = [...legs.map(() => MINT_POSITION), SETTLE_PAIR, ...(isNative ? [SWEEP] : [])];
+  const params = [...mintParams, settleParam, ...(isNative ? [coder.encode(['address', 'address'], [ethers.ZeroAddress, cc.wallet.address])] : [])];
+  const actions = ethers.hexlify(new Uint8Array(actionBytes));
+  const unlockData = coder.encode(['bytes', 'bytes[]'], [actions, params]);
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const value = isNative ? totalBase : 0n;
+  const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
+
+  if (!isNative && !opts.dryRun) await ensurePermit2(cc, baseCurrency, pmAddr, totalBase);
+  if (isNative || !opts.dryRun) {
+    await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address, value });
+  }
+  if (opts.dryRun) return { dryRun: true, tokenIds: [] };
+
+  const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline, { value }));
+  const rc = await tx.wait();
+  const transferTopic = ethers.id('Transfer(address,address,uint256)');
+  const toPadded = ethers.zeroPadValue(cc.wallet.address, 32).toLowerCase();
+  const tokenIds: string[] = [];
+  for (const log of rc?.logs ?? []) {
+    if (
+      log.address.toLowerCase() === pmAddr.toLowerCase() &&
+      log.topics[0] === transferTopic &&
+      log.topics[1] === ethers.ZeroHash &&
+      (log.topics[2] ?? '').toLowerCase() === toPadded
+    ) {
+      tokenIds.push(BigInt(log.topics[3]).toString());
+    }
+  }
+  return { txHash: rc?.hash ?? tx.hash, tokenIds };
+}
+
 /** PoolKey + info base sebuah posisi v4 (untuk add ke pool yg sama). */
 export async function getPoolKeyV4(cc: ChainCtx, tokenId: string): Promise<{ poolKey: PoolKeyV4; baseIsCurrency0: boolean; base: 'ETH' | 'USDG' | null }> {
   const pmAddr = V4_PM[cc.key];
@@ -534,6 +763,11 @@ export async function getPoolKeyV4(cc: ChainCtx, tokenId: string): Promise<{ poo
 }
 
 // ── Valuasi posisi v4 (nilai dalam base + range %) ──────────────────────────
+/** Tick pool v4 sekarang — dipakai buat patok entryTick saat open. */
+export async function currentTickV4(cc: ChainCtx, pk: PoolKeyV4): Promise<number> {
+  return (await readPoolState(cc, pk)).tick;
+}
+
 /** Baca slot0 pool v4: tick + sqrtPriceX96 sekarang. */
 async function readPoolState(cc: ChainCtx, pk: PoolKeyV4): Promise<{ tick: number; sqrtPriceX96: bigint }> {
   const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
@@ -588,6 +822,7 @@ export type V4Valuation = {
   rangePctLow: number;
   inRange: boolean;
   currentTick: number;
+  converted: boolean; // out-of-range & sisi base kosong → 100% token seberang (target tercapai)
 };
 
 /** Nilai posisi v4 (token amounts, nilai dalam base, range %). */
@@ -608,6 +843,10 @@ export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: nu
   const sgn = baseIsCurrency0 ? -1 : 1;
   const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - tick)) - 1) * 100;
   const pcts = [pctOf(tickUpper), pctOf(tickLower)].sort((a, b) => b - a);
+  const inRange = tick >= tickLower && tick < tickUpper;
+  // Sisi base kosong saat out-of-range = harga sudah menembus SELURUH rentang →
+  // 100% token seberang (buy-dip: sudah jadi token; target leg tercapai).
+  const baseAmt = baseIsCurrency0 ? amount0 : amount1;
   return {
     amount0,
     amount1,
@@ -616,8 +855,9 @@ export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: nu
     valueBaseWei,
     rangePctHigh: pcts[0],
     rangePctLow: pcts[1],
-    inRange: tick >= tickLower && tick < tickUpper,
+    inRange,
     currentTick: tick,
+    converted: !inRange && baseAmt === 0n,
   };
 }
 

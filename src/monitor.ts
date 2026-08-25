@@ -365,15 +365,27 @@ async function tick(bot: Telegraf) {
     }
   }
   // Monitor posisi v4 yang DIKELOLA bot (alert in/out-range; bersihkan bila tertutup).
-  for (const rec of v4store.allV4()) {
+  // LADDER: cek 1 WAKIL per grup, bukan tiap leg. Ladder 69-leg dulu = 138 RPC SERIAL
+  // tiap ronde → saturasi Alchemy free-tier → semua command (mis. /positions) molor >1
+  // menit. Leg segrup berbagi pool → status range-nya diwakili satu leg; alert pun cukup
+  // sekali per grup (bukan 69 notif).
+  const seenGroup = new Set<string>();
+  const v4reps = v4store.allV4().filter((rec) => {
+    if (!rec.groupId) return true; // posisi tunggal → selalu dicek
+    if (seenGroup.has(rec.groupId)) return false;
+    seenGroup.add(rec.groupId);
+    return true; // leg pertama grup = wakil
+  });
+  for (const rec of v4reps) {
     try {
       const st = await checkV4Status(getChain(rec.chain), rec.tokenId);
-      if (!st.exists) {
-        v4store.removeV4(rec.tokenId); // ditutup di luar bot
+      if (!st.exists && !rec.groupId) {
+        v4store.removeV4(rec.tokenId); // tunggal & ditutup di luar bot → buang
         continue;
       }
       if (st.inRange !== null && v4store.setV4InRange(rec.tokenId, st.inRange)) {
-        await bot.telegram.sendMessage(config.telegram.allowedUserId, msgV4Range(rec.tokenId, st.inRange), html);
+        const label = rec.groupId ? `${msgV4Range(rec.tokenId, st.inRange)} (ladder ${rec.legCount ?? '?'} leg)` : msgV4Range(rec.tokenId, st.inRange);
+        await bot.telegram.sendMessage(config.telegram.allowedUserId, label, html);
       }
     } catch (e) {
       console.log(`[monitor:v4] #${rec.tokenId} dilewati ronde ini:`, (e as Error).message.slice(0, 120));
