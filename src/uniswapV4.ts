@@ -69,7 +69,8 @@ export type V4Position = {
   liquidity: bigint;
   base: 'ETH' | 'USDG' | null; // aset dasar pasangan (utk add/cash-out)
   poolKey: PoolKeyV4;
-  valueBaseWei: bigint | null; // nilai posisi dlm base (null bila gagal baca harga)
+  valueBaseWei: bigint | null; // PRINSIPAL dlm base (null bila gagal baca harga)
+  feesBaseWei: bigint | null; // fee belum diklaim, dlm base
   rangePctHigh: number | null; // % ujung terdekat dari harga sekarang
   rangePctLow: number | null;
   inRange: boolean | null;
@@ -380,7 +381,7 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
         // Valuasi (nilai + range %); gagal baca harga → null (kartu tetap tampil).
         let val: Awaited<ReturnType<typeof valuePositionV4>> | null = null;
         try {
-          val = await valuePositionV4(cc, poolKey, tickLower, tickUpper, liquidity);
+          val = await valuePositionV4(cc, poolKey, tickLower, tickUpper, liquidity, id);
         } catch {
           /* biarkan null */
         }
@@ -412,6 +413,7 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
           liquidity,
           poolKey,
           valueBaseWei: val ? val.valueBaseWei : null,
+          feesBaseWei: val ? val.feesBaseWei : null,
           rangePctHigh: val ? val.rangePctHigh : null,
           rangePctLow: val ? val.rangePctLow : null,
           inRange: val ? val.inRange : null,
@@ -812,12 +814,61 @@ function amountsForLiquidity(sqrtP: bigint, sqrtA: bigint, sqrtB: bigint, L: big
   return { amount0: 0n, amount1: amount1Delta(sqrtA, sqrtB, L) };
 }
 
+/**
+ * Slot0 + fee posisi dalam SATU extsload(bytes32[]). Menggantikan readPoolState
+ * di valuePositionV4 supaya jumlah RPC tak bertambah walau fee ikut dihitung.
+ * tokenId = salt posisi v4 (owner = PositionManager).
+ * Layout Pool.State: slot0@0, feeGrowthGlobal0/1@1,2, ticks@4, positions@6.
+ */
+async function readPoolAndFees(
+  cc: ChainCtx, pk: PoolKeyV4, tickLower: number, tickUpper: number, tokenId: string,
+): Promise<{ tick: number; sqrtPriceX96: bigint; fee0: bigint; fee1: bigint }> {
+  const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], [
+    'function extsload(bytes32[]) view returns (bytes32[])',
+  ], cc.provider);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const poolId = ethers.keccak256(coder.encode(['tuple(address,address,uint24,int24,address)'],
+    [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]]));
+  const h = (x: bigint) => ethers.zeroPadValue(ethers.toBeHex(x), 32);
+  const base = BigInt(ethers.keccak256(ethers.concat([poolId, h(6n)])));
+  const tickSlot = (t: number) => BigInt(ethers.keccak256(ethers.concat([
+    h(BigInt.asUintN(256, BigInt(t))), h(base + 4n)])));
+  const posKey = ethers.keccak256(ethers.solidityPacked(
+    ['address', 'int24', 'int24', 'bytes32'], [V4_PM[cc.key], tickLower, tickUpper, h(BigInt(tokenId))]));
+  const posSlot = BigInt(ethers.keccak256(ethers.concat([posKey, h(base + 6n)])));
+
+  const raw: string[] = await mgr['extsload(bytes32[])']([
+    h(base), h(base + 1n), h(base + 2n),
+    h(tickSlot(tickLower) + 1n), h(tickSlot(tickLower) + 2n),
+    h(tickSlot(tickUpper) + 1n), h(tickSlot(tickUpper) + 2n),
+    h(posSlot), h(posSlot + 1n), h(posSlot + 2n),
+  ]);
+  const [s0, fg0, fg1, lo0, lo1, up0, up1, pl, il0, il1] = raw.map((x) => BigInt(x));
+
+  const sqrtPriceX96 = s0 & ((1n << 160n) - 1n);
+  let tick = Number((s0 >> 160n) & 0xffffffn);
+  if (tick >= 2 ** 23) tick -= 2 ** 24;
+
+  // feeGrowthInside = global - below - above (wrap-around uint256 disengaja).
+  const M = 1n << 256n;
+  const wrap = (x: bigint) => ((x % M) + M) % M;
+  const below0 = tick >= tickLower ? lo0 : wrap(fg0 - lo0);
+  const below1 = tick >= tickLower ? lo1 : wrap(fg1 - lo1);
+  const above0 = tick < tickUpper ? up0 : wrap(fg0 - up0);
+  const above1 = tick < tickUpper ? up1 : wrap(fg1 - up1);
+  const L = pl & ((1n << 128n) - 1n);
+  const fee0 = (wrap(wrap(fg0 - below0 - above0) - il0) * L) >> 128n;
+  const fee1 = (wrap(wrap(fg1 - below1 - above1) - il1) * L) >> 128n;
+  return { tick, sqrtPriceX96, fee0, fee1 };
+}
+
 export type V4Valuation = {
   amount0: bigint;
   amount1: bigint;
   base: 'ETH' | 'USDG' | null;
   baseIsCurrency0: boolean;
-  valueBaseWei: bigint; // nilai posisi dalam unit base (raw, desimal base)
+  valueBaseWei: bigint; // nilai posisi dalam unit base (raw, desimal base) — PRINSIPAL saja
+  feesBaseWei: bigint; // fee belum diklaim, dinilai dalam base (0 bila tokenId tak diberi)
   rangePctHigh: number; // % ujung terdekat dari harga sekarang
   rangePctLow: number;
   inRange: boolean;
@@ -826,20 +877,23 @@ export type V4Valuation = {
 };
 
 /** Nilai posisi v4 (token amounts, nilai dalam base, range %). */
-export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: number, tickUpper: number, liquidity: bigint): Promise<V4Valuation> {
-  const { tick, sqrtPriceX96 } = await readPoolState(cc, pk);
+export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: number, tickUpper: number, liquidity: bigint, tokenId?: string): Promise<V4Valuation> {
+  // tokenId ada → sekalian ambil fee (RPC sama banyak). Tanpa tokenId (pratinjau
+  // posisi yang belum dibuka) → slot0 saja, fee 0.
+  const { tick, sqrtPriceX96, fee0, fee1 } = tokenId
+    ? await readPoolAndFees(cc, pk, tickLower, tickUpper, tokenId)
+    : { ...(await readPoolState(cc, pk)), fee0: 0n, fee1: 0n };
   const sqrtL = sqrtAtTick(tickLower);
   const sqrtU = sqrtAtTick(tickUpper);
   const { amount0, amount1 } = amountsForLiquidity(sqrtPriceX96, sqrtL, sqrtU, liquidity);
   const { base, baseIsCurrency0 } = pairBase(cc, pk.currency0, pk.currency1);
   // sqrtPriceX96 = sqrt(token1/token0)*Q96 (rasio raw). Nilai dlm base:
   const p2 = sqrtPriceX96 * sqrtPriceX96; // (token1/token0)*Q96^2
-  let valueBaseWei = 0n;
-  if (baseIsCurrency0) {
-    valueBaseWei = amount0 + (p2 === 0n ? 0n : (amount1 * Q96 * Q96) / p2);
-  } else {
-    valueBaseWei = amount1 + (amount0 * p2) / (Q96 * Q96);
-  }
+  const inBase = (a0: bigint, a1: bigint) => baseIsCurrency0
+    ? a0 + (p2 === 0n ? 0n : (a1 * Q96 * Q96) / p2)
+    : a1 + (a0 * p2) / (Q96 * Q96);
+  const valueBaseWei = inBase(amount0, amount1);
+  const feesBaseWei = inBase(fee0, fee1);
   const sgn = baseIsCurrency0 ? -1 : 1;
   const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - tick)) - 1) * 100;
   const pcts = [pctOf(tickUpper), pctOf(tickLower)].sort((a, b) => b - a);
@@ -853,6 +907,7 @@ export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: nu
     base,
     baseIsCurrency0,
     valueBaseWei,
+    feesBaseWei,
     rangePctHigh: pcts[0],
     rangePctLow: pcts[1],
     inRange,

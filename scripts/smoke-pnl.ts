@@ -22,3 +22,25 @@ assert.equal(gained(ethers.parseEther('0.5'), ethers.parseEther('0.4')), 0n,
   'saldo menyusut → hasil 0, bukan angka negatif');
 
 console.log('OK — PnL: desimal ikut chain, hasil = pertambahan saldo.');
+
+// --- penjaga: setiap valuasi posisi WAJIB menyertakan fee (v3 & v4) ---
+// Regresi nyata: v4 dulu memakai valueBaseWei saja → PnL #920574 tampil -0.0%
+// padahal +4.0%, karena 6.09 USDG fee tak terhitung.
+import { readFileSync } from 'node:fs';
+const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+const lolos = new Set([
+  // baris ini memang menampilkan nilai & fee TERPISAH — bukan PnL.
+  'const valF = Number(ethers.formatUnits(d.valueBaseWei, d.baseDecimals));',
+  '`${msg.cleanUnits(d.valueBaseWei, d.baseDecimals)} ${d.baseSymbol}` +',
+]);
+const nakal = src.split('\n').filter((l) => {
+  const t = l.trim();
+  if (!/formatUnits\(|formatEther\(/.test(t)) return false;
+  if (!/\.valueBaseWei/.test(t)) return false;
+  if (/feesBaseWei/.test(t)) return false;
+  return !lolos.has(t);
+});
+assert.deepEqual(nakal, [],
+  'valuasi posisi tanpa feesBaseWei — PnL akan understate:\n' + nakal.join('\n'));
+
+console.log('smoke-pnl: LULUS');

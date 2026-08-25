@@ -548,7 +548,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       const v4 = v4Supported(ccLp) ? await listPositionsV4(ccLp).catch(() => []) : [];
       const v4Vals = v4.map((p) => {
         if (p.valueBaseWei === null || !p.base) return undefined;
-        const v = Number(ethers.formatUnits(p.valueBaseWei, baseDecimalsOf(ccLp.key, p.base === 'USDG' ? 'usdg' : 'weth')));
+        const v = Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), baseDecimalsOf(ccLp.key, p.base === 'USDG' ? 'usdg' : 'weth')));
         return p.base === 'USDG' ? v : ethUsd !== null ? v * ethUsd : null;
       });
       const all = [...vals, ...v4Vals];
@@ -869,10 +869,10 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   const dec = baseDecimalsOf(undefined, p.base === 'USDG' ? 'usdg' : 'weth'); // v4 = chain utama
   let valueLabel = '—';
   if (p.valueBaseWei !== null && p.base === 'ETH') {
-    const eth = Number(ethers.formatEther(p.valueBaseWei));
+    const eth = Number(ethers.formatEther(p.valueBaseWei + (p.feesBaseWei ?? 0n)));
     valueLabel = ethUsdV4 !== null ? `${msg.usdPlain(eth * ethUsdV4)}  (${eth.toFixed(5)} ETH)` : `${eth.toFixed(5)} ETH`;
   } else if (p.valueBaseWei !== null && p.base === 'USDG') {
-    valueLabel = `${Number(ethers.formatUnits(p.valueBaseWei, 6)).toFixed(2)} USDG`;
+    valueLabel = `${Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), 6)).toFixed(2)} USDG`;
   }
   const tracked = v4store.getV4(p.tokenId);
   // Range % DIPATOK ke tick ENTRY (bila tersimpan) → angkanya diam, tak goyang tiap
@@ -890,7 +890,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       : '—';
   let pnlText: string | undefined;
   if (tracked && p.valueBaseWei !== null && p.base) {
-    const curF = Number(ethers.formatUnits(p.valueBaseWei, dec));
+    const curF = Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), dec));
     const entF = Number(ethers.formatUnits(BigInt(tracked.entryBaseWei), dec));
     // PnL USD ala LP Agent bila entryEthUsd tersimpan (gerak harga base ikut kehitung).
     const nowUsdPer = p.base === 'USDG' ? 1 : ethUsdV4;
@@ -1137,7 +1137,7 @@ async function cmdPositions(ctx: any, edit = false) {
   for (const p of v4) {
     const dec = baseDecimalsOf(undefined, p.base === 'USDG' ? 'usdg' : 'weth'); // v4 = chain utama
     const tracked = v4store.getV4(p.tokenId);
-    const curF = p.valueBaseWei !== null ? Number(ethers.formatUnits(p.valueBaseWei, dec)) : null;
+    const curF = p.valueBaseWei !== null ? Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), dec)) : null;
     let investNum = curF ?? 0;
     let pnlUsd: number | null = null;
     let pnlPct: number | null = null;
