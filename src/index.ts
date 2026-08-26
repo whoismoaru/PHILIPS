@@ -904,11 +904,16 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     };
   })();
   const anchoredPcts = anchored?.pcts ?? null;
-  const rangeLabel = anchoredPcts
-    ? `${msg.fmtPct(anchoredPcts[0])} / ${msg.fmtPct(anchoredPcts[1])}`
-    : p.rangePctHigh !== null && p.rangePctLow !== null
+  // Persen rentang diukur dari harga SEKARANG, jadi ikut bergerak saat token
+  // turun: "berapa jauh lagi ke tiap ujung dari sini". Batas absolutnya tetap
+  // diam dan ditunjukkan baris mcap di bawahnya (dipatok ke entry). Dulu persen
+  // ini juga dipatok ke entry → angkanya beku dan terbaca seolah range mati.
+  const rangeLabel =
+    p.rangePctHigh !== null && p.rangePctLow !== null
       ? `${msg.fmtPct(p.rangePctHigh)} / ${msg.fmtPct(p.rangePctLow)}`
-      : '—';
+      : anchoredPcts
+        ? `${msg.fmtPct(anchoredPcts[0])} / ${msg.fmtPct(anchoredPcts[1])}`
+        : '—';
   let pnlText: string | undefined;
   if (tracked && p.valueBaseWei !== null && p.base) {
     const curF = Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), dec));

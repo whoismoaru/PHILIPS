@@ -412,7 +412,7 @@ export function msgV4Position(p: {
     ...(isLeg && p.ladder!.groupDeposit ? [`💰 ${bold('Ladder deposit:')} ${esc(p.ladder!.groupDeposit)} ${base} ${italic('(all legs)')}`] : []),
     `💰 ${bold(isLeg ? 'Leg Value:' : 'Value:')} ${esc(p.valueLabel)}`,
     ...(p.feesLabel ? [italic(`↳ termasuk fee ${esc(p.feesLabel)}`)] : []),
-    `📉 ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${esc(p.rangeLabel)}`,
+    `📉 ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${esc(p.rangeLabel)} ${italic('dari harga kini')}`,
     ...(p.mcRange ? [italic(`↳ market cap ${esc(p.mcRange)}`)] : []),
     ...(p.pnlText ? [`📈 ${bold('Current PnL:')} ${esc(p.pnlText)}`] : []),
     `${statusEmoji} ${bold('Status:')} ${status}`,
