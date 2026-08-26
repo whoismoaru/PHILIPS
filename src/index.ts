@@ -42,7 +42,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
+import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
@@ -3565,6 +3565,7 @@ async function sendProfitCard(
   tokenId: string,
   rec: store.PosRecord | undefined,
   baseOutWei: bigint,
+  feesBaseWei?: bigint,
 ): Promise<void> {
   if (!rec) return;
   const stable = isStableBase(rec.baseKind ?? 'weth');
@@ -3592,8 +3593,13 @@ async function sendProfitCard(
       { label: 'deposit', value: `${fmt(baseIn)} ${baseSym}` },
       { label: 'received', value: `${fmt(baseOut)} ${baseSym}` },
       { label: 'held', value: msg.fmtAge(Date.now() - rec.openedAt) },
+      // Fee dibaca SEBELUM burn (lihat pemanggil). Tak terbaca → kotak keempat
+      // dikosongkan, bukan diisi 0 yang terbaca seperti "tak dapat fee sama sekali".
+      ...(feesBaseWei !== undefined && feesBaseWei > 0n
+        ? [{ label: 'fees', value: `${fmt(Number(ethers.formatUnits(feesBaseWei, dec)))} ${baseSym}` }]
+        : []),
     ],
-    footerLeft: `#${tokenId} · ${new Date().toISOString().slice(0, 10)}`,
+    footerLeft: `#${tokenId} · ${new Date().toISOString().slice(0, 10)} ${msg.nowWib()}`,
   });
   // sendDocument, BUKAN sendPhoto: Telegram me-render ulang foto jadi JPEG
   // (terukur 1130 KB -> 185 KB) dan artefaknya paling terlihat pada teks tajam
@@ -3794,7 +3800,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
         [Markup.button.callback('💧 Open a New LP', 'howto:add')],
       ]),
     });
-    await sendProfitCard(ctx, tokenId, closingRec, summary.baseOutWei).catch((e) =>
+    await sendProfitCard(ctx, tokenId, closingRec, summary.baseOutWei, summary.feesBaseWei).catch((e) =>
       console.log('[profit-card] failed:', (e as Error).message.slice(0, 120)),
     );
   } catch (err) {
@@ -3818,7 +3824,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
 async function stopAndCashOut(
   tokenId: string,
   cc: ChainCtx = getChain(),
-): Promise<{ text: string; baseOutWei: bigint; leftover: boolean; leftoverWei: bigint }> {
+): Promise<{ text: string; baseOutWei: bigint; leftover: boolean; leftoverWei: bigint; feesBaseWei?: bigint }> {
   const { positionManager: pm, weth: wethC, wallet: w } = cc;
   const p = await pm.positions(tokenId);
   // Pool tanpa base yang kita kenal (mis. TOKENA/TOKENB hasil impor): tak ada rute
@@ -3838,6 +3844,13 @@ async function stopAndCashOut(
   // Saldo token SEBELUM burn = bag spot yang mungkin kamu pegang terpisah. Cash-out
   // hanya boleh menjual yang dihasilkan POSISI ini (delta di atas ini), bukan bag-mu.
   const otherBefore: bigint = await otherC.balanceOf(w.address).catch(() => 0n);
+
+  // Fee belum diklaim DIBACA SEBELUM burn: sesudahnya posisi lenyap dan fee sudah
+  // melebur ke dalam hasil cash-out, tak bisa dipisah lagi. Gagal baca ≠ gagal
+  // close — kartu cuma kehilangan satu kotak.
+  const feesBaseWei = await getPositionDetail(tokenId, cc)
+    .then((d) => d.feesBaseWei)
+    .catch(() => undefined);
 
   const notes: string[] = [];
   notes.push(...(await executeRemove(tokenId, cc)).notes);
@@ -3920,7 +3933,7 @@ async function stopAndCashOut(
   console.log(`[cashout] #${tokenId}:`, notes.join(' | ')); // rekam ke journal
   const text = msg.msgCashOut({ tokenId, notes, ethOut, txHashes });
   // leftover = token benar-benar masih tersisa di wallet setelah semua percobaan.
-  return { text, baseOutWei, leftover: sw.leftover, leftoverWei: sw.leftoverWei };
+  return { text, baseOutWei, leftover: sw.leftover, leftoverWei: sw.leftoverWei, feesBaseWei };
 }
 
 // ── Tutup posisi Uniswap v4 (baca-saja untuk lihat; close didukung) ──
@@ -3984,6 +3997,10 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     return cc.provider.getBalance(cc.wallet.address).catch(() => null);
   };
   const beforeWei = await readBase();
+  // Alasan sama dengan jalur v3: fee v4 hanya ada selama posisinya masih hidup.
+  const feesBaseWei = await checkV4Status(cc, tokenId)
+    .then((st) => st.val?.feesBaseWei)
+    .catch(() => undefined);
   // Profit card v4: butuh hasil terukur + modal awal. Diisi di cabang jurnal di
   // bawah (satu-satunya tempat keduanya diketahui), dikirim setelah kartu teks.
   let cardRec: store.PosRecord | undefined;
@@ -4045,7 +4062,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
       html,
     );
     if (cardOutWei !== undefined) {
-      await sendProfitCard(ctx, tokenId, cardRec, cardOutWei).catch((e) =>
+      await sendProfitCard(ctx, tokenId, cardRec, cardOutWei, feesBaseWei).catch((e) =>
         console.log('[profit-card] v4 failed:', (e as Error).message.slice(0, 120)),
       );
     }
