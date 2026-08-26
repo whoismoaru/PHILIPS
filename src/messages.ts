@@ -378,7 +378,11 @@ export function msgV4Position(p: {
   chain?: string;
   mcRange?: string; // rentang yang sama dibaca sebagai kapitalisasi pasar
   converted?: boolean; // out-of-range & 100% token seberang (target tercapai)
-  ladder?: { legIndex: number; legCount: number; shape: string; groupDeposit?: string; sharePct?: number; progress?: string }; // leg dari grup ladder
+  ladder?: { legIndex: number; legCount: number; shape: string; groupDeposit?: string; sharePct?: number; progress?: string;
+    // Ringkasan SELURUH ladder — inti fitur bid-ask. Tanpa ini kartu leg hanya
+    // memperlihatkan satu anak tangga, padahal yang disetor user adalah ladder.
+    valueLabel?: string; feesLabel?: string; pnlText?: string; mcRange?: string;
+    filled?: number; active?: number; waiting?: number }; // leg dari grup ladder
 }): string {
   // Samakan layout dengan kartu V3 (msgPositionCard): satu fakta satu baris,
   // status di barisnya sendiri, ada strategi + penjelasan uang.
@@ -421,9 +425,27 @@ export function msgV4Position(p: {
     '',
     `🔗 ${bold('Pair:')} ${esc(p.pair)} ${italic(`(${esc(p.feeLabel)} Fee)`)}${p.chain ? ` · ${esc(p.chain)}` : ''}`,
     `🎯 ${bold('Strategy:')} ${base} Side (Buy the dip)${isLeg ? ` · ${bold(`◣ ${p.ladder!.shape === 'bidask' ? 'Bid-Ask' : 'Spot'} ladder`)}` : ''}`,
-    ...(isLeg ? [`🪜 ${bold('Ladder leg:')} ${p.ladder!.legIndex + 1} / ${p.ladder!.legCount}`] : []),
-    ...(p.ladder?.progress ? [italic(`↳ ${esc(p.ladder.progress)}`)] : []),
-    ...(isLeg && p.ladder!.groupDeposit ? [`💰 ${bold('Ladder deposit:')} ${esc(p.ladder!.groupDeposit)} ${base} ${italic('(all legs)')}`] : []),
+    // ── Blok LADDER dulu (yang disetor user adalah ladder), baru blok leg. ──
+    ...(isLeg
+      ? [
+          '',
+          `🪜 ${bold(`LADDER · ${p.ladder!.legCount} legs`)}`,
+          ...(p.ladder!.groupDeposit ? [`💰 ${bold('Deposit:')} ${esc(p.ladder!.groupDeposit)} ${base}`] : []),
+          ...(p.ladder!.valueLabel
+            ? [
+                `💰 ${bold('Value now:')} ${esc(p.ladder!.valueLabel)}`,
+                ...(p.ladder!.feesLabel ? [italic(`↳ termasuk fee ${esc(p.ladder!.feesLabel)}`)] : []),
+              ]
+            : []),
+          ...(p.ladder!.pnlText ? [`📈 ${bold('Ladder PnL:')} ${esc(p.ladder!.pnlText)}`] : []),
+          ...(p.ladder!.mcRange ? [`📉 ${bold('Ladder Range:')} ${italic(esc(p.ladder!.mcRange))}`] : []),
+          ...(p.ladder!.filled !== undefined
+            ? [`🎚 ${bold('Rungs:')} ${p.ladder!.filled} terisi · ${p.ladder!.active} aktif · ${p.ladder!.waiting} menunggu`]
+            : []),
+          '',
+          `${italic(`— leg ${p.ladder!.legIndex + 1} dari ${p.ladder!.legCount}${p.ladder!.sharePct !== undefined ? `, ${p.ladder!.sharePct.toFixed(1)}% modal ladder` : ''} —`)}`,
+        ]
+      : []),
     `💰 ${bold(isLeg ? 'Leg Value:' : 'Value:')} ${esc(p.valueLabel)}`,
     ...(p.feesLabel ? [italic(`↳ termasuk fee ${esc(p.feesLabel)}`)] : []),
     `📉 ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${esc(p.rangeLabel)} ${italic('dari harga kini')}`,

@@ -975,10 +975,11 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       priceWarn = `harga pool ini ${x.toFixed(1)}× dari harga pasar (pasar ${explore.usdShort(mcMarket)}) — likuiditas dangkal, nilai & range di atas mengikuti pool ini, bukan pasar.`;
     }
   }
-  // Ringkasan SELURUH ladder untuk kartu satu leg. Diambil dari daftar v4 yang
-  // sudah ter-cache (45 dtk) — kartu leg tanpa konteks grup itu yang membuat
-  // satu anak tangga terserap terbaca seperti seluruh posisi habis.
-  const ladderProgress = tracked?.groupId
+  // Ringkasan SELURUH ladder untuk kartu satu leg. Yang disetor user adalah
+  // ladder, bukan satu anak tangga — tanpa blok ini kartu leg memperlihatkan
+  // nilai & PnL sepersekian modal dan terbaca menyesatkan. Datanya dari daftar
+  // v4 yang sudah ter-cache (45 dtk), jadi tak ada pembacaan per-leg.
+  const ladderSum = tracked?.groupId
     ? await (async () => {
         const legs = v4store.groupV4(tracked.groupId!);
         if (legs.length < 2) return undefined;
@@ -986,21 +987,54 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
         const byId = new Map(live.map((x) => [x.tokenId, x]));
         let filled = 0;
         let active = 0;
-        let doneWei = 0n;
-        let allWei = 0n;
+        let valWei = 0n;
+        let feeWei = 0n;
+        let depWei = 0n;
+        let lo: number | null = null;
+        let hi: number | null = null;
+        let seen = 0;
         for (const l of legs) {
+          depWei += BigInt(l.entryBaseWei || '0');
           const x = byId.get(l.tokenId);
-          allWei += BigInt(l.entryBaseWei || '0');
           if (!x) continue;
+          seen++;
           if (x.inRange) active++;
-          else if (x.converted) {
-            filled++;
-            doneWei += BigInt(l.entryBaseWei || '0');
-          }
+          else if (x.converted) filled++;
+          if (x.valueBaseWei !== null) valWei += x.valueBaseWei;
+          feeWei += x.feesBaseWei ?? 0n;
+          lo = lo === null ? x.tickLower : Math.min(lo, x.tickLower);
+          hi = hi === null ? x.tickUpper : Math.max(hi, x.tickUpper);
         }
-        const waiting = legs.length - filled - active;
-        const pct = allWei > 0n ? Number((doneWei * 1000n) / allWei) / 10 : 0;
-        return `ladder: ${filled} terisi · ${active} aktif · ${waiting} menunggu — ${pct.toFixed(1)}% modal sudah jadi ${p.sym0 === p.base ? p.sym1 : p.sym0}`;
+        const val = Number(ethers.formatUnits(valWei + feeWei, dec));
+        const dep = Number(ethers.formatUnits(depWei, dec));
+        const pnl = val - dep;
+        const pct = dep > 0 ? (pnl / dep) * 100 : 0;
+        const usdPer = p.base === 'USDG' ? 1 : ethUsdV4;
+        // Rentang ladder = ujung terluar seluruh leg, dipatok ke entry yang sama
+        // dengan baris mcap leg supaya kedua baris bisa dibandingkan langsung.
+        let mcRangeLadder: string | undefined;
+        if (lo !== null && hi !== null && tracked.entryMcap && tracked.entryTick !== undefined) {
+          const sgn = tracked.baseIsCurrency0 ? -1 : 1;
+          const mcOf = (tk: number) => tracked.entryMcap! * Math.pow(1.0001, sgn * (tk - tracked.entryTick!));
+          // Urutkan berdasarkan NILAI, bukan urutan tick: base = currency0 membuat
+          // tick naik berarti mcap turun, jadi tick tertinggi justru batas bawah.
+          const ends = [mcOf(lo), mcOf(hi)].sort((x, y) => y - x);
+          const nowStr = p.currentTick !== null ? ` · now ${explore.usdShort(mcOf(p.currentTick))}` : '';
+          mcRangeLadder = `${explore.usdShort(ends[0])} ⇄ ${explore.usdShort(ends[1])}${nowStr}`;
+        }
+        return {
+          valueLabel: seen ? `${val.toFixed(dec >= 18 ? 5 : 2)} ${p.base ?? ''}` : undefined,
+          feesLabel: feeWei > 0n ? `${Number(ethers.formatUnits(feeWei, dec)).toFixed(dec >= 18 ? 5 : 2)} ${p.base ?? ''}` : undefined,
+          pnlText: seen
+            ? usdPer !== null
+              ? `${msg.usdSigned(pnl * usdPer)} (${msg.fmtPct(pct)})`
+              : `${pnl >= 0 ? '+' : ''}${pnl.toFixed(dec >= 18 ? 5 : 2)} ${p.base ?? ''} (${msg.fmtPct(pct)})`
+            : undefined,
+          mcRange: mcRangeLadder,
+          filled,
+          active,
+          waiting: legs.length - filled - active,
+        };
       })()
     : undefined;
   const text = msg.msgV4Position({
@@ -1030,7 +1064,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
           const mine = BigInt(tracked.entryBaseWei || '0');
           return {
             sharePct: depWei > 0n ? Number((mine * 10000n) / depWei) / 100 : undefined,
-            progress: ladderProgress,
+            ...ladderSum,
             legIndex: tracked.legIndex ?? 0,
             legCount: tracked.legCount ?? legs.length,
             shape: tracked.shape ?? 'bidask',
