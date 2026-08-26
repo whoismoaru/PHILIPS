@@ -93,17 +93,9 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   const img = await background();
   if (img) {
     // Cover RATA KANAN, bukan crop tengah: komposisi artwork menaruh karakter di
-    // kanan dan ruang kosong di kiri — persis tempat panel kartu ini.
+    // kanan dan ruang kosong di kiri — persis tempat teks kartu ini.
     const s = Math.max(W / img.width, H / img.height);
     ctx.drawImage(img, W - img.width * s, (H - img.height * s) / 2, img.width * s, img.height * s);
-    // Scrim lembut saja: kontras teks sekarang datang dari panel kaca di bawah,
-    // jadi artwork tak perlu digelapkan sekeras dulu.
-    const sc = ctx.createLinearGradient(0, 0, W, 0);
-    sc.addColorStop(0, 'rgba(7,10,16,0.86)');
-    sc.addColorStop(0.55, 'rgba(7,10,16,0.55)');
-    sc.addColorStop(1, 'rgba(7,10,16,0.10)');
-    ctx.fillStyle = sc;
-    ctx.fillRect(0, 0, W, H);
   } else {
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, COL.bg0);
@@ -112,128 +104,85 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
     ctx.fillRect(0, 0, W, H);
   }
 
-  // ── Panel kaca. Menggantikan tumpukan teks telanjang + garis pemisah yang
-  // dulu terpotong di tengah udara. Panel memberi tepi yang disengaja, jadi
-  // tata letak boleh bernapas tanpa terlihat kaku.
-  const PX = 44;
-  const PY = 40;
-  const PWID = 680;
-  const PHGT = H - PY * 2 - 8;
+  // ── Selubung gelap MIRING yang memudar habis, bukan panel bertepi. Artwork
+  // menembus sampai ke area teks; peralihannya tak berbatas garis.
+  // Gradasi WAJIB mencapai nol (760) SEBELUM tepi kliping paling kiri (800),
+  // kalau tidak sisa kegelapan di garis potong terbaca sebagai garis tegak.
   ctx.save();
-  roundRect(ctx, PX, PY, PWID, PHGT, 34);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(900, 0);
+  ctx.lineTo(800, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
   ctx.clip();
-  ctx.fillStyle = 'rgba(9,12,19,0.80)';
-  ctx.fillRect(PX, PY, PWID, PHGT);
-  // Cahaya accent dari kiri-atas: kedalaman, sekaligus mewarnai kartu sesuai hasil.
-  const glow = ctx.createRadialGradient(PX + 150, PY + 150, 10, PX + 150, PY + 150, 430);
-  glow.addColorStop(0, accent + '1C');
+  const veil = ctx.createLinearGradient(0, 0, 760, 0);
+  veil.addColorStop(0, 'rgba(8,11,18,0.88)');
+  veil.addColorStop(0.55, 'rgba(12,16,26,0.62)');
+  veil.addColorStop(1, 'rgba(18,24,38,0)');
+  ctx.fillStyle = veil;
+  ctx.fillRect(0, 0, 900, H);
+  const glow = ctx.createRadialGradient(120, 130, 10, 120, 130, 600);
+  glow.addColorStop(0, accent + '24');
   glow.addColorStop(1, accent + '00');
   ctx.fillStyle = glow;
-  ctx.fillRect(PX, PY, PWID, PHGT);
+  ctx.fillRect(0, 0, 900, H);
   ctx.restore();
-  roundRect(ctx, PX + 0.5, PY + 0.5, PWID - 1, PHGT - 1, 34);
-  ctx.strokeStyle = 'rgba(255,255,255,0.11)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
 
-  const CX = PX + 44; // margin kiri isi panel
-  const CW = PWID - 88; // lebar isi panel
-
-  // ── Header: penanda accent + wordmark, lalu pasangan token sebagai chip.
-  ctx.fillStyle = accent;
-  roundRect(ctx, CX, PY + 44, 8, 30, 4);
-  ctx.fill();
+  const X = 76;
+  ctx.fillStyle = COL.muted;
+  ctx.font = '19px PhSansB';
+  ctx.fillText('PHILIPS', X, 84);
   ctx.fillStyle = COL.text;
-  ctx.font = '30px PhSansB';
-  ctx.fillText('PHILIPS', CX + 22, PY + 69);
+  ctx.font = '29px PhSansB';
+  ctx.fillText(o.pair, X, 128);
 
-  const chipH = 40;
-  const chipY = PY + 92;
-  ctx.font = '21px PhSans';
-  const chipW = ctx.measureText(o.pair).width + 36;
-  ctx.fillStyle = 'rgba(255,255,255,0.07)';
-  roundRect(ctx, CX, chipY, chipW, chipH, chipH / 2);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
-  ctx.lineWidth = 1;
-  roundRect(ctx, CX + 0.5, chipY + 0.5, chipW - 1, chipH - 1, chipH / 2);
-  ctx.stroke();
-  ctx.fillStyle = COL.text;
-  ctx.fillText(o.pair, CX + 18, chipY + 27);
-
-  // ── Hero: label, angka besar, lalu persen dalam pil bernada accent.
+  // Label hasil + garis bawah selebar KATANYA SENDIRI (LOSS lebih pendek dari
+  // PROFIT; lebar mati akan menyisakan garis menggantung).
+  const word = o.positive ? 'PROFIT' : 'LOSS';
   ctx.fillStyle = accent;
-  ctx.font = '21px PhSansB';
-  ctx.fillText(o.positive ? 'PROFIT' : 'LOSS', CX, PY + 196);
+  ctx.font = '19px PhSansB';
+  ctx.fillText(word, X, 208);
+  ctx.fillRect(X, 216, ctx.measureText(word).width, 2);
 
-  // Angka utama MENGECIL sendiri sampai muat di panel. Ukuran mati cocok untuk
-  // '+$1.42' tapi '-138.61 USDT' meluber keluar panel — rekap PnL memang sering
-  // panjang (nilai + satuan).
-  let heroPx = 106;
-  ctx.font = `${heroPx}px PhSansB`;
-  while (heroPx > 46 && ctx.measureText(o.pnlBig).width > CW) {
-    heroPx -= 4;
-    ctx.font = `${heroPx}px PhSansB`;
+  // Nominal + persen ikut warna hasil. Satuan ('USDT') dipisah dan digambar
+  // lebih kecil: yang membuat '-138.61 USDT' jauh lebih panjang dari '+$18.42'
+  // adalah satuannya, bukan angkanya — dipisah begini kedua kartu seukuran.
+  // Angkanya tetap MENGECIL sendiri kalau ekstrem panjang (jaring pengaman).
+  const sp = o.pnlBig.indexOf(' ');
+  const num = sp < 0 ? o.pnlBig : o.pnlBig.slice(0, sp);
+  const unit = sp < 0 ? '' : o.pnlBig.slice(sp + 1);
+  let npx = 92;
+  ctx.font = `${npx}px PhSansB`;
+  while (npx > 44 && ctx.measureText(num).width > (unit ? 400 : 460)) {
+    npx -= 3;
+    ctx.font = `${npx}px PhSansB`;
   }
-  const heroY = PY + 296 - Math.round((106 - heroPx) * 0.35);
-  ctx.fillStyle = COL.text;
-  ctx.fillText(o.pnlBig, CX - 2, heroY);
-
-  const pctTxt = `${o.positive ? '▲' : '▼'}  ${o.pnlPct}`;
-  ctx.font = '30px PhSansB';
-  const pctW = ctx.measureText(pctTxt).width + 40;
-  const pctY = heroY + 24;
-  ctx.fillStyle = accent + '24';
-  roundRect(ctx, CX, pctY, pctW, 52, 26);
-  ctx.fill();
-  ctx.strokeStyle = accent + '59';
-  ctx.lineWidth = 1.5;
-  roundRect(ctx, CX + 0.75, pctY + 0.75, pctW - 1.5, 50.5, 26);
-  ctx.stroke();
   ctx.fillStyle = accent;
-  ctx.fillText(pctTxt, CX + 20, pctY + 36);
-
-  // ── Stats sebagai kartu kecil, bukan kolom teks telanjang. Font nilai turun
-  // bertahap supaya empat stat tetap muat sebelum ada yang dibuang.
-  const stats = o.stats.slice(0, 4);
-  const GAP = 10;
-  const statsY = PY + PHGT - 152;
-  const statH = 84;
-  let vPx = 24;
-  let widths: number[] = [];
-  for (const px of [24, 22, 20, 18]) {
-    vPx = px;
-    widths = stats.map((s) => {
-      ctx.font = '16px PhSansB';
-      const lw = ctx.measureText(s.label.toUpperCase()).width;
-      ctx.font = `${px}px PhSans`;
-      return Math.max(lw, ctx.measureText(s.value).width) + 32;
-    });
-    if (widths.reduce((a, b) => a + b, 0) + GAP * (stats.length - 1) <= CW) break;
+  ctx.fillText(num, X - 2, 302);
+  if (unit) {
+    const nw = ctx.measureText(num).width;
+    ctx.font = `${Math.round(npx * 0.42)}px PhSansB`;
+    ctx.fillText(unit, X - 2 + nw + 14, 302);
   }
-  let sx = CX;
-  stats.forEach((s, i) => {
-    const w = widths[i];
-    if (sx + w > CX + CW) return; // lebih baik satu stat hilang daripada meluber
-    ctx.fillStyle = 'rgba(255,255,255,0.055)';
-    roundRect(ctx, sx, statsY, w, statH, 16);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-    ctx.lineWidth = 1;
-    roundRect(ctx, sx + 0.5, statsY + 0.5, w - 1, statH - 1, 16);
-    ctx.stroke();
+  ctx.font = '40px PhSansB';
+  ctx.fillText(o.pnlPct, X, 366);
+
+  // Statistik 2x2 — tanpa kotak, cuma jarak.
+  o.stats.slice(0, 4).forEach((s, i) => {
+    const y = 424 + Math.floor(i / 2) * 82;
+    const x = X + (i % 2) * 250;
     ctx.fillStyle = COL.muted;
     ctx.font = '16px PhSansB';
-    ctx.fillText(s.label.toUpperCase(), sx + 16, statsY + 32);
+    ctx.fillText(s.label.toUpperCase(), x, y);
     ctx.fillStyle = COL.text;
-    ctx.font = `${vPx}px PhSans`;
-    ctx.fillText(s.value, sx + 16, statsY + 64);
-    sx += w + GAP;
+    ctx.font = '25px PhSans';
+    ctx.fillText(s.value, x, y + 32);
   });
 
   ctx.fillStyle = COL.muted;
-  ctx.font = '18px PhMono';
-  ctx.fillText(o.footerLeft, CX, PY + PHGT - 34);
+  ctx.font = '17px PhMono';
+  ctx.fillText(o.footerLeft, X, H - 42);
 
   return canvas.toBuffer('image/png');
 }
