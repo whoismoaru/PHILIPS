@@ -3568,7 +3568,6 @@ async function sendProfitCard(
   feesBaseWei?: bigint,
 ): Promise<void> {
   if (!rec) return;
-  const stable = isStableBase(rec.baseKind ?? 'weth');
   const dec = baseDecimalsOf(rec.chain, rec.baseKind);
   const baseSym = baseSymbolOf(rec.baseKind, ctxOf(rec));
   const baseIn = Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
@@ -3576,18 +3575,17 @@ async function sendProfitCard(
   const pnl = baseOut - baseIn;
   const pnlPct = baseIn > 0 ? (pnl / baseIn) * 100 : 0;
   const positive = pnl >= 0;
-  let usd: number | null = null;
-  if (stable) usd = pnl;
-  else {
-    const cc = ctxOf(rec);
-    const eu = await getEthUsd(cc.wethAddress, cc);
-    usd = eu !== null ? pnl * eu : null;
-  }
+  // PnL SELALU dalam aset yang dipakai DEPOSIT: deposit USDG dilaporkan dalam
+  // USDG, deposit ETH dalam ETH. Dulu semuanya dikali harga hari ini jadi USD —
+  // itu memasukkan gerak harga base ke dalam angka yang seharusnya murni hasil
+  // LP (deposit 1 ETH balik 1 ETH bisa terbaca "-$120" cuma karena ETH turun),
+  // sekaligus tak sebaris dengan baris deposit/received di bawahnya.
   const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
+  const pnlBig = `${positive ? '+' : ''}${fmt(pnl)} ${baseSym}`;
   const buf = await renderProfitCard({
     pair: `${baseSym} / ${rec.symbol}`,
     positive,
-    pnlBig: usd !== null ? msg.usdSigned(usd) : `${positive ? '+' : ''}${pnl.toFixed(dec >= 18 ? 5 : 2)} ${baseSym}`,
+    pnlBig,
     pnlPct: msg.fmtPct(pnlPct),
     stats: [
       { label: 'deposit', value: `${fmt(baseIn)} ${baseSym}` },
