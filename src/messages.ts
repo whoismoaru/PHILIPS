@@ -378,7 +378,7 @@ export function msgV4Position(p: {
   chain?: string;
   mcRange?: string; // rentang yang sama dibaca sebagai kapitalisasi pasar
   converted?: boolean; // out-of-range & 100% token seberang (target tercapai)
-  ladder?: { legIndex: number; legCount: number; shape: string; groupDeposit?: string }; // leg dari grup ladder
+  ladder?: { legIndex: number; legCount: number; shape: string; groupDeposit?: string; sharePct?: number }; // leg dari grup ladder
 }): string {
   // Samakan layout dengan kartu V3 (msgPositionCard): satu fakta satu baris,
   // status di barisnya sendiri, ada strategi + penjelasan uang.
@@ -399,7 +399,13 @@ export function msgV4Position(p: {
       : p.inRange
         ? `Your liquidity is ${bold('active')} and earning fees right now. As long as ${sym} stays inside this range, fees keep accruing.`
         : p.converted
-          ? `Price dropped through this ${p.ladder && p.ladder.legCount > 1 ? 'leg' : 'position'}'s entire range, so it is now ${bold(`100% ${sym}`)} — the buy-dip target here is done. The value above is that ${sym} priced back in ${base}; it falls further if ${sym} keeps dropping. Hold and wait for a bounce, or close.`
+          ? p.ladder && p.ladder.legCount > 1
+            // Leg ladder yang habis terserap itu NORMAL, bukan tanda ladder-nya
+            // gagal — anak tangga terisi satu per satu dari atas. Sebut porsi
+            // modalnya supaya "OUT OF RANGE" pada kartu SATU leg tak terbaca
+            // seolah seluruh modal ladder sudah berubah jadi token.
+            ? `Price dropped through ${bold('this leg')}'s range, so leg ${p.ladder.legIndex + 1} of ${p.ladder.legCount} is now ${bold(`100% ${sym}`)}${p.ladder.sharePct !== undefined ? ` — ${bold(`${p.ladder.sharePct.toFixed(1)}%`)} of the ladder` : ''}. That is how a ladder works: rungs fill one at a time from the top. The legs below still hold ${base} and are waiting for lower prices. Judge the ladder as a whole, not this rung alone.`
+            : `Price dropped through this position's entire range, so it is now ${bold(`100% ${sym}`)} — the buy-dip target here is done. The value above is that ${sym} priced back in ${base}; it falls further if ${sym} keeps dropping. Hold and wait for a bounce, or close.`
           : `Your liquidity is currently inactive. It will automatically convert to ${sym} and start earning fees once the token price ${bold('drops')} into your target range (${esc(p.rangeLabel)}).`;
 
   const isLeg = p.ladder && p.ladder.legCount > 1;

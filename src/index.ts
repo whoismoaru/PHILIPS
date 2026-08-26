@@ -996,7 +996,12 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       ? (() => {
           const legs = v4store.groupV4(tracked.groupId!);
           const depWei = legs.reduce((s, l) => s + BigInt(l.entryBaseWei || '0'), 0n);
+          // Porsi modal leg ini dari seluruh ladder — murni dari data tersimpan,
+          // nol RPC tambahan. Bid-ask menaruh bobot terkecil di leg teratas,
+          // jadi leg yang duluan habis biasanya justru yang paling kecil.
+          const mine = BigInt(tracked.entryBaseWei || '0');
           return {
+            sharePct: depWei > 0n ? Number((mine * 10000n) / depWei) / 100 : undefined,
             legIndex: tracked.legIndex ?? 0,
             legCount: tracked.legCount ?? legs.length,
             shape: tracked.shape ?? 'bidask',
