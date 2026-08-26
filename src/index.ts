@@ -868,16 +868,27 @@ function finalizeClose(
 
 /** Kartu detail satu posisi v4 (nilai + range% + PnL bila dikelola bot) + tombol. */
 async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain()): Promise<{ text: string; extra: Record<string, unknown> }> {
+  const tracked0 = v4store.getV4(p.tokenId);
   const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
   const dec = baseDecimalsOf(undefined, p.base === 'USDG' ? 'usdg' : 'weth'); // v4 = chain utama
   let valueLabel = '—';
+  let feesLabel: string | undefined;
+  // Value = prinsipal + fee. Tanpa rincian, kartu bisa tampak "cuma -3.6%"
+  // padahal prinsipal -19% dan yang menambal adalah fee — sengaja dipisah.
+  if (p.feesBaseWei !== null && p.feesBaseWei > 0n && p.valueBaseWei !== null) {
+    const fd = p.base === 'USDG' ? 6 : 18;
+    const f = Number(ethers.formatUnits(p.feesBaseWei, fd));
+    const ent = tracked0 ? Number(ethers.formatUnits(BigInt(tracked0.entryBaseWei), fd)) : 0;
+    const pct = ent > 0 ? ` (+${((f / ent) * 100).toFixed(1)}% modal)` : '';
+    feesLabel = `${f.toFixed(fd >= 18 ? 5 : 2)} ${p.base ?? ''}${pct}`;
+  }
   if (p.valueBaseWei !== null && p.base === 'ETH') {
     const eth = Number(ethers.formatEther(p.valueBaseWei + (p.feesBaseWei ?? 0n)));
     valueLabel = ethUsdV4 !== null ? `${msg.usdPlain(eth * ethUsdV4)}  (${eth.toFixed(5)} ETH)` : `${eth.toFixed(5)} ETH`;
   } else if (p.valueBaseWei !== null && p.base === 'USDG') {
     valueLabel = `${Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), 6)).toFixed(2)} USDG`;
   }
-  const tracked = v4store.getV4(p.tokenId);
+  const tracked = tracked0;
   // Range % DIPATOK ke tick ENTRY (bila tersimpan) → angkanya diam, tak goyang tiap
   // refresh. Fallback ke live (relatif harga sekarang) untuk posisi tanpa entryTick.
   // Batas rentang DAN harga sekarang dihitung di SATU ruang: tick pool, dipatok
@@ -964,6 +975,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     pair: `${p.sym0} / ${p.sym1}`,
     feeLabel,
     valueLabel,
+    feesLabel,
     rangeLabel,
     inRange: p.inRange,
     pnlText,

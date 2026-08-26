@@ -366,6 +366,7 @@ export function msgV4Position(p: {
   pair: string;
   feeLabel: string;
   valueLabel: string; // "$12.34" / "0.02 ETH" / "—"
+  feesLabel?: string; // fee belum diklaim, sudah termasuk di valueLabel
   rangeLabel: string; // "+5.2% / -3.1%" / "—"
   inRange: boolean | null;
   pnlText?: string; // hanya bila dikelola bot (entry diketahui)
@@ -410,6 +411,7 @@ export function msgV4Position(p: {
     ...(isLeg ? [`🪜 ${bold('Ladder leg:')} ${p.ladder!.legIndex + 1} / ${p.ladder!.legCount}`] : []),
     ...(isLeg && p.ladder!.groupDeposit ? [`💰 ${bold('Ladder deposit:')} ${esc(p.ladder!.groupDeposit)} ${base} ${italic('(all legs)')}`] : []),
     `💰 ${bold(isLeg ? 'Leg Value:' : 'Value:')} ${esc(p.valueLabel)}`,
+    ...(p.feesLabel ? [italic(`↳ termasuk fee ${esc(p.feesLabel)}`)] : []),
     `📉 ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${esc(p.rangeLabel)}`,
     ...(p.mcRange ? [italic(`↳ market cap ${esc(p.mcRange)}`)] : []),
     ...(p.pnlText ? [`📈 ${bold('Current PnL:')} ${esc(p.pnlText)}`] : []),
