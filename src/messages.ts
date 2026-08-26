@@ -378,20 +378,27 @@ export function msgV4Position(p: {
   chain?: string;
   mcRange?: string; // rentang yang sama dibaca sebagai kapitalisasi pasar
   converted?: boolean; // out-of-range & 100% token seberang (target tercapai)
-  ladder?: { legIndex: number; legCount: number; shape: string; groupDeposit?: string; sharePct?: number }; // leg dari grup ladder
+  ladder?: { legIndex: number; legCount: number; shape: string; groupDeposit?: string; sharePct?: number; progress?: string }; // leg dari grup ladder
 }): string {
   // Samakan layout dengan kartu V3 (msgPositionCard): satu fakta satu baris,
   // status di barisnya sendiri, ada strategi + penjelasan uang.
   const base = esc(p.baseSymbol ?? 'ETH');
   const sym = esc(p.tokenSymbol ?? p.pair.split('/').map((s) => s.trim()).find((s) => s !== p.baseSymbol) ?? 'token');
-  const statusEmoji = p.inRange === null ? '🔷' : p.inRange ? '🟢' : '🔴';
+  const isLadderLeg = !!p.ladder && p.ladder.legCount > 1;
+  // Leg ladder yang terserap BUKAN kegagalan — itu tugasnya. "OUT OF RANGE"
+  // merah pada satu anak tangga terbaca seperti seluruh posisi bermasalah,
+  // padahal ladder-nya masih jalan. Leg terisi dapat kata & warnanya sendiri.
+  const statusEmoji =
+    p.inRange === null ? '🔷' : p.inRange ? '🟢' : p.converted && isLadderLeg ? '🟡' : '🔴';
   const status =
     p.inRange === null
       ? bold('UNKNOWN')
       : p.inRange
         ? bold('IN RANGE')
         : p.converted
-          ? `${bold('OUT OF RANGE')} — fully converted`
+          ? isLadderLeg
+            ? `${bold('LEG FILLED')} — bought, ladder still running`
+            : `${bold('OUT OF RANGE')} — fully converted`
           : `${bold('OUT OF RANGE')} — waiting`;
   const explain =
     p.inRange === null
@@ -415,6 +422,7 @@ export function msgV4Position(p: {
     `🔗 ${bold('Pair:')} ${esc(p.pair)} ${italic(`(${esc(p.feeLabel)} Fee)`)}${p.chain ? ` · ${esc(p.chain)}` : ''}`,
     `🎯 ${bold('Strategy:')} ${base} Side (Buy the dip)${isLeg ? ` · ${bold(`◣ ${p.ladder!.shape === 'bidask' ? 'Bid-Ask' : 'Spot'} ladder`)}` : ''}`,
     ...(isLeg ? [`🪜 ${bold('Ladder leg:')} ${p.ladder!.legIndex + 1} / ${p.ladder!.legCount}`] : []),
+    ...(p.ladder?.progress ? [italic(`↳ ${esc(p.ladder.progress)}`)] : []),
     ...(isLeg && p.ladder!.groupDeposit ? [`💰 ${bold('Ladder deposit:')} ${esc(p.ladder!.groupDeposit)} ${base} ${italic('(all legs)')}`] : []),
     `💰 ${bold(isLeg ? 'Leg Value:' : 'Value:')} ${esc(p.valueLabel)}`,
     ...(p.feesLabel ? [italic(`↳ termasuk fee ${esc(p.feesLabel)}`)] : []),

@@ -975,6 +975,34 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       priceWarn = `harga pool ini ${x.toFixed(1)}× dari harga pasar (pasar ${explore.usdShort(mcMarket)}) — likuiditas dangkal, nilai & range di atas mengikuti pool ini, bukan pasar.`;
     }
   }
+  // Ringkasan SELURUH ladder untuk kartu satu leg. Diambil dari daftar v4 yang
+  // sudah ter-cache (45 dtk) — kartu leg tanpa konteks grup itu yang membuat
+  // satu anak tangga terserap terbaca seperti seluruh posisi habis.
+  const ladderProgress = tracked?.groupId
+    ? await (async () => {
+        const legs = v4store.groupV4(tracked.groupId!);
+        if (legs.length < 2) return undefined;
+        const live = await listPositionsV4(cc).catch(() => [] as V4Position[]);
+        const byId = new Map(live.map((x) => [x.tokenId, x]));
+        let filled = 0;
+        let active = 0;
+        let doneWei = 0n;
+        let allWei = 0n;
+        for (const l of legs) {
+          const x = byId.get(l.tokenId);
+          allWei += BigInt(l.entryBaseWei || '0');
+          if (!x) continue;
+          if (x.inRange) active++;
+          else if (x.converted) {
+            filled++;
+            doneWei += BigInt(l.entryBaseWei || '0');
+          }
+        }
+        const waiting = legs.length - filled - active;
+        const pct = allWei > 0n ? Number((doneWei * 1000n) / allWei) / 10 : 0;
+        return `ladder: ${filled} terisi · ${active} aktif · ${waiting} menunggu — ${pct.toFixed(1)}% modal sudah jadi ${p.sym0 === p.base ? p.sym1 : p.sym0}`;
+      })()
+    : undefined;
   const text = msg.msgV4Position({
     tokenId: p.tokenId,
     pair: `${p.sym0} / ${p.sym1}`,
@@ -1002,6 +1030,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
           const mine = BigInt(tracked.entryBaseWei || '0');
           return {
             sharePct: depWei > 0n ? Number((mine * 10000n) / depWei) / 100 : undefined,
+            progress: ladderProgress,
             legIndex: tracked.legIndex ?? 0,
             legCount: tracked.legCount ?? legs.length,
             shape: tracked.shape ?? 'bidask',
