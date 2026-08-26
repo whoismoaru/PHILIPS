@@ -93,16 +93,15 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   const img = await background();
   if (img) {
     // Cover RATA KANAN, bukan crop tengah: komposisi artwork menaruh karakter di
-    // kanan dan ruang kosong di kiri — persis tempat teks kartu ini.
+    // kanan dan ruang kosong di kiri — persis tempat panel kartu ini.
     const s = Math.max(W / img.width, H / img.height);
     ctx.drawImage(img, W - img.width * s, (H - img.height * s) / 2, img.width * s, img.height * s);
-    // Scrim gelap: pekat di kiri (agar teks terbaca), menghilang di kanan (agar
-    // karakternya tetap kelihatan).
+    // Scrim lembut saja: kontras teks sekarang datang dari panel kaca di bawah,
+    // jadi artwork tak perlu digelapkan sekeras dulu.
     const sc = ctx.createLinearGradient(0, 0, W, 0);
-    sc.addColorStop(0, 'rgba(7,10,16,0.94)');
-    sc.addColorStop(0.5, 'rgba(7,10,16,0.80)');
-    sc.addColorStop(0.78, 'rgba(7,10,16,0.18)');
-    sc.addColorStop(1, 'rgba(7,10,16,0.05)');
+    sc.addColorStop(0, 'rgba(7,10,16,0.86)');
+    sc.addColorStop(0.55, 'rgba(7,10,16,0.55)');
+    sc.addColorStop(1, 'rgba(7,10,16,0.10)');
     ctx.fillStyle = sc;
     ctx.fillRect(0, 0, W, H);
   } else {
@@ -111,76 +110,130 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
     g.addColorStop(1, COL.bg1);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
-    const glow = ctx.createRadialGradient(W - 200, 140, 20, W - 200, 140, 420);
-    glow.addColorStop(0, accent + '33');
-    glow.addColorStop(1, accent + '00');
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, W, H);
   }
 
-  // Header brand.
-  ctx.fillStyle = COL.text;
-  ctx.font = '36px PhSansB';
-  ctx.fillText('PHILIPS', PAD, 100);
-  ctx.fillStyle = COL.muted;
-  ctx.font = '22px PhSans';
-  ctx.fillText(o.pair, PAD, 136);
+  // ── Panel kaca. Menggantikan tumpukan teks telanjang + garis pemisah yang
+  // dulu terpotong di tengah udara. Panel memberi tepi yang disengaja, jadi
+  // tata letak boleh bernapas tanpa terlihat kaku.
+  const PX = 44;
+  const PY = 40;
+  const PWID = 680;
+  const PHGT = H - PY * 2 - 8;
+  ctx.save();
+  roundRect(ctx, PX, PY, PWID, PHGT, 34);
+  ctx.clip();
+  ctx.fillStyle = 'rgba(9,12,19,0.80)';
+  ctx.fillRect(PX, PY, PWID, PHGT);
+  // Cahaya accent dari kiri-atas: kedalaman, sekaligus mewarnai kartu sesuai hasil.
+  const glow = ctx.createRadialGradient(PX + 150, PY + 150, 10, PX + 150, PY + 150, 430);
+  glow.addColorStop(0, accent + '1C');
+  glow.addColorStop(1, accent + '00');
+  ctx.fillStyle = glow;
+  ctx.fillRect(PX, PY, PWID, PHGT);
+  ctx.restore();
+  roundRect(ctx, PX + 0.5, PY + 0.5, PWID - 1, PHGT - 1, 34);
+  ctx.strokeStyle = 'rgba(255,255,255,0.11)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
 
-  // Hero: label + PnL besar + persen.
-  ctx.fillStyle = COL.muted;
-  ctx.font = '24px PhSansB';
-  ctx.fillText(o.positive ? 'PROFIT' : 'LOSS', PAD, 250);
+  const CX = PX + 44; // margin kiri isi panel
+  const CW = PWID - 88; // lebar isi panel
+
+  // ── Header: penanda accent + wordmark, lalu pasangan token sebagai chip.
   ctx.fillStyle = accent;
-  // Angka utama MENGECIL sendiri sampai muat di kolom teks. Ukuran mati 118px cocok
-  // untuk '+$1.42' tapi '-138.61 USDT' meluber menutupi karakter di kanan — dan
-  // rekap PnL memang sering panjang (nilai + satuan).
-  const HERO_MAX_W = 700;
-  let heroPx = 118;
+  roundRect(ctx, CX, PY + 44, 8, 30, 4);
+  ctx.fill();
+  ctx.fillStyle = COL.text;
+  ctx.font = '30px PhSansB';
+  ctx.fillText('PHILIPS', CX + 22, PY + 69);
+
+  const chipH = 40;
+  const chipY = PY + 92;
+  ctx.font = '21px PhSans';
+  const chipW = ctx.measureText(o.pair).width + 36;
+  ctx.fillStyle = 'rgba(255,255,255,0.07)';
+  roundRect(ctx, CX, chipY, chipW, chipH, chipH / 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, CX + 0.5, chipY + 0.5, chipW - 1, chipH - 1, chipH / 2);
+  ctx.stroke();
+  ctx.fillStyle = COL.text;
+  ctx.fillText(o.pair, CX + 18, chipY + 27);
+
+  // ── Hero: label, angka besar, lalu persen dalam pil bernada accent.
+  ctx.fillStyle = accent;
+  ctx.font = '21px PhSansB';
+  ctx.fillText(o.positive ? 'PROFIT' : 'LOSS', CX, PY + 196);
+
+  // Angka utama MENGECIL sendiri sampai muat di panel. Ukuran mati cocok untuk
+  // '+$1.42' tapi '-138.61 USDT' meluber keluar panel — rekap PnL memang sering
+  // panjang (nilai + satuan).
+  let heroPx = 106;
   ctx.font = `${heroPx}px PhSansB`;
-  while (heroPx > 56 && ctx.measureText(o.pnlBig).width > HERO_MAX_W) {
+  while (heroPx > 46 && ctx.measureText(o.pnlBig).width > CW) {
     heroPx -= 4;
     ctx.font = `${heroPx}px PhSansB`;
   }
-  // Baseline ikut turun-naik supaya jarak ke label & ke persen tetap seimbang.
-  const heroY = 356 - Math.round((118 - heroPx) * 0.35);
-  ctx.fillText(o.pnlBig, PAD - 2, heroY);
-  ctx.font = '46px PhSansB';
-  ctx.fillText(o.pnlPct, PAD, heroY + 56);
+  const heroY = PY + 296 - Math.round((106 - heroPx) * 0.35);
+  ctx.fillStyle = COL.text;
+  ctx.fillText(o.pnlBig, CX - 2, heroY);
 
-  // Divider hanya selebar area teks — jangan memotong karakter di kanan.
-  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(PAD, 466);
-  ctx.lineTo(660, 466);
+  const pctTxt = `${o.positive ? '▲' : '▼'}  ${o.pnlPct}`;
+  ctx.font = '30px PhSansB';
+  const pctW = ctx.measureText(pctTxt).width + 40;
+  const pctY = heroY + 24;
+  ctx.fillStyle = accent + '24';
+  roundRect(ctx, CX, pctY, pctW, 52, 26);
+  ctx.fill();
+  ctx.strokeStyle = accent + '59';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, CX + 0.75, pctY + 0.75, pctW - 1.5, 50.5, 26);
   ctx.stroke();
+  ctx.fillStyle = accent;
+  ctx.fillText(pctTxt, CX + 20, pctY + 36);
 
-  // Stats: jarak dari lebar TERUKUR. Jarak mati membuat nilai panjang bertabrakan.
-  let x = PAD;
-  // Berhenti sebelum kolom teks habis: stat yang meluber akan tercetak DI ATAS
-  // karakter di kanan dan jadi tak terbaca. Lebih baik satu stat tak tampil
-  // daripada semuanya kotor. Batasnya disetel agar TIGA stat normal tetap muat
-  // (pernah kesempitan sampai kolom LOSS ikut terbuang), tapi yang keempat tertahan.
-  const STATS_MAX_X = 790;
-  for (const s of o.stats.slice(0, 4)) {
-    const label = s.label.toUpperCase();
-    ctx.font = '20px PhSansB';
-    const lw = ctx.measureText(label).width;
-    ctx.font = '28px PhSans';
-    const vw = ctx.measureText(s.value).width;
-    if (x + Math.max(lw, vw) > STATS_MAX_X) break;
-    ctx.fillStyle = COL.muted;
-    ctx.font = '20px PhSansB';
-    ctx.fillText(label, x, 518);
-    ctx.fillStyle = COL.text;
-    ctx.font = '28px PhSans';
-    ctx.fillText(s.value, x, 556);
-    x += Math.max(lw, vw) + 46;
+  // ── Stats sebagai kartu kecil, bukan kolom teks telanjang. Font nilai turun
+  // bertahap supaya empat stat tetap muat sebelum ada yang dibuang.
+  const stats = o.stats.slice(0, 4);
+  const GAP = 10;
+  const statsY = PY + PHGT - 152;
+  const statH = 84;
+  let vPx = 24;
+  let widths: number[] = [];
+  for (const px of [24, 22, 20, 18]) {
+    vPx = px;
+    widths = stats.map((s) => {
+      ctx.font = '16px PhSansB';
+      const lw = ctx.measureText(s.label.toUpperCase()).width;
+      ctx.font = `${px}px PhSans`;
+      return Math.max(lw, ctx.measureText(s.value).width) + 32;
+    });
+    if (widths.reduce((a, b) => a + b, 0) + GAP * (stats.length - 1) <= CW) break;
   }
+  let sx = CX;
+  stats.forEach((s, i) => {
+    const w = widths[i];
+    if (sx + w > CX + CW) return; // lebih baik satu stat hilang daripada meluber
+    ctx.fillStyle = 'rgba(255,255,255,0.055)';
+    roundRect(ctx, sx, statsY, w, statH, 16);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, sx + 0.5, statsY + 0.5, w - 1, statH - 1, 16);
+    ctx.stroke();
+    ctx.fillStyle = COL.muted;
+    ctx.font = '16px PhSansB';
+    ctx.fillText(s.label.toUpperCase(), sx + 16, statsY + 32);
+    ctx.fillStyle = COL.text;
+    ctx.font = `${vPx}px PhSans`;
+    ctx.fillText(s.value, sx + 16, statsY + 64);
+    sx += w + GAP;
+  });
 
   ctx.fillStyle = COL.muted;
-  ctx.font = '20px PhMono';
-  ctx.fillText(o.footerLeft, PAD, H - 40);
+  ctx.font = '18px PhMono';
+  ctx.fillText(o.footerLeft, CX, PY + PHGT - 34);
 
   return canvas.toBuffer('image/png');
 }
