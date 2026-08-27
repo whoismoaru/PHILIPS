@@ -739,6 +739,9 @@ async function buildPositionCard(
             return {
               inWei: BigInt(l.initialWethWei || '0'),
               valWei: dd.valueBaseWei + dd.feesBaseWei,
+              feeWei: dd.feesBaseWei,
+              lo: Math.min(Number(dd.priceLower), Number(dd.priceUpper)),
+              hi: Math.max(Number(dd.priceLower), Number(dd.priceUpper)),
               inRange: dd.inRange,
               converted: !dd.inRange && (l.side === 'token' ? dd.side === 'above' : dd.side === 'below'),
             };
@@ -755,12 +758,37 @@ async function buildPositionCard(
           const pct = inF > 0 ? ((valF - inF) / inF) * 100 : 0;
           ladderPnl = `${usd !== null ? msg.usdSigned(usd) : `${valF - inF >= 0 ? '+' : ''}${(valF - inF).toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`} (${msg.fmtPct(pct)})`;
         }
+        // Nilai & fee SELURUH ladder, plus rentang mcap dari ujung terluar semua leg
+        // — supaya kartu leg memakai bentuk yang sama dengan kartu v4.
+        const complete = ok.length === legs.length;
+        const fmtBase = (n: number) => `${n.toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`;
+        const ladderValue = complete
+          ? fmtBase(Number(ethers.formatUnits(ok.reduce((a, x) => a + x.valWei, 0n), dec)))
+          : undefined;
+        const ladderFees = complete
+          ? fmtBase(Number(ethers.formatUnits(ok.reduce((a, x) => a + x.feeWei, 0n), dec)))
+          : undefined;
+        let ladderMcRange: string | undefined;
+        if (complete && rec.entryMcap && rec.entryPrice && Number(rec.entryPrice) > 0) {
+          const e = Number(rec.entryPrice);
+          const at = (price: number) => explore.usdShort((rec.entryMcap! * price) / e);
+          const nowPrice = Number(d.currentPrice);
+          const nowStr = nowPrice > 0 ? ` · now ${at(nowPrice)}` : '';
+          ladderMcRange = `${at(Math.max(...ok.map((x) => x.hi)))} ⇄ ${at(Math.min(...ok.map((x) => x.lo)))}${nowStr}`;
+        }
+        const mineWei = BigInt(rec.initialWethWei || '0');
         return {
           legIndex: rec.legIndex ?? 0,
           legCount: rec.legCount ?? legs.length,
           shape: rec.shape ?? 'bidask',
           groupInvest: msg.cleanUnits(groupWei, dec),
+          ladderValue,
+          ladderFees,
+          ladderMcRange,
           ladderPnl,
+          sharePct: groupWei > 0n ? Number((mineWei * 10000n) / groupWei) / 100 : undefined,
+          legValue: fmtBase(Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec))),
+          legFees: d.feesBaseWei > 0n ? fmtBase(Number(ethers.formatUnits(d.feesBaseWei, dec))) : undefined,
           filled: ok.filter((x) => x.converted).length,
           active: ok.filter((x) => x.inRange).length,
           waiting: ok.filter((x) => !x.inRange && !x.converted).length,

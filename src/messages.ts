@@ -454,14 +454,16 @@ export function msgV4Position(p: {
     `${statusEmoji} ${bold('Status:')} ${status}`,
   ];
   if (p.priceWarn) lines.push('', `⚠️ ${bold('Thin pool')} — ${esc(p.priceWarn)}`);
+  // Kalimat penjelas menutup isi kartu, baris waktu jadi jejak paling bawah.
+  // Baris "Uniswap v4 · managed by the bot" dibuang: protokolnya sudah tersirat
+  // dari isi kartu, dan barisnya cuma menambah panjang tanpa memberi keputusan.
   lines.push(
-    '',
-    `⏱️ <i>${p.age ? `Age ${esc(p.age)} · ` : ''}updated ${nowWib()}</i>`,
     '',
     `<i>${explain}</i>`,
     '',
-    note(p.tracked ? 'Uniswap v4 · managed by the bot' : 'Uniswap v4 · read-only (opened outside the bot)'),
+    `⏱️ <i>${p.age ? `Age ${esc(p.age)} · ` : ''}updated ${nowWib()}</i>`,
   );
+  if (!p.tracked) lines.push(note('read-only — opened outside the bot'));
   return lines.join('\n');
 }
 
@@ -1043,7 +1045,9 @@ export function msgPositionCard(opts: {
     legIndex: number; legCount: number; shape: string; groupInvest?: string;
     // Ringkasan SELURUH ladder — inti fitur bid-ask. Tanpa ini kartu leg cuma
     // memperlihatkan satu anak tangga padahal yang disetor user adalah ladder.
-    ladderPnl?: string; filled?: number; active?: number; waiting?: number; unread?: number;
+    ladderValue?: string; ladderFees?: string; ladderMcRange?: string; ladderPnl?: string;
+    sharePct?: number; legValue?: string; legFees?: string;
+    filled?: number; active?: number; waiting?: number; unread?: number;
   }; // leg dari grup ladder
 }): string {
   const base = esc(opts.baseSymbol ?? 'WETH');
@@ -1078,35 +1082,54 @@ export function msgPositionCard(opts: {
     '',
     `🔗 ${bold('Pair:')} ${base} / ${sym} ${italic(opts.feeIsTickSpacing ? `(ts ${opts.fee} · dynamic fee)` : `(${feeLabel(opts.fee)} Fee)`)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
     `🎯 ${bold('Strategy:')} ${strategy}${isLeg ? ` · ${bold(`◣ ${opts.ladder!.shape === 'bidask' ? 'Bid-Ask' : 'Spot'} ladder`)}` : ''}`,
-    ...(isLeg ? [`🪜 ${bold('Ladder leg:')} ${opts.ladder!.legIndex + 1} / ${opts.ladder!.legCount}`] : []),
-    // Ladder: tampilkan modal SEGRUP (total), bukan cuma leg ini — biar tak terlihat
-    // seperti posisi tunggal kecil. Leg ini sendiri diberi label "this leg".
-    isLeg && opts.ladder!.groupInvest
-      ? `💰 ${bold('Principal:')} ${esc(opts.ladder!.groupInvest)} ${investUnit} ${italic(`(ladder total; this leg ${esc(opts.invest)})`)}`
-      : `💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`,
-    `${tokenSide ? '📈' : '📉'} ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${range} ${italic('from current price')}`,
-    ...(opts.mcRange ? [italic(`↳ market cap ${esc(opts.mcRange)}`)] : []),
-    // Leg: PnL di baris ini milik LEG INI saja, sedangkan Principal di atas milik
-    // seluruh ladder. Tanpa kata "this leg", persennya terbaca terhadap modal ladder.
-    `📈 ${bold(isLeg ? 'Leg PnL:' : 'Current PnL:')} ${esc(opts.pnlText)}`,
-    ...(isLeg && opts.ladder!.ladderPnl ? [`📊 ${bold('Ladder PnL:')} ${esc(opts.ladder!.ladderPnl)}`] : []),
-    ...(isLeg && opts.ladder!.filled !== undefined
+    // ── Blok LADDER dulu (yang disetor user adalah ladder), baru blok leg. ──
+    // Bentuknya disamakan dengan kartu v4 supaya posisi bid-ask terbaca sama di
+    // kedua protokol: dulu v3 memampatkan ladder & leg jadi satu daftar campur.
+    ...(isLeg
       ? [
-          `🎚 ${bold('Rungs:')} ${opts.ladder!.filled} filled · ${opts.ladder!.active} active · ${opts.ladder!.waiting} waiting` +
-            (opts.ladder!.unread ? ` · ${italic(`${opts.ladder!.unread} unreadable`)}` : ''),
+          '',
+          `🪜 ${bold(`LADDER · ${opts.ladder!.legCount} legs`)}`,
+          ...(opts.ladder!.groupInvest ? [`💰 ${bold('Deposit:')} ${esc(opts.ladder!.groupInvest)} ${investUnit}`] : []),
+          ...(opts.ladder!.ladderValue
+            ? [
+                `💰 ${bold('Value now:')} ${esc(opts.ladder!.ladderValue)}`,
+                ...(opts.ladder!.ladderFees ? [italic(`↳ incl. fees ${esc(opts.ladder!.ladderFees)}`)] : []),
+              ]
+            : []),
+          ...(opts.ladder!.ladderPnl ? [`📈 ${bold('Ladder PnL:')} ${esc(opts.ladder!.ladderPnl)}`] : []),
+          ...(opts.ladder!.ladderMcRange ? [`📉 ${bold('Ladder Range:')} ${italic(esc(opts.ladder!.ladderMcRange))}`] : []),
+          ...(opts.ladder!.filled !== undefined
+            ? [
+                `🎚 ${bold('Rungs:')} ${opts.ladder!.filled} filled · ${opts.ladder!.active} active · ${opts.ladder!.waiting} waiting` +
+                  (opts.ladder!.unread ? ` · ${italic(`${opts.ladder!.unread} unreadable`)}` : ''),
+              ]
+            : []),
+          '',
+          italic(
+            `— leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount}` +
+              (opts.ladder!.sharePct !== undefined ? `, ${opts.ladder!.sharePct.toFixed(1)}% of ladder capital` : '') +
+              ' —',
+          ),
+          `💰 ${bold('Leg Value:')} ${esc(opts.ladder!.legValue ?? opts.invest)} ${opts.ladder!.legValue ? '' : investUnit}`.trimEnd(),
+          ...(opts.ladder!.legFees ? [italic(`↳ incl. fees ${esc(opts.ladder!.legFees)}`)] : []),
         ]
-      : []),
+      : [`💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`]),
+    `${tokenSide ? '📈' : '📉'} ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${range} ${italic('from current price')}`,
+    // "now" cukup sekali, di baris Ladder Range.
+    ...(opts.mcRange ? [italic(`↳ market cap ${esc(isLeg ? opts.mcRange.replace(/ · now .*$/, '') : opts.mcRange)}`)] : []),
+    `📈 ${bold(isLeg ? 'Leg PnL:' : 'Current PnL:')} ${esc(opts.pnlText)}`,
     `${opts.inRange ? '🟢' : opts.converted && isLeg ? '🟡' : '🔴'} ${bold('Status:')} ${
       opts.converted && isLeg ? `${bold('LEG FILLED')} — bought, ladder still running` : status
     }`,
-    '',
-    `⏱️ <i>Age ${esc(opts.age)} · updated ${nowWib()}</i>`,
     '',
     // explain sudah berisi tag <b> & teks ter-escape → JANGAN lewat italic()
     // (yang meng-escape lagi dan menampilkan "&lt;b&gt;" mentah ke user).
     `<i>${explain}</i>`,
     '',
-    footerMode(opts.dryRun),
+    `⏱️ <i>Age ${esc(opts.age)} · updated ${nowWib()}</i>`,
+    // Baris LIVE dibuang: waktunya sudah di baris atas dan "LIVE" tak menambah
+    // keputusan apa pun. DRY RUN tetap disebut — itu mengubah arti seluruh kartu.
+    ...(opts.dryRun ? ['', modeLabel(true)] : []),
   ].join('\n');
 }
 
