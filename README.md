@@ -90,9 +90,15 @@ from the Uniswap gateway, Krystal, and on-chain scans.
   More legs is smoother but needs a paid RPC; on a free endpoint it makes the bot
   slow. All the legs open in one batched transaction and are managed as one position.
 
-**Step 4. How much.** Tap 30% / 50% / 70% / 90% of your balance, or type an exact
-number. Percentages are taken from your *usable* balance. The gas reserve is kept
-aside, so 90% never leaves you unable to pay for the transaction.
+  Open any leg and the card shows the ladder first — deposit, current value, fees,
+  PnL, and how many rungs are filled, active, or still waiting — then the one leg you
+  tapped. A leg that fills is doing its job, so it is marked filled rather than
+  flagged as a position gone wrong.
+
+**Step 4. How much.** Tap a percentage of your balance, or type an exact number.
+Percentages are taken from your *usable* balance: the gas reserve is set aside
+first, so the largest button never leaves you unable to pay for the transaction.
+The buttons themselves are yours to change — see **Quick percentages** below.
 
 **Step 5. Review and confirm.** The card shows the real price range, what you're
 depositing, and the estimated gas. Nothing is signed until you tap confirm.
@@ -104,21 +110,55 @@ depositing, and the estimated gas. Nothing is signed until you tap confirm.
 | Command | What it does |
 |---|---|
 | `/start` · `/help` | Menu and bot mode |
-| `/status` | Equity, balances per chain, idle tokens |
+| `/status` | Total equity, and what you hold on each chain |
 | `/positions` | Your live positions; tap one for full detail |
 | `/pnl` | Profit recap from closed trades, as a picture card |
 | `/add_lp` | Open a position (or `/add_lp <contract address>`) |
 | `/claim_fees` | Take the fees, leave the position running |
-| `/remove_lp` | Withdraw 25 / 50 / 75% |
-| `/stop` | Close a position and cash out |
+| `/remove_lp` | Withdraw part of a position and leave the rest running |
+| `/stop` | List your positions with a close button on each |
 | `/buy` · `/sell` | Swap a token via the best available route |
-| `/unwrap` | Turn stuck WETH / WBNB back into gas |
+| `/unwrap` | Turn stuck wrapped native back into gas, on every chain at once |
 | `/bridge` | Move funds between chains |
-| `/settings` | Connect or disconnect your wallet |
+| `/settings` | Wallet, transaction limits, quick percentages |
 | `/alerts` | Which notifications you want |
 
 Every step has **Back** and **Cancel**. Anything that moves money takes one
 explicit confirmation tap and is guarded against double-taps.
+
+---
+
+## Closing a position
+
+`/stop` lists what you have open and puts a close button on each one. Tapping close
+on any leg of a ladder closes the whole ladder in one batched transaction. Either way the bot withdraws the liquidity,
+collects the fees, swaps the token side back to what you deposited, and sends you a
+result card: deposit, received, how long you held it, and the fees you earned.
+
+The result is always reported in **the asset you deposited**. Deposit USDG, get the
+answer in USDG. Converting it to dollars would fold the base asset's own price swing
+into a number that is supposed to measure the position alone.
+
+Withdrawals carry a price floor. If someone pushes the pool to the edge of your
+range while the transaction is in flight, it reverts instead of filling at whatever
+price they made. On the rare occasion the floor cannot be worked out, the bot says
+so on the card rather than staying quiet.
+
+---
+
+## Quick percentages
+
+Every amount step shows percentage buttons. You decide what they are.
+
+`/settings` → **Buy %**, **Sell %**, **Add LP %**, **Withdraw %**, **Bridge %**.
+Each one opens a small card with the current numbers and an **Edit** button. Type up
+to four numbers — `10 25 50 90`, `10,25,50`, or `10/25/50` all work — and they become
+the buttons for that flow. **Reset** puts the defaults back.
+
+Withdraw is the one exception: 100% is not allowed there, because taking everything
+out closes the position, and that has its own button.
+
+Your choices live in `data/pctpresets.json` and survive restarts.
 
 ---
 
@@ -155,9 +195,25 @@ a hot wallet, not a vault.
   output. It swaps **every** unit of that token in the wallet. If you hold the same
   token outside the LP, move it elsewhere first.
 - **Per-transaction caps** (`MAX_ETH_PER_TX`, `MAX_STABLE_PER_TX`) can be raised in
-  `.env`, but never switched off.
+  `.env`, or switched off with `off`. Leaving them empty does *not* remove them —
+  it falls back to the built-in defaults, so a typo can't quietly open the wallet.
+  With the caps off, the only ceiling is the balance you actually hold.
+- **Gas has its own ceiling** (`MAX_TX_FEE_NATIVE`, default `0.005` native). It is
+  checked at broadcast, so every path is covered. A transaction that could cost more
+  is refused before it is sent.
 - **Your keystore is only as strong as `WALLET_SECRET`.** The installer generates a
   random one. Anyone who can read both your disk and your `.env` can open the wallet.
+
+What the bot does do for you:
+
+- **Approvals are for the exact amount**, never unlimited. A router you swap through
+  once cannot come back for the rest of your balance later.
+- **Swaps have a floor.** The minimum output comes from a quote and is never zero, so
+  a swap that would land far below the price you agreed to reverts instead.
+- **On BSC, transactions go out through a private relay** so they never sit in the
+  public mempool waiting to be sandwiched. The other four chains have a single
+  sequencer and no public mempool, so there is nothing to hide from there.
+- **Every transaction is simulated first.** If the simulation reverts, nothing is sent.
 
 ---
 
@@ -165,8 +221,8 @@ a hot wallet, not a vault.
 
 Everything lives in `data/`, which is never committed to git:
 
-`keystore.json` (your encrypted key) · `positions.json` · `journal.jsonl` ·
-`settings.json` · `alerts.json`
+`keystore.json` (your encrypted key) · `positions.json` · `v4positions.json` ·
+`journal.jsonl` · `settings.json` · `alerts.json` · `pctpresets.json`
 
 **Back up that folder.** `journal.jsonl` and `positions.json` are the only record
 of what you paid for each position. If `positions.json` is ever corrupt, the bot
@@ -193,7 +249,13 @@ Needs Node 20 or newer.
 npm run check                        # typecheck
 npx tsx scripts/smoke.ts             # read prices, build a plan
 npx tsx scripts/smoke-journal.ts     # accounting sanity
+
+for f in scripts/smoke-*.ts; do npx tsx "$f"; done   # all of them
 ```
+
+The `smoke-*` scripts also stand in for a test suite. They cover the parts where a
+mistake costs money: slippage ladders, approval amounts, withdrawal price floors,
+sell routing, and PnL accounting.
 
 ---
 
