@@ -4336,21 +4336,19 @@ bot.on(message('text'), async (ctx) => {
     const w = parseAmt(raw, dec);
     if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
     const num = Number(ethers.formatUnits(w, dec));
-    // Sisi token tak punya angka tetap yang masuk akal, tapi tak boleh tanpa batas:
-    // atapnya = saldo token yang benar-benar dipegang. Pembacaan gagal → pakai
-    // batas dari amountCtx, jangan memblokir langkah hanya karena RPC ngadat.
+    // Atapnya = MODAL YANG BENAR-BENAR DIPEGANG, bukan angka kebijakan. usableFor()
+    // sudah menangani kedua sisi: sisi token = saldo token, sisi base wrappable =
+    // saldo native dikurangi cadangan gas (kalau dipakai habis, tx-nya sendiri tak
+    // terbayar). Dulu hanya sisi token yang dijaga saldo; sisi base bersandar pada
+    // batas per-tx, jadi begitu batas itu dimatikan tak ada yang menahan sama sekali.
+    // Pembacaan gagal → pakai batas dari amountCtx, jangan memblokir hanya karena RPC ngadat.
     let cap = a.cap;
     let capLabel = a.capLabel;
-    if (flow.strategy === 'token') {
-      const cc = wizardCtx(flow);
-      const bal = await new ethers.Contract(flow.token, ERC20_ABI, cc.provider)
-        .balanceOf(cc.wallet.address)
-        .then((b: bigint) => Number(ethers.formatUnits(b, dec)))
-        .catch(() => null);
-      if (bal !== null) {
-        cap = bal;
-        capLabel = `${bal.toLocaleString("en-US", { maximumFractionDigits: 6 })} ${a.symbol}`;
-      }
+    const balWei = await usableFor(flow).catch(() => null);
+    if (balWei !== null) {
+      const sym = flow.strategy === 'token' ? a.symbol : wizardBase(flow).wrappable ? wizardCtx(flow).nativeSymbol : a.symbol;
+      cap = Number(ethers.formatUnits(balWei, dec));
+      capLabel = `${cap.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${sym}`;
     }
     if (num > cap) return ctx.reply(msg.msgOverLimit(capLabel), html);
     flow.awaitingAmount = false;
