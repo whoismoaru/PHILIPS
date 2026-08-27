@@ -1140,6 +1140,19 @@ function collapseLadderRows(rows: PosRow[]): void {
     base.wethEq = sumWethEq;
     base.inRange = legs.some((r) => r.inRange);
     base.rangeLabel = `${legs.length}-leg ${base.legShape ?? 'ladder'} · ${base.rangeLabel ?? ''}`;
+    // Leg selain yang pertama DIBUANG dari array di bawah, jadi fee-nya harus
+    // dipindahkan ke baris gabungan dulu — kalau tidak, ladder 8-leg cuma
+    // melaporkan fee leg 1 (dan footer total ikut kehilangan sisanya).
+    const feeVals = legs.map((r) => r.feesBase).filter((v): v is number => typeof v === 'number');
+    if (feeVals.length) {
+      const sumFee = feeVals.reduce((a, b) => a + b, 0);
+      base.feesBase = sumFee;
+      base.feesLabel = `${sumFee.toFixed(sumFee >= 1 ? 4 : 6)} ${unit}`.trim();
+      const usdVals = legs
+        .map((r) => (r.feesUsdLabel ? Number(r.feesUsdLabel.replace(/[^0-9.-]/g, '')) : null))
+        .filter((v): v is number => v !== null && Number.isFinite(v));
+      base.feesUsdLabel = usdVals.length === feeVals.length ? `+${msg.usdPlain(usdVals.reduce((a, b) => a + b, 0))}` : null;
+    }
     // Buang leg selain yang pertama dari array.
     for (const r of legs.slice(1)) {
       const i = rows.indexOf(r);
@@ -1287,6 +1300,21 @@ async function cmdPositions(ctx: any, edit = false) {
       inRange: p.inRange ?? false, // null (tak diketahui) → dianggap out (konservatif)
       wethEq: p.base === 'USDG' ? (ethUsd ? investNum / ethUsd : 0) : investNum,
       natSym: getChain().nativeSymbol,
+      // Fee v4 DULU tak pernah diisi di baris daftar, jadi posisi v4 yang sudah
+      // lama in-range tetap terbaca "Uncollected Fees: —" seolah tak panen apa pun.
+      // Datanya sudah ada di p.feesBaseWei — cuma tak pernah diteruskan ke sini.
+      ...(p.feesBaseWei !== null && p.feesBaseWei !== undefined
+        ? (() => {
+            const f = Number(ethers.formatUnits(p.feesBaseWei, dec));
+            const usdPer = p.base === 'USDG' ? 1 : ethUsd;
+            return {
+              feesLabel: `${f.toFixed(dec >= 18 ? 5 : 2)} ${sym}`,
+              // Harga tak terbaca → null, kartu jatuh ke satuan base. Jangan $0.00 palsu.
+              feesUsdLabel: usdPer !== null ? `+${msg.usdPlain(f * usdPer)}` : null,
+              feesBase: f,
+            };
+          })()
+        : {}),
     });
   }
 
