@@ -3960,14 +3960,20 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
     );
     // Kartu PnL untuk SELURUH ladder (lihat catatan yang sama di jalur v4).
-    await sendProfitCard(
+    // Hasil 0 = delta saldo tak terukur, BUKAN rugi total: kartunya akan menulis
+    // −100% padahal dananya utuh. Lebih baik tak ada kartu daripada kartu bohong.
+    if (totalOut > 0n) {
+      await sendProfitCard(
       ctx,
       `${legs[0].tokenId} +${legs.length - 1}`,
       { ...legs[0], initialWethWei: totalInit.toString(), openedAt: Math.min(...legs.map((l) => l.openedAt)) },
       totalOut,
       feesWei,
-      legs[0].shape ?? 'bidask',
-    ).catch((e) => console.log('[profit-card] ladder gagal:', (e as Error).message.slice(0, 120)));
+        legs[0].shape ?? 'bidask',
+      ).catch((e) => console.log('[profit-card] ladder gagal:', (e as Error).message.slice(0, 120)));
+    } else {
+      await ctx.reply(msg.note('Result could not be measured, so no PnL card for this close.'), html);
+    }
   } catch (err) {
     await recoverStrayWeth(cc, 'close ladder').catch(() => {});
     await ctx.reply(msg.msgError('close ladder', (err as Error).message), html);
@@ -4027,7 +4033,8 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
     // Kartu PnL untuk SELURUH ladder — yang disetor user memang satu ladder, bukan
     // 8 posisi terpisah. Dulu jalur ladder (v3 & v4) tak pernah mengirim kartu sama
     // sekali; hanya close posisi tunggal yang punya.
-    await sendProfitCard(
+    if (r.baseOutWei > 0n) {
+      await sendProfitCard(
       ctx,
       `${legs[0].tokenId} +${legs.length - 1}`,
       {
@@ -4040,8 +4047,11 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
       } as store.PosRecord,
       r.baseOutWei,
       feesWei,
-      legs[0].shape ?? 'bidask',
-    ).catch((e) => console.log('[profit-card] v4 ladder gagal:', (e as Error).message.slice(0, 120)));
+        legs[0].shape ?? 'bidask',
+      ).catch((e) => console.log('[profit-card] v4 ladder gagal:', (e as Error).message.slice(0, 120)));
+    } else {
+      await ctx.reply(msg.note('Result could not be measured, so no PnL card for this close.'), html);
+    }
   } catch (err) {
     await recoverStrayWeth(cc, 'close v4 ladder').catch(() => {});
     await ctx.reply(msg.msgError('close v4 ladder', (err as Error).message), html);
@@ -4372,6 +4382,11 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
       await sendProfitCard(ctx, tokenId, cardRec, cardOutWei, feesBaseWei, tracked?.shape).catch((e) =>
         console.log('[profit-card] v4 failed:', (e as Error).message.slice(0, 120)),
       );
+    } else if (!r.dryRun) {
+      // Kartu butuh modal DAN hasil yang sama-sama terukur. Posisi v4 yang tak
+      // tercatat bot (dibuka di luar) atau delta saldo yang tak terbaca akan
+      // menghasilkan angka karangan — sebut alasannya, jangan diam saja.
+      await ctx.reply(msg.note('Result could not be measured, so no PnL card for this close.'), html);
     }
   } catch (e) {
     await recoverStrayWeth(cc, 'close v4').catch(() => {});
