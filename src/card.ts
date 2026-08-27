@@ -75,6 +75,7 @@ export type ProfitCardOpts = {
   pnlPct: string; // '+7.8%'
   stats: Array<{ label: string; value: string }>; // ≤4
   footerLeft: string; // '#199367 · 19 Jul 2026 17:08 UTC'
+  shape?: 'spot' | 'bidask'; // badge di kanan pair; kosong = tak digambar
 };
 
 /**
@@ -136,6 +137,30 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   ctx.fillStyle = COL.text;
   ctx.font = '29px PhSansB';
   ctx.fillText(o.pair, X, 128);
+
+  // Badge bentuk posisi, tepat di kanan pair. Warnanya NETRAL (bukan hijau/merah):
+  // ini keterangan, bukan hasil — memakai warna hasil akan bersaing dengan angka
+  // besar di bawahnya. Tingginya mengikuti tinggi huruf pair, bukan angka mati.
+  if (o.shape) {
+    const label = o.shape === 'bidask' ? 'BID-ASK' : 'SPOT';
+    const pairW = ctx.measureText(o.pair).width;
+    ctx.font = '15px PhSansB';
+    const tw = ctx.measureText(label).width;
+    const padX = 11;
+    const bw = tw + padX * 2;
+    const bh = 26;
+    const bx = X + pairW + 16;
+    const by = 128 - bh + 5; // sejajar dasar huruf pair
+    ctx.fillStyle = COL.chipBg;
+    roundRect(ctx, bx, by, bw, bh, 7);
+    ctx.fill();
+    ctx.strokeStyle = COL.line;
+    ctx.lineWidth = 1;
+    roundRect(ctx, bx + 0.5, by + 0.5, bw - 1, bh - 1, 7);
+    ctx.stroke();
+    ctx.fillStyle = COL.muted;
+    ctx.fillText(label, bx + padX, by + bh - 8);
+  }
 
   // Label hasil + garis bawah selebar KATANYA SENDIRI (LOSS lebih pendek dari
   // PROFIT; lebar mati akan menyisakan garis menggantung).

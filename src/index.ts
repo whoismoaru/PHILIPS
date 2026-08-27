@@ -3828,6 +3828,7 @@ async function sendProfitCard(
   rec: store.PosRecord | undefined,
   baseOutWei: bigint,
   feesBaseWei?: bigint,
+  shape?: 'spot' | 'bidask',
 ): Promise<void> {
   if (!rec) return;
   const dec = baseDecimalsOf(rec.chain, rec.baseKind);
@@ -3860,6 +3861,9 @@ async function sendProfitCard(
         : []),
     ],
     footerLeft: `#${tokenId} · ${new Date().toISOString().slice(0, 10)} ${msg.nowWib()}`,
+    // Bentuk posisi ikut dari catatan; posisi lama tanpa penanda dianggap SPOT
+    // (itu memang perilaku sebelum ladder ada).
+    shape: shape ?? rec.shape ?? 'spot',
   });
   // sendDocument, BUKAN sendPhoto: Telegram me-render ulang foto jadi JPEG
   // (terukur 1130 KB -> 185 KB) dan artefaknya paling terlihat pada teks tajam
@@ -3962,6 +3966,7 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       { ...legs[0], initialWethWei: totalInit.toString(), openedAt: Math.min(...legs.map((l) => l.openedAt)) },
       totalOut,
       feesWei,
+      legs[0].shape ?? 'bidask',
     ).catch((e) => console.log('[profit-card] ladder gagal:', (e as Error).message.slice(0, 120)));
   } catch (err) {
     await recoverStrayWeth(cc, 'close ladder').catch(() => {});
@@ -4035,6 +4040,7 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
       } as store.PosRecord,
       r.baseOutWei,
       feesWei,
+      legs[0].shape ?? 'bidask',
     ).catch((e) => console.log('[profit-card] v4 ladder gagal:', (e as Error).message.slice(0, 120)));
   } catch (err) {
     await recoverStrayWeth(cc, 'close v4 ladder').catch(() => {});
@@ -4363,7 +4369,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     );
     if (r.unprotected) await ctx.reply(msg.esc(V4_UNPROTECTED_NOTE(tokenId)), html);
     if (cardOutWei !== undefined) {
-      await sendProfitCard(ctx, tokenId, cardRec, cardOutWei, feesBaseWei).catch((e) =>
+      await sendProfitCard(ctx, tokenId, cardRec, cardOutWei, feesBaseWei, tracked?.shape).catch((e) =>
         console.log('[profit-card] v4 failed:', (e as Error).message.slice(0, 120)),
       );
     }
