@@ -144,33 +144,41 @@ async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
   const ids = new Set(allV4().filter((r) => r.chain === cc.key).map((r) => r.tokenId));
   if (!cc.blockscout) return [...ids];
   enumDegraded = false;
-  try {
-    // Blockscout memberi ~50 item per halaman; wallet menimbun NFT v4 KOSONG tiap
-    // tutup posisi, jadi tanpa paginasi posisi hidup bisa jatuh dari halaman 1.
-    let url: string | null = `${cc.blockscout}/addresses/${cc.wallet.address}/nft?type=ERC-721`;
-    for (let page = 0; url && page < 10; page++) {
-      const ctrl = new AbortController();
-      // 3 dtk (dulu 8): Blockscout Robinhood sering 500/lambat & posisi bot sudah
-      // ada di v4store, jadi enumerasi ini cuma jaring pengaman — jangan bikin
-      // /positions nunggu lama. Gagal cepat → pakai v4store saja.
-      const t = setTimeout(() => ctrl.abort(), 3000);
-      const res = await fetch(url, { headers: { accept: 'application/json' }, signal: ctrl.signal }).finally(() =>
-        clearTimeout(t),
-      );
-      if (!res.ok) throw new Error(`blockscout HTTP ${res.status}`);
-      const j: any = await res.json();
-      for (const x of j.items || []) {
-        if ((x.token?.address_hash || x.token?.address || '').toLowerCase() === pm.toLowerCase()) ids.add(String(x.id));
+  // Dua percobaan: Blockscout Robinhood sering gagal SESAAT (abort 3 dtk, 500, 503)
+  // lalu berhasil di detik berikutnya. Sekali gagal langsung dianggap rusak membuat
+  // peringatan "indexer bermasalah" muncul hampir tiap /positions — dan peringatan
+  // yang selalu menyala berhenti dibaca. Percobaan kedua diberi waktu lebih panjang.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      // Blockscout memberi ~50 item per halaman; wallet menimbun NFT v4 KOSONG tiap
+      // tutup posisi, jadi tanpa paginasi posisi hidup bisa jatuh dari halaman 1.
+      let url: string | null = `${cc.blockscout}/addresses/${cc.wallet.address}/nft?type=ERC-721`;
+      for (let page = 0; url && page < 10; page++) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), attempt === 0 ? 3000 : 8000);
+        const res = await fetch(url, { headers: { accept: 'application/json' }, signal: ctrl.signal }).finally(() =>
+          clearTimeout(t),
+        );
+        if (!res.ok) throw new Error(`blockscout HTTP ${res.status}`);
+        const j: any = await res.json();
+        for (const x of j.items || []) {
+          if ((x.token?.address_hash || x.token?.address || '').toLowerCase() === pm.toLowerCase()) ids.add(String(x.id));
+        }
+        const p = j.next_page_params;
+        url = p ? `${cc.blockscout}/addresses/${cc.wallet.address}/nft?${new URLSearchParams(p as any)}` : null;
       }
-      const p = j.next_page_params;
-      url = p ? `${cc.blockscout}/addresses/${cc.wallet.address}/nft?${new URLSearchParams(p as any)}` : null;
+      enumDegraded = false;
+      break;
+    } catch (e) {
+      // Jangan diam-diam: kegagalan indexer yang "tertolong" v4store harus terlihat.
+      // Jangan cuma di log server: user yang melihat /positions harus tahu daftarnya
+      // mungkin tak lengkap — inilah yang dulu membuat posisi "hilang" tanpa sebab.
+      enumDegraded = true;
+      console.log(
+        `[v4] enumerasi Blockscout gagal (percobaan ${attempt + 1}/2), pakai v4store saja:`,
+        (e as Error).message.slice(0, 100),
+      );
     }
-  } catch (e) {
-    // Jangan diam-diam: kegagalan indexer yang "tertolong" v4store harus terlihat.
-    // Jangan cuma di log server: user yang melihat /positions harus tahu daftarnya
-    // mungkin tak lengkap — inilah yang dulu membuat posisi "hilang" tanpa sebab.
-    enumDegraded = true;
-    console.log('[v4] enumerasi Blockscout gagal, pakai v4store saja:', (e as Error).message.slice(0, 100));
   }
   return [...ids];
 }
