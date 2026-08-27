@@ -2026,13 +2026,17 @@ export function msgOverLimit(maxLabel: string): string {
 // ─── /unwrap — WETH nyangkut → ETH ─────────────────────────────────
 
 // wrapped/native ikut chain: WETH→ETH di Robinhood, WBNB→BNB di BSC.
-export function msgUnwrapNone(dust: string, wrapped = 'WETH', native = 'ETH'): string {
+export function msgUnwrapNone(dust: string, wrapped = 'WETH', native = 'ETH', chains?: string[]): string {
+  // Pemeriksaannya melintasi SEMUA chain, jadi kalimatnya harus menyebut itu —
+  // "No stuck WETH" saja terbaca seolah cuma chain aktif yang dilihat, dan user
+  // tak punya cara tahu WBNB di BSC sudah ikut diperiksa atau belum.
+  const scope = chains?.length ? `on any chain (${esc(chains.join(', '))})` : 'in your wallet';
   return [
-    `🔄 ${bold(`Unwrap ${wrapped} → ${native}`)}`,
+    `🔄 ${bold(chains?.length ? 'Unwrap wrapped native → native' : `Unwrap ${wrapped} → ${native}`)}`,
     '',
-    `No stuck ${esc(wrapped)} in your wallet — balance is below ${bold(dust)}.`,
+    `No stuck wrapped native ${scope} — every balance is below ${bold(dust)}.`,
     '',
-    note(`${wrapped} only ever sits here as an intermediate step (opening an LP, swapping).`),
+    note(`Wrapped native only ever sits here as an intermediate step (opening an LP, swapping).`),
   ].join('\n');
 }
 

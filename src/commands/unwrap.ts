@@ -35,6 +35,10 @@ const symbolsOf = (cc: ReturnType<typeof getChain>) => ({
  * di-unwrap", padahal ada. Sapuan otomatis monitor memang sudah melintasi semua
  * chain; jalur manualnya yang tertinggal.
  */
+/** Label chain yang benar-benar diperiksa — dipakai kartu "tak ada yang nyangkut". */
+const scannedChains = (): string[] =>
+  Object.values(CHAINS).filter((cc) => cc.hasWethBase).map((cc) => cc.label);
+
 async function stuckEverywhere(): Promise<Array<{ cc: ChainCtx; bal: bigint }>> {
   const found = await Promise.all(
     Object.values(CHAINS).map(async (cc) => {
@@ -57,7 +61,7 @@ async function cmdUnwrap(ctx: any) {
     return editProgress(ctx, prog, msg.msgError('unwrap', (e as Error).message));
   }
   if (stuck.length === 0) {
-    return editProgress(ctx, prog, msg.msgUnwrapNone(`${msg.fmtEth(WETH_DUST)} ${wrapped}`, wrapped, native));
+    return editProgress(ctx, prog, msg.msgUnwrapNone(`${msg.fmtEth(WETH_DUST)} ${wrapped}`, wrapped, native, scannedChains()));
   }
   const one = stuck.length === 1 ? stuck[0] : null;
   const eu = one ? await getEthUsd(one.cc.wethAddress, one.cc).catch(() => null) : null;
@@ -93,7 +97,7 @@ bot.action('unwrap:go', async (ctx) => {
   const stuck = (await stuckEverywhere().catch(() => [])).filter((x) => !unwrapping.has(x.cc.key));
   if (stuck.length === 0) {
     await ctx.answerCbQuery('Processing…');
-    return void (await ctx.editMessageText(msg.msgUnwrapNone(`${msg.fmtEth(WETH_DUST)} ${wrapped}`, wrapped, native), html));
+    return void (await ctx.editMessageText(msg.msgUnwrapNone(`${msg.fmtEth(WETH_DUST)} ${wrapped}`, wrapped, native, scannedChains()), html));
   }
   for (const x of stuck) unwrapping.add(x.cc.key);
   // Monitor tak boleh ikut menyapu wrapped-native yang sama di tengah tx ini
