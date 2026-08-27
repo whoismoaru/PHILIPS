@@ -1754,7 +1754,7 @@ export function msgSettings(
   dryRun: boolean,
   maxPerTx: string,
   gasCeiling?: string | null, // atap ongkos gas per-tx; null = tanpa atap
-  pcts?: { buy: number[]; sell: number[]; add: number[]; stop: number[] },
+  pcts?: { buy: number[]; sell: number[]; add: number[]; stop: number[]; bridge: number[] },
 ): string {
   return [
     `⚙️ ${bold('PHILIPS Settings')}`,
@@ -1768,7 +1768,7 @@ export function msgSettings(
     `💸 ${bold('Transaction Preferences')}`,
     `• Tx Limit: ${esc(maxPerTx)}`,
     ...(pcts
-      ? [`• Quick %: buy ${esc(pcts.buy.join('/'))} · sell ${esc(pcts.sell.join('/'))} · add ${esc(pcts.add.join('/'))} · withdraw ${esc(pcts.stop.join('/'))}`]
+      ? [`• Quick %: buy ${esc(pcts.buy.join('/'))} · sell ${esc(pcts.sell.join('/'))} · add ${esc(pcts.add.join('/'))} · withdraw ${esc(pcts.stop.join('/'))} · bridge ${esc(pcts.bridge.join('/'))}`]
       : []),
     `• Gas Fee: Auto-fetched from L2${gasCeiling ? ` · ceiling ${esc(gasCeiling)}/tx` : ''}`,
     // Angka slippage ditulis sesuai yang BENAR-BENAR dipakai kode: swap coba 5%

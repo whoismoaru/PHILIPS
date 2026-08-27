@@ -9,13 +9,14 @@ import { join } from 'node:path';
  * /add memakai 30/50/70/90, sisanya 25/50/75/100). Mengubahnya berarti mengedit
  * empat tempat lalu restart, jadi praktis tak pernah diubah.
  */
-export type PctFlow = 'buy' | 'sell' | 'add' | 'stop';
+export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge';
 
 export const FLOW_LABEL: Record<PctFlow, string> = {
   buy: 'Buy',
   sell: 'Sell',
   add: 'Add LP',
   stop: 'Withdraw',
+  bridge: 'Bridge',
 };
 
 // `stop` sengaja tanpa 100: menarik seluruhnya = menutup posisi, dan itu punya
@@ -25,6 +26,7 @@ const DEFAULTS: Record<PctFlow, number[]> = {
   sell: [25, 50, 75, 100],
   add: [30, 50, 70, 90],
   stop: [25, 50, 75],
+  bridge: [25, 50, 75, 100],
 };
 
 const FILE = join(process.cwd(), 'data', 'pctpresets.json');

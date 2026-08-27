@@ -7,6 +7,7 @@ import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridg
 import { NATIVE } from '../relay.js';
 import { ERC20_ABI } from '../chain.js';
 import * as store from '../store.js';
+import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
 
 /**
@@ -162,10 +163,39 @@ bot.action(/^bra:(\w+):(\w+):(\w+)$/, async (ctx) => {
   await ctx.editMessageText(msg.msgBridgeAmount(from.label, to.label, bal.label, a.srcSymbol), {
     ...html,
     ...Markup.inlineKeyboard([
+      pctPresets.get('bridge').map((p) => Markup.button.callback(`${p}%`, `brpct:${p}`)),
       [Markup.button.callback('⬅️ Back', `br:${fromKey}:${toKey}`)],
       [Markup.button.callback('❌ Cancel', 'cancel')],
     ]),
   });
+});
+
+/**
+ * Persen saldo → nominal bridge.
+ *
+ * Untuk aset NATIVE, persennya dihitung dari saldo yang sudah dikurangi cadangan
+ * gas: ongkos bridge dibayar di chain ASAL, jadi 100% dari saldo mentah berarti
+ * tak ada sisa untuk membayar transaksinya sendiri. Stablecoin dipakai utuh —
+ * gasnya dibayar native, dan kecukupannya dicek terpisah di jalur quote.
+ */
+bot.action(/^brpct:(\d+)$/, async (ctx) => {
+  const flow = flows.get(ctx.from!.id);
+  if (!flow?.awaitingAmount) return ctx.answerCbQuery('Expired — start again with /bridge.');
+  const from = CHAINS[flow.fromKey];
+  if (!from) return ctx.answerCbQuery('Chain unavailable.');
+  await ctx.answerCbQuery();
+  const kind = flow.kind ?? 'weth';
+  const { wei: bal } = await assetBalance(from, kind);
+  const usable = kind === 'weth' ? (bal > GAS_RESERVE_WEI ? bal - GAS_RESERVE_WEI : 0n) : bal;
+  const pct = Number(ctx.match[1]);
+  const wei = pct >= 100 ? usable : (usable * BigInt(pct)) / 100n;
+  if (wei <= 0n) {
+    return ctx.reply(
+      msg.msgError('bridge', `Nothing left to bridge on ${from.label} after the gas reserve.`),
+      html,
+    );
+  }
+  return void (await bridgeQuote(ctx, flow, wei));
 });
 
 bot.action('br:back', async (ctx) => {
@@ -192,6 +222,16 @@ export async function handleBridgeAmount(ctx: any, raw: string): Promise<boolean
     await ctx.reply(msg.msgInvalidAmount(), html);
     return true;
   }
+  await bridgeQuote(ctx, flow, wei);
+  return true;
+}
+
+/** Cek saldo + quote + kartu konfirmasi. Dipakai jalur ketik-nominal & tombol persen. */
+async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<void> {
+  const from = CHAINS[flow.fromKey];
+  const to = CHAINS[flow.toKey];
+  const kind = flow.kind ?? 'weth';
+  const isNative = kind === 'weth';
   const prog = await ctx.reply(msg.msgProgress('requesting bridge quote…'), html);
   try {
     // Native: sisakan gas (dibayar di chain asal). Stablecoin: cek saldo token cukup,
@@ -201,19 +241,19 @@ export async function handleBridgeAmount(ctx: any, raw: string): Promise<boolean
       if (wei + GAS_RESERVE_WEI > nativeBal) {
         await editProgress(ctx, prog, msg.msgError('bridge',
           `Amount plus gas exceeds your balance (${ethers.formatEther(nativeBal)} ${from.nativeSymbol}). Leave ~${ethers.formatEther(GAS_RESERVE_WEI)} for gas.`));
-        return true;
+        return;
       }
     } else {
       const tokBal = (await assetBalance(from, kind)).wei;
       if (wei > tokBal) {
         await editProgress(ctx, prog, msg.msgError('bridge',
           `Amount exceeds your ${flow.srcSymbol} balance (${Number(ethers.formatUnits(tokBal, flow.srcDecimals ?? 18)).toFixed(4)}).`));
-        return true;
+        return;
       }
       if (nativeBal < GAS_RESERVE_WEI) {
         await editProgress(ctx, prog, msg.msgError('bridge',
           `Not enough ${from.nativeSymbol} for gas on ${from.label} (need ~${ethers.formatEther(GAS_RESERVE_WEI)}).`));
-        return true;
+        return;
       }
     }
     const assets = { originCurrency: flow.originCurrency, destinationCurrency: flow.destinationCurrency };
@@ -250,7 +290,6 @@ export async function handleBridgeAmount(ctx: any, raw: string): Promise<boolean
   } catch (e) {
     await editProgress(ctx, prog, msg.msgError('bridge', (e as Error).message));
   }
-  return true;
 }
 
 bot.action('br:go', async (ctx) => {

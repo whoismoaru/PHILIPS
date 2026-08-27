@@ -75,6 +75,7 @@ async function cmdSettings(ctx: any) {
     Markup.button.callback('➕ Add LP %', 'pct:add'),
     Markup.button.callback('🗑️ Withdraw %', 'pct:stop'),
   ]);
+  rows.push([Markup.button.callback('🌉 Bridge %', 'pct:bridge')]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
@@ -93,7 +94,7 @@ function pctCardKb(flow: pctPresets.PctFlow) {
   ]);
 }
 
-bot.action(/^pct:(buy|sell|add|stop)$/, async (ctx) => {
+bot.action(/^pct:(buy|sell|add|stop|bridge)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   await ctx.answerCbQuery();
   return ctx.editMessageText(
@@ -102,7 +103,7 @@ bot.action(/^pct:(buy|sell|add|stop)$/, async (ctx) => {
   );
 });
 
-bot.action(/^pctedit:(buy|sell|add|stop)$/, async (ctx) => {
+bot.action(/^pctedit:(buy|sell|add|stop|bridge)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.askEdit(ctx.from!.id, flow);
   await ctx.answerCbQuery();
@@ -112,7 +113,7 @@ bot.action(/^pctedit:(buy|sell|add|stop)$/, async (ctx) => {
   });
 });
 
-bot.action(/^pctreset:(buy|sell|add|stop)$/, async (ctx) => {
+bot.action(/^pctreset:(buy|sell|add|stop|bridge)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.clearEdit(ctx.from!.id);
   const v = pctPresets.reset(flow);
