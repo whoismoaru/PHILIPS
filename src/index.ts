@@ -298,7 +298,6 @@ const RANGE_OPTIONS = [
 
 /** Pilihan jumlah leg ladder Bid-Ask. 8-10 = sweet spot free-tier; 69 butuh RPC
  *  berbayar (free-tier + VM 2-core → /positions & monitor berat). Auto-cap ke spacing. */
-const LADDER_LEG_OPTIONS = [8, 9, 10, 69];
 
 
 /** Edit pesan progress existing, atau kirim baru bila gagal/tidak ada. */
@@ -2217,11 +2216,18 @@ async function renderShapeStep(ctx: any, flow: AddFlow, edit: boolean) {
 /** Pilih jumlah leg untuk ladder Bid-Ask (auto-cap ke spacing pool saat plan). */
 async function renderLegStep(ctx: any, flow: AddFlow, edit: boolean) {
   const text = msg.msgLegStep(flow.selected?.otherSymbol ?? 'token', flow.rangePct ?? 0);
-  const opts = LADDER_LEG_OPTIONS.map((n) =>
-    Markup.button.callback(n >= 15 ? `${n} legs · 💸 RPC berbayar` : `${n} legs`, `leg:${n}`),
+  // Pilihan leg diambil dari setelan (/settings → Ladder legs), bukan daftar mati.
+  const opts = pctPresets.get('legs').map((n) =>
+    Markup.button.callback(n >= 15 ? `${n} legs · 💸 paid RPC` : `${n} legs`, `leg:${n}`),
   );
-  // 8/9/10 sebaris, 69 (berbayar) barisnya sendiri biar gak asal kepencet.
-  const rows = [opts.slice(0, 3), opts.slice(3), [Markup.button.callback('⬅️ Back', 'back:shape'), Markup.button.callback('❌ Cancel', 'cancel')]];
+  // Yang butuh RPC berbayar dipisah ke barisnya sendiri biar tak asal kepencet.
+  const cheap = opts.filter((_, i) => pctPresets.get('legs')[i] < 15);
+  const pricey = opts.filter((_, i) => pctPresets.get('legs')[i] >= 15);
+  const rows = [
+    ...(cheap.length ? [cheap] : []),
+    ...(pricey.length ? [pricey] : []),
+    [Markup.button.callback('⬅️ Back', 'back:shape'), Markup.button.callback('❌ Cancel', 'cancel')],
+  ];
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }

@@ -75,7 +75,10 @@ async function cmdSettings(ctx: any) {
     Markup.button.callback('➕ Add LP %', 'pct:add'),
     Markup.button.callback('🗑️ Withdraw %', 'pct:stop'),
   ]);
-  rows.push([Markup.button.callback('🌉 Bridge %', 'pct:bridge')]);
+  rows.push([
+    Markup.button.callback('🌉 Bridge %', 'pct:bridge'),
+    Markup.button.callback('🪜 Ladder legs', 'pct:legs'),
+  ]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
@@ -86,6 +89,22 @@ async function cmdSettings(ctx: any) {
 }
 bot.command('settings', cmdSettings);
 
+/** Satuan + batas + catatan khusus satu alur, dipakai ketiga kartu setelan. */
+function pctOpts(flow: pctPresets.PctFlow) {
+  const b = pctPresets.boundsFor(flow);
+  return {
+    unit: pctPresets.unitFor(flow),
+    min: b.min,
+    max: b.max,
+    noteLine:
+      flow === 'stop'
+        ? '100% is not allowed here. Withdrawing everything closes the position, which has its own button.'
+        : flow === 'legs'
+          ? 'More legs means a smoother ladder but more RPC calls. Above 15 you want a paid endpoint.'
+          : undefined,
+  };
+}
+
 /** Kartu satu alur: nilai sekarang + tombol ubah / kembalikan ke bawaan. */
 function pctCardKb(flow: pctPresets.PctFlow) {
   return Markup.inlineKeyboard([
@@ -94,32 +113,32 @@ function pctCardKb(flow: pctPresets.PctFlow) {
   ]);
 }
 
-bot.action(/^pct:(buy|sell|add|stop|bridge)$/, async (ctx) => {
+bot.action(/^pct:(buy|sell|add|stop|bridge|legs)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   await ctx.answerCbQuery();
   return ctx.editMessageText(
-    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctPresets.defaultsFor(flow), flow === 'stop'),
+    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctPresets.defaultsFor(flow), pctOpts(flow)),
     { ...html, ...pctCardKb(flow) },
   );
 });
 
-bot.action(/^pctedit:(buy|sell|add|stop|bridge)$/, async (ctx) => {
+bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.askEdit(ctx.from!.id, flow);
   await ctx.answerCbQuery();
-  return ctx.editMessageText(msg.msgPctAsk(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), flow === 'stop'), {
+  return ctx.editMessageText(msg.msgPctAsk(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctOpts(flow)), {
     ...html,
     ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `pct:${flow}`)]]),
   });
 });
 
-bot.action(/^pctreset:(buy|sell|add|stop|bridge)$/, async (ctx) => {
+bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.clearEdit(ctx.from!.id);
   const v = pctPresets.reset(flow);
   await ctx.answerCbQuery('Reset');
   return ctx.editMessageText(
-    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], v, pctPresets.defaultsFor(flow), flow === 'stop'),
+    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], v, pctPresets.defaultsFor(flow), pctOpts(flow)),
     { ...html, ...pctCardKb(flow) },
   );
 });
@@ -135,12 +154,12 @@ export async function handlePctReply(ctx: any, raw: string): Promise<boolean> {
   const nums = pctPresets.parseList(raw);
   const saved = nums ? pctPresets.set(flow, nums) : null;
   if (!saved) {
-    await ctx.reply(msg.msgPctInvalid(flow === 'stop'), html);
+    await ctx.reply(msg.msgPctInvalid(pctOpts(flow)), html);
     return true; // tetap ditangani: jangan jatuh ke alur nominal
   }
   pctPresets.clearEdit(ctx.from.id);
   await ctx.reply(
-    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], saved, pctPresets.defaultsFor(flow), flow === 'stop'),
+    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], saved, pctPresets.defaultsFor(flow), pctOpts(flow)),
     { ...html, ...pctCardKb(flow) },
   );
   return true;

@@ -235,13 +235,15 @@ so on the card rather than staying quiet.
 
 Every amount step shows percentage buttons. You decide what they are.
 
-`/settings` → **Buy %**, **Sell %**, **Add LP %**, **Withdraw %**, **Bridge %**.
+`/settings` → **Buy %**, **Sell %**, **Add LP %**, **Withdraw %**, **Bridge %**,
+and **Ladder legs** (how many rungs a bid-ask ladder offers, 2 to 69).
 Each one opens a small card with the current numbers and an **Edit** button. Type up
 to four numbers `10 25 50 90`, `10,25,50`, or `10/25/50` all work and they become
 the buttons for that flow. **Reset** puts the defaults back.
 
 Withdraw is the one exception: 100% is not allowed there, because taking everything
-out closes the position, and that has its own button.
+out closes the position, and that has its own button. Ladder legs takes counts
+rather than percentages, so its range is 2 to 69.
 
 Your choices live in `data/pctpresets.json` and survive restarts.
 

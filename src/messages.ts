@@ -858,38 +858,45 @@ export function msgSellAmount(sym: string, balLabel: string): string {
 }
 
 /** Kartu satu alur di /settings: angka yang dipakai sekarang. */
-export function msgPctPreset(label: string, values: number[], defaults: number[], noFull: boolean): string {
+export function msgPctPreset(
+  label: string,
+  values: number[],
+  defaults: number[],
+  o: { unit: string; min: number; max: number; noteLine?: string },
+): string {
   const same = values.length === defaults.length && values.every((v, i) => v === defaults[i]);
+  const u = o.unit === '%' ? '%' : ` ${o.unit}`;
   return [
-    `⚙️ ${bold(`${esc(label)} — quick percentages`)}`,
+    `⚙️ ${bold(`${esc(label)} · quick picks`)}`,
     '',
-    `🎚 ${bold('Now:')} ${values.map((v) => code(`${v}%`)).join('  ')}`,
+    `🎚 ${bold('Now:')} ${values.map((v) => code(`${v}${u}`)).join('  ')}`,
     `${note(`default: ${defaults.join(' / ')}${same ? ' (unchanged)' : ''}`)}`,
     '',
-    `These are the buttons shown when you pick an amount in ${bold(esc(label))}.`,
-    ...(noFull
-      ? ['', note('100% is not allowed here — withdrawing everything closes the position, which has its own button.')]
-      : []),
+    o.unit === '%'
+      ? `These are the buttons shown when you pick an amount in ${bold(esc(label))}.`
+      : 'These are the buttons shown when a bid-ask ladder asks how many legs to open.',
+    ...(o.noteLine ? ['', note(o.noteLine)] : []),
   ].join('\n');
 }
 
-/** Prompt ketik daftar persen. */
-export function msgPctAsk(label: string, current: number[], noFull: boolean): string {
+/** Prompt ketik daftar nilai. */
+export function msgPctAsk(label: string, current: number[], o: { unit: string; min: number; max: number }): string {
+  const example = o.unit === '%' ? '10 25 50 90' : '4 8 12 20';
   return [
-    `✏️ ${bold(`Edit ${esc(label)} percentages`)}`,
+    `✏️ ${bold(`Edit ${esc(label)}`)}`,
     '',
-    `💬 Type up to 4 numbers, separated by spaces — e.g. ${code('10 25 50 90')}.`,
+    `💬 Type up to 4 numbers, separated by spaces. For example ${code(example)}.`,
     '',
     `${note(`current: ${current.join(' / ')}`)}`,
-    note(`each one 1–${noFull ? '99' : '100'}, duplicates dropped, sorted automatically.`),
+    note(`each one ${o.min}–${o.max}, duplicates dropped, sorted automatically.`),
   ].join('\n');
 }
 
-export function msgPctInvalid(noFull: boolean): string {
+export function msgPctInvalid(o: { unit: string; min: number; max: number }): string {
+  const example = o.unit === '%' ? '10 25 50 90' : '4 8 12 20';
   return msgError(
-    'percentages',
-    `Give 1–4 whole numbers between 1 and ${noFull ? '99' : '100'} (e.g. ${'10 25 50 90'}).` +
-      (noFull ? ' 100% is not allowed here — that would close the position.' : ''),
+    o.unit === '%' ? 'percentages' : 'leg counts',
+    `Give 1 to 4 whole numbers between ${o.min} and ${o.max}. For example ${example}.`,
   );
 }
 

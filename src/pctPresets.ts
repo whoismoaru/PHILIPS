@@ -9,7 +9,7 @@ import { join } from 'node:path';
  * /add memakai 30/50/70/90, sisanya 25/50/75/100). Mengubahnya berarti mengedit
  * empat tempat lalu restart, jadi praktis tak pernah diubah.
  */
-export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge';
+export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs';
 
 export const FLOW_LABEL: Record<PctFlow, string> = {
   buy: 'Buy',
@@ -17,6 +17,7 @@ export const FLOW_LABEL: Record<PctFlow, string> = {
   add: 'Add LP',
   stop: 'Withdraw',
   bridge: 'Bridge',
+  legs: 'Ladder legs',
 };
 
 // `stop` sengaja tanpa 100: menarik seluruhnya = menutup posisi, dan itu punya
@@ -27,6 +28,8 @@ const DEFAULTS: Record<PctFlow, number[]> = {
   add: [30, 50, 70, 90],
   stop: [25, 50, 75],
   bridge: [25, 50, 75, 100],
+  // Bukan persen: jumlah anak tangga ladder bid-ask.
+  legs: [8, 9, 10, 69],
 };
 
 const FILE = join(process.cwd(), 'data', 'pctpresets.json');
@@ -34,16 +37,34 @@ const MAX_BUTTONS = 4; // lebih dari ini tombolnya terpotong di layar sempit
 
 let cache: Record<PctFlow, number[]> | null = null;
 
-/** Persen yang sah: bilangan bulat 1–100, urut naik, tanpa kembar, maksimal 4. */
+/**
+ * Batas nilai yang sah per alur.
+ *
+ * `stop` berhenti di 99: menarik 100% berarti MENUTUP posisi, dan itu jalur kode
+ * yang berbeda dengan tombolnya sendiri. `legs` bukan persen sama sekali — itu
+ * jumlah anak tangga, minimal 2 (satu leg bukan ladder) dan dibatasi 69 seperti
+ * jalur open-nya.
+ */
+const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
+  buy: { min: 1, max: 100 },
+  sell: { min: 1, max: 100 },
+  add: { min: 1, max: 100 },
+  stop: { min: 1, max: 99 },
+  bridge: { min: 1, max: 100 },
+  legs: { min: 2, max: 69 },
+};
+export const boundsFor = (flow: PctFlow) => BOUNDS[flow];
+/** Satuan yang dipakai kartu setelan — '%' untuk nominal, 'legs' untuk ladder. */
+export const unitFor = (flow: PctFlow): string => (flow === 'legs' ? 'legs' : '%');
+
+/** Nilai sah: bilangan bulat dalam jangkauan alurnya, urut naik, tanpa kembar, maksimal 4. */
 export function sanitize(values: number[], flow: PctFlow): number[] | null {
   // Angka di luar jangkauan DITOLAK, bukan disaring diam-diam: "0 50" hampir pasti
   // salah ketik, dan menyimpannya sebagai "50" membuat user mengira 0 diterima.
-  if (values.some((v) => !Number.isInteger(v) || v < 1 || v > 100)) return null;
+  const { min, max } = BOUNDS[flow];
+  if (values.some((v) => !Number.isInteger(v) || v < min || v > max)) return null;
   const clean = [...new Set(values)].sort((a, b) => a - b);
   if (clean.length === 0 || clean.length > MAX_BUTTONS) return null;
-  // 100% pada alur withdraw berarti menutup posisi — itu jalur lain, bukan
-  // penarikan sebagian, jadi jangan biarkan masuk sebagai tombol persen.
-  if (flow === 'stop' && clean.includes(100)) return null;
   return clean;
 }
 

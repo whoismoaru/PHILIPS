@@ -24,8 +24,16 @@ assert.deepEqual(p.parseList('10% 25%'), [10, 25]);
 assert.equal(p.parseList(''), null);
 assert.equal(p.parseList('abc'), null);
 
+// Jumlah leg bukan persen: minimal 2 (satu leg bukan ladder), maksimal 69.
+assert.equal(p.sanitize([1, 8], 'legs'), null, '1 leg bukan ladder');
+assert.equal(p.sanitize([70], 'legs'), null, 'di atas batas jalur open');
+assert.deepEqual(p.sanitize([8, 2, 69], 'legs'), [2, 8, 69]);
+assert.equal(p.unitFor('legs'), 'legs');
+assert.equal(p.unitFor('buy'), '%');
+assert.deepEqual(p.boundsFor('stop'), { min: 1, max: 99 }, 'withdraw 100% = close, jalur lain');
+
 // Bawaan tiap alur tetap sah menurut aturannya sendiri.
-for (const f of ['buy', 'sell', 'add', 'stop'] as p.PctFlow[]) {
+for (const f of ['buy', 'sell', 'add', 'stop', 'bridge', 'legs'] as p.PctFlow[]) {
   assert.ok(p.sanitize(p.defaultsFor(f), f), `bawaan ${f} tak lolos validasinya sendiri`);
 }
 
