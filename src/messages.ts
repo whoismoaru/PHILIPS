@@ -1717,6 +1717,7 @@ export function msgSettings(
   chainLabel: string,
   dryRun: boolean,
   maxPerTx: string,
+  gasCeiling?: string | null, // atap ongkos gas per-tx; null = tanpa atap
 ): string {
   return [
     `⚙️ ${bold('PHILIPS Settings')}`,
@@ -1729,7 +1730,7 @@ export function msgSettings(
     '',
     `💸 ${bold('Transaction Preferences')}`,
     `• Tx Limit: ${esc(maxPerTx)}`,
-    '• Gas Fee: Auto-fetched from L2',
+    `• Gas Fee: Auto-fetched from L2${gasCeiling ? ` · ceiling ${esc(gasCeiling)}/tx` : ''}`,
     // Angka slippage ditulis sesuai yang BENAR-BENAR dipakai kode: swap coba 5%
     // dulu, naik ke 15% kalau tertolak; mint LP terpisah & jauh lebih ketat (0.5%).
     '• Swap Slippage: 5%, retried at 15% if rejected',

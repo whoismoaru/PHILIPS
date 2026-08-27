@@ -69,6 +69,9 @@ export const config = {
     // Batas terpisah utk base stablecoin (USDT/USDG): satuannya dolar, bukan ETH.
     // Kosong = tanpa batas.
     maxStablePerTx: optional('MAX_STABLE_PER_TX', ''),
+    // Atap ONGKOS GAS satu transaksi, dalam aset native chain itu. 'off'/'0' =
+    // tanpa atap; kosong = bawaan (lihat chains.ts). Bukan batas nominal transaksi.
+    maxTxFeeNative: optional('MAX_TX_FEE_NATIVE', ''),
     dryRun: optional('DRY_RUN', 'true').toLowerCase() === 'true',
   },
   // Krystal Cloud API — sumber pool yang jauh lebih lengkap dari gateway Uniswap

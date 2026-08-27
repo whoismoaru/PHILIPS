@@ -1,7 +1,7 @@
 import { Markup } from 'telegraf';
 import { config } from '../config.js';
 import { bot, html, editProgress, maxEthLabel } from '../core.js';
-import { getChain, rebuildChains } from '../chains.js';
+import { getChain, rebuildChains, gasFeeCapLabel } from '../chains.js';
 import * as walletStore from '../walletStore.js';
 import * as store from '../store.js';
 import * as msg from '../messages.js';
@@ -63,10 +63,11 @@ async function cmdSettings(ctx: any) {
   // Tombol "Adjust Slippage" dari naskah sengaja TIDAK dipasang: slippage masih
   // konstanta di kode, jadi tombolnya cuma akan membuka kartu yang tak mengubah apa
   // pun. Pasang setelah nilainya benar-benar bisa disimpan & dipakai jalur swap.
+  const gasCeil = gasFeeCapLabel() ? `${gasFeeCapLabel()} ${cc.nativeSymbol}` : null;
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
-  return ctx.reply(msg.msgSettings(addr, bal, cc.label, config.safety.dryRun, maxEthLabel), {
+  return ctx.reply(msg.msgSettings(addr, bal, cc.label, config.safety.dryRun, maxEthLabel, gasCeil), {
     ...html,
     ...Markup.inlineKeyboard(rows),
   });

@@ -47,4 +47,11 @@ assert.ok(
   'kartu close v4 tak melaporkan burn tanpa lantai harga',
 );
 
-console.log('OK — guards: penarikan v3 & v4 tanpa lantai harga selalu dilaporkan ke user.');
+// --- atap ongkos gas ------------------------------------------------------
+// Harus dicek di titik BROADCAST: itu satu-satunya tempat yang dilewati SEMUA
+// jalur kirim (panggilan kontrak, sendTxNonceSafe, tx mentah dari agregator).
+const chains = readFileSync(join(process.cwd(), 'src', 'chains.ts'), 'utf8');
+assert.ok(/broadcastTransaction[\s\S]{0,400}Gas fee ceiling hit/.test(chains),
+  'atap ongkos gas tak terpasang di broadcastTransaction — sebagian jalur kirim lolos');
+
+console.log('OK — guards: lantai harga v3 & v4 dilaporkan, atap ongkos gas terpasang di broadcast.');

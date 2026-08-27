@@ -75,6 +75,22 @@ export const isStableBase = (kind: BaseKind): boolean =>
  * berbeda antar chain (WETH di Robinhood, WBNB di BSC), dan menampilkan 'WETH' di
  * BSC berarti menyebut aset yang tak pernah dipegang user.
  */
+/**
+ * Atap ongkos gas per-tx dalam aset native. 'off'/'0' = tanpa atap; kosong = bawaan.
+ * Nilai tak masuk akal (bukan angka, negatif) jatuh ke bawaan, bukan diam-diam mati.
+ */
+const DEFAULT_MAX_TX_FEE = '0.005';
+export function gasFeeCapLabel(): string | null {
+  const c = parseFeeCap(config.safety.maxTxFeeNative);
+  return c === null ? null : ethers.formatEther(c);
+}
+function parseFeeCap(raw: string): bigint | null {
+  const v = raw.trim().toLowerCase();
+  if (v === 'off' || v === 'none' || v === '0') return null;
+  const use = Number(v) > 0 ? v : DEFAULT_MAX_TX_FEE;
+  return ethers.parseEther(use);
+}
+
 export const baseSymbolOf = (kind: BaseKind | undefined, ctx?: ChainCtx): string => {
   if (ctx) {
     const b = ctx.bases.find((x) => x.kind === (kind ?? 'weth'));
@@ -357,6 +373,30 @@ function build(key: string, d: Def): ChainCtx {
       resp.wait = (confirms?: number, timeout?: number) =>
         provider.waitForTransaction(resp.hash, confirms, timeout) as ReturnType<typeof resp.wait>;
       return resp;
+    };
+  }
+
+  // ATAP ONGKOS GAS. Gas diambil otomatis dari jaringan tanpa batas atas; satu
+  // lonjakan (atau RPC yang mengembalikan fee ngawur) akan tetap dibayar berapa pun.
+  // Dicek di titik broadcast supaya SEMUA jalur kena — panggilan kontrak biasa,
+  // sendTxNonceSafe, maupun tx mentah dari agregator — bukan cuma yang lewat satu
+  // helper. Ongkos di kelima chain ~0.00003 native untuk tx 400k gas, jadi atap
+  // bawaan 0.005 memberi ~170× kelonggaran: tak pernah mengganggu operasi normal,
+  // tapi menahan yang benar-benar liar.
+  const feeCap = parseFeeCap(config.safety.maxTxFeeNative);
+  if (feeCap !== null) {
+    const beforeCap = provider.broadcastTransaction.bind(provider);
+    provider.broadcastTransaction = async (signedTx: string) => {
+      const parsed = ethers.Transaction.from(signedTx);
+      const price = parsed.maxFeePerGas ?? parsed.gasPrice ?? 0n;
+      const worst = price * (parsed.gasLimit ?? 0n);
+      if (worst > feeCap) {
+        throw new Error(
+          `Gas fee ceiling hit: this transaction could cost up to ${ethers.formatEther(worst)} ${d.nativeSymbol} ` +
+            `(ceiling ${ethers.formatEther(feeCap)}). Nothing was sent. Wait for gas to drop, or raise MAX_TX_FEE_NATIVE.`,
+        );
+      }
+      return beforeCap(signedTx);
     };
   }
 
