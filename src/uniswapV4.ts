@@ -190,9 +190,56 @@ const BURN_POSITION = 0x03;
 const TAKE_PAIR = 0x11;
 const V4_WRITE_ABI = [
   'function getPoolAndPositionInfo(uint256) view returns (tuple(address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) poolKey, uint256 info)',
+  'function getPositionLiquidity(uint256) view returns (uint128)',
   'function ownerOf(uint256) view returns (address)',
   'function modifyLiquidities(bytes unlockData, uint256 deadline) payable',
 ];
+
+/** Lantai slippage penarikan v4 — disamakan dengan v3 (WITHDRAW_SLIPPAGE_BPS). */
+const BURN_SLIPPAGE_BPS = 50n; // 0.5%
+
+/** Catatan yang ikut ke kartu close saat burn v4 terpaksa tanpa lantai harga. */
+export const V4_UNPROTECTED_NOTE = (ids: string) =>
+  `⚠️ #${ids} withdrawn WITHOUT a price floor — the pool could not be priced, so sandwich protection was off for this close.`;
+
+/**
+ * amount0Min/amount1Min untuk BURN_POSITION.
+ *
+ * Dulu keduanya 0 dengan alasan "burn = tarik dana sendiri, bukan swap". Alasan itu
+ * TIDAK berlaku untuk likuiditas terkonsentrasi: harga bisa didorong ke tepi rentang,
+ * posisi keluar ~100% sebagai aset yang sedang ditekan, lalu harga dikembalikan — dan
+ * tx-nya tetap "sukses" sehingga tak ada yang menandai. v3 sudah dijaga sejak lama
+ * (withdrawMins); ini menutup lubang yang sama di v4.
+ *
+ * Lantainya dihitung dari PRINSIPAL saja (harga pool sekarang, dikurangi 0.5%),
+ * sedangkan cek slippage on-chain mengukur prinsipal + fee. Fee hanya menambah, jadi
+ * lantai ini konservatif — tak akan menolak burn yang sehat.
+ *
+ * Tak bisa dihitung → {0,0} + tanda `unprotected` (dana user > risiko MEV), dan
+ * tandanya DIBAWA KE ATAS supaya muncul di kartu, bukan cuma di log server.
+ */
+async function burnMinsV4(
+  cc: ChainCtx,
+  pm: ethers.Contract,
+  tokenId: string,
+  pk: PoolKeyV4,
+): Promise<{ min0: bigint; min1: bigint; unprotected: boolean }> {
+  try {
+    const [, info] = await pm.getPoolAndPositionInfo(tokenId);
+    const liquidity: bigint = await pm.getPositionLiquidity(tokenId);
+    // Likuiditas 0 → tak ada prinsipal yang bisa dicuri lewat harga; bukan celah.
+    if (liquidity === 0n) return { min0: 0n, min1: 0n, unprotected: false };
+    const tickLower = signExt24((BigInt(info) >> 8n) & 0xffffffn);
+    const tickUpper = signExt24((BigInt(info) >> 32n) & 0xffffffn);
+    const { sqrtPriceX96 } = await readPoolState(cc, pk);
+    const { amount0, amount1 } = amountsForLiquidity(sqrtPriceX96, sqrtAtTick(tickLower), sqrtAtTick(tickUpper), liquidity);
+    const floor = (v: bigint) => (v * (10000n - BURN_SLIPPAGE_BPS)) / 10000n;
+    return { min0: floor(amount0), min1: floor(amount1), unprotected: false };
+  } catch (e) {
+    console.log(`[v4] ⚠️ lantai slippage TAK tersedia (#${tokenId}) — burn tanpa proteksi harga:`, (e as Error).message.slice(0, 80));
+    return { min0: 0n, min1: 0n, unprotected: true };
+  }
+}
 
 /**
  * Tutup (burn) posisi v4: tarik SELURUH likuiditas + fee, terima kedua token ke
@@ -213,6 +260,7 @@ export async function closePositionV4(
   other?: string; // token non-base → jurnal & kandidat sweep
   cashedOut?: string;
   leftover?: string;
+  unprotected?: boolean; // burn terpaksa tanpa lantai harga
 }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
@@ -224,8 +272,8 @@ export async function closePositionV4(
   const [pk] = await pm.getPoolAndPositionInfo(tokenId);
   const coder = ethers.AbiCoder.defaultAbiCoder();
   const actions = ethers.concat([Uint8Array.of(BURN_POSITION), Uint8Array.of(TAKE_PAIR)]);
-  // amount0Min/amount1Min = 0: burn = tarik dana sendiri (bukan swap) → risiko MEV rendah.
-  const pBurn = coder.encode(['uint256', 'uint128', 'uint128', 'bytes'], [tokenId, 0, 0, '0x']);
+  const mins = await burnMinsV4(cc, pm, tokenId, pk);
+  const pBurn = coder.encode(['uint256', 'uint128', 'uint128', 'bytes'], [tokenId, mins.min0, mins.min1, '0x']);
   const pTake = coder.encode(['address', 'address', 'address'], [pk.currency0, pk.currency1, cc.wallet.address]);
   const unlockData = coder.encode(['bytes', 'bytes[]'], [actions, [pBurn, pTake]]);
   const deadline = Math.floor(Date.now() / 1000) + 600;
@@ -246,7 +294,7 @@ export async function closePositionV4(
 
   // Simulasi WAJIB (burn+take) — revert di sini = batalkan sebelum kirim tx.
   await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
-  if (opts.dryRun) return { dryRun: true, sym0, sym1, base, other: other ?? undefined };
+  if (opts.dryRun) return { dryRun: true, sym0, sym1, base, other: other ?? undefined, unprotected: mins.unprotected };
 
   const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline));
   const rc = await tx.wait();
@@ -258,12 +306,14 @@ export async function closePositionV4(
     other?: string; // alamat token non-base → dipakai jurnal & kandidat sweep
     cashedOut?: string;
     leftover?: string;
+    unprotected?: boolean;
   } = {
     txHash: rc?.hash ?? tx.hash,
     sym0,
     sym1,
     base,
     other: other ?? undefined,
+    unprotected: mins.unprotected,
   };
 
   // Cash-out: swap token "receh" → base (best-effort; gagal → biarkan sbg leftover, tak hilang).
@@ -307,7 +357,7 @@ export async function closeLadderV4(
   tokenIds: string[],
   cc: ChainCtx,
   opts: { dryRun: boolean },
-): Promise<{ dryRun?: boolean; txHash?: string; base: 'ETH' | 'USDG' | null; other?: string; sym0: string; sym1: string; baseOutWei: bigint; cashedOut?: string }> {
+): Promise<{ dryRun?: boolean; txHash?: string; base: 'ETH' | 'USDG' | null; other?: string; sym0: string; sym1: string; baseOutWei: bigint; cashedOut?: string; unprotected?: string[] }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
   const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
@@ -329,14 +379,17 @@ export async function closeLadderV4(
   const beforeWei = await readBase();
 
   const actionBytes = [...tokenIds.map(() => BURN_POSITION), TAKE_PAIR];
+  // Tiap leg punya rentangnya sendiri → lantainya dihitung per leg, bukan sekali.
+  const legMins = await Promise.all(tokenIds.map((id) => burnMinsV4(cc, pm, id, pk)));
+  const unprotectedIds = tokenIds.filter((_, i) => legMins[i].unprotected);
   const params = [
-    ...tokenIds.map((id) => coder.encode(['uint256', 'uint128', 'uint128', 'bytes'], [id, 0, 0, '0x'])),
+    ...tokenIds.map((id, i) => coder.encode(['uint256', 'uint128', 'uint128', 'bytes'], [id, legMins[i].min0, legMins[i].min1, '0x'])),
     coder.encode(['address', 'address', 'address'], [pk.currency0, pk.currency1, cc.wallet.address]),
   ];
   const unlockData = coder.encode(['bytes', 'bytes[]'], [ethers.hexlify(new Uint8Array(actionBytes)), params]);
   const deadline = Math.floor(Date.now() / 1000) + 600;
   await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
-  if (opts.dryRun) return { dryRun: true, base, other: other ?? undefined, sym0, sym1, baseOutWei: 0n };
+  if (opts.dryRun) return { dryRun: true, base, other: other ?? undefined, sym0, sym1, baseOutWei: 0n, unprotected: unprotectedIds };
 
   const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline));
   const rc = await tx.wait();
@@ -360,7 +413,7 @@ export async function closeLadderV4(
   }
   const afterWei = await readBase();
   const baseOutWei = afterWei > beforeWei ? afterWei - beforeWei : 0n;
-  return { txHash: rc?.hash ?? tx.hash, base, other: other ?? undefined, sym0, sym1, baseOutWei, cashedOut };
+  return { txHash: rc?.hash ?? tx.hash, base, other: other ?? undefined, sym0, sym1, baseOutWei, cashedOut, unprotected: unprotectedIds };
 }
 
 // Cache hasil list v4 per chain (TTL pendek): banyak command (/status, /positions,

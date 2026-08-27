@@ -42,7 +42,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
+import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
@@ -3866,6 +3866,8 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
       `✅ ${msg.bold('V4 LADDER CLOSED')} · ${legs.length} legs\n\nTotal cashed out · ${msg.bold(msg.esc(`${msg.cleanUnits(r.baseOutWei, dec)} ${sym}`))}`,
       { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
     );
+    // Leg yang terpaksa di-burn tanpa lantai harga harus terlihat, bukan cuma di log.
+    if (r.unprotected?.length) await ctx.reply(msg.esc(V4_UNPROTECTED_NOTE(r.unprotected.join(', #'))), html);
   } catch (err) {
     await recoverStrayWeth(cc, 'close v4 ladder').catch(() => {});
     await ctx.reply(msg.msgError('close v4 ladder', (err as Error).message), html);
@@ -4191,6 +4193,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
       }),
       html,
     );
+    if (r.unprotected) await ctx.reply(msg.esc(V4_UNPROTECTED_NOTE(tokenId)), html);
     if (cardOutWei !== undefined) {
       await sendProfitCard(ctx, tokenId, cardRec, cardOutWei, feesBaseWei).catch((e) =>
         console.log('[profit-card] v4 failed:', (e as Error).message.slice(0, 120)),
