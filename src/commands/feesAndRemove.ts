@@ -5,6 +5,7 @@ import { bot, html, editProgress, mapLimit, POS_CARD_CONCURRENCY } from '../core
 import { ctxOf } from '../chains.js';
 import { getPositionDetail, collectFeesOnly, removeLiquidityPct } from '../uniswap.js';
 import * as store from '../store.js';
+import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
 
 /**
@@ -97,7 +98,7 @@ bot.action(/^rm:(\d+)$/, async (ctx) => {
   await ctx.editMessageText(msg.msgRemovePct(id), {
     ...html,
     ...Markup.inlineKeyboard([
-      [25, 50, 75].map((p) => Markup.button.callback(`${p}%`, `rmpct:${id}:${p}`)),
+      pctPresets.get('stop').map((p) => Markup.button.callback(`${p}%`, `rmpct:${id}:${p}`)),
       [Markup.button.callback('100% (close position)', `stop:${id}`)],
       [Markup.button.callback('❌ Cancel', 'cancel')],
     ]),

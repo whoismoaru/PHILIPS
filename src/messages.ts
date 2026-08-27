@@ -883,15 +883,40 @@ export function msgSellAmount(sym: string, balLabel: string): string {
   ].join('\n');
 }
 
-/** Prompt "Custom %" — dipakai /buy & /sell. */
-export function msgTypePercent(sym: string): string {
+/** Kartu satu alur di /settings: angka yang dipakai sekarang. */
+export function msgPctPreset(label: string, values: number[], defaults: number[], noFull: boolean): string {
+  const same = values.length === defaults.length && values.every((v, i) => v === defaults[i]);
   return [
-    `✏️ ${bold('Custom percentage')}`,
+    `⚙️ ${bold(`${esc(label)} — quick percentages`)}`,
     '',
-    `💬 Type how many percent of your ${bold(esc(sym))} to use — ${code('1')}–${code('100')}.`,
+    `🎚 ${bold('Now:')} ${values.map((v) => code(`${v}%`)).join('  ')}`,
+    `${note(`default: ${defaults.join(' / ')}${same ? ' (unchanged)' : ''}`)}`,
     '',
-    note('e.g. 35 → 35% of the usable balance.'),
+    `These are the buttons shown when you pick an amount in ${bold(esc(label))}.`,
+    ...(noFull
+      ? ['', note('100% is not allowed here — withdrawing everything closes the position, which has its own button.')]
+      : []),
   ].join('\n');
+}
+
+/** Prompt ketik daftar persen. */
+export function msgPctAsk(label: string, current: number[], noFull: boolean): string {
+  return [
+    `✏️ ${bold(`Edit ${esc(label)} percentages`)}`,
+    '',
+    `💬 Type up to 4 numbers, separated by spaces — e.g. ${code('10 25 50 90')}.`,
+    '',
+    `${note(`current: ${current.join(' / ')}`)}`,
+    note(`each one 1–${noFull ? '99' : '100'}, duplicates dropped, sorted automatically.`),
+  ].join('\n');
+}
+
+export function msgPctInvalid(noFull: boolean): string {
+  return msgError(
+    'percentages',
+    `Give 1–4 whole numbers between 1 and ${noFull ? '99' : '100'} (e.g. ${'10 25 50 90'}).` +
+      (noFull ? ' 100% is not allowed here — that would close the position.' : ''),
+  );
 }
 
 export function msgSellTypeAmount(sym: string): string {
@@ -1729,6 +1754,7 @@ export function msgSettings(
   dryRun: boolean,
   maxPerTx: string,
   gasCeiling?: string | null, // atap ongkos gas per-tx; null = tanpa atap
+  pcts?: { buy: number[]; sell: number[]; add: number[]; stop: number[] },
 ): string {
   return [
     `⚙️ ${bold('PHILIPS Settings')}`,
@@ -1741,6 +1767,9 @@ export function msgSettings(
     '',
     `💸 ${bold('Transaction Preferences')}`,
     `• Tx Limit: ${esc(maxPerTx)}`,
+    ...(pcts
+      ? [`• Quick %: buy ${esc(pcts.buy.join('/'))} · sell ${esc(pcts.sell.join('/'))} · add ${esc(pcts.add.join('/'))} · withdraw ${esc(pcts.stop.join('/'))}`]
+      : []),
     `• Gas Fee: Auto-fetched from L2${gasCeiling ? ` · ceiling ${esc(gasCeiling)}/tx` : ''}`,
     // Angka slippage ditulis sesuai yang BENAR-BENAR dipakai kode: swap coba 5%
     // dulu, naik ke 15% kalau tertolak; mint LP terpisah & jauh lebih ketat (0.5%).

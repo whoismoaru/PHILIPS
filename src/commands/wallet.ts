@@ -4,6 +4,7 @@ import { bot, html, editProgress, maxEthLabel } from '../core.js';
 import { getChain, rebuildChains, gasFeeCapLabel } from '../chains.js';
 import * as walletStore from '../walletStore.js';
 import * as store from '../store.js';
+import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
 
 /**
@@ -64,15 +65,85 @@ async function cmdSettings(ctx: any) {
   // konstanta di kode, jadi tombolnya cuma akan membuka kartu yang tak mengubah apa
   // pun. Pasang setelah nilainya benar-benar bisa disimpan & dipakai jalur swap.
   const gasCeil = gasFeeCapLabel() ? `${gasFeeCapLabel()} ${cc.nativeSymbol}` : null;
+  // Angka persen tiap alur bisa diubah dari sini — dulu dipatok di kode, jadi
+  // praktis tak pernah bisa disesuaikan tanpa edit + restart.
+  rows.push([
+    Markup.button.callback('🛒 Buy %', 'pct:buy'),
+    Markup.button.callback('📉 Sell %', 'pct:sell'),
+  ]);
+  rows.push([
+    Markup.button.callback('➕ Add LP %', 'pct:add'),
+    Markup.button.callback('🗑️ Withdraw %', 'pct:stop'),
+  ]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
-  return ctx.reply(msg.msgSettings(addr, bal, cc.label, config.safety.dryRun, maxEthLabel, gasCeil), {
+  return ctx.reply(msg.msgSettings(addr, bal, cc.label, config.safety.dryRun, maxEthLabel, gasCeil, pctPresets.all()), {
     ...html,
     ...Markup.inlineKeyboard(rows),
   });
 }
 bot.command('settings', cmdSettings);
+
+/** Kartu satu alur: nilai sekarang + tombol ubah / kembalikan ke bawaan. */
+function pctCardKb(flow: pctPresets.PctFlow) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('✏️ Edit', `pctedit:${flow}`), Markup.button.callback('↩️ Reset', `pctreset:${flow}`)],
+    [Markup.button.callback('⬅️ Back', 'settings')],
+  ]);
+}
+
+bot.action(/^pct:(buy|sell|add|stop)$/, async (ctx) => {
+  const flow = ctx.match[1] as pctPresets.PctFlow;
+  await ctx.answerCbQuery();
+  return ctx.editMessageText(
+    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctPresets.defaultsFor(flow), flow === 'stop'),
+    { ...html, ...pctCardKb(flow) },
+  );
+});
+
+bot.action(/^pctedit:(buy|sell|add|stop)$/, async (ctx) => {
+  const flow = ctx.match[1] as pctPresets.PctFlow;
+  pctPresets.askEdit(ctx.from!.id, flow);
+  await ctx.answerCbQuery();
+  return ctx.editMessageText(msg.msgPctAsk(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), flow === 'stop'), {
+    ...html,
+    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `pct:${flow}`)]]),
+  });
+});
+
+bot.action(/^pctreset:(buy|sell|add|stop)$/, async (ctx) => {
+  const flow = ctx.match[1] as pctPresets.PctFlow;
+  pctPresets.clearEdit(ctx.from!.id);
+  const v = pctPresets.reset(flow);
+  await ctx.answerCbQuery('Reset');
+  return ctx.editMessageText(
+    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], v, pctPresets.defaultsFor(flow), flow === 'stop'),
+    { ...html, ...pctCardKb(flow) },
+  );
+});
+
+/**
+ * Menerima daftar persen yang diketik user. Dipanggil dari penangan teks utama
+ * (index.ts) SEBELUM alur nominal, supaya "25 50 75" tak terbaca sebagai nominal.
+ * @returns true bila pesan ini memang jawaban untuk prompt persen.
+ */
+export async function handlePctReply(ctx: any, raw: string): Promise<boolean> {
+  const flow = pctPresets.pendingEdit(ctx.from?.id);
+  if (!flow) return false;
+  const nums = pctPresets.parseList(raw);
+  const saved = nums ? pctPresets.set(flow, nums) : null;
+  if (!saved) {
+    await ctx.reply(msg.msgPctInvalid(flow === 'stop'), html);
+    return true; // tetap ditangani: jangan jatuh ke alur nominal
+  }
+  pctPresets.clearEdit(ctx.from.id);
+  await ctx.reply(
+    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], saved, pctPresets.defaultsFor(flow), flow === 'stop'),
+    { ...html, ...pctCardKb(flow) },
+  );
+  return true;
+}
 bot.action('settings', async (ctx) => {
   await ctx.answerCbQuery();
   return cmdSettings(ctx);

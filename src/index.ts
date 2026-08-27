@@ -44,6 +44,7 @@ import {
 } from './uniswap.js';
 import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
+import * as pctPresets from './pctPresets.js';
 import { screenToken, formatScreen, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
 import { startMonitor } from './monitor.js';
@@ -57,6 +58,7 @@ import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import './commands/feesAndRemove.js';
 import './commands/alerts.js';
 import './commands/unwrap.js';
+import { handlePctReply } from './commands/wallet.js';
 import { handleBridgeAmount } from './commands/bridge.js';
 import {
   CHAINS,
@@ -1645,7 +1647,7 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   flow.awaitingAmount = true;
   const a = amountCtx(flow);
   const rows: any[] = [];
-  rows.push(AMOUNT_PCTS.map((p) => Markup.button.callback(`${p}%`, `amt:${p}`)));
+  rows.push(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `amt:${p}`)));
   rows.push([Markup.button.callback('⬅️ Back', 'back:strategy')], [Markup.button.callback('❌ Cancel', 'cancel')]);
   // Saldo (1 RPC, gagal → '?': jangan pernah memblokir langkah ini).
   const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
@@ -1657,7 +1659,6 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
 }
 
 /** Persentase saldo yang ditawarkan di langkah nominal. */
-const AMOUNT_PCTS = [30, 50, 70, 90] as const;
 
 /** Saldo mentah sisi yang sedang dipilih (token / native / stablecoin). */
 async function rawBalanceFor(flow: AddFlow): Promise<bigint> {
@@ -1693,7 +1694,7 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
     return ctx.reply(msg.msgSessionExpired(), html);
   }
   const pct = Number(ctx.match[1]);
-  if (!AMOUNT_PCTS.includes(pct as (typeof AMOUNT_PCTS)[number])) return;
+  if (!pctPresets.get('add').includes(pct)) return;
 
   const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
   const usable = await usableFor(flow).catch(() => null);
@@ -2661,7 +2662,6 @@ type TSwapFlow = {
   tokenDec?: number;
   awaitingToken?: boolean;
   awaitingAmount?: boolean;
-  awaitingPct?: boolean;         // menunggu user mengetik PERSEN (bubble "Custom %")
   awaitingCA?: boolean;          // /buy: menunggu user tempel CA
   chainOptions?: string[];       // /buy: chain kandidat (token ada di >1 chain didukung)
   screenText?: string;           // /buy: kartu Detail+Safety (cache → Kembali tak re-scan)
@@ -2824,7 +2824,6 @@ async function buyUsableWei(flow: TSwapFlow): Promise<bigint> {
 
 async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   flow.awaitingAmount = true;
-  flow.awaitingPct = false; // kembali ke kartu nominal membatalkan prompt "Custom %"
   flow.previewBack = 'buyback:size'; // Kembali dari Preview → balik ke size
   const cc = CHAINS[flow.chainKey]!;
   const base = flow.base!;
@@ -2848,8 +2847,7 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   // persentase saldo — sejajar dengan /sell dan wizard /add, yang sudah punya
   // tombol persen. "Custom %" untuk angka di luar preset.
   const rows: any[] = [];
-  rows.push([25, 50, 75, 100].map((p) => Markup.button.callback(`${p}%`, `buypct:${p}`)));
-  rows.push([Markup.button.callback('✏️ Custom %', 'buypct:custom')]);
+  rows.push(pctPresets.get('buy').map((p) => Markup.button.callback(`${p}%`, `buypct:${p}`)));
   const multiBase = basesFor(cc).length > 1;
   const backSize = multiBase ? 'buyback:base' : flow.fromHub ? 'hub:back' : 'buyback:safety';
   rows.push([Markup.button.callback('⬅️ Back', backSize), Markup.button.callback('❌ Cancel', 'cancel')]);
@@ -3187,20 +3185,13 @@ bot.action('buyback:base', async (ctx) => {
   await buyBaseStep(ctx, flow, true);
 });
 /** Persen saldo → nominal beli. Sumbernya saldo yang BISA DIPAKAI (gas sudah disisihkan). */
-bot.action(/^buypct:(\d+|custom)$/, async (ctx) => {
+bot.action(/^buypct:(\d+)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
   if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired — start again with /buy.');
   const cc = CHAINS[flow.chainKey]!;
   const base = flow.base!;
   const sym = base.wrappable ? cc.nativeSymbol : base.symbol;
-  if (ctx.match[1] === 'custom') {
-    flow.awaitingPct = true;
-    await ctx.answerCbQuery();
-    return ctx.editMessageText(msg.msgTypePercent(sym), {
-      ...html,
-      ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'buyback:size')]]),
-    });
-  }
+  void sym;
   await ctx.answerCbQuery();
   return buyFromPct(ctx, flow, Number(ctx.match[1]));
 });
@@ -3215,7 +3206,6 @@ async function buyFromPct(ctx: any, flow: TSwapFlow, pct: number): Promise<unkno
   if (amountWei <= 0n) {
     return ctx.reply(msg.msgError('buy', `No spendable ${sym} left after the gas reserve.`), html);
   }
-  flow.awaitingPct = false;
   const label = `${Number(ethers.formatUnits(amountWei, base.decimals)).toLocaleString('en-US', { maximumFractionDigits: base.decimals >= 18 ? 6 : 2 })} ${sym} (${pct}%)`;
   return tswapQuoteConfirm(ctx, flow, cc, base.address, flow.token!, amountWei, label);
 }
@@ -3380,13 +3370,12 @@ function sellListKb(list: SellHolding[], showChain = false) {
 // Langkah 2: pilih % / jumlah.
 function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   flow.awaitingAmount = true;
-  flow.awaitingPct = false; // kembali ke kartu nominal membatalkan prompt "Custom %"
   flow.previewBack = 'sellback:amount'; // Kembali dari Preview → step %/jumlah
   // Masuk dari hub = tak ada daftar holdings untuk dituju; pulangkan ke kartu token.
   const back = flow.sellList ? 'sellback:list' : flow.fromHub ? 'hub:back' : 'cancel';
   const rows = [
-    [25, 50, 75, 100].map((p) => Markup.button.callback(`${p}%`, `sellpct:${p}`)),
-    [Markup.button.callback('✏️ Custom %', 'sellpct:pct'), Markup.button.callback('Type an amount', 'sellpct:custom')],
+    pctPresets.get('sell').map((p) => Markup.button.callback(`${p}%`, `sellpct:${p}`)),
+    [Markup.button.callback('Type an amount', 'sellpct:custom')],
     [Markup.button.callback('⬅️ Back', back), Markup.button.callback('❌ Cancel', 'cancel')],
   ];
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
@@ -3458,17 +3447,9 @@ bot.action(/^sellpick:(\d+)$/, async (ctx) => {
   await sellAmountStep(ctx, flow, true);
 });
 
-bot.action(/^sellpct:(\d+|custom|pct)$/, async (ctx) => {
+bot.action(/^sellpct:(\d+|custom)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
   if (!flow?.token || flow.tokenBalWei === undefined) return ctx.answerCbQuery('Expired — start again with /sell.');
-  if (ctx.match[1] === 'pct') {
-    flow.awaitingPct = true;
-    await ctx.answerCbQuery();
-    return ctx.editMessageText(msg.msgTypePercent(flow.tokenSym!), {
-      ...html,
-      ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'sellback:amount')]]),
-    });
-  }
   if (ctx.match[1] === 'custom') {
     await ctx.answerCbQuery();
     return ctx.editMessageText(msg.msgSellTypeAmount(flow.tokenSym!), {
@@ -4327,26 +4308,14 @@ bot.on(message('text'), async (ctx) => {
     tswapFlows.delete(ctx.from.id);
     return ctx.reply(msg.msgSessionExpired(), html);
   }
+  // Jawaban untuk prompt persen di /settings dicek lebih dulu: "25 50 75" harus
+  // tersimpan sebagai setelan, bukan terbaca sebagai nominal di alur yang terbuka.
+  if (await handlePctReply(ctx, raw)) return;
   if (tflow?.awaitingCA) {
     // /buy alur CA-dulu: user tempel CA → deteksi chain → safety.
     tflow.awaitingCA = false;
     const prog = await ctx.reply(msg.msgProgress('detecting chain…'), html);
     return buyStartFromCA(ctx, raw.trim(), { message_id: prog.message_id });
-  }
-  // "Custom %": user mengetik ANGKA PERSEN, bukan nominal. Dicek SEBELUM cabang
-  // nominal supaya "50" tak terbaca sebagai 50 token.
-  if (tflow?.awaitingPct) {
-    const pct = Number(raw.trim().replace('%', '').replace(',', '.'));
-    if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
-      return ctx.reply(msg.msgError(tflow.buy ? 'buy' : 'sell', 'Enter a percentage between 1 and 100.'), html);
-    }
-    tflow.awaitingPct = false;
-    if (tflow.buy) return buyFromPct(ctx, tflow, pct);
-    const bal = tflow.tokenBalWei ?? 0n;
-    const amountWei = pct >= 100 ? bal : (bal * BigInt(Math.round(pct * 100))) / 10000n;
-    if (amountWei <= 0n) return ctx.reply(msg.msgError('sell', 'That percentage rounds to zero.'), html);
-    const amtLabel = `${fmt4((tflow.tokenBalNum! * pct) / 100)} ${tflow.tokenSym} (${pct}%)`;
-    return sellPreview(ctx, tflow, amountWei, amtLabel);
   }
   if (tflow?.awaitingAmount && tflow.sellList) {
     // /sell alur holdings: user ketik jumlah token (absolut) atau "semua".
