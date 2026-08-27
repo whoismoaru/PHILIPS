@@ -3722,19 +3722,39 @@ bot.action('tswapok', async (ctx) => {
           route: r.route,
         };
       }
-      // JUAL selalu berakhir di native ETH (permintaan pemilik 2 Agu 2026). Tak ada
-      // lagi cabang ke stablecoin: sellPreview mengunci base ke wrapped-native, dan
-      // token yang cuma punya pool USDG tetap terlayani lewat rute 2-hop di dalam
+      // Menjual SALDO NATIVE: daftar jual mencatatnya memakai alamat wrapped-native,
+      // tapi dananya masih native — belum pernah di-wrap. Tanpa langkah ini setiap
+      // rute mencoba menarik WBNB yang saldonya 0 ("STF", "did not reduce the token
+      // balance") lalu menyerah sebagai "All swap routes failed". Tujuannya pun
+      // stablecoin, bukan native: menjual native ke native adalah swap ke diri sendiri.
+      if (token!.toLowerCase() === cc.wethAddress.toLowerCase()) {
+        const have: bigint = await cc.weth.balanceOf(cc.wallet.address);
+        if (have < amountWei) await wrapWithGasReserve(cc, amountWei - have);
+        const r = await swapTokenToUsdgRobust(token!, amountWei, base!.address, cc, MAX_SLIP_PCT);
+        return {
+          outLabel: `${Number(ethers.formatUnits(r.outWei, base!.decimals)).toFixed(2)} ${base!.symbol}`,
+          route: r.route,
+        };
+      }
+      // JUAL token biasa berakhir di native ETH (permintaan pemilik 2 Agu 2026).
+      // Token yang cuma punya pool USDG tetap terlayani lewat rute 2-hop di dalam
       // swapTokenToEthRobust (token→USDG→ETH).
       const r = await swapTokenToEthRobust(token!, amountWei, cc, MAX_SLIP_PCT);
       return { outLabel: `${Number(ethers.formatEther(r.outEthWei)).toFixed(6)} ${cc.nativeSymbol}`, route: r.route };
     };
 
     // Probe = saldo aset masukan. Berkurang → swap sudah (sebagian) jalan → jangan ulang.
+    // Menjual saldo native: yang berkurang adalah NATIVE. Memakai saldo WBNB di sini
+    // justru NAIK dari 0 setelah wrap, jadi percobaan yang sudah mendarat terbaca
+    // "belum jalan" dan diulang — wrap dobel.
+    const sellNative = !buy && token!.toLowerCase() === cc.wethAddress.toLowerCase();
     const inC = new ethers.Contract(buy ? base!.address : token!, ERC20_ABI, cc.provider);
+    const probe = sellNative
+      ? () => cc.provider.getBalance(cc.wallet.address)
+      : () => inC.balanceOf(cc.wallet.address) as Promise<bigint>;
     const { outLabel, route } = await retryOnce(
       'swap',
-      () => inC.balanceOf(cc.wallet.address) as Promise<bigint>,
+      probe,
       attempt,
       { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
     );
