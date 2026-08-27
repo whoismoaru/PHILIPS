@@ -74,6 +74,7 @@ import {
   type BaseAsset,
   venueCtx,
   ctxOf,
+  pairLabel,
 } from './chains.js';
 import { swapExactInBest, previewSwapOut } from './swapRoute.js';
 
@@ -1193,7 +1194,7 @@ async function cmdPositions(ctx: any, edit = false) {
         id: rec.tokenId,
         groupId: rec.groupId ?? null,
         legShape: rec.shape ?? null,
-        pair: `${d.baseSymbol} / ${rec.symbol}`,
+        pair: pairLabel(d.baseSymbol, rec.symbol),
         protocol: 'V3',
         investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${d.baseSymbol}`,
         age: msg.fmtAge(Date.now() - rec.openedAt),
@@ -3686,7 +3687,7 @@ async function sendProfitCard(
   const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
   const pnlBig = `${positive ? '+' : ''}${fmt(pnl)} ${baseSym}`;
   const buf = await renderProfitCard({
-    pair: `${baseSym} / ${rec.symbol}`,
+    pair: pairLabel(baseSym, rec.symbol),
     positive,
     pnlBig,
     pnlPct: msg.fmtPct(pnlPct),

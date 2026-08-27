@@ -83,6 +83,18 @@ export const baseSymbolOf = (kind: BaseKind | undefined, ctx?: ChainCtx): string
   return kind === 'usdg' ? 'USDG' : kind === 'usdt' ? 'USDT' : kind === 'usdc' ? 'USDC' : 'WETH';
 };
 
+/**
+ * Label pasangan untuk kartu/pesan. `symbol` di catatan posisi TIDAK seragam:
+ * sebagian sudah berupa pasangan ('AGI/USDG', 'USDG/CLAN'), sebagian cuma nama
+ * token ('PONS'). Menempelkan base begitu saja menghasilkan 'USDG / AGI/USDG'.
+ * Kalau sudah ada pasangan, sisi yang sama dengan base dibuang dan sisanya dipakai.
+ */
+export const pairLabel = (baseSym: string, symbol: string): string => {
+  const parts = symbol.split('/').map((x) => x.trim()).filter(Boolean);
+  const other = parts.length > 1 ? parts.find((x) => x.toLowerCase() !== baseSym.toLowerCase()) : undefined;
+  return `${baseSym} / ${other ?? parts[parts.length - 1] ?? symbol}`;
+};
+
 /** Daftar base asset yang tersedia di chain ini. */
 export function basesFor(ctx: ChainCtx): BaseAsset[] {
   return ctx.bases;
