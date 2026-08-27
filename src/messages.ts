@@ -1073,7 +1073,12 @@ export function msgPositionCard(opts: {
   side?: 'base' | 'token'; // sisi setoran; kosong = base (posisi lama)
   converted?: boolean; // harga menembus seluruh rentang → posisi 100% aset seberang
   feeIsTickSpacing?: boolean; // Velodrome Slipstream: `fee` = tickSpacing (fee-nya dinamis)
-  ladder?: { legIndex: number; legCount: number; shape: string; groupInvest?: string }; // leg dari grup ladder
+  ladder?: {
+    legIndex: number; legCount: number; shape: string; groupInvest?: string;
+    // Ringkasan SELURUH ladder — inti fitur bid-ask. Tanpa ini kartu leg cuma
+    // memperlihatkan satu anak tangga padahal yang disetor user adalah ladder.
+    ladderPnl?: string; filled?: number; active?: number; waiting?: number; unread?: number;
+  }; // leg dari grup ladder
 }): string {
   const base = esc(opts.baseSymbol ?? 'WETH');
   const sym = esc(opts.symbol);
@@ -1091,7 +1096,10 @@ export function msgPositionCard(opts: {
 
   // Kalimat penutup menjelaskan APA yang sedang terjadi pada uangnya — beda
   // untuk tiap status & sisi, jadi jangan disatukan jadi satu kalimat generik.
-  const explain = opts.inRange
+  const isLeg = opts.ladder && opts.ladder.legCount > 1;
+  const explain = opts.converted && isLeg
+    ? `This rung has done its job: leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount} is now ${bold(`100% ${tokenSide ? (opts.baseSymbol ?? 'WETH') : opts.symbol}`)}. The remaining rungs are still waiting further down.`
+    : opts.inRange
     ? `Your liquidity is ${bold('active')} and earning fees right now. As long as ${sym} stays inside this range, fees keep accruing.`
     : opts.converted
       ? `Price moved through your entire range, so this position is now ${bold(`100% ${tokenSide ? (opts.baseSymbol ?? 'WETH') : opts.symbol}`)} and no longer earning fees. Your target is done — withdraw, or leave it and wait for price to come back into range.`
@@ -1099,7 +1107,6 @@ export function msgPositionCard(opts: {
       ? `Your liquidity is currently inactive. It will automatically convert to ${base} and start earning fees once the ${sym} price ${bold('rises')} into your target range (${range}).`
       : `Your liquidity is currently inactive. It will automatically convert to ${sym} and start earning fees once the token price ${bold('drops')} into your target range (${range}).`;
 
-  const isLeg = opts.ladder && opts.ladder.legCount > 1;
   return [
     `📊 ${bold(`Position Details: #${esc(opts.tokenId)}`)}`,
     '',
@@ -1111,10 +1118,21 @@ export function msgPositionCard(opts: {
     isLeg && opts.ladder!.groupInvest
       ? `💰 ${bold('Principal:')} ${esc(opts.ladder!.groupInvest)} ${investUnit} ${italic(`(ladder total; this leg ${esc(opts.invest)})`)}`
       : `💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`,
-    `${tokenSide ? '📈' : '📉'} ${bold('Target Range:')} ${range} ${italic('dari harga kini')}`,
+    `${tokenSide ? '📈' : '📉'} ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${range} ${italic('dari harga kini')}`,
     ...(opts.mcRange ? [italic(`↳ market cap ${esc(opts.mcRange)}`)] : []),
-    `📈 ${bold('Current PnL:')} ${esc(opts.pnlText)}`,
-    `${opts.inRange ? '🟢' : '🔴'} ${bold('Status:')} ${status}`,
+    // Leg: PnL di baris ini milik LEG INI saja, sedangkan Principal di atas milik
+    // seluruh ladder. Tanpa kata "this leg", persennya terbaca terhadap modal ladder.
+    `📈 ${bold(isLeg ? 'Leg PnL:' : 'Current PnL:')} ${esc(opts.pnlText)}`,
+    ...(isLeg && opts.ladder!.ladderPnl ? [`📊 ${bold('Ladder PnL:')} ${esc(opts.ladder!.ladderPnl)}`] : []),
+    ...(isLeg && opts.ladder!.filled !== undefined
+      ? [
+          `🎚 ${bold('Rungs:')} ${opts.ladder!.filled} terisi · ${opts.ladder!.active} aktif · ${opts.ladder!.waiting} menunggu` +
+            (opts.ladder!.unread ? ` · ${italic(`${opts.ladder!.unread} tak terbaca`)}` : ''),
+        ]
+      : []),
+    `${opts.inRange ? '🟢' : opts.converted && isLeg ? '🟡' : '🔴'} ${bold('Status:')} ${
+      opts.converted && isLeg ? `${bold('LEG FILLED')} — bought, ladder still running` : status
+    }`,
     '',
     `⏱️ <i>Age ${esc(opts.age)} · Updated Live: ${nowWib()}</i>`,
     '',

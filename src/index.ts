@@ -771,15 +771,47 @@ async function buildPositionCard(
   // Ladder: total modal SEGRUP (jumlah semua leg) supaya kartu leg tak terlihat
   // seperti posisi tunggal kecil.
   const ladder = rec.groupId
-    ? (() => {
+    ? await (async () => {
         const legs = store.group(rec.groupId!);
         if (legs.length < 2) return undefined;
+        const dec = baseDecimalsOf(rec.chain, rec.baseKind);
         const groupWei = legs.reduce((s, l) => s + BigInt(l.initialWethWei || '0'), 0n);
+        // Ringkasan SELURUH ladder. Tanpa ini kartu memasang modal SEGRUP tepat di
+        // atas PnL yang cuma milik SATU leg: "+4.5%" terbaca terhadap 175 USDT
+        // (≈$7.9) padahal untungnya $0.22 — dua baris bersebelahan dengan penyebut
+        // berbeda. Sekarang kedua cakupan disebut terang-terangan.
+        const seen = await mapLimit(legs, POS_CARD_CONCURRENCY, async (l) => {
+          try {
+            const dd = await getPositionDetail(l.tokenId, cc);
+            return {
+              inWei: BigInt(l.initialWethWei || '0'),
+              valWei: dd.valueBaseWei + dd.feesBaseWei,
+              inRange: dd.inRange,
+              converted: !dd.inRange && (l.side === 'token' ? dd.side === 'above' : dd.side === 'below'),
+            };
+          } catch {
+            return null;
+          }
+        });
+        const ok = seen.filter((x): x is NonNullable<typeof x> => x !== null);
+        let ladderPnl: string | undefined;
+        if (ok.length === legs.length) {
+          const inF = Number(ethers.formatUnits(ok.reduce((a, x) => a + x.inWei, 0n), dec));
+          const valF = Number(ethers.formatUnits(ok.reduce((a, x) => a + x.valWei, 0n), dec));
+          const usd = await baseToUsd(rec.baseKind ?? d.baseKind, valF - inF, cc);
+          const pct = inF > 0 ? ((valF - inF) / inF) * 100 : 0;
+          ladderPnl = `${usd !== null ? msg.usdSigned(usd) : `${valF - inF >= 0 ? '+' : ''}${(valF - inF).toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`} (${msg.fmtPct(pct)})`;
+        }
         return {
           legIndex: rec.legIndex ?? 0,
           legCount: rec.legCount ?? legs.length,
           shape: rec.shape ?? 'bidask',
-          groupInvest: msg.cleanUnits(groupWei, baseDecimalsOf(rec.chain, rec.baseKind)),
+          groupInvest: msg.cleanUnits(groupWei, dec),
+          ladderPnl,
+          filled: ok.filter((x) => x.converted).length,
+          active: ok.filter((x) => x.inRange).length,
+          waiting: ok.filter((x) => !x.inRange && !x.converted).length,
+          unread: legs.length - ok.length,
         };
       })()
     : undefined;
