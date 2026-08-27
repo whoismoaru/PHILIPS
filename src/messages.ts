@@ -883,6 +883,17 @@ export function msgSellAmount(sym: string, balLabel: string): string {
   ].join('\n');
 }
 
+/** Prompt "Custom %" — dipakai /buy & /sell. */
+export function msgTypePercent(sym: string): string {
+  return [
+    `✏️ ${bold('Custom percentage')}`,
+    '',
+    `💬 Type how many percent of your ${bold(esc(sym))} to use — ${code('1')}–${code('100')}.`,
+    '',
+    note('e.g. 35 → 35% of the usable balance.'),
+  ].join('\n');
+}
+
 export function msgSellTypeAmount(sym: string): string {
   return [`📉 ${bold('Sell Token')}`, '', `💬 Type how much ${bold(sym)} to sell (or ${code('all')}).`].join('\n');
 }
