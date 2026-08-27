@@ -1,5 +1,7 @@
 # PHILIPS
 
+![A closed position, as the bot reports it](assets/pnl-card.jpg)
+
 **A Telegram bot that opens single-sided liquidity positions for you.**
 
 You deposit one token. The position sits there like a limit order, earning trading
@@ -131,9 +133,14 @@ explicit confirmation tap and is guarded against double-taps.
 ## Closing a position
 
 `/stop` lists what you have open and puts a close button on each one. Tapping close
-on any leg of a ladder closes the whole ladder in one batched transaction. Either way the bot withdraws the liquidity,
-collects the fees, swaps the token side back to what you deposited, and sends you a
-result card: deposit, received, how long you held it, and the fees you earned.
+on any leg of a ladder closes the whole ladder in one batched transaction. Either
+way the bot withdraws the liquidity, collects the fees, swaps the token side back to
+what you deposited, and sends you a result card: deposit, received, how long you held
+it, and the fees you earned.
+
+That card is the image at the top of this page. The artwork behind it is just a
+file. Drop your own `data/PHILIPS ANIME.jpg` in and every card uses it instead.
+Wide images with the subject on one side work best; the text sits on the other.
 
 The result is always reported in **the asset you deposited**. Deposit USDG, get the
 answer in USDG. Converting it to dollars would fold the base asset's own price swing
