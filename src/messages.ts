@@ -408,7 +408,7 @@ export function msgV4Position(p: {
     p.inRange === null
       ? `Range status couldn't be read right now — the value above may be stale.`
       : p.inRange
-        ? `Your liquidity is ${bold('active')} and earning fees right now. As long as ${sym} stays inside this range, fees keep accruing.`
+        ? `Your liquidity is ${bold('active')} and earning fees. Fees keep accruing as long as ${sym} stays inside this range.`
         : p.converted
           ? p.ladder && p.ladder.legCount > 1
             // Leg ladder yang habis terserap itu NORMAL, bukan tanda ladder-nya
@@ -417,7 +417,7 @@ export function msgV4Position(p: {
             // seolah seluruh modal ladder sudah berubah jadi token.
             ? `Price dropped through ${bold('this leg')}'s range, so leg ${p.ladder.legIndex + 1} of ${p.ladder.legCount} is now ${bold(`100% ${sym}`)}${p.ladder.sharePct !== undefined ? ` — ${bold(`${p.ladder.sharePct.toFixed(1)}%`)} of the ladder` : ''}. That is how a ladder works: rungs fill one at a time from the top. The legs below still hold ${base} and are waiting for lower prices. Judge the ladder as a whole, not this rung alone.`
             : `Price dropped through this position's entire range, so it is now ${bold(`100% ${sym}`)} — the buy-dip target here is done. The value above is that ${sym} priced back in ${base}; it falls further if ${sym} keeps dropping. Hold and wait for a bounce, or close.`
-          : `Your liquidity is currently inactive. It will automatically convert to ${sym} and start earning fees once the token price ${bold('drops')} into your target range (${esc(p.rangeLabel)}).`;
+          : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${esc(p.rangeLabel)}).`;
 
   const isLeg = p.ladder && p.ladder.legCount > 1;
   const lines = [
@@ -434,21 +434,21 @@ export function msgV4Position(p: {
           ...(p.ladder!.valueLabel
             ? [
                 `💰 ${bold('Value now:')} ${esc(p.ladder!.valueLabel)}`,
-                ...(p.ladder!.feesLabel ? [italic(`↳ termasuk fee ${esc(p.ladder!.feesLabel)}`)] : []),
+                ...(p.ladder!.feesLabel ? [italic(`↳ incl. fees ${esc(p.ladder!.feesLabel)}`)] : []),
               ]
             : []),
           ...(p.ladder!.pnlText ? [`📈 ${bold('Ladder PnL:')} ${esc(p.ladder!.pnlText)}`] : []),
           ...(p.ladder!.mcRange ? [`📉 ${bold('Ladder Range:')} ${italic(esc(p.ladder!.mcRange))}`] : []),
           ...(p.ladder!.filled !== undefined
-            ? [`🎚 ${bold('Rungs:')} ${p.ladder!.filled} terisi · ${p.ladder!.active} aktif · ${p.ladder!.waiting} menunggu`]
+            ? [`🎚 ${bold('Rungs:')} ${p.ladder!.filled} filled · ${p.ladder!.active} active · ${p.ladder!.waiting} waiting`]
             : []),
           '',
-          `${italic(`— leg ${p.ladder!.legIndex + 1} dari ${p.ladder!.legCount}${p.ladder!.sharePct !== undefined ? `, ${p.ladder!.sharePct.toFixed(1)}% modal ladder` : ''} —`)}`,
+          `${italic(`— leg ${p.ladder!.legIndex + 1} of ${p.ladder!.legCount}${p.ladder!.sharePct !== undefined ? `, ${p.ladder!.sharePct.toFixed(1)}% of ladder capital` : ''} —`)}`,
         ]
       : []),
     `💰 ${bold(isLeg ? 'Leg Value:' : 'Value:')} ${esc(p.valueLabel)}`,
-    ...(p.feesLabel ? [italic(`↳ termasuk fee ${esc(p.feesLabel)}`)] : []),
-    `📉 ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${esc(p.rangeLabel)} ${italic('dari harga kini')}`,
+    ...(p.feesLabel ? [italic(`↳ incl. fees ${esc(p.feesLabel)}`)] : []),
+    `📉 ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${esc(p.rangeLabel)} ${italic('from current price')}`,
     ...(p.mcRange ? [italic(`↳ market cap ${esc(p.mcRange)}`)] : []),
     ...(p.pnlText ? [`📈 ${bold('Current PnL:')} ${esc(p.pnlText)}`] : []),
     `${statusEmoji} ${bold('Status:')} ${status}`,
@@ -460,7 +460,7 @@ export function msgV4Position(p: {
     '',
     `<i>${explain}</i>`,
     '',
-    note(p.tracked ? 'Uniswap v4 · dikelola bot' : 'Uniswap v4 · baca-saja (dibuka di luar bot)'),
+    note(p.tracked ? 'Uniswap v4 · dikelola bot' : 'Uniswap v4 · read-only (opened outside the bot)'),
   );
   return lines.join('\n');
 }
@@ -1066,12 +1066,12 @@ export function msgPositionCard(opts: {
   const explain = opts.converted && isLeg
     ? `This rung has done its job: leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount} is now ${bold(`100% ${tokenSide ? (opts.baseSymbol ?? 'WETH') : opts.symbol}`)}. The remaining rungs are still waiting further down.`
     : opts.inRange
-    ? `Your liquidity is ${bold('active')} and earning fees right now. As long as ${sym} stays inside this range, fees keep accruing.`
+    ? `Your liquidity is ${bold('active')} and earning fees. Fees keep accruing as long as ${sym} stays inside this range.`
     : opts.converted
       ? `Price moved through your entire range, so this position is now ${bold(`100% ${tokenSide ? (opts.baseSymbol ?? 'WETH') : opts.symbol}`)} and no longer earning fees. Your target is done — withdraw, or leave it and wait for price to come back into range.`
       : tokenSide
-      ? `Your liquidity is currently inactive. It will automatically convert to ${base} and start earning fees once the ${sym} price ${bold('rises')} into your target range (${range}).`
-      : `Your liquidity is currently inactive. It will automatically convert to ${sym} and start earning fees once the token price ${bold('drops')} into your target range (${range}).`;
+      ? `Your liquidity is not active yet. It converts to ${base} and starts earning fees once ${sym} ${bold('rises')} into your range (${range}).`
+      : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${range}).`;
 
   return [
     `📊 ${bold(`Position Details: #${esc(opts.tokenId)}`)}`,
@@ -1084,7 +1084,7 @@ export function msgPositionCard(opts: {
     isLeg && opts.ladder!.groupInvest
       ? `💰 ${bold('Principal:')} ${esc(opts.ladder!.groupInvest)} ${investUnit} ${italic(`(ladder total; this leg ${esc(opts.invest)})`)}`
       : `💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`,
-    `${tokenSide ? '📈' : '📉'} ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${range} ${italic('dari harga kini')}`,
+    `${tokenSide ? '📈' : '📉'} ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${range} ${italic('from current price')}`,
     ...(opts.mcRange ? [italic(`↳ market cap ${esc(opts.mcRange)}`)] : []),
     // Leg: PnL di baris ini milik LEG INI saja, sedangkan Principal di atas milik
     // seluruh ladder. Tanpa kata "this leg", persennya terbaca terhadap modal ladder.
@@ -1092,15 +1092,15 @@ export function msgPositionCard(opts: {
     ...(isLeg && opts.ladder!.ladderPnl ? [`📊 ${bold('Ladder PnL:')} ${esc(opts.ladder!.ladderPnl)}`] : []),
     ...(isLeg && opts.ladder!.filled !== undefined
       ? [
-          `🎚 ${bold('Rungs:')} ${opts.ladder!.filled} terisi · ${opts.ladder!.active} aktif · ${opts.ladder!.waiting} menunggu` +
-            (opts.ladder!.unread ? ` · ${italic(`${opts.ladder!.unread} tak terbaca`)}` : ''),
+          `🎚 ${bold('Rungs:')} ${opts.ladder!.filled} filled · ${opts.ladder!.active} active · ${opts.ladder!.waiting} waiting` +
+            (opts.ladder!.unread ? ` · ${italic(`${opts.ladder!.unread} unreadable`)}` : ''),
         ]
       : []),
     `${opts.inRange ? '🟢' : opts.converted && isLeg ? '🟡' : '🔴'} ${bold('Status:')} ${
       opts.converted && isLeg ? `${bold('LEG FILLED')} — bought, ladder still running` : status
     }`,
     '',
-    `⏱️ <i>Age ${esc(opts.age)} · Updated Live: ${nowWib()}</i>`,
+    `⏱️ <i>Age ${esc(opts.age)} · updated ${nowWib()}</i>`,
     '',
     // explain sudah berisi tag <b> & teks ter-escape → JANGAN lewat italic()
     // (yang meng-escape lagi dan menampilkan "&lt;b&gt;" mentah ke user).
@@ -1185,6 +1185,7 @@ export function msgPositionsList(opts: {
     feesLabel?: string | null;
     feesUsdLabel?: string | null; // fee dalam USD; jatuh ke feesLabel bila harga tak terbaca
     strategy?: string | null;
+    baseSymbol?: string | null; // aset yang DISETOR — dipakai label sisi
     converted?: boolean; // harga sudah melewati SELURUH rentang → posisi 100% jadi aset seberang
     convertedInto?: string | null; // simbol aset hasil konversi
   }>;
@@ -1194,7 +1195,9 @@ export function msgPositionsList(opts: {
   const blocks = shown.map((r) => {
     // Sisi ditulis dari sudut pandang aset yang DISETOR: "ETH Side" = setor base.
     const tokenSide = r.strategy === 'token';
-    const side = tokenSide ? 'Token Side (Sell the rip)' : 'ETH Side (Buy the dip)';
+    // Simbolnya IKUT posisi: "ETH Side" pada posisi USDT menyebut aset yang tak
+    // pernah disetor. Tanpa data → 'Base Side', bukan menebak ETH.
+    const side = tokenSide ? 'Token Side (Sell the rip)' : `${r.baseSymbol ?? 'Base'} Side (Buy the dip)`;
     // Tiga keadaan, bukan dua: belum sampai rentang, sedang di dalam rentang, dan
     // sudah menembus SELURUH rentang (modal 100% jadi aset seberang, berhenti panen
     // fee). Tanpa yang ketiga, posisi yang belinya sudah SELESAI terbaca sama persis
@@ -1220,14 +1223,14 @@ export function msgPositionsList(opts: {
   const out = [
     `📊 ${bold('Active LP Positions')}`,
     '',
-    `Here ${opts.rows.length === 1 ? 'is' : 'are'} your current Uniswap position${opts.rows.length === 1 ? '' : 's'} :`,
+    `Here ${opts.rows.length === 1 ? 'is' : 'are'} your current Uniswap position${opts.rows.length === 1 ? '' : 's'}:`,
     '',
     blocks.join('\n\n'),
   ];
   // Daftar v4 = catatan bot ∪ enumerasi indexer. Kalau indexer gagal, posisi yang
   // TAK tercatat bot lenyap dari daftar tanpa jejak — dulu ini diam di log server.
   if (opts.listDegraded) {
-    out.push('', `⚠️ ${italic('Indexer sedang bermasalah — posisi yang dibuka di luar bot mungkin belum tampil di daftar ini.')}`);
+    out.push('', `⚠️ ${italic('The indexer is lagging — positions opened outside the bot may be missing from this list.')}`);
   }
   if (opts.rows.length > MAX_ROWS)
     out.push('', note(`+${opts.rows.length - MAX_ROWS} more positions — close some to see them`));
@@ -1240,13 +1243,13 @@ export function msgPositionsList(opts: {
   const anyWaiting = shown.some((r) => !r.inRange && !r.converted);
   const tail = anyIn
     ? anyWaiting || anyConverted
-      ? 'Some positions are in range and earning fees; the rest are listed above with their current state.'
-      : 'Your liquidity is in range and actively earning trading fees.'
+      ? 'Some positions are in range and earning fees; the rest are listed above.'
+      : 'Your liquidity is in range and earning fees.'
     : anyConverted && !anyWaiting
       ? 'Your liquidity has fully converted and stopped earning fees. Withdraw it, or wait for the price to move back into range.'
       : anyConverted
         ? 'Part of your liquidity has fully converted and stopped earning fees; the rest is still waiting to enter range.'
-        : 'Your liquidity is currently inactive. It will automatically convert and start earning fees once the token price moves into your target range.';
+        : 'Your liquidity is not active yet. It starts earning fees once the token price moves into your range.';
   out.push('', italic(tail));
   return out.join('\n');
 }
@@ -1355,10 +1358,10 @@ export function msgStrategyStep(pair: string, baseSym: string, tokenSym: string,
     'Choose your single-side deposit strategy :',
     '',
     `🟢 ${bold(`${baseSym} Side (Buy the Dip)`)}`,
-    `• You deposit ${bold(baseSym)}. Your liquidity will automatically convert to ${esc(tokenSym)} and earn fees when the ${esc(tokenSym)} price ${bold('drops')} into your target range.`,
+    `• You deposit ${bold(baseSym)}. It converts to ${esc(tokenSym)} and earns fees when the price ${bold('drops')} into your range.`,
     '',
     `🔵 ${bold('Token Side (Sell the Rip)')}`,
-    `• You deposit ${bold(tokenSym)}. Your liquidity will automatically convert to ${esc(baseSym)} and earn fees when the ${esc(tokenSym)} price ${bold('rises')} into your target range.`,
+    `• You deposit ${bold(tokenSym)}. It converts to ${esc(baseSym)} and earns fees when the price ${bold('rises')} into your range.`,
     '',
     // Syarat yang menentukan apakah tombol kedua bisa dipakai sama sekali.
     note(`Token Side requires you to already hold ${tokenSym} — buy it with /buy first if you do not.`),

@@ -60,7 +60,7 @@ const assetLabel = (cc: ChainCtx, kind: BaseKind): string =>
  */
 function resolveAssets(from: ChainCtx, to: ChainCtx, kind: BaseKind) {
   const srcBase = from.bases.find((b) => b.kind === kind);
-  if (!srcBase) throw new Error(`${from.label} tidak punya ${kind.toUpperCase()}`);
+  if (!srcBase) throw new Error(`${from.label} has no ${kind.toUpperCase()}`);
   if (kind === 'weth') {
     return {
       originCurrency: NATIVE,

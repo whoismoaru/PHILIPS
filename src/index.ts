@@ -911,7 +911,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     const fd = p.base === 'USDG' ? 6 : 18;
     const f = Number(ethers.formatUnits(p.feesBaseWei, fd));
     const ent = tracked0 ? Number(ethers.formatUnits(BigInt(tracked0.entryBaseWei), fd)) : 0;
-    const pct = ent > 0 ? ` (+${((f / ent) * 100).toFixed(1)}% modal)` : '';
+    const pct = ent > 0 ? ` (+${((f / ent) * 100).toFixed(1)}% of capital)` : '';
     feesLabel = `${f.toFixed(fd >= 18 ? 5 : 2)} ${p.base ?? ''}${pct}`;
   }
   if (p.valueBaseWei !== null && p.base === 'ETH') {
@@ -1004,7 +1004,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     const ratio = mcPool / mcMarket;
     if (ratio > 1.25 || ratio < 0.8) {
       const x = ratio >= 1 ? ratio : 1 / ratio;
-      priceWarn = `harga pool ini ${x.toFixed(1)}× dari harga pasar (pasar ${explore.usdShort(mcMarket)}) — likuiditas dangkal, nilai & range di atas mengikuti pool ini, bukan pasar.`;
+      priceWarn = `this pool prices the token ${x.toFixed(1)}× the market (market ${explore.usdShort(mcMarket)}) — liquidity is thin, and the value and range above follow this pool, not the market.`;
     }
   }
   // Ringkasan SELURUH ladder untuk kartu satu leg. Yang disetor user adalah
@@ -1128,6 +1128,7 @@ type PosRow = {
   protocol?: string | null; // 'V3' | 'V4' — ditulis di judul baris
   wethEq: number; // setara-WETH utk total invest (USDG→WETH via ethUsd)
   strategy?: string | null;
+  baseSymbol?: string | null; // aset yang disetor — label sisi ikut ini, bukan 'ETH' kaku
   rangeLabel?: string | null;
   feesLabel?: string | null;
   feesUsdLabel?: string | null;
@@ -1243,6 +1244,7 @@ async function cmdPositions(ctx: any, edit = false) {
         // Dibaca kembali oleh kartu untuk menentukan sisi — pakai penanda stabil
         // ('token'/'base'), bukan kalimat yang bisa berubah saat teks diterjemahkan.
         strategy: rec.side === 'token' ? 'token' : 'base',
+        baseSymbol: d.baseSymbol,
         // Terkonversi penuh = harga menembus SELURUH rentang ke arah tujuan:
         // sisi base menunggu harga TURUN (selesai saat 'below'), sisi token
         // menunggu harga NAIK (selesai saat 'above').
@@ -1317,6 +1319,7 @@ async function cmdPositions(ctx: any, edit = false) {
       age: tracked ? msg.fmtAge(Date.now() - tracked.openedAt) : '—',
       pnlUsd,
       pnlPct,
+      baseSymbol: sym,
       inRange: p.inRange ?? false, // null (tak diketahui) → dianggap out (konservatif)
       wethEq: p.base === 'USDG' ? (ethUsd ? investNum / ethUsd : 0) : investNum,
       natSym: getChain().nativeSymbol,
@@ -1771,9 +1774,9 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
     ladderNote =
       `\n\n◣ <b>BID-ASK ladder · ${legPlans.length} leg</b>\n` +
       legPlans
-        .map((lp, i) => `  ${i + 1}. ${msg.fmtPct(lp.pctHigh)}…${msg.fmtPct(lp.pctLow)} · ${(w[i] * 100).toFixed(0)}% modal`)
+        .map((lp, i) => `  ${i + 1}. ${msg.fmtPct(lp.pctHigh)}…${msg.fmtPct(lp.pctLow)} · ${(w[i] * 100).toFixed(0)}% of capital`)
         .join('\n') +
-      `\n<i>Modal makin besar di harga makin rendah (buy-dip).</i>`;
+      `\n<i>Bigger size the lower the price — that is the buy-the-dip shape.</i>`;
   } else {
     flow.ladderPlans = undefined;
   }
@@ -1848,9 +1851,9 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
     ladderNote =
       `\n\n◣ <b>BID-ASK ladder v4 · ${legs.length} leg · 1 tx atomik</b>\n` +
       legs
-        .map((l, i) => `  ${i + 1}. ${msg.fmtPct(l.pctHigh)}…${msg.fmtPct(l.pctLow)} · ${((Number(l.baseAmountWei) / Number(total)) * 100).toFixed(0)}% modal`)
+        .map((l, i) => `  ${i + 1}. ${msg.fmtPct(l.pctHigh)}…${msg.fmtPct(l.pctLow)} · ${((Number(l.baseAmountWei) / Number(total)) * 100).toFixed(0)}% of capital`)
         .join('\n') +
-      `\n<i>Modal makin besar di harga makin rendah (buy-dip).</i>`;
+      `\n<i>Bigger size the lower the price — that is the buy-the-dip shape.</i>`;
   } else {
     flow.v4LadderLegs = undefined;
     const widthSpacings = rangePctToSpacings(flow.rangePct!, pk.tickSpacing);
@@ -2175,7 +2178,7 @@ async function renderShapeStep(ctx: any, flow: AddFlow, edit: boolean) {
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('▬ SPOT (1 posisi, panen fee)', 'shape:spot')],
+      [Markup.button.callback('▬ SPOT (one position, earns fees)', 'shape:spot')],
       [Markup.button.callback('◣ BID-ASK ladder (buy-dip) →', 'shape:bidask')],
       [Markup.button.callback('⬅️ Back', 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
     ]),
@@ -2318,7 +2321,7 @@ bot.action('addok', async (ctx) => {
         if (stray.length === 0) throw e;
         ids = stray;
         await ctx.reply(
-          msg.msgError('add v4 ladder', `${(e as Error).message.slice(0, 160)}\n\n${stray.length} leg ternyata SUDAH ter-mint dan sekarang dicatat bot.`),
+          msg.msgError('add v4 ladder', `${(e as Error).message.slice(0, 160)}\n\n${stray.length} leg(s) had already been minted, and are now tracked by the bot.`),
           html,
         );
       }
@@ -2484,7 +2487,7 @@ bot.action('addok', async (ctx) => {
     } catch (err) {
       console.error('[open ladder] gagal:', (err as Error).message.slice(0, 200));
       await recoverStrayWeth(getChain(flow.chain), 'add ladder').catch(() => {});
-      const note = opened.length ? ` (${opened.length} leg sudah terbuka, tersimpan)` : '';
+      const note = opened.length ? ` (${opened.length} leg(s) already opened and saved)` : '';
       await ctx.reply(msg.msgError('add ladder', (err as Error).message + note), html);
     } finally {
       store.endMoneyOp();

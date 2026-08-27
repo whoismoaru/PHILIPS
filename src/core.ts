@@ -52,7 +52,7 @@ export const maxEth = parseCap(config.safety.maxEthPerTx, DEFAULT_MAX_ETH);
 export const maxStable = parseCap(config.safety.maxStablePerTx, DEFAULT_MAX_STABLE);
 
 /** Label batas yang menyebut satuan aset yang benar (ETH di Robinhood, BNB di BSC). */
-export const capLabelFor = (cap: number, sym: string) => (cap === Infinity ? 'tanpa batas' : `${cap} ${sym}`);
+export const capLabelFor = (cap: number, sym: string) => (cap === Infinity ? 'unlimited' : `${cap} ${sym}`);
 export const maxEthLabel = capLabelFor(maxEth, 'ETH');
 
 /** Posisi sudah di-burn/tak ada di chain (NFT hilang). */
