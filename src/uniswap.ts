@@ -760,7 +760,8 @@ export async function executeRemoveBatch(
         continue;
       }
       if (liquidity > 0n) {
-        const mins = await withdrawMins(positionManager, tokenId, liquidity, deadline, ctx);
+        const { unprotected, ...mins } = await withdrawMins(positionManager, tokenId, liquidity, deadline, ctx);
+        if (unprotected) notes.push(WITHDRAW_UNPROTECTED_NOTE(tokenId));
         calls.push(iface.encodeFunctionData('decreaseLiquidity', [{ tokenId, liquidity, ...mins, deadline }]));
       }
       calls.push(
@@ -883,6 +884,10 @@ export async function collectFeesOnly(
  */
 const WITHDRAW_SLIPPAGE_BPS = 50n; // 0.5%
 
+/** Catatan yang ikut ke kartu hasil close saat penarikan terpaksa tanpa lantai harga. */
+const WITHDRAW_UNPROTECTED_NOTE = (tokenId: string) =>
+  `⚠️ #${tokenId} withdrawn WITHOUT a price floor — the pool could not be priced, so sandwich protection was off for this close.`;
+
 /** Ekspektasi jumlah token0/token1 dari burn `liquidity`, dihitung dari HARGA POOL
  *  saat ini via SDK (tanpa simulasi decreaseLiquidity). Dipakai sebagai lantai
  *  slippage cadangan bila staticCall PM tak tersedia. */
@@ -914,14 +919,14 @@ async function withdrawMins(
   liquidity: bigint,
   deadline: number,
   ctx: ChainCtx,
-): Promise<{ amount0Min: bigint; amount1Min: bigint }> {
+): Promise<{ amount0Min: bigint; amount1Min: bigint; unprotected: boolean }> {
   const floor = (v: bigint) => (BigInt(v) * (10000n - WITHDRAW_SLIPPAGE_BPS)) / 10000n;
   // Retry: kegagalan staticCall paling lazim TRANSIEN (RPC rewel sesaat) — bukan
   // alasan menutup tanpa proteksi. Coba 3x sebelum menyerah ke jalur cadangan.
   for (let i = 0; i < 3; i++) {
     try {
       const [a0, a1] = await positionManager.decreaseLiquidity.staticCall({ tokenId, liquidity, amount0Min: 0n, amount1Min: 0n, deadline });
-      return { amount0Min: floor(a0), amount1Min: floor(a1) };
+      return { amount0Min: floor(a0), amount1Min: floor(a1), unprotected: false };
     } catch {
       if (i < 2) await new Promise((r) => setTimeout(r, 800));
     }
@@ -931,11 +936,14 @@ async function withdrawMins(
   try {
     const exp = await expectedBurnAmounts(tokenId, liquidity, ctx);
     console.log(`[withdraw] staticCall gagal, pakai lantai dari harga pool (#${tokenId})`);
-    return { amount0Min: floor(exp.amount0), amount1Min: floor(exp.amount1) };
+    return { amount0Min: floor(exp.amount0), amount1Min: floor(exp.amount1), unprotected: false };
   } catch {
     // Benar-benar tak bisa hitung → jangan blokir penarikan (dana user > risiko MEV).
+    // Ini SATU-SATUNYA jalur yang menarik tanpa lantai harga. Dulu hanya masuk log
+    // server, jadi user menutup posisi tanpa pernah tahu ronde itu tak terlindungi.
+    // `unprotected` dibawa ke atas supaya muncul di kartu hasil close.
     console.log(`[withdraw] ⚠️ lantai slippage TAK tersedia (#${tokenId}) — tarik tanpa proteksi harga`);
-    return { amount0Min: 0n, amount1Min: 0n };
+    return { amount0Min: 0n, amount1Min: 0n, unprotected: true };
   }
 }
 
@@ -956,7 +964,7 @@ export async function removeLiquidityPct(
 
   const iface = positionManager.interface;
   const deadline = Math.floor(Date.now() / 1000) + 600;
-  const mins = await withdrawMins(positionManager, tokenId, part, deadline, ctx);
+  const { unprotected, ...mins } = await withdrawMins(positionManager, tokenId, part, deadline, ctx);
   const calls = [
     iface.encodeFunctionData('decreaseLiquidity', [
       { tokenId, liquidity: part, ...mins, deadline },
@@ -969,7 +977,10 @@ export async function removeLiquidityPct(
   const receipt = await tx.wait();
   return {
     txHash: receipt.hash,
-    notes: [`Withdraw ${pct}% of position #${tokenId} liquidity + harvest fees (tx ${receipt.hash})`],
+    notes: [
+      `Withdraw ${pct}% of position #${tokenId} liquidity + harvest fees (tx ${receipt.hash})`,
+      ...(unprotected ? [WITHDRAW_UNPROTECTED_NOTE(tokenId)] : []),
+    ],
   };
 }
 
@@ -987,8 +998,11 @@ export async function executeRemove(
   const deadline = Math.floor(Date.now() / 1000) + 600;
 
   const calls: string[] = [];
+  let unprotected = false;
   if (liquidity > 0n) {
-    const mins = await withdrawMins(positionManager, tokenId, liquidity, deadline, ctx);
+    const r = await withdrawMins(positionManager, tokenId, liquidity, deadline, ctx);
+    unprotected = r.unprotected;
+    const mins = { amount0Min: r.amount0Min, amount1Min: r.amount1Min };
     calls.push(
       iface.encodeFunctionData('decreaseLiquidity', [{ tokenId, liquidity, ...mins, deadline }]),
     );
@@ -1003,7 +1017,10 @@ export async function executeRemove(
   const tx = await positionManager.multicall(calls);
   const receipt = await tx.wait();
   return {
-    notes: [`Close position #${tokenId}${liquidity === 0n ? ' (empty → burn directly)' : ''} (tx ${receipt.hash})`],
+    notes: [
+      `Close position #${tokenId}${liquidity === 0n ? ' (empty → burn directly)' : ''} (tx ${receipt.hash})`,
+      ...(unprotected ? [WITHDRAW_UNPROTECTED_NOTE(tokenId)] : []),
+    ],
   };
 }
 
