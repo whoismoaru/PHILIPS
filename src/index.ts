@@ -3903,6 +3903,12 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
 
     await ctx.editMessageText(msg.msgProgress(`closing ${legs.length}-leg ladder (batched)…`), html);
     const notes: string[] = [];
+    // Fee dibaca SEBELUM burn: sesudahnya ia sudah melebur ke hasil cash-out.
+    const feesWei = (
+      await Promise.all(
+        tokenIds.map((id) => getPositionDetail(id, cc).then((dd) => dd.feesBaseWei).catch(() => 0n)),
+      )
+    ).reduce((a, b) => a + b, 0n);
     notes.push(...(await executeRemoveBatch(tokenIds, cc)).notes);
     await sleep(1500);
     const sw = await sweepTokenToBase(otherAddr, otherC, base, cc, notes, otherBefore).catch(() => ({
@@ -3949,6 +3955,14 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       `✅ ${msg.bold('LADDER CLOSED')} · ${legs.length} legs\n\nTotal cashed out · ${msg.bold(msg.esc(outLabel))}`,
       { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
     );
+    // Kartu PnL untuk SELURUH ladder (lihat catatan yang sama di jalur v4).
+    await sendProfitCard(
+      ctx,
+      `${legs[0].tokenId} +${legs.length - 1}`,
+      { ...legs[0], initialWethWei: totalInit.toString(), openedAt: Math.min(...legs.map((l) => l.openedAt)) },
+      totalOut,
+      feesWei,
+    ).catch((e) => console.log('[profit-card] ladder gagal:', (e as Error).message.slice(0, 120)));
   } catch (err) {
     await recoverStrayWeth(cc, 'close ladder').catch(() => {});
     await ctx.reply(msg.msgError('close ladder', (err as Error).message), html);
@@ -3968,6 +3982,13 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
   store.beginMoneyOp();
   try {
     await ctx.editMessageText(msg.msgProgress(`closing ${legs.length}-leg v4 ladder (batched)…`), html);
+    // Fee dibaca SEBELUM burn: sesudahnya ia sudah melebur ke hasil cash-out dan tak
+    // bisa dipisah lagi. Gagal baca ≠ gagal close — kartu cuma kehilangan satu kotak.
+    const feesWei = (
+      await Promise.all(
+        tokenIds.map((id) => checkV4Status(cc, id).then((st) => st.val?.feesBaseWei ?? 0n).catch(() => 0n)),
+      )
+    ).reduce((a, b) => a + b, 0n);
     const r = await closeLadderV4(tokenIds, cc, { dryRun: false });
     // Bagi hasil proporsional ke modal tiap leg → jurnal PnL per-leg benar.
     const totalInit = legs.reduce((s, l) => s + BigInt(l.entryBaseWei || '0'), 0n);
@@ -3998,6 +4019,23 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
     );
     // Leg yang terpaksa di-burn tanpa lantai harga harus terlihat, bukan cuma di log.
     if (r.unprotected?.length) await ctx.reply(msg.esc(V4_UNPROTECTED_NOTE(r.unprotected.join(', #'))), html);
+    // Kartu PnL untuk SELURUH ladder — yang disetor user memang satu ladder, bukan
+    // 8 posisi terpisah. Dulu jalur ladder (v3 & v4) tak pernah mengirim kartu sama
+    // sekali; hanya close posisi tunggal yang punya.
+    await sendProfitCard(
+      ctx,
+      `${legs[0].tokenId} +${legs.length - 1}`,
+      {
+        tokenId: legs[0].tokenId,
+        chain: cc.key,
+        baseKind: (r.base === 'USDG' ? 'usdg' : 'weth') as store.PosRecord['baseKind'],
+        symbol: `${r.sym0}/${r.sym1}`,
+        initialWethWei: totalInit.toString(),
+        openedAt: Math.min(...legs.map((l) => l.openedAt)),
+      } as store.PosRecord,
+      r.baseOutWei,
+      feesWei,
+    ).catch((e) => console.log('[profit-card] v4 ladder gagal:', (e as Error).message.slice(0, 120)));
   } catch (err) {
     await recoverStrayWeth(cc, 'close v4 ladder').catch(() => {});
     await ctx.reply(msg.msgError('close v4 ladder', (err as Error).message), html);
