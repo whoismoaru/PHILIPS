@@ -564,6 +564,32 @@ async function renderStatus(ctx: any, edit: boolean) {
     } catch {
       lpUsd = null;
     }
+    // Realized PnL SELURUH chain & satuan. Dulu kartu ini memakai lifetimeNetEth(),
+    // yang cuma membaca buku ETH di Robinhood — 102 USDG, -6.24 USDT (BSC), dan
+    // hasil Base/HyperEVM tak pernah muncul, padahal Total Equity di atasnya
+    // menjumlah keempat chain. Dua angka bersebelahan dengan cakupan berbeda.
+    const realized = await (async () => {
+      const books: Array<{ unit: string; net: number }> = [];
+      let usd = 0;
+      let priced = true;
+      for (const c of Object.values(CHAINS)) {
+        for (const b of journal.statsFor(0, c.key).books) {
+          if (b.net === 0) continue;
+          books.push({ unit: b.unit, net: b.net });
+          if (b.unit === c.nativeSymbol) {
+            const px = await getEthUsd(c.wethAddress, c).catch(() => null);
+            if (px === null) priced = false;
+            else usd += b.net * px;
+          } else {
+            usd += b.net; // stablecoin ≈ $1
+          }
+        }
+      }
+      // Satu harga native gagal terbaca → totalnya tak sahih; tampilkan '—' dan
+      // biarkan rincian per-satuan yang bicara, jangan mengarang angka USD.
+      return { usd: priced ? usd : null, books };
+    })();
+
     // Total USD: null bila harga ETH tak terbaca (ETH mendominasi → total tak sahih).
     const stablesUsd = chains.reduce(
       (s, c) => s + (c.stables ?? []).reduce((t, x) => t + (x.usd ?? 0), 0),
@@ -575,14 +601,17 @@ async function renderStatus(ctx: any, edit: boolean) {
       dryRun: config.safety.dryRun,
       chainId: network.chainId,
       positions: store.active().length,
-      limitLabel: `${capLabelFor(maxEth, 'ETH/BNB')} · ${capLabelFor(maxStable, 'USD')}`,
+      limitLabel:
+        maxEth === Infinity && maxStable === Infinity
+          ? 'tanpa batas'
+          : `${capLabelFor(maxEth, 'ETH/BNB')} · ${capLabelFor(maxStable, 'USD')}`,
       wallet: getChain().wallet.address,
       chains,
       totalUsd,
       holdingsCount,
       lpUsd,
       lpFailed,
-      realizedEth: journal.lifetimeNetEth(),
+      realized,
       // Aset tujuan yang disarankan = base chain aktif, bukan 'WETH/USDG' kaku.
       sellInto: basesFor(getChain())
         .map((b) => b.symbol)

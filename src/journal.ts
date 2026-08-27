@@ -1,7 +1,7 @@
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ethers } from 'ethers';
-import { baseDecimalsOf, getChain, type BaseKind } from './chains.js';
+import { baseDecimalsOf, getChain, CHAINS, type BaseKind } from './chains.js';
 
 /**
  * Jurnal riwayat trade (append-only, file khusus `data/journal.jsonl`).
@@ -134,11 +134,18 @@ export function recentTokens(limit = 80): Array<{ ca: string; chain?: string; sy
 }
 
 /** Label denominasi sebuah entri. 'weth' di BSC berarti BNB, bukan ETH. */
+/**
+ * Satuan buku PnL. Diambil dari metadata chain, bukan daftar khusus — dulu hanya
+ * BSC yang dikecualikan, sehingga trade native HyperEVM (HYPE) tercatat sebagai
+ * 'ETH' dan menyatu ke buku ETH chain lain. 'usdc' juga terlewat dan jatuh ke
+ * cabang native, jadi trade USDC terbaca sebagai ETH/BNB.
+ */
 export function unitOf(chain?: string, baseKind?: JournalEntry['baseKind']): string {
   const bk = baseKind ?? 'weth';
   if (bk === 'usdg') return 'USDG';
   if (bk === 'usdt') return 'USDT';
-  return (chain ?? 'robinhood') === 'bsc' ? 'BNB' : 'ETH';
+  if (bk === 'usdc') return 'USDC';
+  return CHAINS[chain ?? 'robinhood']?.nativeSymbol ?? 'ETH';
 }
 
 /** Satu buku PnL = satu denominasi (ETH / BNB / USDG / USDT). */
@@ -276,10 +283,6 @@ export const PERIODS = {
 } as const;
 export type PeriodKey = keyof typeof PERIODS;
 
-/** Net ETH Robinhood seumur hidup — dipakai baris "realized" di /status. */
-export function lifetimeNetEth(): number {
-  return statsFor(0, 'robinhood').books.find((b) => b.unit === 'ETH')?.net ?? 0;
-}
 
 /** Baca N entri terbaru (terbaru dulu). */
 export function read(limit = 20): JournalEntry[] {

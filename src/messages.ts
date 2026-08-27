@@ -583,7 +583,9 @@ export function msgStatus(opts: {
   holdingsCount: number | null; // null = pembacaan gagal (BUKAN 'bersih')
   lpUsd?: number | null; // nilai posisi LP aktif
   lpFailed?: number; // posisi yang gagal dibaca → total belum lengkap
-  realizedEth?: number; // PnL cashout seumur hidup
+  // PnL cashout seumur hidup, SEMUA chain & satuan. `usd` null = ada harga native
+  // yang tak terbaca → totalnya tak sahih, rincian per-satuan tetap ditampilkan.
+  realized?: { usd: number | null; books: Array<{ unit: string; net: number }> };
   explorerUrl?: string | null; // base URL explorer → alamat jadi tautan (null = teks biasa)
   sellInto?: string; // aset tujuan yang disarankan saat menjual token nganggur
 }): string {
@@ -613,9 +615,13 @@ export function msgStatus(opts: {
       `• Active in LP = ${bold(usdCol(opts.lpUsd))} ${italic(`(${opts.positions} Position${opts.positions === 1 ? '' : 's'})`)}`,
     );
   }
-  if (opts.realizedEth !== undefined) {
+  if (opts.realized && opts.realized.books.length) {
+    const r = opts.realized;
+    const fmtNet = (n: number, unit: string) =>
+      `${n >= 0 ? '+' : ''}${n.toFixed(unit === 'USDG' || unit === 'USDT' || unit === 'USDC' ? 2 : 5)} ${unit}`;
     parts.push(
-      `• Realized PnL = ${bold(`${opts.realizedEth >= 0 ? '+' : ''}${opts.realizedEth.toFixed(5)} ETH`)}`,
+      `• Realized PnL = ${bold(r.usd === null ? '—' : `${r.usd >= 0 ? '+' : ''}${usdPlain(r.usd)}`)}`,
+      `  ${italic(esc(r.books.map((b) => fmtNet(b.net, b.unit)).join(' · ')))}`,
     );
   }
 
