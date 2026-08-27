@@ -42,7 +42,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
+import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import { screenToken, formatScreen, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
@@ -866,6 +866,17 @@ function finalizeClose(
   }
 }
 
+/**
+ * Id posisi v4 milik kita yang lahir sejak `from` — dipakai memungut NFT yang
+ * terlanjur ter-mint saat alur open gagal di tengah jalan. Mengembalikan daftar
+ * id terurut (urutan mint = urutan leg).
+ */
+async function adoptStrayV4(cc: ReturnType<typeof getChain>, from: bigint): Promise<string[]> {
+  const to = await v4NextTokenId(cc).catch(() => null);
+  if (to === null) return [];
+  return await v4OwnedIdsInRange(cc, from, to).catch(() => []);
+}
+
 /** Kartu detail satu posisi v4 (nilai + range% + PnL bila dikelola bot) + tombol. */
 async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain()): Promise<{ text: string; extra: Record<string, unknown> }> {
   const tracked0 = v4store.getV4(p.tokenId);
@@ -1293,6 +1304,7 @@ async function cmdPositions(ctx: any, edit = false) {
     totalInvestLabel: totalUnit ? `≈ ${totalWethEq.toFixed(4)} ${totalUnit}` : null,
     totalPnlUsd,
     outOfRange: rows.filter((r) => !r.inRange).length,
+    listDegraded: v4Supported(cc) && v4ListDegraded(),
     totalFeesLabel: (() => {
       // Fee total hanya bisa dijumlah bila semua posisi memakai base yang sama;
       // sekarang base tunggal (WETH), tapi tetap jaga-jaga: lewati bila tak ada data.
@@ -2244,7 +2256,30 @@ bot.action('addok', async (ctx) => {
         currentTickV4(cc, pk).catch(() => undefined),
         explore.tokenMarketCap(cc, tokenAddr).catch(() => null),
       ]);
-      const r = await openLadderV4(cc, pk, selected.baseIsCurrency0!, legs, { dryRun: false });
+      // Kurung rentang id SEBELUM kirim. Kalau alur ini gagal setelah tx mendarat
+      // (wait timeout, log tak terbaca, revert di percobaan lanjutan), NFT sudah
+      // lahir tapi tak tercatat — itulah cara posisi jadi "hilang" dari
+      // /positions. Rentang ini membuatnya bisa dipungut lagi.
+      const idBefore = await v4NextTokenId(cc).catch(() => null);
+      let ids: string[];
+      try {
+        ids = (await openLadderV4(cc, pk, selected.baseIsCurrency0!, legs, { dryRun: false })).tokenIds;
+      } catch (e) {
+        // Gagal ≠ tak jadi. Pungut dulu yang terlanjur ter-mint, baru lempar.
+        const stray = idBefore !== null ? await adoptStrayV4(cc, idBefore) : [];
+        if (stray.length === 0) throw e;
+        ids = stray;
+        await ctx.reply(
+          msg.msgError('add v4 ladder', `${(e as Error).message.slice(0, 160)}\n\n${stray.length} leg ternyata SUDAH ter-mint dan sekarang dicatat bot.`),
+          html,
+        );
+      }
+      // Sukses tapi jumlahnya kurang → sisanya juga dipungut lewat jalur yang sama.
+      if (idBefore !== null && ids.length < legs.length) {
+        const stray = await adoptStrayV4(cc, idBefore);
+        if (stray.length > ids.length) ids = stray;
+      }
+      const r = { tokenIds: ids };
       for (let i = 0; i < r.tokenIds.length; i++) {
         v4store.trackV4({
           tokenId: r.tokenIds[i],

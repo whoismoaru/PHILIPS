@@ -130,6 +130,12 @@ async function tokenDecimals(addr: string, cc: ChainCtx): Promise<number> {
 }
 
 /** tokenId NFT v4 yang dipegang wallet (via Blockscout). */
+/** true bila enumerasi indexer gagal di pemanggilan terakhir → daftar bisa tak lengkap. */
+let enumDegraded = false;
+export function v4ListDegraded(): boolean {
+  return enumDegraded;
+}
+
 async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
   const pm = V4_PM[cc.key];
   if (!pm) return [];
@@ -137,6 +143,7 @@ async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
   // v4-mu tak boleh lenyap dari /positions (dulu catch→[] bikin kedip "tak sinkron").
   const ids = new Set(allV4().filter((r) => r.chain === cc.key).map((r) => r.tokenId));
   if (!cc.blockscout) return [...ids];
+  enumDegraded = false;
   try {
     // Blockscout memberi ~50 item per halaman; wallet menimbun NFT v4 KOSONG tiap
     // tutup posisi, jadi tanpa paginasi posisi hidup bisa jatuh dari halaman 1.
@@ -160,6 +167,9 @@ async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
     }
   } catch (e) {
     // Jangan diam-diam: kegagalan indexer yang "tertolong" v4store harus terlihat.
+    // Jangan cuma di log server: user yang melihat /positions harus tahu daftarnya
+    // mungkin tak lengkap — inilah yang dulu membuat posisi "hilang" tanpa sebab.
+    enumDegraded = true;
     console.log('[v4] enumerasi Blockscout gagal, pakai v4store saja:', (e as Error).message.slice(0, 100));
   }
   return [...ids];
@@ -753,6 +763,37 @@ export async function openLadderV4(
     }
   }
   return { txHash: rc?.hash ?? tx.hash, tokenIds };
+}
+
+/**
+ * Id NFT posisi berikutnya di PositionManager. Dipakai untuk MENGURUNG rentang
+ * id yang mungkin lahir dari satu percobaan open: baca sebelum kirim, baca lagi
+ * sesudahnya. Otoritatif (langsung dari kontrak), tak bergantung indexer.
+ */
+export async function v4NextTokenId(cc: ChainCtx): Promise<bigint> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
+  return await new ethers.Contract(pmAddr, ['function nextTokenId() view returns (uint256)'], cc.provider).nextTokenId();
+}
+
+/**
+ * Id dalam [from, to) yang dimiliki wallet kita. Untuk memungut posisi yang
+ * TERLANJUR ter-mint padahal alur open-nya gagal di tengah — tanpa ini posisi
+ * itu ada di chain tapi tak punya catatan, jadi tak pernah muncul di /positions
+ * saat indexer sedang down.
+ * ponytail: dibatasi `cap` id — rentang satu percobaan open selalu kecil.
+ */
+export async function v4OwnedIdsInRange(cc: ChainCtx, from: bigint, to: bigint, cap = 64): Promise<string[]> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr || to <= from) return [];
+  const pm = new ethers.Contract(pmAddr, ['function ownerOf(uint256) view returns (address)'], cc.provider);
+  const me = cc.wallet.address.toLowerCase();
+  const out: string[] = [];
+  for (let id = from; id < to && id - from < BigInt(cap); id++) {
+    const owner = await pm.ownerOf(id).catch(() => null);
+    if (owner && String(owner).toLowerCase() === me) out.push(id.toString());
+  }
+  return out;
 }
 
 /** PoolKey + info base sebuah posisi v4 (untuk add ke pool yg sama). */

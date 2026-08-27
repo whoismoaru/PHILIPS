@@ -1145,6 +1145,7 @@ export function msgPositionsList(opts: {
   totalPnlUsd: number | null;
   outOfRange: number;
   totalFeesLabel?: string | null;
+  listDegraded?: boolean; // indexer gagal → daftar bisa tak lengkap
   rows: Array<{
     id: string;
     pair: string;
@@ -1197,6 +1198,11 @@ export function msgPositionsList(opts: {
     '',
     blocks.join('\n\n'),
   ];
+  // Daftar v4 = catatan bot ∪ enumerasi indexer. Kalau indexer gagal, posisi yang
+  // TAK tercatat bot lenyap dari daftar tanpa jejak — dulu ini diam di log server.
+  if (opts.listDegraded) {
+    out.push('', `⚠️ ${italic('Indexer sedang bermasalah — posisi yang dibuka di luar bot mungkin belum tampil di daftar ini.')}`);
+  }
   if (opts.rows.length > MAX_ROWS)
     out.push('', note(`+${opts.rows.length - MAX_ROWS} more positions — close some to see them`));
   // Catatan penutup mengikuti keadaan yang SEBENARNYA. Kalimat "liquidity is
