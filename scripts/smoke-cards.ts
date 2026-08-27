@@ -17,10 +17,7 @@ show(
   'UANG (/status)',
   m.msgStatus({
     dryRun: false,
-    chainId: 4663n as unknown as bigint,
     positions: 1,
-    limitLabel: '∞',
-    wallet: '0x1234567890abcdef1234567890abcdef12345678',
     chains: [
       {
         label: 'Robinhood',
@@ -38,10 +35,7 @@ show(
 
 show('UANG — baca token gagal', m.msgStatus({
   dryRun: false,
-  chainId: 4663n as unknown as bigint,
   positions: 0,
-  limitLabel: '∞',
-  wallet: '0x1234567890abcdef1234567890abcdef12345678',
   chains: [{ label: 'Robinhood', amount: '0.0421', symbol: 'ETH', usd: null }],
   totalUsd: null,
   holdingsCount: null,

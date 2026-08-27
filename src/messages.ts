@@ -567,10 +567,7 @@ export function msgUnknown(txt: string): string {
 
 export function msgStatus(opts: {
   dryRun: boolean;
-  chainId: string | number | bigint;
   positions: number;
-  limitLabel: string; // '∞' atau mis. '0.5 ETH'
-  wallet: string;
   /** Per chain: saldo native + stablecoin base yang dipegang di chain itu. */
   chains: Array<{
     label: string;
@@ -583,11 +580,6 @@ export function msgStatus(opts: {
   holdingsCount: number | null; // null = pembacaan gagal (BUKAN 'bersih')
   lpUsd?: number | null; // nilai posisi LP aktif
   lpFailed?: number; // posisi yang gagal dibaca → total belum lengkap
-  // PnL cashout seumur hidup, SEMUA chain & satuan. `usd` null = ada harga native
-  // yang tak terbaca → totalnya tak sahih, rincian per-satuan tetap ditampilkan.
-  realized?: { usd: number | null; books: Array<{ unit: string; net: number }> };
-  explorerUrl?: string | null; // base URL explorer → alamat jadi tautan (null = teks biasa)
-  sellInto?: string; // aset tujuan yang disarankan saat menjual token nganggur
 }): string {
   // USD tak terbaca → '—' (netral), JANGAN '$0.00' yang terbaca sebagai fakta.
   const usdCol = (u: number | null | undefined) => (u === null || u === undefined ? '—' : usdPlain(u));
@@ -607,21 +599,12 @@ export function msgStatus(opts: {
     bold('PORTFOLIO'),
     '',
     `💰 ${bold('Equity Summary :')}`,
-    `• Total Equity = ${bold(equity)}`,
-    `• Unstaked Balance = ${bold(usdCol(opts.totalUsd))}${assetNames.length ? ` ${italic(`(${assetNames.join(', ')})`)}` : ''}`,
+    `- Total Equity = ${bold(equity)}`,
+    `- Unstaked Balance = ${bold(usdCol(opts.totalUsd))}${assetNames.length ? ` ${italic(`(${assetNames.join(', ')})`)}` : ''}`,
   ];
   if (opts.lpUsd !== undefined) {
     parts.push(
-      `• Active in LP = ${bold(usdCol(opts.lpUsd))} ${italic(`(${opts.positions} Position${opts.positions === 1 ? '' : 's'})`)}`,
-    );
-  }
-  if (opts.realized && opts.realized.books.length) {
-    const r = opts.realized;
-    const fmtNet = (n: number, unit: string) =>
-      `${n >= 0 ? '+' : ''}${n.toFixed(unit === 'USDG' || unit === 'USDT' || unit === 'USDC' ? 2 : 5)} ${unit}`;
-    parts.push(
-      `• Realized PnL = ${bold(r.usd === null ? '—' : `${r.usd >= 0 ? '+' : ''}${usdPlain(r.usd)}`)}`,
-      `  ${italic(esc(r.books.map((b) => fmtNet(b.net, b.unit)).join(' · ')))}`,
+      `- Active in LP = ${bold(usdCol(opts.lpUsd))} ${italic(`(${opts.positions} Position${opts.positions === 1 ? '' : 's'})`)}`,
     );
   }
 
@@ -637,34 +620,21 @@ export function msgStatus(opts: {
       for (const t of c.stables ?? []) {
         cells.push(`${esc(t.amount)} ${esc(t.symbol)}${t.usd === null ? '' : ` (${usdPlain(t.usd)})`}`);
       }
-      parts.push(`• ${bold(c.label)} = ${cells.join(' | ')}`);
+      parts.push(`- ${bold(c.label)} = ${cells.join(' | ')}`);
     }
   }
 
   if (opts.lpFailed) parts.push('', `⚠️ ${note(`${opts.lpFailed} position(s) failed to read — total is incomplete`)}`);
   if (opts.holdingsCount === null) {
     parts.push('', `⚠️ ${note('token read failed — try Refresh')}`);
-  } else if (opts.holdingsCount > 0) {
-    parts.push(
-      '',
-      `⚠️ ${bold('Action Required :')}`,
-      `• You have ${bold(`${opts.holdingsCount} idle token${opts.holdingsCount === 1 ? '' : 's'}`)} sitting in your wallet earning nothing.`,
-      `• Use /sell to convert them back to ${esc(opts.sellInto ?? 'WETH/USDG')}.`,
-    );
   }
 
-  const short = esc(shortAddr(opts.wallet));
-  const link = opts.explorerUrl
-    ? `<a href="${esc(opts.explorerUrl)}/address/${esc(opts.wallet)}">${short}</a>`
-    : `<code>${short}</code>`;
-  parts.push(
-    '',
-    `🔗 ${bold('Wallet')} → ${link}`,
-    `<code>${esc(opts.wallet)}</code>`,
-    '',
-    `${opts.dryRun ? '⚪ DRY RUN' : '🟢 LIVE'} · max/tx ${esc(opts.limitLabel)}`,
-    `<i>Last Updated: ${nowWib()}</i>`,
-  );
+  // Alamat wallet, batas per-tx, dan ajakan /sell dibuang dari kartu ini:
+  // dua yang pertama sudah ada di /settings, yang ketiga bukan keadaan
+  // portofolio melainkan saran. Peringatan di atas TETAP ada karena ia hanya
+  // muncul saat ada sumber yang gagal dibaca — tanpa itu angkanya terbaca
+  // sebagai fakta padahal sebagian datanya hilang.
+  parts.push('', `${opts.dryRun ? '⚪ DRY RUN' : '✅ LIVE'}: ${nowWib()}`);
 
   return parts.join('\n');
 }
