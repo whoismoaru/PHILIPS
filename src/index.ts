@@ -688,7 +688,6 @@ async function buildPositionCard(
   // terhadap harga (suplai tetap), jadi MC di batas = MC sekarang × (harga batas
   // ÷ harga sekarang). Rasio itu tanpa satuan, jadi harga boleh tetap dalam base.
   const mcRange = await (async () => {
-    const mcNow = await explore.tokenMarketCap(cc, d.otherAddress).catch(() => null);
     const [hi, lo] = Number(d.priceUpper) >= Number(d.priceLower)
       ? [d.priceUpper, d.priceLower]
       : [d.priceLower, d.priceUpper];
@@ -699,9 +698,20 @@ async function buildPositionCard(
     if (rec.entryMcap && rec.entryPrice && Number(rec.entryPrice) > 0) {
       const e = Number(rec.entryPrice);
       const at = (p: string) => explore.usdShort((rec.entryMcap! * Number(p)) / e);
-      const nowStr = mcNow !== null ? ` · now ${explore.usdShort(mcNow)}` : '';
+      // "now" DITURUNKAN dari harga pool yang baru saja dibaca, bukan ditarik dari
+      // DexScreener. Mcap berskala linier terhadap harga, jadi mcEntry × (hargaKini ÷
+      // hargaEntry) memberi angka yang bergerak SEKETIKA tiap refresh — sementara
+      // DexScreener di-cache 2 menit dan datang dari sumber lain, sehingga "now"
+      // bisa tak sebaris dengan batas rentang, status IN RANGE, dan PnL di kartu
+      // yang sama. Ini pula yang sudah dipakai kartu v4. Harga pool tak terbaca →
+      // baru jatuh ke DexScreener.
+      const nowPrice = Number(d.currentPrice);
+      const derived = nowPrice > 0 ? (rec.entryMcap * nowPrice) / e : null;
+      const shown = derived ?? (await explore.tokenMarketCap(cc, d.otherAddress).catch(() => null));
+      const nowStr = shown !== null ? ` · now ${explore.usdShort(shown)}` : '';
       return `${at(hi)} ⇄ ${at(lo)}${nowStr}`;
     }
+    const mcNow = await explore.tokenMarketCap(cc, d.otherAddress).catch(() => null);
     // Posisi lama tanpa entryMcap: jatuh ke perhitungan live (bergoyang, tapi ada acuan).
     const now = Number(d.currentPrice);
     if (mcNow === null || !(now > 0)) return undefined;

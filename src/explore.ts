@@ -488,7 +488,10 @@ async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePo
 // ─── kapitalisasi pasar (utk menerjemahkan rentang harga jadi rentang MC) ──
 
 const mcapCache = new Map<string, { t: number; v: number | null }>();
-const MCAP_TTL_MS = 120_000;
+// 30 dtk (dulu 120). Jalur utama kartu posisi kini MENURUNKAN mcap dari harga pool
+// yang dibaca tiap refresh, jadi cache ini tinggal melayani jalur cadangan &
+// penjelajahan token — di sana 2 menit terlalu basi untuk token yang bergerak cepat.
+const MCAP_TTL_MS = 30_000;
 
 /**
  * Kapitalisasi pasar token dari DexScreener. null = tak terbaca (JANGAN 0 — nol
