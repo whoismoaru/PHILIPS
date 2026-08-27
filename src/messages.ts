@@ -1105,7 +1105,7 @@ export function msgPositionCard(opts: {
     isLeg && opts.ladder!.groupInvest
       ? `💰 ${bold('Principal:')} ${esc(opts.ladder!.groupInvest)} ${investUnit} ${italic(`(ladder total; this leg ${esc(opts.invest)})`)}`
       : `💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`,
-    `${tokenSide ? '📈' : '📉'} ${bold('Target Range:')} ${range}`,
+    `${tokenSide ? '📈' : '📉'} ${bold('Target Range:')} ${range} ${italic('dari harga kini')}`,
     ...(opts.mcRange ? [italic(`↳ market cap ${esc(opts.mcRange)}`)] : []),
     `📈 ${bold('Current PnL:')} ${esc(opts.pnlText)}`,
     `${opts.inRange ? '🟢' : '🔴'} ${bold('Status:')} ${status}`,

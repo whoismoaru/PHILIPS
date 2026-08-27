@@ -693,16 +693,20 @@ async function buildPositionCard(
   // Warm ethUsd cache sekali per chain (getEthUsd sudah TTL 60s).
   if (d.baseKind === 'weth') await getEthUsd(cc.wethAddress, cc);
   const pnlText = await positionPnlText(rec, d, cc);
-  // Jarak batas range dari HARGA ENTRY (dipatok saat buka) — jadi angkanya diam,
-  // tak goyang tiap refresh. Batas posisi memang terkunci; acuannya pun harus tetap.
-  // Fallback ke harga live (currentTick) hanya utk posisi lama tanpa entryPrice.
-  const entry = rec.entryPrice ? Number(rec.entryPrice) : 0;
+  // Jarak batas range dari HARGA SEKARANG — "berapa jauh lagi ke tiap ujung dari
+  // sini", jadi ikut bergerak saat token turun. Dulu dipatok ke entryPrice supaya
+  // angkanya diam; akibatnya kartu memberi tahu keadaan saat POSISI DIBUKA, bukan
+  // keadaan sekarang: token turun 26% dan barisnya tetap menulis -0.7% ⇄ -90.2%
+  // padahal dari harga kini batasnya +34.7% ⇄ -86.8%. Batas absolutnya tetap diam
+  // dan ditunjukkan baris mcap di bawah (dipatok ke entry). Sama seperti kartu v4.
   const range = (() => {
-    if (entry > 0) {
-      const pf = (p: string) => (Number(p) / entry - 1) * 100;
+    const now = Number(d.currentPrice);
+    if (now > 0) {
+      const pf = (p: string) => (Number(p) / now - 1) * 100;
       const [a, b] = [pf(d.priceUpper), pf(d.priceLower)].sort((x, y) => y - x);
       return `${msg.fmtPct(a)} ⇄ ${msg.fmtPct(b)}`;
     }
+    // Harga live tak terbaca → pakai tick (sumber yang sama, jalur berbeda).
     const sgn = d.baseIsToken0 ? -1 : 1;
     const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
     const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
