@@ -1234,19 +1234,17 @@ export function msgPositionsList(opts: {
     const pnl = r.pnlPct === null ? `— ${italic('(entry unknown)')}` : fmtPct(r.pnlPct);
     return [
       `${r.inRange ? '🟢' : '🔴'} ${bold(`${r.pair}${r.protocol ? ` (${r.protocol})` : ''}`)}`,
-      `• ID: #${esc(r.id)}`,
-      `• Strategy: ${esc(side)}`,
-      `• Invested: ${esc(r.investLabel)}`,
-      `• Status: ${status} · ${esc(r.age)}`,
-      `• Uncollected Fees: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
-      `• PnL: ${pnl}`,
+      `- ID: #${esc(r.id)}`,
+      `- Strategy: ${esc(side)}`,
+      `- Invested: ${esc(r.investLabel)}`,
+      `- Status: ${status} · ${esc(r.age)}`,
+      `- Uncollected Fees: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
+      `- PnL: ${pnl}`,
     ].join('\n');
   });
 
   const out = [
-    `📊 ${bold('Active LP Positions')}`,
-    '',
-    `Here ${opts.rows.length === 1 ? 'is' : 'are'} your current Uniswap position${opts.rows.length === 1 ? '' : 's'}:`,
+    bold('POSITIONS'),
     '',
     blocks.join('\n\n'),
   ];
