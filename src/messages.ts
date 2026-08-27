@@ -2042,13 +2042,22 @@ export function msgUnwrapConfirm(
   dryRun: boolean,
   wrapped = 'WETH',
   native = 'ETH',
+  // Wrapped-native nyangkut bisa ada di BEBERAPA chain sekaligus (WETH di Base,
+  // WBNB di BSC, WHYPE di HyperEVM). Bila diisi, kartu menyebut satu per satu —
+  // dulu perintah ini cuma melihat chain yang sedang aktif.
+  perChain?: Array<{ label: string; amount: string }>,
 ): string {
+  const multi = perChain && perChain.length > 1;
   return [
-    `🔄 ${bold(`Unwrap ${wrapped} → ${native}`)}`,
+    `🔄 ${bold(multi ? 'Unwrap wrapped native → native' : `Unwrap ${wrapped} → ${native}`)}`,
     '',
-    `💰 ${bold(`Stuck ${wrapped}:`)} ${bold(amount)}${usd ? ` ${italic(`(${usd})`)}` : ''}`,
+    ...(multi
+      ? perChain!.map((c) => `• ${esc(c.label)}: ${bold(c.amount)}`)
+      : [`💰 ${bold(`Stuck ${wrapped}:`)} ${bold(amount)}${usd ? ` ${italic(`(${usd})`)}` : ''}`]),
     '',
-    `All of it will be unwrapped back to native ${esc(native)}. One transaction, no swap, no slippage.`,
+    multi
+      ? `All of it will be unwrapped back to each chain's native asset. One transaction per chain, no swap, no slippage.`
+      : `All of it will be unwrapped back to native ${esc(native)}. One transaction, no swap, no slippage.`,
     ...(dryRun ? ['', note('DRY RUN — no transaction will be sent.')] : []),
   ].join('\n');
 }
