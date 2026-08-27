@@ -3430,13 +3430,27 @@ function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
 async function sellPreview(ctx: any, flow: TSwapFlow, amountWei: bigint, amtLabel: string) {
   const cc = CHAINS[flow.chainKey]!;
   const prog = await ctx.reply(msg.msgProgress('finding the best sell route…'), html);
-  const ethBase = basesFor(cc).find((b) => b.wrappable);
-  if (!ethBase) {
+  // Saldo NATIVE ikut daftar jual, dan dicatat memakai alamat wrapped-native. Kalau
+  // tujuannya juga native, from == to — swap ke dirinya sendiri, yang selalu balik
+  // sebagai "No route (thin pool/liquidity)". Menjual native berarti menjualnya ke
+  // STABLECOIN; itu pula yang dimaksud addNativeHolding ("tak ada tujuan jual" bila
+  // chain-nya tak punya stablecoin base).
+  const sellingNative = flow.token!.toLowerCase() === cc.wethAddress.toLowerCase();
+  const dest = sellingNative
+    ? basesFor(cc).find((b) => isStableBase(b.kind))
+    : basesFor(cc).find((b) => b.wrappable);
+  if (!dest) {
     tswapFlows.delete(ctx.from!.id);
-    return editProgress(ctx, prog, msg.msgError('sell', `${cc.label} has no native base to sell into.`));
+    return editProgress(
+      ctx,
+      prog,
+      msg.msgError('sell', sellingNative
+        ? `${cc.label} has no stablecoin to sell ${cc.nativeSymbol} into.`
+        : `${cc.label} has no native base to sell into.`),
+    );
   }
-  flow.base = ethBase;
-  await tswapQuoteConfirm(ctx, flow, cc, flow.token!, ethBase.address, amountWei, amtLabel, { message_id: prog.message_id });
+  flow.base = dest;
+  await tswapQuoteConfirm(ctx, flow, cc, flow.token!, dest.address, amountWei, amtLabel, { message_id: prog.message_id });
 }
 
 async function cmdSell(ctx: any) {
