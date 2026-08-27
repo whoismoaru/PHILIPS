@@ -128,6 +128,84 @@ depositing, and the estimated gas. Nothing is signed until you tap confirm.
 Every step has **Back** and **Cancel**. Anything that moves money takes one
 explicit confirmation tap and is guarded against double-taps.
 
+`/positions` lists what is open, one block per position:
+
+```
+POSITIONS
+
+🟢 USDT / PONS (V3)
+- ID: #1234567
+- Strategy: USDT Side (Buy the dip)
+- Invested: 197.2980 USDT
+- Status: Active (In Range) · 30m
+- Uncollected Fees: +$8.48
+- PnL: +2.4%
+
+🟢 USDG / VYNEX  ◣×8 (V4)
+- ID: #1234568
+- Strategy: USDG Side (Buy the dip)
+- Invested: 199.0800 USDG
+- Status: Active (In Range) · 25m
+- Uncollected Fees: +$6.70
+- PnL: +3.1%
+
+Your liquidity is in range and earning fees.
+```
+
+Tap one for the full card. A ladder shows the whole ladder first, then the leg you
+opened:
+
+```
+📊 Position Details: #1234568
+
+🔗 Pair: USDG / VYNEX (3.01% Fee) · Robinhood
+🎯 Strategy: USDG Side (Buy the dip) · ◣ Bid-Ask ladder
+
+🪜 LADDER · 8 legs
+💰 Deposit: 199.0807 USDG
+💰 Value now: 204.23 USDG
+↳ incl. fees 5.44 USDG
+📈 Ladder PnL: +$5.15 (+2.6%)
+📉 Ladder Range: $545.5K ⇄ $49.1K · now $457.2K
+🎚 Rungs: 0 filled · 1 active · 7 waiting
+
+— leg 1 of 8, 2.8% of ladder capital —
+💰 Leg Value: 6.16 USDG
+↳ incl. fees 0.91 USDG (+16.4% of capital)
+📉 Leg Range: +19.3% / -11.7% from current price
+↳ market cap $545.5K ⇄ $403.7K
+📈 Leg PnL: +$0.63 (+11.3%)
+🟢 Status: IN RANGE
+
+Your liquidity is active and earning fees. Fees keep accruing as long as VYNEX
+stays inside this range.
+```
+
+`/status` answers the other question, where your money actually is:
+
+```
+PORTFOLIO
+
+💰 Equity Summary :
+- Total Equity = $1,250.00
+- Unstaked Balance = $850.00 (ETH, USDG, BNB, USDT, HYPE)
+- Active in LP = $400.00 (8 Positions)
+
+📊 Asset Breakdown :
+- Robinhood = 0.3000 ETH ($750.00) | 25.00 USDG ($25.00)
+- BSC = 0.0800 BNB ($56.00) | 12.00 USDT ($12.00)
+- Base = 0.0010 ETH ($2.50)
+- HyperEVM = 0.0500 HYPE ($4.50)
+
+✅ LIVE: 21:50 WIB
+```
+
+`/pnl` sums up the trades you have closed, per chain and per period:
+
+![Lifetime PnL recap](assets/pnl-recap.jpg)
+
+All figures on this page are examples, not anyone's real history.
+
 ---
 
 ## Closing a position
