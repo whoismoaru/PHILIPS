@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { getChain, type ChainCtx } from './chains.js';
-import { ERC20_ABI } from './chain.js';
+import { approveExact } from './chain.js';
 import { NATIVE, relayQuoteOut, slipLadder, swapTokenViaRelay } from './relay.js';
 import { lifiQuoteOut, swapViaLifi } from './lifi.js';
 
@@ -120,13 +120,7 @@ async function uniExec(
 ): Promise<{ outWei: bigint; txHashes: string[] }> {
   if (minOut <= 0n) throw new Error('quoter returned 0 — swap cancelled (sandwich protection)');
   const txHashes: string[] = [];
-  const from = new ethers.Contract(fromAddr, ERC20_ABI, ctx.wallet);
-  const allowance: bigint = await from.allowance(ctx.wallet.address, ctx.routerAddress);
-  if (allowance < amountInWei) {
-    const atx = await from.approve(ctx.routerAddress, ethers.MaxUint256);
-    await atx.wait();
-    txHashes.push(atx.hash);
-  }
+  txHashes.push(...(await approveExact(fromAddr, ctx.routerAddress, amountInWei, ctx.wallet)));
   const router = new ethers.Contract(
     ctx.routerAddress,
     ctx.routerHasDeadline ? ROUTER_ABI_DEADLINE : ROUTER_ABI,

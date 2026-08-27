@@ -18,7 +18,7 @@ const { Token, Percent, CurrencyAmount } = sdkCore;
 // Daftarkan spacing-nya sekali di sini — angkanya diverifikasi on-chain lewat
 // factory.feeAmountTickSpacing(2500) = 50.
 (TICK_SPACINGS as Record<number, number>)[2500] = 50;
-import { ERC20_ABI } from './chain.js';
+import { ERC20_ABI, approveExact } from './chain.js';
 import { sendTxNonceSafe } from './core.js';
 import { getChain, baseOf, basesFor, detectBase, type ChainCtx, type BaseAsset, type BaseKind } from './chains.js';
 
@@ -547,11 +547,8 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
       if (bal < amountWei) throw new Error('Wrap still short after retry — try again.');
     }
   }
-  const allowance: bigint = await baseC.allowance(wallet.address, ctx.pmAddress);
-  if (allowance < amountWei) {
-    const tx = await baseC.approve(ctx.pmAddress, ethers.MaxUint256);
-    await tx.wait();
-    notes.push(`Approve ${base.symbol} for Position Manager (tx ${tx.hash})`);
+  for (const h of await approveExact(base.address, ctx.pmAddress, amountWei, wallet)) {
+    notes.push(`Approve ${base.symbol} for Position Manager (tx ${h})`);
   }
   return notes;
 }
@@ -575,11 +572,8 @@ async function ensureErc20Ready(
         `have ${ethers.formatUnits(bal, decimals)}. Buy some with /buy or lower the amount.`,
     );
   }
-  const allowance: bigint = await c.allowance(wallet.address, ctx.pmAddress);
-  if (allowance < amountWei) {
-    const tx = await c.approve(ctx.pmAddress, ethers.MaxUint256);
-    await tx.wait();
-    notes.push(`Approve ${symbol} for Position Manager (tx ${tx.hash})`);
+  for (const h of await approveExact(address, ctx.pmAddress, amountWei, wallet)) {
+    notes.push(`Approve ${symbol} for Position Manager (tx ${h})`);
   }
   return notes;
 }

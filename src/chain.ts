@@ -62,3 +62,38 @@ export const POSITION_MANAGER_ABI = [
 // Instance kontrak default-chain sengaja TIDAK dibuat di sini: semua jalur sudah
 // chain-aware lewat chains.ts (cc.factory/cc.positionManager/cc.weth), dan
 // `new Contract('')` saat env kosong dulu meledak di import-time.
+
+/**
+ * Approve SEBESAR YANG DIPAKAI, bukan MaxUint256.
+ *
+ * Approve tak terbatas berarti tiap router/PM yang pernah kita sentuh boleh
+ * menarik SELURUH saldo token itu selamanya — kalau salah satunya kompromis,
+ * yang hilang bukan cuma nominal transaksinya. LI.FI di repo ini sudah memakai
+ * pola exact-amount; ini menyamakan sisanya.
+ *
+ * Sebagian token gaya USDT menolak mengubah allowance bukan-nol ke bukan-nol
+ * lain, jadi sisa allowance dinolkan dulu sebelum diisi ulang.
+ *
+ * @returns hash tx approve yang benar-benar dikirim (kosong bila allowance cukup).
+ */
+export async function approveExact(
+  token: string,
+  spender: string,
+  amountWei: bigint,
+  wallet: ethers.Signer,
+): Promise<string[]> {
+  const c = new ethers.Contract(token, ERC20_ABI, wallet);
+  const owner = await wallet.getAddress();
+  const current: bigint = await c.allowance(owner, spender);
+  if (current >= amountWei) return [];
+  const hashes: string[] = [];
+  if (current > 0n) {
+    const zero = await c.approve(spender, 0n);
+    await zero.wait();
+    hashes.push(zero.hash);
+  }
+  const tx = await c.approve(spender, amountWei);
+  await tx.wait();
+  hashes.push(tx.hash);
+  return hashes;
+}

@@ -1,4 +1,5 @@
 import { ethers } from 'ethers';
+import { approveExact } from './chain.js';
 import { getChain, type ChainCtx } from './chains.js';
 
 /**
@@ -197,7 +198,6 @@ async function swapViaUniswap(
 ): Promise<{ txHashes: string[]; outEthWei: bigint }> {
   const { ethers: e } = await import('ethers');
   const { discoverPools } = await import('./uniswap.js');
-  const { ERC20_ABI } = await import('./chain.js');
   const { wallet, weth } = ctx;
 
   // Jalur ini memang khusus token→WETH/WBNB. Token yang likuiditasnya hanya di pool
@@ -208,14 +208,8 @@ async function swapViaUniswap(
   const fee = pools[0].fee;
 
   const txHashes: string[] = [];
-  const token = new e.Contract(tokenAddress, ERC20_ABI, wallet);
   const routerAddr = ctx.routerAddress;
-  const allowance: bigint = await token.allowance(wallet.address, routerAddr);
-  if (allowance < amountWei) {
-    const atx = await token.approve(routerAddr, e.MaxUint256);
-    await atx.wait();
-    txHashes.push(atx.hash);
-  }
+  txHashes.push(...(await approveExact(tokenAddress, routerAddr, amountWei, wallet)));
 
   // minOut dari quoter, dikurangi slippage. Quoter gagal / kembali 0 → BATALKAN
   // route ini (JANGAN swap dgn minOut=0 — itu umpan sandwich). swapTokenToEthRobust
@@ -445,12 +439,7 @@ export async function swapTokenToUsdgRobust(
   const routerAddr = ctx.routerAddress;
   const txHashes: string[] = [];
   if (hasDirectPool) {
-    const allowance: bigint = await token.allowance(wallet.address, routerAddr);
-    if (allowance < amountWei) {
-      const atx = await token.approve(routerAddr, ethers.MaxUint256);
-      await atx.wait();
-      txHashes.push(atx.hash);
-    }
+    txHashes.push(...(await approveExact(tokenAddress, routerAddr, amountWei, wallet)));
   }
 
   const quoter = new ethers.Contract(ctx.quoterAddress, QUOTER_ABI, wallet);
