@@ -86,19 +86,19 @@ from the Uniswap gateway, Krystal, and on-chain scans.
 - **Spot.** One position near the price. Simplest, and it harvests the most fees.
 - **Bid-Ask.** A ladder of several positions, with more money placed at the lower
   prices. It buys more of the token the deeper it dips and protects your capital,
-  but earns less in fees. You pick how many legs — **8 to 10 is the sweet spot**.
+  but earns less in fees. You pick how many legs **8 to 10 is the sweet spot**.
   More legs is smoother but needs a paid RPC; on a free endpoint it makes the bot
   slow. All the legs open in one batched transaction and are managed as one position.
 
-  Open any leg and the card shows the ladder first — deposit, current value, fees,
-  PnL, and how many rungs are filled, active, or still waiting — then the one leg you
+  Open any leg and the card shows the ladder first deposit, current value, fees,
+  PnL, and how many rungs are filled, active, or still waiting then the one leg you
   tapped. A leg that fills is doing its job, so it is marked filled rather than
   flagged as a position gone wrong.
 
 **Step 4. How much.** Tap a percentage of your balance, or type an exact number.
 Percentages are taken from your *usable* balance: the gas reserve is set aside
 first, so the largest button never leaves you unable to pay for the transaction.
-The buttons themselves are yours to change — see **Quick percentages** below.
+The buttons themselves are yours to change see **Quick percentages** below.
 
 **Step 5. Review and confirm.** The card shows the real price range, what you're
 depositing, and the estimated gas. Nothing is signed until you tap confirm.
@@ -152,7 +152,7 @@ Every amount step shows percentage buttons. You decide what they are.
 
 `/settings` → **Buy %**, **Sell %**, **Add LP %**, **Withdraw %**, **Bridge %**.
 Each one opens a small card with the current numbers and an **Edit** button. Type up
-to four numbers — `10 25 50 90`, `10,25,50`, or `10/25/50` all work — and they become
+to four numbers `10 25 50 90`, `10,25,50`, or `10/25/50` all work and they become
 the buttons for that flow. **Reset** puts the defaults back.
 
 Withdraw is the one exception: 100% is not allowed there, because taking everything
@@ -195,7 +195,7 @@ a hot wallet, not a vault.
   output. It swaps **every** unit of that token in the wallet. If you hold the same
   token outside the LP, move it elsewhere first.
 - **Per-transaction caps** (`MAX_ETH_PER_TX`, `MAX_STABLE_PER_TX`) can be raised in
-  `.env`, or switched off with `off`. Leaving them empty does *not* remove them —
+  `.env`, or switched off with `off`. Leaving them empty does *not* remove them
   it falls back to the built-in defaults, so a typo can't quietly open the wallet.
   With the caps off, the only ceiling is the balance you actually hold.
 - **Gas has its own ceiling** (`MAX_TX_FEE_NATIVE`, default `0.005` native). It is
