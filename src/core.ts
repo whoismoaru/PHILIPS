@@ -31,24 +31,28 @@ const originalCommand = bot.command.bind(bot);
 export const html = { parse_mode: 'HTML' as const };
 
 /**
- * Batas per-transaksi TIDAK PERNAH tak terhingga.
+ * Batas per-transaksi. Mematikannya harus DISENGAJA, bukan efek samping.
  *
- * Dulu `.env` kosong berarti unlimited — dan itu diam-diam: kartu menulis
- * "unlimited", tak ada yang menahan satu digit kelebihan. Sekarang kosong jatuh
- * ke bawaan yang masuk akal. Untuk menaikkan batas, isi angkanya di `.env`;
- * tak ada lagi cara MEMATIKANNYA sama sekali.
+ * `.env` KOSONG tetap jatuh ke bawaan yang masuk akal — dulu kosong berarti
+ * unlimited, dan itu diam-diam: salah ketik satu baris .env membuka wallet tanpa
+ * ada yang menahan. Untuk benar-benar mematikan batas, tulis `off` (atau `0`)
+ * secara eksplisit; nilai lain dibaca sebagai angka batas.
  */
 const DEFAULT_MAX_ETH = 0.1;
 const DEFAULT_MAX_STABLE = 250;
 
-const rawMax = Number(config.safety.maxEthPerTx);
-export const maxEth = rawMax > 0 ? rawMax : DEFAULT_MAX_ETH;
+const parseCap = (raw: string, fallback: number): number => {
+  const v = raw.trim().toLowerCase();
+  if (v === 'off' || v === 'none' || v === '0') return Infinity;
+  const n = Number(v);
+  return n > 0 ? n : fallback;
+};
 
-const rawStable = Number(config.safety.maxStablePerTx);
-export const maxStable = rawStable > 0 ? rawStable : DEFAULT_MAX_STABLE;
+export const maxEth = parseCap(config.safety.maxEthPerTx, DEFAULT_MAX_ETH);
+export const maxStable = parseCap(config.safety.maxStablePerTx, DEFAULT_MAX_STABLE);
 
 /** Label batas yang menyebut satuan aset yang benar (ETH di Robinhood, BNB di BSC). */
-export const capLabelFor = (cap: number, sym: string) => `${cap} ${sym}`;
+export const capLabelFor = (cap: number, sym: string) => (cap === Infinity ? 'tanpa batas' : `${cap} ${sym}`);
 export const maxEthLabel = capLabelFor(maxEth, 'ETH');
 
 /** Posisi sudah di-burn/tak ada di chain (NFT hilang). */
