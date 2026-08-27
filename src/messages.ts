@@ -406,7 +406,7 @@ export function msgV4Position(p: {
           : `${bold('OUT OF RANGE')} — waiting`;
   const explain =
     p.inRange === null
-      ? `Range status couldn't be read right now — the value above may be stale.`
+      ? `Range status could not be read — the value above may be stale.`
       : p.inRange
         ? `Your liquidity is ${bold('active')} and earning fees. Fees keep accruing as long as ${sym} stays inside this range.`
         : p.converted
@@ -415,8 +415,8 @@ export function msgV4Position(p: {
             // gagal — anak tangga terisi satu per satu dari atas. Sebut porsi
             // modalnya supaya "OUT OF RANGE" pada kartu SATU leg tak terbaca
             // seolah seluruh modal ladder sudah berubah jadi token.
-            ? `Price dropped through ${bold('this leg')}'s range, so leg ${p.ladder.legIndex + 1} of ${p.ladder.legCount} is now ${bold(`100% ${sym}`)}${p.ladder.sharePct !== undefined ? ` — ${bold(`${p.ladder.sharePct.toFixed(1)}%`)} of the ladder` : ''}. That is how a ladder works: rungs fill one at a time from the top. The legs below still hold ${base} and are waiting for lower prices. Judge the ladder as a whole, not this rung alone.`
-            : `Price dropped through this position's entire range, so it is now ${bold(`100% ${sym}`)} — the buy-dip target here is done. The value above is that ${sym} priced back in ${base}; it falls further if ${sym} keeps dropping. Hold and wait for a bounce, or close.`
+            ? `This rung bought its ${bold(`${p.ladder.sharePct !== undefined ? `${p.ladder.sharePct.toFixed(1)}%` : 'share'}`)} of the ladder. The rungs below still hold ${base}, waiting lower.`
+            : `Fully converted to ${bold(`100% ${sym}`)} — the buy-dip target is done. Hold for a bounce, or close.`
           : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${esc(p.rangeLabel)}).`;
 
   const isLeg = p.ladder && p.ladder.legCount > 1;
@@ -449,18 +449,18 @@ export function msgV4Position(p: {
     `💰 ${bold(isLeg ? 'Leg Value:' : 'Value:')} ${esc(p.valueLabel)}`,
     ...(p.feesLabel ? [italic(`↳ incl. fees ${esc(p.feesLabel)}`)] : []),
     `📉 ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${esc(p.rangeLabel)} ${italic('from current price')}`,
-    ...(p.mcRange ? [italic(`↳ market cap ${esc(p.mcRange)}`)] : []),
-    ...(p.pnlText ? [`📈 ${bold('Current PnL:')} ${esc(p.pnlText)}`] : []),
+    ...(p.mcRange ? [italic(`↳ market cap ${esc(isLeg ? p.mcRange.replace(/ · now .*$/, '') : p.mcRange)}`)] : []),
+    ...(p.pnlText ? [`📈 ${bold(isLeg ? 'Leg PnL:' : 'Current PnL:')} ${esc(p.pnlText)}`] : []),
     `${statusEmoji} ${bold('Status:')} ${status}`,
   ];
-  if (p.priceWarn) lines.push('', `⚠️ ${bold('Pool tipis')} — ${esc(p.priceWarn)}`);
+  if (p.priceWarn) lines.push('', `⚠️ ${bold('Thin pool')} — ${esc(p.priceWarn)}`);
   lines.push(
     '',
-    `⏱️ <i>${p.age ? `Age ${esc(p.age)} · ` : ''}Updated Live: ${nowWib()}</i>`,
+    `⏱️ <i>${p.age ? `Age ${esc(p.age)} · ` : ''}updated ${nowWib()}</i>`,
     '',
     `<i>${explain}</i>`,
     '',
-    note(p.tracked ? 'Uniswap v4 · dikelola bot' : 'Uniswap v4 · read-only (opened outside the bot)'),
+    note(p.tracked ? 'Uniswap v4 · managed by the bot' : 'Uniswap v4 · read-only (opened outside the bot)'),
   );
   return lines.join('\n');
 }
