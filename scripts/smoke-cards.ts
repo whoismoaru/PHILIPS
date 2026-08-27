@@ -29,16 +29,14 @@ show(
       { label: 'BSC', amount: '0.0019', symbol: 'BNB', usd: 1.9 },
     ],
     totalUsd: 163.7,
-    holdingsCount: 2,
   }),
 );
 
-show('UANG — baca token gagal', m.msgStatus({
+show('UANG — harga native tak terbaca', m.msgStatus({
   dryRun: false,
   positions: 0,
   chains: [{ label: 'Robinhood', amount: '0.0421', symbol: 'ETH', usd: null }],
   totalUsd: null,
-  holdingsCount: null,
 }));
 
 show(

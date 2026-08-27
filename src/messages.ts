@@ -577,7 +577,6 @@ export function msgStatus(opts: {
     stables?: Array<{ symbol: string; amount: string; usd: number | null }>;
   }>;
   totalUsd: number | null; // null = harga native tak terbaca (JANGAN 0)
-  holdingsCount: number | null; // null = pembacaan gagal (BUKAN 'bersih')
   lpUsd?: number | null; // nilai posisi LP aktif
   lpFailed?: number; // posisi yang gagal dibaca → total belum lengkap
 }): string {
@@ -625,9 +624,6 @@ export function msgStatus(opts: {
   }
 
   if (opts.lpFailed) parts.push('', `⚠️ ${note(`${opts.lpFailed} position(s) failed to read — total is incomplete`)}`);
-  if (opts.holdingsCount === null) {
-    parts.push('', `⚠️ ${note('token read failed — try Refresh')}`);
-  }
 
   // Alamat wallet, batas per-tx, dan ajakan /sell dibuang dari kartu ini:
   // dua yang pertama sudah ada di /settings, yang ketiga bukan keadaan

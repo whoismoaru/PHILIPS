@@ -525,14 +525,6 @@ async function renderStatus(ctx: any, edit: boolean) {
         }),
       ),
     ]);
-    // Jumlah token nyangkut. null = PEMBACAAN GAGAL (bukan "bersih") — dulu RPC
-    // gagal terbaca sebagai sinyal aman palsu di pintu masuk /sell & sweep.
-    let holdingsCount: number | null = null;
-    try {
-      holdingsCount = (await sellHoldings(getChain())).length;
-    } catch {
-      /* biarkan null — kartu menyebut "baca token gagal" */
-    }
     // Nilai posisi LP aktif (v3 + v4). Gagal baca satu posisi tak boleh menggagalkan kartu;
     // jumlah yang gagal dilaporkan supaya total tak terbaca sebagai fakta.
     let lpUsd: number | null = null;
@@ -576,23 +568,13 @@ async function renderStatus(ctx: any, edit: boolean) {
       positions: store.active().length,
       chains,
       totalUsd,
-      holdingsCount,
       lpUsd,
       lpFailed,
     });
-    // Tombol explorer hanya dirender bila chain aktif memang punya explorer —
-    // tombol URL kosong ditolak Telegram dan menggagalkan SELURUH kartu.
-    const explorerBase = getChain().blockscout?.replace(/\/api\/v2\/?$/, '') ?? null;
     const extra = {
       ...html,
       ...Markup.inlineKeyboard([
         [Markup.button.callback('🔄 Refresh Data', 'refresh:status')],
-        // Menjual token nganggur adalah tindakan yang dimaksud kartu ini;
-        // /buy tak menyelesaikan apa pun di sini.
-        [Markup.button.callback('💱 Sell Idle Tokens', 'sell:start')],
-        ...(explorerBase
-          ? [[Markup.button.url('🔗 View on Explorer', `${explorerBase}/address/${getChain().wallet.address}`)]]
-          : []),
         [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
       ]),
     };
