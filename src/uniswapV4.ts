@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { TickMath, nearestUsableTick } from '@uniswap/v3-sdk';
-import type { ChainCtx } from './chains.js';
+import { isStableBase, type ChainCtx } from './chains.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { sendTxNonceSafe, mapLimit } from './core.js';
 import { allV4 } from './v4store.js';
@@ -10,6 +10,7 @@ const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 // PoolManager singleton v4 per chain.
 const V4_POOL_MANAGER: Record<string, string> = {
   robinhood: '0x8366a39CC670B4001A1121B8F6A443A643e40951',
+  bsc: '0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF',
 };
 // v4 Actions tambahan (add).
 const MINT_POSITION = 0x02;
@@ -27,7 +28,40 @@ const SWEEP = 0x14;
 // PositionManager Uniswap v4 per chain. Kosong = v4 tak didukung di chain itu.
 const V4_PM: Record<string, string> = {
   robinhood: '0x58daec3116aae6D93017bAAea7749052E8a04fA7',
+  bsc: '0x7A4a5c919aE2541AeD11041A1AEeE68f1287f95b',
 };
+
+/**
+ * Alamat kontrak dinormalkan SAAT MODUL DIMUAT.
+ *
+ * ethers menolak alamat yang checksum-nya salah, dan pembacaan pool dibungkus
+ * `.catch(() => 0n)` — jadi satu huruf besar/kecil yang keliru tidak memunculkan
+ * error, melainkan "likuiditas 0" yang membuat SETIAP pool di chain itu terbuang
+ * diam-diam. Menormalkan di sini membuat salah ketik gagal keras saat start,
+ * bukan menyamar sebagai pool mati.
+ */
+for (const table of [V4_PM, V4_POOL_MANAGER]) {
+  for (const [k, v] of Object.entries(table)) table[k] = ethers.getAddress(v.toLowerCase());
+}
+
+/**
+ * Base stablecoin chain ini. Modul ini dulu mematok USDG (satu-satunya chain v4
+ * saat itu), jadi menyalakan v4 di BSC membuat pool USDT tak dikenali sebagai
+ * pasangan yang bisa dibuka satu sisi. Diambil dari daftar base chain-nya sendiri.
+ */
+function stableOf(cc: ChainCtx): { addr: string; symbol: string; decimals: number } | null {
+  const b = cc.bases.find((x) => isStableBase(x.kind));
+  return b ? { addr: b.address, symbol: b.symbol, decimals: b.decimals } : null;
+}
+/** Simbol base yang BENAR untuk chain ini — dipakai kartu & label. */
+export function v4BaseSymbol(cc: ChainCtx, base: 'ETH' | 'USDG' | null): string {
+  if (base === 'ETH') return cc.nativeSymbol;
+  return base === 'USDG' ? (stableOf(cc)?.symbol ?? 'USD') : '';
+}
+/** Desimal base v4 di chain ini (stable BSC 18, Robinhood 6 — jangan dipatok). */
+export function v4BaseDecimals(cc: ChainCtx, base: 'ETH' | 'USDG' | null): number {
+  return base === 'USDG' ? (stableOf(cc)?.decimals ?? 6) : 18;
+}
 
 const DYNAMIC_FEE_FLAG = 0x800000; // v4: fee bertanda dynamic
 
@@ -82,7 +116,8 @@ export type V4Position = {
 /** Tentukan aset dasar pasangan + apakah base = currency0. */
 function pairBase(cc: ChainCtx, cur0: string, cur1: string): { base: 'ETH' | 'USDG' | null; baseIsCurrency0: boolean } {
   const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
-  const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
+  const st = stableOf(cc);
+  const isUsdg = (a: string) => !!st && a.toLowerCase() === st.addr.toLowerCase();
   if (isEth(cur0)) return { base: 'ETH', baseIsCurrency0: true };
   if (isEth(cur1)) return { base: 'ETH', baseIsCurrency0: false };
   if (isUsdg(cur0)) return { base: 'USDG', baseIsCurrency0: true };
@@ -91,7 +126,11 @@ function pairBase(cc: ChainCtx, cur0: string, cur1: string): { base: 'ETH' | 'US
 }
 
 export function v4Supported(cc: ChainCtx): boolean {
-  return !!V4_PM[cc.key] && !!cc.blockscout;
+  // Blockscout TAK lagi jadi syarat: enumerasi punya jalur tanpa indexer
+  // (nextTokenId + ownerOf), dan posisi yang dibuka bot selalu tercatat lokal.
+  // Tanpa indexer, yang hilang cuma posisi v4 yang dibuka DI LUAR bot — dan
+  // /positions sudah menyebut daftarnya mungkin tak lengkap.
+  return !!V4_PM[cc.key];
 }
 
 // Symbol & desimal token TAK PERNAH berubah → cache permanen. Tanpa ini, /positions
@@ -281,7 +320,8 @@ export async function closePositionV4(
 
   // Tentukan aset dasar (cash-out): pair ber-ETH → ETH; ber-USDG → USDG; lainnya → tak ada.
   const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
-  const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
+  const st = stableOf(cc);
+  const isUsdg = (a: string) => !!st && a.toLowerCase() === st.addr.toLowerCase();
   let base: 'ETH' | 'USDG' | null = null;
   let other: string | null = null;
   if (isEth(pk.currency0) || isEth(pk.currency1)) {
@@ -324,7 +364,7 @@ export async function closePositionV4(
       if (bal > 0n) {
         const r = base === 'ETH'
           ? await swapTokenToEthRobust(other, bal, cc)
-          : await swapTokenToUsdgRobust(other, bal, cc.usdgAddress!, cc);
+          : await swapTokenToUsdgRobust(other, bal, stableOf(cc)!.addr, cc);
         out.cashedOut = `${base} via ${r.route}`;
       }
     } catch (e) {
@@ -365,7 +405,8 @@ export async function closeLadderV4(
   const coder = ethers.AbiCoder.defaultAbiCoder();
   const [sym0, sym1] = await Promise.all([tokenSymbol(pk.currency0, cc), tokenSymbol(pk.currency1, cc)]);
   const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
-  const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
+  const st = stableOf(cc);
+  const isUsdg = (a: string) => !!st && a.toLowerCase() === st.addr.toLowerCase();
   let base: 'ETH' | 'USDG' | null = null;
   let other: string | null = null;
   if (isEth(pk.currency0) || isEth(pk.currency1)) { base = 'ETH'; other = isEth(pk.currency0) ? pk.currency1 : pk.currency0; }
@@ -373,8 +414,8 @@ export async function closeLadderV4(
 
   // Ukur saldo base SEBELUM (delta = hasil). ETH → native; USDG → token.
   const readBase = async (): Promise<bigint> =>
-    base === 'USDG' && cc.usdgAddress
-      ? ((await new ethers.Contract(cc.usdgAddress, ['function balanceOf(address) view returns (uint256)'], cc.provider).balanceOf(cc.wallet.address).catch(() => 0n)) as bigint)
+    base === 'USDG' && stableOf(cc)
+      ? ((await new ethers.Contract(stableOf(cc)!.addr, ['function balanceOf(address) view returns (uint256)'], cc.provider).balanceOf(cc.wallet.address).catch(() => 0n)) as bigint)
       : ((await cc.provider.getBalance(cc.wallet.address).catch(() => 0n)) as bigint);
   const beforeWei = await readBase();
 
@@ -400,7 +441,7 @@ export async function closeLadderV4(
       const erc = new ethers.Contract(other, ['function balanceOf(address) view returns (uint256)'], cc.provider);
       const bal: bigint = await erc.balanceOf(cc.wallet.address);
       if (bal > 0n) {
-        const r = base === 'ETH' ? await swapTokenToEthRobust(other, bal, cc) : await swapTokenToUsdgRobust(other, bal, cc.usdgAddress!, cc);
+        const r = base === 'ETH' ? await swapTokenToEthRobust(other, bal, cc) : await swapTokenToUsdgRobust(other, bal, stableOf(cc)!.addr, cc);
         cashedOut = `${base} via ${r.route}`;
       }
     } catch { /* token receh tetap di wallet */ }

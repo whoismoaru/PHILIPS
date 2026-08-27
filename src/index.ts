@@ -42,7 +42,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
+import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import * as pctPresets from './pctPresets.js';
 import { screenToken, formatScreen, getEthUsd, getTokenEthPrice } from './screening.js';
@@ -545,7 +545,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       const v4 = v4Supported(ccLp) ? await listPositionsV4(ccLp).catch(() => []) : [];
       const v4Vals = v4.map((p) => {
         if (p.valueBaseWei === null || !p.base) return undefined;
-        const v = Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), baseDecimalsOf(ccLp.key, p.base === 'USDG' ? 'usdg' : 'weth')));
+        const v = Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), v4BaseDecimals(ccLp, p.base)));
         return p.base === 'USDG' ? v : ethUsd !== null ? v * ethUsd : null;
       });
       const all = [...vals, ...v4Vals];
@@ -926,16 +926,27 @@ async function adoptStrayV4(cc: ReturnType<typeof getChain>, from: bigint): Prom
 }
 
 /** Kartu detail satu posisi v4 (nilai + range% + PnL bila dikelola bot) + tombol. */
+/**
+ * BaseKind untuk posisi v4 di chain ini. `'USDG'` di modul v4 berarti "base
+ * stablecoin chain ini", bukan token USDG secara harfiah — di BSC itu USDT.
+ * Memetakannya mati ke 'usdg' membuat desimal & simbolnya salah begitu v4
+ * dinyalakan di chain lain.
+ */
+function v4Kind(cc: ChainCtx, base: 'ETH' | 'USDG' | null): store.PosRecord['baseKind'] {
+  if (base !== 'USDG') return 'weth';
+  return (cc.bases.find((b) => isStableBase(b.kind))?.kind ?? 'usdg') as store.PosRecord['baseKind'];
+}
+
 async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain()): Promise<{ text: string; extra: Record<string, unknown> }> {
   const tracked0 = v4store.getV4(p.tokenId);
   const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
-  const dec = baseDecimalsOf(undefined, p.base === 'USDG' ? 'usdg' : 'weth'); // v4 = chain utama
+  const dec = v4BaseDecimals(cc, p.base);
   let valueLabel = '—';
   let feesLabel: string | undefined;
   // Value = prinsipal + fee. Tanpa rincian, kartu bisa tampak "cuma -3.6%"
   // padahal prinsipal -19% dan yang menambal adalah fee — sengaja dipisah.
   if (p.feesBaseWei !== null && p.feesBaseWei > 0n && p.valueBaseWei !== null) {
-    const fd = p.base === 'USDG' ? 6 : 18;
+    const fd = v4BaseDecimals(cc, p.base);
     const f = Number(ethers.formatUnits(p.feesBaseWei, fd));
     const ent = tracked0 ? Number(ethers.formatUnits(BigInt(tracked0.entryBaseWei), fd)) : 0;
     const pct = ent > 0 ? ` (+${((f / ent) * 100).toFixed(1)}% of capital)` : '';
@@ -997,7 +1008,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   // harga PASAR (DexScreener pool terdalam). Selisih besar = pool tipis, harga &
   // range di kartu tak bisa dipercaya (persis kasus PEPE di pool liq $25).
   let priceWarn: string | null = null;
-  const baseSymbol = p.base === 'USDG' ? 'USDG' : p.base === 'ETH' ? 'ETH' : undefined;
+  const baseSymbol = p.base ? v4BaseSymbol(cc, p.base) : undefined;
   const tokenSymbol = baseSymbol ? [p.sym0, p.sym1].find((s) => s !== baseSymbol) : undefined;
   // Market cap: kapitalisasi sekarang + di batas rentang (MC ∝ harga, jadi
   // MC@batas = MC_now × (1 + pct/100)). Samakan dengan sub-baris mcap kartu V3.
@@ -1313,7 +1324,7 @@ async function cmdPositions(ctx: any, edit = false) {
 
   // v4 (baca-saja + PnL bila dikelola bot).
   for (const p of v4) {
-    const dec = baseDecimalsOf(undefined, p.base === 'USDG' ? 'usdg' : 'weth'); // v4 = chain utama
+    const dec = v4BaseDecimals(cc, p.base);
     const tracked = v4store.getV4(p.tokenId);
     const curF = p.valueBaseWei !== null ? Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), dec)) : null;
     let investNum = curF ?? 0;
@@ -1335,7 +1346,7 @@ async function cmdPositions(ctx: any, edit = false) {
         }
       }
     }
-    const sym = p.base === 'USDG' ? 'USDG' : 'ETH';
+    const sym = v4BaseSymbol(cc, p.base);
     rows.push({
       id: p.tokenId,
       groupId: tracked?.groupId ?? null,
@@ -4019,7 +4030,7 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
           symbol: `${r.sym0}/${r.sym1}`,
           ca: r.other,
           chain: cc.key,
-          baseKind: (r.base === 'USDG' ? 'usdg' : 'weth') as store.PosRecord['baseKind'],
+          baseKind: v4Kind(cc, r.base),
           openedAt: l.openedAt,
           initialWethWei: l.entryBaseWei || '0',
         },
@@ -4028,8 +4039,8 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
       v4store.removeV4(l.tokenId);
     });
     invalidateV4ListCache();
-    const dec = baseDecimalsOf(cc.key, r.base === 'USDG' ? 'usdg' : 'weth');
-    const sym = r.base === 'USDG' ? 'USDG' : cc.nativeSymbol;
+    const dec = v4BaseDecimals(cc, r.base);
+    const sym = v4BaseSymbol(cc, r.base);
     await ctx.reply(
       `✅ ${msg.bold('V4 LADDER CLOSED')} · ${legs.length} legs\n\nTotal cashed out · ${msg.bold(msg.esc(`${msg.cleanUnits(r.baseOutWei, dec)} ${sym}`))}`,
       { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
@@ -4046,7 +4057,7 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
       {
         tokenId: legs[0].tokenId,
         chain: cc.key,
-        baseKind: (r.base === 'USDG' ? 'usdg' : 'weth') as store.PosRecord['baseKind'],
+        baseKind: v4Kind(cc, r.base),
         symbol: `${r.sym0}/${r.sym1}`,
         initialWethWei: totalInit.toString(),
         openedAt: Math.min(...legs.map((l) => l.openedAt)),
@@ -4303,7 +4314,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   const tracked = v4store.getV4(tokenId); // tangkap SEBELUM removeV4
   // Base dibaca dari poolKey SEBELUM close (setelah burn, info pool ikut hilang).
   const trackedBase = await getPoolKeyV4(cc, tokenId)
-    .then((x) => (x.base === 'USDG' ? 'usdg' : 'weth'))
+    .then((x) => v4Kind(cc, x.base))
     .catch(() => 'weth' as const);
   // Hasil close diukur dari delta saldo BASE posisi. Base ETH → saldo native; base
   // USDG → saldo token USDG. Dulu `afterWei` dipaksa null untuk non-ETH, sehingga
@@ -4347,7 +4358,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
         // Ledger presisi baru perlu kalau v4 jadi jalur utama.
         // Base yang diukur harus SAMA dengan base hasil close; kalau tidak, deltanya
         // milik aset lain → lebih baik "tak terukur" daripada angka yang salah.
-        const sameBase = trackedBase === (r.base === 'USDG' ? 'usdg' : 'weth');
+        const sameBase = trackedBase === v4Kind(cc, r.base);
         const measured =
           sameBase && beforeWei !== null && afterWei !== null && afterWei > beforeWei
             ? afterWei - beforeWei
@@ -4357,7 +4368,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
           symbol: `${r.sym0}/${r.sym1}`,
           ca: r.other,
           chain: cc.key,
-          baseKind: (r.base === 'USDG' ? 'usdg' : 'weth') as store.PosRecord['baseKind'],
+          baseKind: v4Kind(cc, r.base),
           openedAt: tracked?.openedAt ?? Date.now(),
           initialWethWei: tracked?.entryBaseWei ?? '0',
         };

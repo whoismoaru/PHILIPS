@@ -2,7 +2,7 @@ import { ethers } from 'ethers';
 import { config } from './config.js';
 import { venueCtx, venuesFor, type BaseKind, type ChainCtx } from './chains.js';
 import type { TokenPool } from './explore.js';
-import type { PoolKeyV4 } from './uniswapV4.js';
+import { v4Supported, type PoolKeyV4 } from './uniswapV4.js';
 
 /**
  * Sumber pool via Krystal Cloud API — daftar pool jauh lebih lengkap dari gateway
@@ -153,10 +153,10 @@ export async function krystalPools(cc: ChainCtx, token: string, sortBy = 0): Pro
       if (tvl < 500) return null;
 
       if (proto === 'uniswapv4') {
-        // v4 hanya di chain yang bot dukung PENUH: enumerasi/monitor/tutup posisi v4
-        // butuh Blockscout (BSC tak punya) + V4_PM terkonfigurasi. Tanpa itu, posisi
-        // yang dibuka tak bisa dipantau/ditutup — jangan tawarkan.
-        if (!cc.blockscout) return null;
+        // v4 hanya di chain yang PositionManager-nya terkonfigurasi — tanpa itu
+        // posisi yang dibuka tak bisa dipantau maupun ditutup. Blockscout tak lagi
+        // jadi syarat: enumerasi punya jalur tanpa indexer (nextTokenId + ownerOf).
+        if (!v4Supported(cc)) return null;
         const pk = await resolveV4PoolKey(cc, p);
         if (!pk) return null; // poolKey tak terbukti → jangan tawarkan
         const b = baseOfPair(cc, pk.currency0, pk.currency1);
