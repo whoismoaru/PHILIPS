@@ -266,15 +266,15 @@ export function msgStarted(o: {
           .join(' · ')
       : '';
   return [
-    `🤖 ${bold('Welcome to PHILIPS!')}`,
+    bold('WELCOME TO PHILIPS!'),
     '',
     `PHILIPS is your personal assistant for managing Single-Side Liquidity Pools (LP) on ${bold('Uniswap')}. PHILIPS goal is to make DeFi simple, secure, and efficient. Whether you are automatically buying the dip, taking profit on the rip, or tracking your fees, I've got you covered.`,
     '',
-    `🛠️ ${bold('Core Features :')}`,
-    '• Connect your Robinhood Wallet (Manual Import)',
-    '• Single-Side LP (Provide liquidity with only 1 token)',
-    '• Automated Token Security Audit &amp; Rug Pull Check',
-    '• Track active LP positions, APR, and earned fees',
+    `🛠 ${bold('Core Features :')}`,
+    '- Connect your Robinhood Wallet (Manual Import)',
+    '- Single-Side LP (Provide liquidity with only 1 token)',
+    '- Automated Token Security Audit &amp; Rug Pull Check',
+    '- Track active LP positions, APR, and earned fees',
     '',
     `⚠️ ${bold('Security Notice :')}`,
     // Pintu resminya kini tombol Connect Wallet di /settings — /connect sudah dihapus,
@@ -288,8 +288,11 @@ export function msgStarted(o: {
     ...(o.dryRun ? [`⚪ ${bold('DRY RUN')} — simulation mode, no funds will move.`, ''] : []),
     ...(sync ? [`🔄 ${bold('Sync:')} ${esc(sync)}`, ''] : []),
     `👉 ${bold('Get Started :')}`,
+    // Saat dompet sudah terhubung tak ada lagi tombol utama di kartu ini, jadi
+    // kalimatnya harus menunjuk tindakan yang benar-benar bisa dilakukan:
+    // menempel CA. "Tap the button below" akan menunjuk tombol yang tak ada.
     o.walletShort
-      ? 'Tap the button below to open a new Single-Side LP and start earning trading fees.'
+      ? `Paste a token contract address into the chat, or send ${code('/add_lp')}, to open a new Single-Side LP and start earning trading fees.`
       : 'Tap the button below to Connect your Robinhood Wallet and start earning trading fees.',
   ].join('\n');
 }

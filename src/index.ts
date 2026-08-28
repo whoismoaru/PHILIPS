@@ -396,14 +396,12 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
 // Keyboard inline /start (sama dgn /help tapi tombol Help, bukan Close All).
 // 'portfolio' & 'status' kini kartu yang SAMA (kartu uang) — cukup satu tombol.
 // Action 'portfolio' tetap hidup untuk tombol di pesan-pesan lama.
-// Tombol utama = tindakan yang benar-benar berikutnya. Dompet belum terhubung →
-// Connect Wallet; sudah terhubung → tombol itu bohong (tap-nya cuma bilang "sudah
-// terhubung"), jadi diganti Add Liquidity.
+// Tombol Add Liquidity dibuang atas permintaan: membuka LP dimulai dari menempel
+// CA, jadi tombol itu cuma membuka kartu "cara memakai" — satu tap yang tak
+// mengerjakan apa pun. Connect Wallet tetap ada karena ia memang bertindak.
 const startKeyboard = () =>
   Markup.inlineKeyboard([
-    walletStore.isConnected()
-      ? [Markup.button.callback('💧 Add Liquidity', 'howto:add')]
-      : [Markup.button.callback('🔗 Connect Wallet', 'connect')],
+    ...(walletStore.isConnected() ? [] : [[Markup.button.callback('🔗 Connect Wallet', 'connect')]]),
     [Markup.button.callback('📖 How it Works', 'howitworks')],
   ]);
 
