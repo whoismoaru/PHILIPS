@@ -19,7 +19,7 @@ const { Token, Percent, CurrencyAmount } = sdkCore;
 // factory.feeAmountTickSpacing(2500) = 50.
 (TICK_SPACINGS as Record<number, number>)[2500] = 50;
 import { ERC20_ABI, approveExact } from './chain.js';
-import { sendTxNonceSafe } from './core.js';
+import { sendTxNonceSafe, isGoneErr } from './core.js';
 import { getChain, baseOf, basesFor, detectBase, type ChainCtx, type BaseAsset, type BaseKind } from './chains.js';
 
 const MAX_UINT128 = (1n << 128n) - 1n;
@@ -751,13 +751,23 @@ export async function executeRemoveBatch(
     const calls: string[] = [];
     let live = 0;
     for (const tokenId of chunk) {
-      // Leg yang sudah hangus (positions() throw) atau sudah ter-burn → LEWATI, jangan
+      // Leg yang sudah hangus (positions() revert 'Invalid token ID') → LEWATI, jangan
       // masukkan ke multicall (burn ganda me-revert seluruh batch & bikin close macet).
+      //
+      // TAPI hanya untuk revert itu. Dulu `catch {}` menelan SEMUA kegagalan, termasuk
+      // RPC yang putus — dan itu berakhir bencana: 28 Agu 2026 delapan leg (214 USDT)
+      // gagal dibaca karena ECONNRESET, semuanya dilewati, daftar panggilan jadi kosong,
+      // dan bot melaporkan "LADDER CLOSED" padahal tak satu tx pun dikirim. Posisinya
+      // masih hidup di chain tapi sudah dihapus dari catatan. Gagal baca ≠ posisi hilang.
       let liquidity: bigint;
       try {
         liquidity = BigInt((await positionManager.positions(tokenId)).liquidity);
-      } catch {
-        continue;
+      } catch (e) {
+        if (isGoneErr(e)) continue;
+        throw new Error(
+          `Could not read position #${tokenId} (${(e as Error).message.slice(0, 80)}). ` +
+            'Nothing was closed. Try again when the network settles.',
+        );
       }
       if (liquidity > 0n) {
         const { unprotected, ...mins } = await withdrawMins(positionManager, tokenId, liquidity, deadline, ctx);
@@ -773,6 +783,8 @@ export async function executeRemoveBatch(
       live++;
     }
     if (calls.length === 0) {
+      // Sampai di sini artinya SETIAP leg benar-benar revert 'Invalid token ID' —
+      // kegagalan baca sudah dilempar di atas, jadi ini memang sudah tertutup.
       notes.push('Batch close: all legs already closed on-chain.');
       continue;
     }

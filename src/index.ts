@@ -3931,6 +3931,14 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       )
     ).reduce((a, b) => a + b, 0n);
     notes.push(...(await executeRemoveBatch(tokenIds, cc)).notes);
+    // Tak ada tx penarikan yang terkirim = tak ada yang ditutup. Melanjutkan ke
+    // finalisasi akan menandai posisi HIDUP sebagai tertutup lalu menghapusnya dari
+    // catatan — persis yang terjadi 28 Agu 2026.
+    if (!notes.some((n) => n.startsWith('Batch close ') && n.includes('tx '))) {
+      throw new Error(
+        'No withdrawal transaction was sent, so nothing was closed. Your positions are untouched — try again.',
+      );
+    }
     await sleep(1500);
     const sw = await sweepTokenToBase(otherAddr, otherC, base, cc, notes, otherBefore).catch(() => ({
       baseOut: 0n,
