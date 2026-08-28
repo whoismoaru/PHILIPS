@@ -405,7 +405,7 @@ export async function closeLadderV4(
   tokenIds: string[],
   cc: ChainCtx,
   opts: { dryRun: boolean },
-): Promise<{ dryRun?: boolean; txHash?: string; base: 'ETH' | 'USDG' | null; other?: string; sym0: string; sym1: string; baseOutWei: bigint; cashedOut?: string; unprotected?: string[] }> {
+): Promise<{ dryRun?: boolean; txHash?: string; base: 'ETH' | 'USDG' | null; other?: string; sym0: string; sym1: string; baseOutWei: bigint; cashedOut?: string; unprotected?: string[]; gone?: string[] }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
   const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
@@ -427,6 +427,31 @@ export async function closeLadderV4(
       : ((await cc.provider.getBalance(cc.wallet.address).catch(() => 0n)) as bigint);
   const beforeWei = await readBase();
 
+  // Leg yang SUDAH TAK ADA harus disaring dulu. BURN_POSITION pada id yang tak
+  // pernah/tak lagi ter-mint me-revert 'NOT_MINTED', dan karena ini SATU multicall
+  // seluruh batch ikut gagal — delapan leg tak bisa ditutup gara-gara satu id hantu.
+  // Hanya revert kepemilikan yang dianggap "hilang"; gagal baca lain dilempar,
+  // supaya RPC yang rewel tak pernah lagi terbaca sebagai "posisi tak ada".
+  const alive: string[] = [];
+  const gone: string[] = [];
+  for (const id of tokenIds) {
+    try {
+      await pm.ownerOf(id);
+      alive.push(id);
+    } catch (e) {
+      const m = (e as Error).message ?? '';
+      if (/NOT_MINTED|invalid token id|nonexistent/i.test(m)) gone.push(id);
+      else throw new Error(`Could not read v4 position #${id} (${m.slice(0, 80)}). Nothing was closed.`);
+    }
+  }
+  if (alive.length === 0) {
+    throw new Error(
+      `None of these ${tokenIds.length} legs exist on-chain, so there was nothing to close. ` +
+        'They no longer exist on-chain and have been dropped from tracking.',
+    );
+  }
+  tokenIds = alive;
+
   const actionBytes = [...tokenIds.map(() => BURN_POSITION), TAKE_PAIR];
   // Tiap leg punya rentangnya sendiri → lantainya dihitung per leg, bukan sekali.
   const legMins = await Promise.all(tokenIds.map((id) => burnMinsV4(cc, pm, id, pk)));
@@ -438,7 +463,7 @@ export async function closeLadderV4(
   const unlockData = coder.encode(['bytes', 'bytes[]'], [ethers.hexlify(new Uint8Array(actionBytes)), params]);
   const deadline = Math.floor(Date.now() / 1000) + 600;
   await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
-  if (opts.dryRun) return { dryRun: true, base, other: other ?? undefined, sym0, sym1, baseOutWei: 0n, unprotected: unprotectedIds };
+  if (opts.dryRun) return { dryRun: true, base, other: other ?? undefined, sym0, sym1, baseOutWei: 0n, unprotected: unprotectedIds, gone };
 
   const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline));
   const rc = await tx.wait();
@@ -462,7 +487,7 @@ export async function closeLadderV4(
   }
   const afterWei = await readBase();
   const baseOutWei = afterWei > beforeWei ? afterWei - beforeWei : 0n;
-  return { txHash: rc?.hash ?? tx.hash, base, other: other ?? undefined, sym0, sym1, baseOutWei, cashedOut, unprotected: unprotectedIds };
+  return { txHash: rc?.hash ?? tx.hash, base, other: other ?? undefined, sym0, sym1, baseOutWei, cashedOut, unprotected: unprotectedIds, gone };
 }
 
 // Cache hasil list v4 per chain (TTL pendek): banyak command (/status, /positions,

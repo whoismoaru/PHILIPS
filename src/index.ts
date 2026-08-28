@@ -4110,6 +4110,15 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
     );
     // Leg yang terpaksa di-burn tanpa lantai harga harus terlihat, bukan cuma di log.
     if (r.unprotected?.length) await ctx.reply(msg.esc(V4_UNPROTECTED_NOTE(r.unprotected.join(', #'))), html);
+    // Leg hantu (tak ada di chain) dibuang dari catatan — kalau dibiarkan, ia akan
+    // menggagalkan SETIAP percobaan tutup berikutnya dengan NOT_MINTED.
+    if (r.gone?.length) {
+      for (const id of r.gone) v4store.removeV4(id);
+      await ctx.reply(
+        msg.note(`${r.gone.length} leg no longer existed on-chain and were dropped from tracking.`),
+        html,
+      );
+    }
     // Kartu PnL untuk SELURUH ladder — yang disetor user memang satu ladder, bukan
     // 8 posisi terpisah. Dulu jalur ladder (v3 & v4) tak pernah mengirim kartu sama
     // sekali; hanya close posisi tunggal yang punya.
@@ -4134,6 +4143,12 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
     }
   } catch (err) {
     await recoverStrayWeth(cc, 'close v4 ladder').catch(() => {});
+    // Seluruh grup ternyata tak ada di chain → buang catatannya. Membiarkannya
+    // membuat tiap percobaan tutup berikutnya gagal dengan alasan yang sama.
+    if (/no longer exist on-chain/i.test((err as Error).message)) {
+      for (const l of legs) v4store.removeV4(l.tokenId);
+      invalidateV4ListCache();
+    }
     await ctx.reply(msg.msgError('close v4 ladder', (err as Error).message), html);
   } finally {
     for (const l of legs) closingInFlight.delete(`v4:${l.tokenId}`);
