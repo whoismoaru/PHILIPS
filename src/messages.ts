@@ -2186,21 +2186,21 @@ export function msgBridgeConfirm(o: {
   dryRun: boolean;
 }): string {
   return [
-    `🌉 ${bold('Review Bridge')}`,
+    bold('BRIDGE REVIEW'),
     '',
     `🔗 ${bold('Transaction Details :')}`,
-    `• Route: ${esc(o.fromLabel)} → ${esc(o.toLabel)}`,
-    `• You send: ${bold(o.inLabel)}`,
-    `• You receive ≈ ${bold(o.outLabel)}`,
-    ...(o.impactPct !== null ? [`• Value Impact: ${fmtPct(o.impactPct)}`] : []),
-    ...(o.feeUsd !== null ? [`• Relayer Fee: ${usdPlain(o.feeUsd)}`] : []),
-    ...(o.etaSec !== null ? [`• Estimated Time: ~${Math.max(1, Math.round(o.etaSec))}s`] : []),
+    `- Route: ${esc(o.fromLabel)} → ${esc(o.toLabel)}`,
+    `- You send: ${bold(o.inLabel)}`,
+    `- You receive ≈ ${bold(o.outLabel)}`,
+    ...(o.impactPct !== null ? [`- Value Impact: ${fmtPct(o.impactPct)}`] : []),
+    ...(o.feeUsd !== null ? [`- Relayer Fee: ${usdPlain(o.feeUsd)}`] : []),
+    ...(o.etaSec !== null ? [`- Estimated Time: ~${Math.max(1, Math.round(o.etaSec))}s`] : []),
     '',
     // Quote di-refresh saat konfirmasi; angka di atas jadi lantai minimumnya.
     italic(
       o.dryRun
-        ? '*DRY RUN — no transaction will be sent.'
-        : '*The quote is refreshed the moment you confirm; if the route moves against you, nothing is sent. Bridges cannot be reversed.',
+        ? '*DRY RUN, no transaction will be sent.'
+        : '*the quote is refreshed the moment you confirm, if the route moves against you, nothing is sent. Bridges cannot be reversed.',
     ),
   ].join('\n');
 }
