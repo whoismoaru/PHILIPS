@@ -14,6 +14,59 @@ import { config } from './config.js';
 export const bot = new Telegraf(config.telegram.botToken);
 
 /**
+ * Tanda kepemilikan di kaki SETIAP keluaran.
+ *
+ * Dipasang di lapisan TELEGRAM, bukan di ~90 fungsi pesan dan bukan pula di
+ * middleware ctx: ctx.reply, kartu monitor (bot.telegram.sendMessage langsung),
+ * dan watchdog semuanya bermuara di sini. Satu titik berarti pesan baru ikut
+ * dapat tanpa harus diingat, dan tak ada jalur yang terlewat.
+ */
+const SIGNATURE = '<i>Powered by Moaru</i>';
+const TG_TEXT_MAX = 4096;
+const TG_CAPTION_MAX = 1024;
+
+function sign(text: unknown, max: number): unknown {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  if (text.includes('Powered by Moaru')) return text; // edit berulang tak menumpuk
+  const tail = `\n\n${SIGNATURE}`;
+  // Batas Telegram: pesan yang kepanjangan DITOLAK seluruhnya, jadi lebih baik
+  // kehilangan tanda tangannya daripada kehilangan pesannya.
+  return text.length + tail.length > max ? text : text + tail;
+}
+
+{
+  const tg = bot.telegram as unknown as Record<string, (...a: any[]) => unknown>;
+  const wrapText = (name: string, argIndex: number, max: number) => {
+    const orig = tg[name]?.bind(tg);
+    if (!orig) return;
+    tg[name] = (...args: any[]) => {
+      args[argIndex] = sign(args[argIndex], max);
+      return orig(...args);
+    };
+  };
+  wrapText('sendMessage', 1, TG_TEXT_MAX);
+  wrapText('editMessageText', 3, TG_TEXT_MAX);
+  // Dokumen (kartu PnL, kalender) membawa teksnya di caption.
+  for (const [name, i] of [['sendDocument', 2], ['sendPhoto', 2]] as const) {
+    const orig = tg[name]?.bind(tg);
+    if (!orig) continue;
+    tg[name] = (...args: any[]) => {
+      const extra = args[i];
+      if (extra?.caption) args[i] = { ...extra, caption: sign(extra.caption, TG_CAPTION_MAX) };
+      return orig(...args);
+    };
+  }
+  const editMedia = tg.editMessageMedia?.bind(tg);
+  if (editMedia) {
+    tg.editMessageMedia = (...args: any[]) => {
+      const m = args[3];
+      if (m?.caption) args[3] = { ...m, caption: sign(m.caption, TG_CAPTION_MAX) };
+      return editMedia(...args);
+    };
+  }
+}
+
+/**
  * Nama tiap command yang benar-benar didaftarkan. Telegraf tak menyimpan daftar
  * ini, padahal tanpa daftar tak ada cara memeriksa menu Telegram sudah lengkap —
  * dan perintah yang hidup tapi absen dari menu praktis tak terlihat user.
