@@ -65,11 +65,9 @@ Send `/add_lp`, or just paste a token's contract address into the chat.
 concentrated the holders are, how deep the liquidity is, how old the pool is, and
 a simulated sell to catch honeypots.
 
-  The verdict is one of three :
-  - ✅ **Safe to LP**
-  - ⚠️ **Proceed with caution**
-  - 🚫 **Do not LP**, and this one **stops the wizard**. There is no button to
-  override it.
+  The card reports what it found and leaves the judgement to you. One case is not
+  left to you: a token that fails the hard checks **stops the wizard**, and there is
+  no button to override it.
 
 **Step 1. Pick a pool.** Up to three, ranked by liquidity and volume, gathered
 from the Uniswap gateway, Krystal, and on-chain scans.

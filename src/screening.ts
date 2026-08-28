@@ -515,23 +515,10 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     `- Sell Tax -> ${taxLine(g?.sellTaxPct ?? null)}`,
   );
 
-  // Verdict & flags TETAP ada: kartu ini mengganti tampilan, bukan peringatannya.
-  const risk = s.flags.filter((f) => f.level === 'BAHAYA' || f.level === 'HATI-HATI');
-  const icon = s.verdict === 'BAHAYA' ? '🚫' : s.verdict === 'HATI-HATI' ? '⚠️' : '✅';
-  const verdictText =
-    s.verdict === 'BAHAYA'
-      ? 'DO NOT LP (High Risk)'
-      : s.verdict === 'HATI-HATI'
-        ? 'PROCEED WITH CAUTION (Moderate Risk)'
-        : 'SAFE TO LP';
-  // Kartu bersih untuk token sehat; vonis TETAP dicetak begitu ada risiko. Menghapus
-  // baris ini sepenuhnya akan membuat satu-satunya keterangan risiko hilang dari
-  // layar — alur /add memang memblokir BAHAYA, tapi HATI-HATI cuma diperingatkan.
-  if (s.verdict !== 'AMAN') {
-    out.push('', `${icon} ${bold('PHILIPS Verdict:')} ${bold(verdictText)}`);
-    for (const f of risk.slice(0, 4)) out.push(`- ${esc(f.msg)}`);
-    if (s.verdict === 'HATI-HATI' && !risk.length) out.push('- Use a tighter range if you still want to LP.');
-  }
+  // Baris vonis DIHAPUS atas permintaan pemilik (28 Agu 2026): kartunya kini hanya
+  // menyajikan angka, penilaiannya diserahkan ke pembaca. `s.verdict` sendiri TETAP
+  // dihitung dan tetap dipakai alur /add untuk MEMBLOKIR token bervonis BAHAYA —
+  // yang hilang cuma tampilannya, bukan penjaganya.
 
   if (opts?.ca) out.push('', code(opts.ca));
 
