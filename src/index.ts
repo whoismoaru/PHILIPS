@@ -922,10 +922,28 @@ function finalizeClose(
  * terlanjur ter-mint saat alur open gagal di tengah jalan. Mengembalikan daftar
  * id terurut (urutan mint = urutan leg).
  */
-async function adoptStrayV4(cc: ReturnType<typeof getChain>, from: bigint): Promise<string[]> {
-  const to = await v4NextTokenId(cc).catch(() => null);
+async function adoptStrayV4(
+  cc: ReturnType<typeof getChain>,
+  from: bigint | null,
+  legs = 8,
+): Promise<string[]> {
+  // Pembacaan id DICOBA ULANG: 29 Agu 2026 RPC balas 503 tepat saat open ladder,
+  // sehingga `from` gagal dibaca DAN pemungutannya ikut menyerah — delapan posisi
+  // lahir di chain tanpa satu pun catatan, lalu lenyap dari /positions.
+  let to: bigint | null = null;
+  for (let i = 0; i < 3 && to === null; i++) {
+    to = await v4NextTokenId(cc).catch(() => null);
+    if (to === null) await sleep(700);
+  }
   if (to === null) return [];
-  return await v4OwnedIdsInRange(cc, from, to).catch(() => []);
+  // Tanpa `from` (pembacaan awal gagal), mundur satu jendela dari id terkini.
+  // Lebih longgar dari jumlah leg karena wallet lain ikut memakai counter yang sama.
+  const window = BigInt(legs * 4 + 32);
+  const start = from ?? (to > window ? to - window : 0n);
+  const ids = await v4OwnedIdsInRange(cc, start, to, 160).catch(() => []);
+  // Yang SUDAH tercatat bukan "stray" — memungutnya lagi akan menyeret posisi
+  // grup lain ke dalam grup baru.
+  return ids.filter((id) => !v4store.getV4(id));
 }
 
 /** Kartu detail satu posisi v4 (nilai + range% + PnL bila dikelola bot) + tombol. */
@@ -2401,7 +2419,7 @@ bot.action('addok', async (ctx) => {
         ids = (await openLadderV4(cc, pk, selected.baseIsCurrency0!, legs, { dryRun: false })).tokenIds;
       } catch (e) {
         // Gagal ≠ tak jadi. Pungut dulu yang terlanjur ter-mint, baru lempar.
-        const stray = idBefore !== null ? await adoptStrayV4(cc, idBefore) : [];
+        const stray = await adoptStrayV4(cc, idBefore, legs.length);
         if (stray.length === 0) throw e;
         ids = stray;
         await ctx.reply(
@@ -2410,8 +2428,8 @@ bot.action('addok', async (ctx) => {
         );
       }
       // Sukses tapi jumlahnya kurang → sisanya juga dipungut lewat jalur yang sama.
-      if (idBefore !== null && ids.length < legs.length) {
-        const stray = await adoptStrayV4(cc, idBefore);
+      if (ids.length < legs.length) {
+        const stray = await adoptStrayV4(cc, idBefore, legs.length);
         if (stray.length > ids.length) ids = stray;
       }
       const r = { tokenIds: ids };
