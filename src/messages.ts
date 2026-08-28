@@ -2285,7 +2285,7 @@ export function msgSendAmount(o: {
     `💰 ${bold('Balance:')} ${esc(o.balance)}`,
     `✅ ${bold('Sendable:')} ${bold(o.usable)}`,
     '',
-    `Tap a percentage, or type the exact amount of ${bold(esc(o.symbol))} in the chat.`,
+    `Tap a percentage, type an amount like ${code('0.5')}, or a percentage like ${code('12.5%')}.`,
   ];
   if (o.nativeReserve) out.push('', note('a gas reserve is kept aside, so 100% still leaves enough to pay for the transfer'));
   if (o.isContract) out.push('', `⚠️ ${italic('the destination is a contract on this chain')}`);

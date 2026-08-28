@@ -4,6 +4,14 @@ import { config } from '../config.js';
 import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset } from '../core.js';
 import { CHAINS, isStableBase, type ChainCtx, type BaseAsset } from '../chains.js';
 import { ERC20_ABI } from '../chain.js';
+
+/**
+ * ERC20_ABI bersama sengaja hanya memuat baca + approve — bot ini nyaris tak pernah
+ * mentransfer token langsung, semuanya lewat router. /send yang pertama butuh
+ * `transfer`, jadi ABI-nya diperluas DI SINI saja, bukan di ABI bersama yang dipakai
+ * puluhan pemanggil lain.
+ */
+const ERC20_SEND_ABI = [...ERC20_ABI, 'function transfer(address to, uint256 amount) returns (bool)'];
 import { gasBuffer } from '../uniswap.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
@@ -193,15 +201,33 @@ export async function handleSendAmount(ctx: any, raw: string): Promise<boolean> 
     return true;
   }
   const cc = CHAINS[flow.chainKey!]!;
+  // "0.1%" itu PERSEN, bukan nominal — dan tombolnya cuma menawarkan angka bulat.
+  // parseAmt menolaknya sebagai nominal tak sah; tanpa cabang ini user cuma dapat
+  // "enter a valid amount" tanpa tahu bahwa yang salah adalah tanda persennya.
+  const pctTyped = raw.trim().match(/^(\d+(?:\.\d+)?)\s*%$/);
+  const usableNow = await sendableWei(cc, flow);
+  if (pctTyped) {
+    const pct = Number(pctTyped[1]);
+    if (!(pct > 0 && pct <= 100)) {
+      await ctx.reply(msg.msgError('send', 'Percentage must be between 0 and 100.'), html);
+      return true;
+    }
+    const w = pct >= 100 ? usableNow : (usableNow * BigInt(Math.round(pct * 1000))) / 100_000n;
+    if (w <= 0n) {
+      await ctx.reply(msg.msgError('send', 'That percentage rounds to zero.'), html);
+      return true;
+    }
+    await confirm(ctx, flow, w);
+    return true;
+  }
   const wei = parseAmt(raw, flow.asset.decimals);
   if (wei === null) {
     await ctx.reply(msg.msgInvalidAmount(), html);
     return true;
   }
-  const usable = await sendableWei(cc, flow);
-  if (wei <= 0n || wei > usable) {
+  if (wei <= 0n || wei > usableNow) {
     await ctx.reply(
-      msg.msgError('send', `Amount exceeds what you can send (${fmtAmt(usable, flow.asset.decimals)} ${flow.asset.symbol}).`),
+      msg.msgError('send', `Amount exceeds what you can send (${fmtAmt(usableNow, flow.asset.decimals)} ${flow.asset.symbol}).`),
       html,
     );
     return true;
@@ -250,7 +276,7 @@ bot.action('sndgo', async (ctx) => {
     }
     await ctx.editMessageText(msg.msgProgress(`sending ${label} on ${cc.label}…`), html).catch(() => {});
     const tx = asset.address
-      ? await new ethers.Contract(asset.address, ERC20_ABI, cc.wallet).transfer(to, amountWei)
+      ? await new ethers.Contract(asset.address, ERC20_SEND_ABI, cc.wallet).transfer(to, amountWei)
       : await (cc.wallet as ethers.Wallet).sendTransaction({ to, value: amountWei });
     const rc = await tx.wait();
     const hash = rc?.hash ?? tx.hash;

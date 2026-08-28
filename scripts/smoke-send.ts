@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as p from '../src/pctPresets.js';
+import { ERC20_ABI } from '../src/chain.js';
 
 /**
  * /send adalah jalur satu arah tanpa pembatalan, jadi penjaganya harus ada:
@@ -39,4 +40,25 @@ assert.ok(
 );
 assert.ok(!/=== \(addr \?\? 'native'\)[\s\S]{0,40}getAddress/.test(src), 'callback dinormalkan checksum lalu dibanding mentah');
 
-console.log('OK — send: alamat divalidasi & dibanding tanpa peduli kapital, gas disisihkan, kirim dikunci.');
+// ERC20_ABI bersama TIDAK punya transfer (bot ini biasanya lewat router), jadi
+// /send wajib memakai ABI yang memuatnya. Tanpa ini: "transfer is not a function"
+// baru muncul SETELAH user menekan Confirm. Terjadi 28 Agu 2026.
+const fnNames = (abi: readonly string[]) =>
+  new ethers.Interface(abi as string[]).fragments.filter((f) => f.type === 'function').map((f: any) => f.name);
+const sendAbi = [...ERC20_ABI, 'function transfer(address to, uint256 amount) returns (bool)'];
+assert.ok(!fnNames(ERC20_ABI).includes('transfer'), 'ERC20_ABI berubah — periksa ulang asumsi /send');
+assert.ok(fnNames(sendAbi).includes('transfer'), 'ABI /send tak punya transfer');
+assert.ok(/ERC20_SEND_ABI/.test(src), '/send tak memakai ABI ber-transfer');
+assert.ok(!/ERC20_ABI, cc\.wallet\)\.transfer/.test(src), 'masih memanggil transfer lewat ABI tanpa transfer');
+
+// "0.1%" harus terbaca sebagai PERSEN, bukan ditolak sebagai nominal tak sah.
+assert.ok(/\^\(\\d\+\(\?:\\\.\\d\+\)\?\)\\s\*%\$/.test(src), '/send tak mengenali nominal berbentuk persen');
+const usable = 208_670_000n;
+const calc = (pct: number) => (pct >= 100 ? usable : (usable * BigInt(Math.round(pct * 1000))) / 100_000n);
+for (const pct of [0.1, 12.5, 33.3, 99.9, 100]) {
+  const w = calc(pct);
+  assert.ok(w > 0n, `${pct}% membulat jadi nol`);
+  assert.ok(w <= usable, `${pct}% melebihi saldo`);
+}
+
+console.log('OK — send: alamat & ABI benar, persen ketikan diterima, gas disisihkan.');
