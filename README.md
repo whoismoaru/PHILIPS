@@ -46,7 +46,7 @@ Telegram id in `.env` is wrong. Only that one account can use the bot.
 The message is deleted from the chat immediately, and the key is stored encrypted
 on your server (`data/keystore.json`, scrypt + AES, file mode 600).
 
-**3.** Send `/status`. Your balances should appear. If they do, the bot can read
+**3.** Send `/portfolio`. Your balances should appear. If they do, the bot can read
 the chain correctly.
 
 **4.** Try `/add_lp` and walk through the wizard without confirming. The bot starts
@@ -112,7 +112,7 @@ depositing, and the estimated gas. Nothing is signed until you tap confirm.
 | Command | What it does |
 |---|---|
 | `/start` · `/help` | Menu and bot mode |
-| `/status` | Total equity, and what you hold on each chain |
+| `/portfolio` | Total equity, and what you hold on each chain |
 | `/positions` | Your live positions; tap one for full detail |
 | `/pnl` | Profit recap from closed trades, as a picture card |
 | `/add_lp` | Open a position (or `/add_lp <contract address>`) |
@@ -181,7 +181,7 @@ Your liquidity is active and earning fees. Fees keep accruing as long as VYNEX
 stays inside this range.
 ```
 
-`/status` answers the other question, where your money actually is:
+`/portfolio` answers the other question, where your money actually is:
 
 ```
 PORTFOLIO

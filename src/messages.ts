@@ -212,7 +212,7 @@ function cockpitLines(dryRun: boolean): string[] {
   return [
     `📊 ${bold('View & Analytics :')}`,
     ...grp([
-      ['/status', 'Balance, equity & wallet breakdown'],
+      ['/portfolio', 'Balance, equity & wallet breakdown'],
       ['/positions', 'Live monitoring of active LPs'],
       ['/pnl', 'PnL recap & closed-trade journal'],
       ['/alerts', 'Position notification settings'],
@@ -1521,7 +1521,7 @@ export function msgPlanStep(opts: {
     '',
   );
   if (opts.costFailed) {
-    body.push(`🟡 ${bold('Balance not verified')} — cost RPC failed. Check /status first.`);
+    body.push(`🟡 ${bold('Balance not verified')} — cost RPC failed. Check /portfolio first.`);
   } else if (opts.shortLabel) {
     body.push(`🔴 ${bold('Insufficient balance')} — short by ${bold(opts.shortLabel)}. Top up, then retry.`);
   }
@@ -2227,7 +2227,7 @@ export function msgBridgeDone(o: {
   if (o.dryRun) out.push('', note('DRY RUN — no transaction was sent.'));
   out.push(
     '',
-    italic('Funds usually arrive within seconds. Check /status once the destination chain updates.'),
+    italic('Funds usually arrive within seconds. Check /portfolio once the destination chain updates.'),
     '',
     note(nowWib()),
   );

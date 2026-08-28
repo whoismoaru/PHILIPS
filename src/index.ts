@@ -84,7 +84,7 @@ import { swapExactInBest, previewSwapOut } from './swapRoute.js';
 
 /**
  * PHILIPS LP Bot — otak utama.
- * Command aktif: /start /help /status /positions /history /pnl /explore /add /stop
+ * Command aktif: /start /help /portfolio /positions /history /pnl /explore /add /stop
  * /buy /sell /unwrap
  * Screening token berjalan otomatis di dalam /add.
  */
@@ -100,7 +100,7 @@ import { swapExactInBest, previewSwapOut } from './swapRoute.js';
  */
 // Berapa kali maksimum ulangi swap saat cash-out sampai token benar-benar habis.
 const MAX_CLOSE_SWEEP = 4;
-/** Max token hold ditampilkan di /status (setelah filter saldo > 0). */
+/** Max token hold ditampilkan di /portfolio (setelah filter saldo > 0). */
 const SELL_HOLDINGS_CAP = 12; // maks token di daftar /sell
 /** Max kandidat CA dicek balance (jurnal + posisi). */
 const HOLDINGS_CAND_MAX = 20;
@@ -446,7 +446,7 @@ bot.action('howto:add', async (ctx) => {
 // Grid 2 kolom (thumb-friendly, perbaikan.md §1.3); aksi uang di baris sendiri.
 const helpKeyboard = () =>
   Markup.inlineKeyboard([
-    [Markup.button.callback('💰 Balance & Equity', 'status'), Markup.button.callback('📊 Active LPs', 'positions')],
+    [Markup.button.callback('💰 Portfolio', 'portfolio'), Markup.button.callback('📊 Active LPs', 'positions')],
     [Markup.button.callback('🧾 PnL & Journal', 'pnl')],
     [Markup.button.callback('⛔ Emergency Close All', 'closeall_confirm')],
   ]);
@@ -458,7 +458,7 @@ bot.command('help', (ctx) =>
 // Tombol inline /help → jalankan command terkait (ctx.reply bekerja dari callback).
 bot.action('portfolio', async (ctx) => {
   await ctx.answerCbQuery();
-  return renderStatus(ctx, false); // /portfolio dilebur ke kartu uang /status
+  return renderStatus(ctx, false);
 });
 bot.action('pnl', async (ctx) => {
   await ctx.answerCbQuery();
@@ -586,6 +586,9 @@ async function renderStatus(ctx: any, edit: boolean) {
   }
 }
 
+bot.command('portfolio', (ctx) => renderStatus(ctx, false));
+// Nama lama tetap hidup: yang sudah terbiasa mengetik /status tak menabrak dinding.
+// Tak dipasang di menu — satu nama saja yang ditawarkan.
 bot.command('status', (ctx) => renderStatus(ctx, false));
 
 bot.action('refresh:status', async (ctx) => {
@@ -4614,7 +4617,7 @@ const BOT_COMMANDS = [
   { command: 'start', description: 'Welcome card & bot status' },
   { command: 'help', description: 'Menu, bot mode & command list' },
   // Pantau
-  { command: 'status', description: 'Portfolio, balances & network' },
+  { command: 'portfolio', description: 'Portfolio, balances & network' },
   { command: 'positions', description: 'Active LP positions (live)' },
   { command: 'pnl', description: 'Lifetime PnL summary' },
   // Riset
@@ -4634,9 +4637,15 @@ const BOT_COMMANDS = [
 ] as const;
 
 /** Menu vs command terdaftar. Selisihnya dilaporkan ke log, tidak mematikan bot. */
+/**
+ * Alias yang SENGAJA tak dipasang di menu. Penjaga menu tetap galak untuk sisanya —
+ * daftar ini agar alias yang disengaja tak terbaca sebagai command yang lupa didaftar.
+ */
+const HIDDEN_COMMANDS = new Set(['status']); // nama lama /portfolio
+
 function assertMenuComplete(): void {
   const inMenu = new Set(BOT_COMMANDS.map((c) => c.command));
-  const missing = [...registeredCommands].filter((c) => !inMenu.has(c as never));
+  const missing = [...registeredCommands].filter((c) => !inMenu.has(c as never) && !HIDDEN_COMMANDS.has(c));
   const stale = [...inMenu].filter((c) => !registeredCommands.has(c));
   if (missing.length) console.error('[menu] command hidup tapi TIDAK ada di menu:', missing.join(', '));
   if (stale.length) console.error('[menu] ada di menu tapi TIDAK terdaftar:', stale.join(', '));
