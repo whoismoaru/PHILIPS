@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { bold, code, esc, italic, nowWib } from './messages.js';
 import { getChain, basesFor, type ChainCtx } from './chains.js';
+import { EXPLORER_HEADERS } from './chain.js';
 import { gmgnExtra, gmgnPrice, type GmgnExtra } from './gmgn.js';
 
 const QUOTER_ABI = [
@@ -142,7 +143,7 @@ async function fetchJson(url: string): Promise<any | null> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 10_000); // cap worst-case; fail-open (null) sudah ditangani
   try {
-    const res = await fetch(url, { signal: ctrl.signal });
+    const res = await fetch(url, { headers: EXPLORER_HEADERS, signal: ctrl.signal });
     if (!res.ok) return null;
     const v = await res.json();
     _jsonCache.set(url, { t: Date.now(), v });

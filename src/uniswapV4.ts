@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { TickMath, nearestUsableTick } from '@uniswap/v3-sdk';
 import { isStableBase, type ChainCtx } from './chains.js';
+import { EXPLORER_HEADERS } from './chain.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { sendTxNonceSafe, mapLimit } from './core.js';
 import { allV4 } from './v4store.js';
@@ -203,7 +204,7 @@ async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
       for (let page = 0; url && page < 10; page++) {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), attempt === 0 ? 3000 : 8000);
-        const res = await fetch(url, { headers: { accept: 'application/json' }, signal: ctrl.signal }).finally(() =>
+        const res = await fetch(url, { headers: EXPLORER_HEADERS, signal: ctrl.signal }).finally(() =>
           clearTimeout(t),
         );
         if (!res.ok) throw new Error(`blockscout HTTP ${res.status}`);

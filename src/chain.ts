@@ -97,3 +97,16 @@ export async function approveExact(
   hashes.push(tx.hash);
   return hashes;
 }
+
+/**
+ * Header untuk API explorer (Blockscout).
+ *
+ * Tanpa User-Agent, Blockscout Robinhood membalas **403** — bot-protection, bukan
+ * indexer lambat. Selama berbulan-bulan itu terbaca sebagai "indexer bermasalah"
+ * dan membuat /positions memasang peringatan daftar tak lengkap. Terbukti 29 Agu
+ * 2026: permintaan yang sama, satu header ditambah, HTTP 403 → 200.
+ */
+export const EXPLORER_HEADERS = {
+  accept: 'application/json',
+  'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+};

@@ -20,7 +20,7 @@ import { renderProfitCard } from './card.js';
 import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
 import { config, EXIT_CONFIG } from './config.js';
-import { provider, ERC20_ABI } from './chain.js';
+import { provider, ERC20_ABI, EXPLORER_HEADERS } from './chain.js';
 import { retryOnce } from './retry.js';
 import * as walletStore from './walletStore.js';
 import {
@@ -3374,7 +3374,7 @@ async function bsFetch(url: string): Promise<any | null> {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
-    const r = await fetch(url, { signal: ctrl.signal });
+    const r = await fetch(url, { headers: EXPLORER_HEADERS, signal: ctrl.signal });
     clearTimeout(timer);
     return r.ok ? await r.json() : null;
   } catch {
