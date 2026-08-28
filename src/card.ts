@@ -227,10 +227,11 @@ export type CalendarCardOpts = {
 /**
  * Kalender PnL 30 hari — TANPA artwork, murni data.
  *
- * Warna kotak = arah hari itu, kepekatan = besarnya relatif terhadap hari terkuat.
- * Skala relatif, bukan absolut: satu hari besar tak boleh membuat sisanya rata abu.
- * Hari tanpa trade digambar sebagai kotak kosong bergaris, bukan hijau/merah pucat —
- * "tak ada trade" bukan "impas".
+ * Tiga lapis supaya tak jadi kisi datar: kisi kalender SEJAJAR HARI (kolom = hari
+ * dalam minggu, seperti kalender sungguhan), kurva kumulatif di kiri bawah yang
+ * memperlihatkan bentuk perjalanannya, dan cincin penanda di hari terbaik & terburuk.
+ * Kepekatan kotak relatif terhadap hari terkuat: skala absolut membuat satu hari
+ * besar meratakan sisanya jadi abu-abu.
  */
 export async function renderCalendarCard(o: CalendarCardOpts, scale = 2): Promise<Buffer> {
   ensureFonts();
@@ -244,8 +245,8 @@ export async function renderCalendarCard(o: CalendarCardOpts, scale = 2): Promis
   g.addColorStop(1, COL.bg1);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
-  const glow = ctx.createRadialGradient(150, 120, 10, 150, 120, 640);
-  glow.addColorStop(0, accent + '1E');
+  const glow = ctx.createRadialGradient(140, 140, 10, 140, 140, 680);
+  glow.addColorStop(0, accent + '1C');
   glow.addColorStop(1, accent + '00');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, W, H);
@@ -253,57 +254,121 @@ export async function renderCalendarCard(o: CalendarCardOpts, scale = 2): Promis
   const X = 76;
   ctx.fillStyle = COL.muted;
   ctx.font = '19px PhSansB';
-  ctx.fillText('PHILIPS', X, 78);
+  ctx.fillText('PHILIPS', X, 76);
   ctx.fillStyle = COL.text;
-  ctx.font = '29px PhSansB';
-  ctx.fillText(o.title, X, 120);
+  ctx.font = '28px PhSansB';
+  ctx.fillText(o.title, X, 116);
   ctx.fillStyle = COL.muted;
-  ctx.font = '17px PhSans';
-  ctx.fillText(o.subtitle, X, 148);
+  ctx.font = '16px PhSans';
+  ctx.fillText(o.subtitle, X, 142);
 
-  // Angka besar di kiri; kalender mengisi sisi kanan.
   ctx.fillStyle = accent;
-  ctx.font = '19px PhSansB';
-  ctx.fillText(o.positive ? 'NET PROFIT' : 'NET LOSS', X, 206);
-  ctx.fillRect(X, 214, ctx.measureText(o.positive ? 'NET PROFIT' : 'NET LOSS').width, 2);
+  ctx.font = '18px PhSansB';
+  const word = o.positive ? 'NET PROFIT' : 'NET LOSS';
+  ctx.fillText(word, X, 194);
+  ctx.fillRect(X, 202, ctx.measureText(word).width, 2);
   const sp = o.netLabel.indexOf(' ');
   const num = sp < 0 ? o.netLabel : o.netLabel.slice(0, sp);
   const unit = sp < 0 ? '' : o.netLabel.slice(sp + 1);
-  let npx = 76;
+  let npx = 70;
   ctx.font = `${npx}px PhSansB`;
-  while (npx > 36 && ctx.measureText(num).width > 300) {
+  while (npx > 34 && ctx.measureText(num).width > 300) {
     npx -= 3;
     ctx.font = `${npx}px PhSansB`;
   }
-  ctx.fillText(num, X - 2, 292);
+  ctx.fillText(num, X - 2, 274);
   if (unit) {
     const nw = ctx.measureText(num).width;
     ctx.font = `${Math.round(npx * 0.42)}px PhSansB`;
-    ctx.fillText(unit, X - 2 + nw + 12, 292);
+    ctx.fillText(unit, X - 2 + nw + 12, 274);
   }
 
-  // Statistik ringkas di bawah angka.
   o.stats.slice(0, 4).forEach((st, i) => {
     const sx = X + (i % 2) * 190;
-    const sy = 372 + Math.floor(i / 2) * 74;
+    const sy = 330 + Math.floor(i / 2) * 66;
     ctx.fillStyle = COL.muted;
-    ctx.font = '14px PhSansB';
+    ctx.font = '13px PhSansB';
     ctx.fillText(st.label.toUpperCase(), sx, sy);
     ctx.fillStyle = COL.text;
-    ctx.font = '23px PhSansB';
-    ctx.fillText(st.value, sx, sy + 30);
+    ctx.font = '22px PhSansB';
+    ctx.fillText(st.value, sx, sy + 28);
   });
 
-  // ── Kalender: 6 kolom × 5 baris, urut tanggal, terbaru di kanan-bawah ──
-  const COLS = 6;
-  const CELL = 62;
-  const GAP = 10;
-  const gx = W - 76 - (COLS * CELL + (COLS - 1) * GAP);
+  // ── Kurva kumulatif: bentuk perjalanan, bukan cuma titik-titik harian ──
+  {
+    const cx = X;
+    const cy = 486;
+    const cw = 372;
+    const ch = 78;
+    let run = 0;
+    const cum = o.days.map((d) => (run += d.net));
+    const lo = Math.min(0, ...cum);
+    const hi = Math.max(0, ...cum);
+    const span = hi - lo || 1;
+    const px = (i: number) => cx + (i / Math.max(1, o.days.length - 1)) * cw;
+    const py = (v: number) => cy + ch - ((v - lo) / span) * ch;
+
+    ctx.strokeStyle = COL.line;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, py(0));
+    ctx.lineTo(cx + cw, py(0));
+    ctx.stroke();
+
+    const area = ctx.createLinearGradient(0, cy, 0, cy + ch);
+    area.addColorStop(0, accent + '3A');
+    area.addColorStop(1, accent + '00');
+    ctx.beginPath();
+    ctx.moveTo(px(0), py(0));
+    cum.forEach((v, i) => ctx.lineTo(px(i), py(v)));
+    ctx.lineTo(px(cum.length - 1), py(0));
+    ctx.closePath();
+    ctx.fillStyle = area;
+    ctx.fill();
+
+    ctx.beginPath();
+    cum.forEach((v, i) => (i === 0 ? ctx.moveTo(px(i), py(v)) : ctx.lineTo(px(i), py(v))));
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(px(cum.length - 1), py(cum[cum.length - 1] ?? 0), 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = COL.muted;
+    ctx.font = '12px PhSansB';
+    ctx.fillText('CUMULATIVE', cx, cy - 12);
+  }
+
+  // ── Kisi kalender: kolom = hari dalam minggu, seperti kalender sungguhan ──
+  const CELL = 64;
+  const GAP = 8;
+  const COLS = 7;
+  const gw = COLS * CELL + (COLS - 1) * GAP;
+  const gx = W - 76 - gw;
   const gy = 168;
+  const WD = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  ctx.fillStyle = COL.muted;
+  ctx.font = '13px PhSansB';
+  WD.forEach((w, i) => {
+    const x = gx + i * (CELL + GAP);
+    ctx.fillText(w, x + CELL / 2 - ctx.measureText(w).width / 2, gy - 12);
+  });
+
+  // Senin = 0. Hari pertama digeser ke kolom hari-nya sendiri.
+  const wd = (d: Date) => (d.getDay() + 6) % 7;
+  const lead = o.days.length ? wd(o.days[0].date) : 0;
   const peak = Math.max(...o.days.map((d) => Math.abs(d.net)), 0);
+  const traded = o.days.filter((d) => d.trades > 0);
+  const best = traded.reduce<null | (typeof o.days)[number]>((a, d) => (a === null || d.net > a.net ? d : a), null);
+  const worst = traded.reduce<null | (typeof o.days)[number]>((a, d) => (a === null || d.net < a.net ? d : a), null);
+
   o.days.forEach((d, i) => {
-    const x = gx + (i % COLS) * (CELL + GAP);
-    const y = gy + Math.floor(i / COLS) * (CELL + GAP);
+    const slot = lead + i;
+    const x = gx + (slot % COLS) * (CELL + GAP);
+    const y = gy + Math.floor(slot / COLS) * (CELL + GAP);
     if (d.trades === 0) {
       ctx.fillStyle = COL.card;
       roundRect(ctx, x, y, CELL, CELL, 10);
@@ -313,46 +378,59 @@ export async function renderCalendarCard(o: CalendarCardOpts, scale = 2): Promis
       roundRect(ctx, x + 0.5, y + 0.5, CELL - 1, CELL - 1, 10);
       ctx.stroke();
     } else {
-      // 0.22 lantai kepekatan: hari bertrade kecil tetap harus terbaca sebagai warna.
-      const a = peak > 0 ? 0.22 + 0.78 * Math.min(1, Math.abs(d.net) / peak) : 0.5;
+      // Lantai 0.25: hari bertrade kecil tetap harus terbaca sebagai warna.
+      const a = peak > 0 ? 0.25 + 0.75 * Math.min(1, Math.abs(d.net) / peak) : 0.6;
       ctx.fillStyle = (d.net >= 0 ? COL.green : COL.red) + Math.round(a * 255).toString(16).padStart(2, '0');
       roundRect(ctx, x, y, CELL, CELL, 10);
       ctx.fill();
     }
+    // Cincin di hari terbaik & terburuk — dua titik yang paling sering dicari.
+    if (d.trades > 0 && (d === best || d === worst)) {
+      ctx.strokeStyle = COL.text;
+      ctx.lineWidth = 2;
+      roundRect(ctx, x - 3, y - 3, CELL + 6, CELL + 6, 13);
+      ctx.stroke();
+    }
     ctx.fillStyle = d.trades === 0 ? COL.muted : '#0B0E14';
     ctx.font = '15px PhSansB';
     const label = String(d.date.getDate());
-    ctx.fillText(label, x + CELL / 2 - ctx.measureText(label).width / 2, y + CELL / 2 + 6);
+    ctx.fillText(label, x + CELL / 2 - ctx.measureText(label).width / 2, y + CELL / 2 + 1);
+    if (d.trades > 0) {
+      ctx.font = '11px PhSansB';
+      const t = `${d.trades}`;
+      ctx.fillText(t, x + CELL / 2 - ctx.measureText(t).width / 2, y + CELL / 2 + 18);
+    }
   });
 
-  // Legenda kecil di bawah kalender.
+  // Legenda.
+  const rows = Math.ceil((lead + o.days.length) / COLS);
+  const ly = gy + rows * (CELL + GAP) + 22;
+  const chip = (x: number, fill: string, outline: boolean, text: string) => {
+    ctx.fillStyle = fill;
+    roundRect(ctx, x, ly - 9, 16, 16, 5);
+    ctx.fill();
+    if (outline) {
+      ctx.strokeStyle = COL.line;
+      ctx.lineWidth = 1;
+      roundRect(ctx, x + 0.5, ly - 8.5, 15, 15, 5);
+      ctx.stroke();
+    }
+    ctx.fillStyle = COL.muted;
+    ctx.font = '13px PhSans';
+    ctx.fillText(text, x + 23, ly + 4);
+    return x + 23 + ctx.measureText(text).width + 22;
+  };
+  let lx = gx;
+  lx = chip(lx, COL.card, true, 'no trades');
+  lx = chip(lx, COL.red, false, 'loss');
+  lx = chip(lx, COL.green, false, 'profit');
   ctx.fillStyle = COL.muted;
-  ctx.font = '14px PhSans';
-  const legendY = gy + 5 * (CELL + GAP) + 26;
-  ctx.fillText('no trades', gx + 26, legendY + 5);
-  ctx.fillStyle = COL.card;
-  roundRect(ctx, gx, legendY - 8, 18, 18, 5);
-  ctx.fill();
-  ctx.strokeStyle = COL.line;
-  ctx.lineWidth = 1;
-  roundRect(ctx, gx + 0.5, legendY - 7.5, 17, 17, 5);
-  ctx.stroke();
-  const lossX = gx + 130;
-  ctx.fillStyle = COL.red;
-  roundRect(ctx, lossX, legendY - 8, 18, 18, 5);
-  ctx.fill();
-  ctx.fillStyle = COL.muted;
-  ctx.fillText('loss', lossX + 26, legendY + 5);
-  const winX = lossX + 90;
-  ctx.fillStyle = COL.green;
-  roundRect(ctx, winX, legendY - 8, 18, 18, 5);
-  ctx.fill();
-  ctx.fillStyle = COL.muted;
-  ctx.fillText('profit', winX + 26, legendY + 5);
+  ctx.font = '13px PhSans';
+  ctx.fillText('◻ best / worst', lx, ly + 4);
 
   ctx.fillStyle = COL.muted;
-  ctx.font = '17px PhMono';
-  ctx.fillText(o.footerLeft, X, H - 42);
+  ctx.font = '16px PhMono';
+  ctx.fillText(o.footerLeft, X, H - 40);
 
   return canvas.toBuffer('image/png');
 }

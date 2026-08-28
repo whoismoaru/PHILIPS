@@ -30,4 +30,12 @@ const buf = await renderCalendarCard({
 }, 1);
 assert.ok(buf.length > 5000, 'kartu kalender kosong / gagal render');
 
-console.log('OK — kalender 30 hari: bucket harian benar, kartu terender tanpa artwork.');
+// Gabungan lintas chain: satuan tanpa kurs DILEWATI dan dihitung, bukan dianggap 0.
+const all = journal.dailyAllUsd(() => 1, 30);
+assert.equal(all.days.length, 30);
+assert.equal(all.skipped, 0, 'dengan kurs lengkap tak boleh ada yang dilewati');
+const none = journal.dailyAllUsd(() => null, 30);
+assert.equal(none.days.reduce((a, d) => a + d.trades, 0), 0, 'tanpa kurs, tak ada trade yang boleh masuk');
+assert.ok(none.skipped >= 0 && Number.isInteger(none.skipped), 'jumlah yang dilewati harus dilaporkan');
+
+console.log('OK — kalender 30 hari: bucket harian benar, gabungan USD melewatkan yang tanpa kurs.');

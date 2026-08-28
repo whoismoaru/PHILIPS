@@ -2,6 +2,7 @@ import { Markup, Input } from 'telegraf';
 import { config } from '../config.js';
 import { bot, html } from '../core.js';
 import { CHAINS } from '../chains.js';
+import { getEthUsd } from '../screening.js';
 import { renderProfitCard, renderCalendarCard } from '../card.js';
 import * as journal from '../journal.js';
 import * as msg from '../messages.js';
@@ -39,9 +40,32 @@ const chainLabel = (key: string): string =>
 function pnlChains(): Array<{ key: string; label: string; trades: number }> {
   const hist = new Map(journal.chainsWithHistory().map((c) => [c.key, c.trades]));
   const keys = new Set<string>([...Object.keys(CHAINS), ...hist.keys()]);
-  return [...keys]
+  const per = [...keys]
     .map((key) => ({ key, label: chainLabel(key), trades: hist.get(key) ?? 0 }))
     .sort((a, b) => b.trades - a.trades || a.label.localeCompare(b.label));
+  // Gabungan semua chain di paling atas — pertanyaan pertama biasanya "totalnya berapa".
+  const total = per.reduce((a, c) => a + c.trades, 0);
+  return total > 0 ? [{ key: ALL, label: 'All chains', trades: total }, ...per] : per;
+}
+
+/** Kunci semu untuk gabungan lintas chain. */
+const ALL = 'all';
+
+/**
+ * Kurs USD tiap satuan buku. Stablecoin ≈ $1; native dihargai lewat wrapped-native
+ * CHAIN-NYA SENDIRI (BNB pakai WBNB, HYPE pakai WHYPE) — memakai harga ETH untuk
+ * semuanya pernah membuat nilai LP HyperEVM 30x lipat.
+ */
+async function usdRates(): Promise<Map<string, number | null>> {
+  const m = new Map<string, number | null>();
+  for (const cc of Object.values(CHAINS)) {
+    for (const b of cc.bases) {
+      const unit = journal.unitOf(cc.key, b.kind);
+      if (m.has(unit)) continue;
+      m.set(unit, b.kind === 'weth' ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1);
+    }
+  }
+  return m;
 }
 
 /** Baris tombol, 2 per baris. */
@@ -115,7 +139,7 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
     { label: 'loss', value: n2(main.grossLoss, main.unit) },
   ];
   return renderProfitCard({
-    pair: `${chainLabel(chain)} · ${journal.PERIODS[key].label}`,
+    pair: `${chain === ALL ? 'All chains' : chainLabel(chain)} · ${journal.PERIODS[key].label}`,
     positive: main.net >= 0,
     pnlBig: n2(main.net, main.unit),
     pnlPct: `${wr.toFixed(1)}% winrate`,
@@ -127,7 +151,7 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
 /** Caption ringkas — detailnya sudah terbaca di gambar (batas caption 1024 char). */
 function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStats): string {
   const p = journal.PERIODS[key];
-  const lines = [`📈 <b>PnL Recap</b> · <b>${chainLabel(chain)}</b> · ${p.label}`, ''];
+  const lines = [`📈 <b>PnL Recap</b> · <b>${chain === ALL ? 'All chains' : chainLabel(chain)}</b> · ${p.label}`, ''];
   if (s.books.length === 0) lines.push('<i>no closed trades with a measured result in this period.</i>');
   else
     for (const b of s.books)
@@ -151,11 +175,13 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
  */
 async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh = false) {
   const p = journal.PERIODS[key];
-  const s = journal.statsFor(p.ms === 0 ? 0 : Date.now() - p.ms, chain);
+  // chain === ALL → statsFor tanpa filter. Bukunya tetap dipisah per satuan, jadi
+  // tak ada USDG yang dijumlahkan dengan ETH; yang digabung cuma cakupan chain-nya.
+  const s = journal.statsFor(p.ms === 0 ? 0 : Date.now() - p.ms, chain === ALL ? undefined : chain);
   const kb = periodKb(chain, key);
   const text = msg.msgPnl({
     dryRun: config.safety.dryRun,
-    chainLabel: chainLabel(chain),
+    chainLabel: chain === ALL ? 'All chains' : chainLabel(chain),
     periodLabel: p.label,
     known: s.known,
     count: s.count,
@@ -191,9 +217,24 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
 bot.action(/^pnlcal:(\w+)$/, async (ctx: any) => {
   const chain = ctx.match[1];
   await ctx.answerCbQuery().catch(() => {});
+  const kb = periodKb(chain, '1m');
+  // Gabungan lintas chain HARUS dikonversi: satu kalender tak bisa memuat USDG,
+  // ETH, dan BNB sekaligus tanpa satuan bersama. Satuan yang kursnya tak terbaca
+  // dilewati dan jumlahnya disebut, bukan dibuang diam-diam.
+  if (chain === ALL) {
+    const rates = await usdRates();
+    const { days, skipped } = journal.dailyAllUsd((u) => rates.get(u) ?? null, 30);
+    return sendCalendar(ctx, kb, {
+      title: 'All chains · USD',
+      days,
+      fmt: (v: number) => `${v >= 0 ? '+' : ''}$${Math.abs(v).toFixed(2)}`,
+      unitLabel: 'USD',
+      note: skipped ? ` · ${skipped} skipped (no rate)` : '',
+      file: 'philips-pnl-calendar-all.png',
+    });
+  }
   const s = journal.statsFor(Date.now() - 30 * 24 * 3600_000, chain);
   const main = s.books[0];
-  const kb = periodKb(chain, '1m');
   if (!main) {
     return swap(ctx, msg.msgPnl({
       dryRun: config.safety.dryRun, chainLabel: chainLabel(chain), periodLabel: '1 Month',
@@ -202,36 +243,59 @@ bot.action(/^pnlcal:(\w+)$/, async (ctx: any) => {
     }), { ...html, ...kb });
   }
   const days = journal.dailyFor(chain, main.unit, 30);
-  const net = days.reduce((a, d) => a + d.net, 0);
-  const active = days.filter((d) => d.trades > 0);
-  const green = active.filter((d) => d.net > 0).length;
-  const best = active.reduce((a, d) => (a === null || d.net > a.net ? d : a), null as (typeof days)[number] | null);
-  const worst = active.reduce((a, d) => (a === null || d.net < a.net ? d : a), null as (typeof days)[number] | null);
-  const buf = await renderCalendarCard({
+  return sendCalendar(ctx, kb, {
     title: `${chainLabel(chain)} · ${main.unit}`,
-    subtitle: 'last 30 days',
     days,
-    unit: main.unit,
-    netLabel: n2(net, main.unit),
+    fmt: (v: number) => n2(v, main.unit).split(' ')[0],
+    unitLabel: main.unit,
+    note: '',
+    file: `philips-pnl-calendar-${chain}.png`,
+  });
+});
+
+/** Susun & kirim kartu kalender. Dipakai jalur per-chain maupun gabungan. */
+async function sendCalendar(
+  ctx: any,
+  kb: any,
+  o: {
+    title: string;
+    days: Array<{ date: Date; net: number; trades: number }>;
+    fmt: (v: number) => string;
+    unitLabel: string;
+    note: string;
+    file: string;
+  },
+) {
+  const net = o.days.reduce((a, d) => a + d.net, 0);
+  const active = o.days.filter((d) => d.trades > 0);
+  const green = active.filter((d) => d.net > 0).length;
+  const best = active.reduce<null | (typeof o.days)[number]>((a, d) => (a === null || d.net > a.net ? d : a), null);
+  const worst = active.reduce<null | (typeof o.days)[number]>((a, d) => (a === null || d.net < a.net ? d : a), null);
+  const buf = await renderCalendarCard({
+    title: o.title,
+    subtitle: 'last 30 days',
+    days: o.days,
+    unit: o.unitLabel,
+    netLabel: `${o.fmt(net)} ${o.unitLabel}`,
     positive: net >= 0,
     stats: [
-      { label: 'best day', value: best ? n2(best.net, main.unit).split(' ')[0] : '—' },
-      { label: 'worst day', value: worst ? n2(worst.net, main.unit).split(' ')[0] : '—' },
-      { label: 'active days', value: `${active.length} of 30` },
+      { label: 'best day', value: best ? o.fmt(best.net) : '—' },
+      { label: 'worst day', value: worst ? o.fmt(worst.net) : '—' },
+      { label: 'active days', value: `${active.length} of ${o.days.length}` },
       { label: 'green days', value: active.length ? `${green} of ${active.length}` : '—' },
     ],
-    footerLeft: `${active.reduce((a, d) => a + d.trades, 0)} trades · ${new Date().toISOString().slice(0, 10)}`,
+    footerLeft: `${active.reduce((a, d) => a + d.trades, 0)} trades${o.note} · ${new Date().toISOString().slice(0, 10)}`,
   }).catch(() => null);
   if (!buf) return ctx.reply(msg.msgError('pnl', 'Could not draw the calendar.'), html);
-  const doc = Input.fromBuffer(buf, `philips-pnl-calendar-${chain}.png`);
-  const caption = `🗓 <b>30-day calendar</b> · <b>${chainLabel(chain)}</b> · ${main.unit}`;
+  const doc = Input.fromBuffer(buf, o.file);
+  const caption = `🗓 <b>30-day calendar</b> · <b>${msg.esc(o.title)}</b>`;
   return ctx
     .editMessageMedia({ type: 'document', media: doc, caption, parse_mode: 'HTML' }, kb)
     .catch(async () => {
       await ctx.deleteMessage().catch(() => {});
       return ctx.replyWithDocument(doc, { caption, parse_mode: 'HTML', ...kb });
     });
-});
+}
 
 // Kembali ke pemilih chain — EDIT kartu yang sama, jangan kirim pesan baru.
 bot.action('pnlback', async (ctx: any) => {

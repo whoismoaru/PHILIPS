@@ -305,6 +305,47 @@ export function dailyFor(
   return buckets;
 }
 
+/**
+ * PnL harian 30 hari untuk SEMUA chain, disatukan dalam USD.
+ *
+ * Menjumlahkan USDG + ETH + BNB butuh kurs, jadi pemanggil menyerahkan `usdOf(unit)`.
+ * Satuan yang kursnya tak terbaca DILEWATI dan dihitung di `skipped` — lebih baik
+ * memberi tahu ada yang tak masuk daripada diam-diam menghasilkan total yang kurang.
+ */
+export function dailyAllUsd(
+  usdOf: (unit: string) => number | null,
+  days = 30,
+): { days: Array<{ date: Date; net: number; trades: number }>; skipped: number } {
+  const me = currentWallet();
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  const startMs = start.getTime();
+  const buckets = Array.from({ length: days }, (_, i) => {
+    const d = new Date(startMs);
+    d.setDate(d.getDate() + i);
+    return { date: d, net: 0, trades: 0 };
+  });
+  let skipped = 0;
+  for (const e of read(Number.MAX_SAFE_INTEGER)) {
+    if ((e.closedAt ?? 0) < startMs) continue;
+    if (me && e.wallet !== me) continue;
+    if (e.resultEthWei === undefined || BigInt(e.resultEthWei) === 0n) continue;
+    const rate = usdOf(unitOf(e.chain, e.baseKind));
+    if (rate === null) {
+      skipped++;
+      continue;
+    }
+    const d = new Date(e.closedAt);
+    d.setHours(0, 0, 0, 0);
+    const i = Math.round((d.getTime() - startMs) / 86_400_000);
+    if (i < 0 || i >= days) continue;
+    buckets[i].net += e.pnlEth * rate;
+    buckets[i].trades += 1;
+  }
+  return { days: buckets, skipped };
+}
+
 export function chainsWithHistory(): Array<{ key: string; trades: number }> {
   const me = currentWallet();
   const n = new Map<string, number>();
