@@ -123,9 +123,12 @@ bot.action(/^snd:(\w+):(native|0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const cc = CHAINS[ctx.match[1]];
   if (!cc) return ctx.answerCbQuery('Chain unavailable.');
   await ctx.answerCbQuery();
-  const addr = ctx.match[2] === 'native' ? null : ethers.getAddress(ctx.match[2]);
+  // Bandingkan alamat huruf-kecil. Alamat base di chains.ts tak seragam kapitalnya
+  // (USDG Robinhood tersimpan lowercase, sisanya checksummed), jadi membandingkan
+  // string apa adanya membuat aset yang jelas-jelas ada terbaca "hilang".
+  const addr = ctx.match[2] === 'native' ? null : ctx.match[2].toLowerCase();
   const list = await assetsOn(cc).catch(() => []);
-  const a = list.find((x) => (x.address ?? 'native') === (addr ?? 'native'));
+  const a = list.find((x) => (x.address?.toLowerCase() ?? 'native') === (addr ?? 'native'));
   if (!a) return ctx.editMessageText(msg.msgError('send', 'That balance is gone — start again with /send.'), html);
   flow.chainKey = cc.key;
   flow.asset = { address: a.address, symbol: a.symbol, decimals: a.decimals };

@@ -30,4 +30,13 @@ assert.equal(p.unitFor('send'), '%');
 // Alamat contoh tetap alamat sah (menjaga helper tak berubah arti).
 assert.ok(ethers.isAddress('0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed'));
 
-console.log('OK — send: alamat divalidasi, gas disisihkan, kontrak diperingatkan, kirim dikunci.');
+// Alamat base di chains.ts tak seragam kapitalnya (USDG Robinhood lowercase,
+// sisanya checksummed). Membandingkan string apa adanya membuat aset yang ADA
+// terbaca "balance is gone" — terjadi 28 Agu 2026 saat /send pertama dicoba.
+assert.ok(
+  /x\.address\?\.toLowerCase\(\)/.test(src),
+  'pencocokan aset masih membandingkan alamat apa adanya (peka huruf besar/kecil)',
+);
+assert.ok(!/=== \(addr \?\? 'native'\)[\s\S]{0,40}getAddress/.test(src), 'callback dinormalkan checksum lalu dibanding mentah');
+
+console.log('OK — send: alamat divalidasi & dibanding tanpa peduli kapital, gas disisihkan, kirim dikunci.');
