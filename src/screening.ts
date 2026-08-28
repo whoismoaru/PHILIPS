@@ -124,6 +124,18 @@ export type ScreenResult = {
 const _jsonCache = new Map<string, { t: number; v: any }>();
 const JSON_TTL = 60_000;
 
+/**
+ * Buang cache off-chain untuk satu token — dipakai tombol Refresh kartu audit.
+ *
+ * Tanpa ini, menekan Refresh dalam 60 detik mengembalikan angka yang sama persis:
+ * cache-nya yang menjawab, bukan jaringannya. Refresh yang tak me-refresh apa pun
+ * lebih buruk daripada tak ada tombol.
+ */
+export function bustScreenCache(addr: string): void {
+  const a = addr.toLowerCase();
+  for (const k of [..._jsonCache.keys()]) if (k.toLowerCase().includes(a)) _jsonCache.delete(k);
+}
+
 async function fetchJson(url: string): Promise<any | null> {
   const hit = _jsonCache.get(url);
   if (hit && Date.now() - hit.t < JSON_TTL) return hit.v;

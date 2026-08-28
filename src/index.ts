@@ -45,7 +45,7 @@ import {
 import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import * as pctPresets from './pctPresets.js';
-import { screenToken, formatScreen, getEthUsd, getTokenEthPrice } from './screening.js';
+import { screenToken, formatScreen, bustScreenCache, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
 import { startMonitor } from './monitor.js';
 import * as store from './store.js';
@@ -3012,7 +3012,9 @@ async function renderTokenHub(
   const kb = Markup.inlineKeyboard([
     rowLp,
     ...(rowTok.length ? [rowTok] : []),
-    [Markup.button.callback('❌ Cancel', 'cancel')],
+    // Kartu ini statis: harganya beku di detik kamu menempel CA. Untuk token yang
+    // baru lahir, satu menit sudah jauh — jadi sediakan cara memperbaruinya di tempat.
+    [Markup.button.callback('🔄 Refresh', `ca:refresh:${ca}`), Markup.button.callback('❌ Cancel', 'cancel')],
   ]);
 
   hubs.set(ctx.from.id, {
@@ -3034,6 +3036,20 @@ async function renderTokenHub(
  * Router 4 tombol hub → alur yang SUDAH ADA. Tak ada jalur uang baru:
  * screening dioper (tak di-scan ulang), semua konfirmasi & guard tetap milik alur asal.
  */
+bot.action(/^ca:refresh:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
+  const ca = ethers.getAddress(ctx.match[1]);
+  const h = hubs.get(ctx.from!.id);
+  if (!h || h.ca.toLowerCase() !== ca.toLowerCase()) return ctx.answerCbQuery('Expired — paste the CA again.');
+  await ctx.answerCbQuery('Refreshing…');
+  // Cache 60 detik dibuang dulu; kalau tidak, tombol ini cuma menggambar ulang
+  // angka yang sama dan terasa seperti tak bekerja.
+  bustScreenCache(ca);
+  const prog = ctx.callbackQuery?.message
+    ? { message_id: (ctx.callbackQuery.message as { message_id: number }).message_id }
+    : null;
+  return renderTokenHub(ctx, ca, h.chainKey, prog);
+});
+
 bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const [, what, ca] = ctx.match as unknown as [string, 'add' | 'buy' | 'close' | 'sell', string];
   const h = hubs.get(ctx.from!.id);
