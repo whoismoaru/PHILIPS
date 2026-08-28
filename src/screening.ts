@@ -476,27 +476,27 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     g?.privileges == null ? null : g.privileges.some((p) => re.test(p));
 
   const out: string[] = [
-    `🔍 ${bold('TOKEN SECURITY AUDIT')}`,
+    bold('TOKEN SECURITY AUDIT'),
     '',
     `📊 ${bold('Basic Info :')}`,
-    `• Name: ${esc(s.name)} (${esc(symUp)})`,
-    `• Network: ${esc(opts?.chainLabel ?? UNK)}`,
-    `• Price: ${bold(s.priceUsd ? `$${s.priceUsd}` : UNK)} · MC: ${compact(s.marketCapUsd)}`,
-    `• Pool Age: ${s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} hours`}`,
+    `- Name: ${esc(s.name)} (${esc(symUp)})`,
+    `- Network: ${esc(opts?.chainLabel ?? UNK)}`,
+    `- Price: ${bold(s.priceUsd ? `$${s.priceUsd}` : UNK)} · MC: ${compact(s.marketCapUsd)}`,
+    `- Pool Age: ${s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} hours`}`,
     '',
-    `🛡️ ${bold('Contract Security :')}`,
-    `• Ownership Renounced: ${yes(renounced)}`,
-    `• Contract Verified: ${yes(verified)}`,
-    `• Proxy Contract: ${no(s.isProxy)}`,
-    `• Honeypot Risk (Can sell?): ${sellable === null ? `${UNK} unreadable` : sellable ? '✅ Safe' : '🚫 Cannot sell'}`,
-    `• Transfer Pause: ${no(privHas(/paus|freeze/))}`,
-    `• Trading Cooldown: ${no(privHas(/cooldown/))}`,
+    `🛡 ${bold('Contract Security :')}`,
+    `- Ownership Renounced: ${yes(renounced)}`,
+    `- Contract Verified: ${yes(verified)}`,
+    `- Proxy Contract: ${no(s.isProxy)}`,
+    `- Honeypot Risk (Can sell?): ${sellable === null ? `${UNK} unreadable` : sellable ? '✅ Safe' : '🚫 Cannot sell'}`,
+    `- Transfer Pause: ${no(privHas(/paus|freeze/))}`,
+    `- Trading Cooldown: ${no(privHas(/cooldown/))}`,
     '',
     `💧 ${bold('Liquidity & Market :')}`,
-    `• Total Liquidity: ${bold(compact(s.liquidityUsd))}`,
-    `• Liquidity Locked: ${lpLocked === null ? UNK : `${pct(lpLocked)} ${lpLocked >= 50 ? '✅' : '⚠️'}`}${burnt ? ` · burnt ${pct(burnt)}` : ''}`,
-    `• 24H Volume: ${compact(s.volume24h)} (${num(s.buys24h)} Buys / ${num(s.sells24h)} Sells)`,
-    `• Top 10 Holders: ${top10Line}`,
+    `- Total Liquidity: ${bold(compact(s.liquidityUsd))}`,
+    `- Liquidity Locked: ${lpLocked === null ? UNK : `${pct(lpLocked)} ${lpLocked >= 50 ? '✅' : '⚠️'}`}${burnt ? ` · burnt ${pct(burnt)}` : ''}`,
+    `- 24H Volume: ${compact(s.volume24h)} (${num(s.buys24h)} Buys / ${num(s.sells24h)} Sells)`,
+    `- Top 10 Holders: ${top10Line}`,
   ];
 
   // Dev & insider digabung satu baris (naskah). Jumlahnya TIDAK dijumlahkan —
@@ -504,15 +504,15 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   if (g && (g.devPct !== null || g.insidersPct !== null)) {
     const worst = Math.max(g.devPct ?? 0, g.insidersPct ?? 0);
     out.push(
-      `• Dev &amp; Insiders: dev ${pct(g.devPct)} · insiders ${pct(g.insidersPct)} ${worst >= 20 ? '🔴' : worst >= 5 ? '⚠️' : '✅'}`,
+      `- Dev &amp; Insiders: dev ${pct(g.devPct)} · insiders ${pct(g.insidersPct)} ${worst >= 20 ? '🔴' : worst >= 5 ? '⚠️' : '✅'}`,
     );
   }
 
   out.push(
     '',
     `💸 ${bold('Taxes / Fees :')}`,
-    `• Buy Tax -> ${taxLine(g?.buyTaxPct ?? null)}`,
-    `• Sell Tax -> ${taxLine(g?.sellTaxPct ?? null)}`,
+    `- Buy Tax -> ${taxLine(g?.buyTaxPct ?? null)}`,
+    `- Sell Tax -> ${taxLine(g?.sellTaxPct ?? null)}`,
   );
 
   // Verdict & flags TETAP ada: kartu ini mengganti tampilan, bukan peringatannya.
@@ -524,18 +524,23 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
       : s.verdict === 'HATI-HATI'
         ? 'PROCEED WITH CAUTION (Moderate Risk)'
         : 'SAFE TO LP';
-  out.push('', `${icon} ${bold('PHILIPS Verdict:')} ${bold(verdictText)}`);
-  for (const f of risk.slice(0, 4)) out.push(`• ${esc(f.msg)}`);
-  if (s.verdict === 'HATI-HATI' && !risk.length) out.push('• Use a tighter range if you still want to LP.');
+  // Kartu bersih untuk token sehat; vonis TETAP dicetak begitu ada risiko. Menghapus
+  // baris ini sepenuhnya akan membuat satu-satunya keterangan risiko hilang dari
+  // layar — alur /add memang memblokir BAHAYA, tapi HATI-HATI cuma diperingatkan.
+  if (s.verdict !== 'AMAN') {
+    out.push('', `${icon} ${bold('PHILIPS Verdict:')} ${bold(verdictText)}`);
+    for (const f of risk.slice(0, 4)) out.push(`- ${esc(f.msg)}`);
+    if (s.verdict === 'HATI-HATI' && !risk.length) out.push('- Use a tighter range if you still want to LP.');
+  }
 
   if (opts?.ca) out.push('', code(opts.ca));
 
   out.push(
     '',
-    `• Holding Token: ${bold(opts?.heldLabel ? esc(opts.heldLabel) : 'No')}`,
-    `• Active LP: ${bold(opts?.lpCount ? `${opts.lpCount} position(s)` : 'No')}`,
+    `-> Holding Token: ${bold(opts?.heldLabel ? esc(opts.heldLabel) : 'No')}`,
+    `-> Active LP: ${bold(opts?.lpCount ? `${opts.lpCount} position(s)` : 'No')}`,
     '',
-    italic(nowWib()),
+    nowWib(),
   );
   return out.join('\n');
 }
