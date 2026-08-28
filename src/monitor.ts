@@ -61,6 +61,7 @@ const SWEEP_EVERY_MS = 60_000; // sapu sisa token tiap 1 menit (= tiap tick moni
 const SWEEP_COOLDOWN_MS = 6 * 3_600_000; // per token max 1 percobaan / 6 jam
 const SWEEP_RECENT_MS = 24 * 3_600_000; // sisa cash-out selalu muncul di jam-jam pertama
 const DUST_COOLDOWN_MS = 7 * 24 * 3_600_000; // token "terlalu kecil" → mundur 7 hari
+const SWEEP_RETRY_BACKOFF_MS = 10 * 60_000; // gagal transien (RPC) → jeda 10 menit
 const SWEEP_FILE = join(process.cwd(), 'data', 'sweep.json');
 const html = { parse_mode: 'HTML' as const };
 // nextSweep[key] = epoch ms paling awal token boleh disapu lagi. PERSIST ke disk
@@ -201,6 +202,14 @@ async function sweepLeftovers(bot: Telegraf) {
       // Token debu (nilai terlalu kecil utk di-swap) → mundur lama, jangan ulang tiap 6j.
       if (/too small|below minimum|\bminimum\b|dust/i.test(emsg)) {
         nextSweep.set(key, Date.now() + DUST_COOLDOWN_MS);
+        saveSweep();
+      } else if (Date.now() >= (nextSweep.get(key) ?? 0)) {
+        // Gagal SEBELUM cooldown 6 jam sempat dipasang — paling sering saat baca
+        // saldo (RPC reset). Tanpa jeda, token itu dicoba lagi TIAP menit selama
+        // RPC-nya rewel: 28 Agu 2026 satu token gagal 8× dalam 15 menit, justru
+        // menambah beban saat jaringan sedang goyah. Mundur sebentar, bukan 6 jam:
+        // ini kegagalan sementara, bukan keputusan bahwa tokennya tak layak sapu.
+        nextSweep.set(key, Date.now() + SWEEP_RETRY_BACKOFF_MS);
         saveSweep();
       }
       console.log(`[sweep] ${r.symbol} gagal: ${emsg.slice(0, 120)}`);

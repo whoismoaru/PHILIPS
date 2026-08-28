@@ -1,6 +1,6 @@
 import { Markup } from 'telegraf';
 import { config } from '../config.js';
-import { bot, html, editProgress, maxEthLabel } from '../core.js';
+import { bot, html, editProgress, maxEthLabel, registerFlowReset } from '../core.js';
 import { getChain, rebuildChains, gasFeeCapLabel } from '../chains.js';
 import * as walletStore from '../walletStore.js';
 import * as store from '../store.js';
@@ -89,6 +89,10 @@ async function cmdSettings(ctx: any) {
 }
 bot.command('settings', cmdSettings);
 
+// Perintah apa pun (/add, /buy, /sell, /bridge) membatalkan prompt persen yang
+// menggantung — kalau tidak, nominal yang diketik user tertelan sebagai jawaban.
+registerFlowReset((uid) => pctPresets.clearEdit(uid));
+
 /** Satuan + batas + catatan khusus satu alur, dipakai ketiga kartu setelan. */
 function pctOpts(flow: pctPresets.PctFlow) {
   const b = pctPresets.boundsFor(flow);
@@ -115,6 +119,9 @@ function pctCardKb(flow: pctPresets.PctFlow) {
 
 bot.action(/^pct:(buy|sell|add|stop|bridge|legs)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
+  // Kembali dari prompt = batal mengetik. Tanpa ini penandanya menetap dan menelan
+  // pesan teks berikutnya, di alur mana pun.
+  pctPresets.clearEdit(ctx.from!.id);
   await ctx.answerCbQuery();
   return ctx.editMessageText(
     msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctPresets.defaultsFor(flow), pctOpts(flow)),

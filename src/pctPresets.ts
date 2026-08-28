@@ -103,10 +103,27 @@ export function reset(flow: PctFlow): number[] {
   return set(flow, DEFAULTS[flow]) ?? DEFAULTS[flow];
 }
 
-/** Siapa yang sedang diminta mengetik angka persen (userId → alur). */
-const pending = new Map<number, PctFlow>();
-export const askEdit = (userId: number, flow: PctFlow): void => void pending.set(userId, flow);
-export const pendingEdit = (userId: number): PctFlow | undefined => pending.get(userId);
+/**
+ * Siapa yang sedang diminta mengetik angka (userId → alur).
+ *
+ * BER-KEDALUWARSA. Dulu tanpa batas waktu: begitu user menekan Edit lalu pergi
+ * tanpa menjawab, penanda ini menetap selamanya — dan karena jawabannya diperiksa
+ * PALING AWAL di penangan teks, setiap pesan berikutnya (nominal /add, /buy, apa
+ * pun) tertelan sebagai "daftar persen" lalu ditolak. Terjadi 28 Agu 2026: empat
+ * penolakan beruntun sebelum user menyerah dan pindah ke /add.
+ */
+const PENDING_TTL_MS = 5 * 60_000;
+const pending = new Map<number, { flow: PctFlow; at: number }>();
+export const askEdit = (userId: number, flow: PctFlow): void => void pending.set(userId, { flow, at: Date.now() });
+export function pendingEdit(userId: number): PctFlow | undefined {
+  const p = pending.get(userId);
+  if (!p) return undefined;
+  if (Date.now() - p.at > PENDING_TTL_MS) {
+    pending.delete(userId);
+    return undefined;
+  }
+  return p.flow;
+}
 export const clearEdit = (userId: number): void => void pending.delete(userId);
 
 /** "10 25 50, 90" / "10/25/50/90" → [10,25,50,90]. Gagal → null. */
