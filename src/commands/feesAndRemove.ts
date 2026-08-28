@@ -98,7 +98,7 @@ bot.action(/^rm:(\d+)$/, async (ctx) => {
   await ctx.editMessageText(msg.msgRemovePct(id), {
     ...html,
     ...Markup.inlineKeyboard([
-      pctPresets.get('stop').map((p) => Markup.button.callback(`${p}%`, `rmpct:${id}:${p}`)),
+      ...pctPresets.chunkButtons(pctPresets.get('stop').map((p) => Markup.button.callback(`${p}%`, `rmpct:${id}:${p}`))),
       [Markup.button.callback('100% (close position)', `stop:${id}`)],
       [Markup.button.callback('❌ Cancel', 'cancel')],
     ]),

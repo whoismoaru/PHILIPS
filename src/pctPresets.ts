@@ -33,7 +33,18 @@ const DEFAULTS: Record<PctFlow, number[]> = {
 };
 
 const FILE = join(process.cwd(), 'data', 'pctpresets.json');
-const MAX_BUTTONS = 4; // lebih dari ini tombolnya terpotong di layar sempit
+// 6, bukan 4. Batas 4 memaksa user membuang salah satu angka yang ia mau: 28 Agu
+// 2026 empat percobaan menyetel preset ditolak beruntun karena daftarnya 5 angka,
+// dan yang tersimpan akhirnya versi tanpa 100%. Tombolnya kini dipecah jadi
+// beberapa baris, jadi lebar layar bukan lagi alasan membatasi di 4.
+const MAX_BUTTONS = 6;
+
+/** Pecah tombol jadi baris berisi maksimal 4 — lebih dari itu terpotong di HP sempit. */
+export function chunkButtons<T>(items: T[], per = 4): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += per) out.push(items.slice(i, i + per));
+  return out;
+}
 
 let cache: Record<PctFlow, number[]> | null = null;
 

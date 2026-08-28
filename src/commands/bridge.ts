@@ -163,7 +163,7 @@ bot.action(/^bra:(\w+):(\w+):(\w+)$/, async (ctx) => {
   await ctx.editMessageText(msg.msgBridgeAmount(from.label, to.label, bal.label, a.srcSymbol), {
     ...html,
     ...Markup.inlineKeyboard([
-      pctPresets.get('bridge').map((p) => Markup.button.callback(`${p}%`, `brpct:${p}`)),
+      ...pctPresets.chunkButtons(pctPresets.get('bridge').map((p) => Markup.button.callback(`${p}%`, `brpct:${p}`))),
       [Markup.button.callback('⬅️ Back', `br:${fromKey}:${toKey}`)],
       [Markup.button.callback('❌ Cancel', 'cancel')],
     ]),

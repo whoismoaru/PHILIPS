@@ -885,7 +885,7 @@ export function msgPctAsk(label: string, current: number[], o: { unit: string; m
   return [
     `✏️ ${bold(`Edit ${esc(label)}`)}`,
     '',
-    `💬 Type up to 4 numbers, separated by spaces. For example ${code(example)}.`,
+    `💬 Type up to 6 numbers, separated by spaces. For example ${code(example)}.`,
     '',
     `${note(`current: ${current.join(' / ')}`)}`,
     note(`each one ${o.min}–${o.max}, duplicates dropped, sorted automatically.`),
@@ -896,7 +896,7 @@ export function msgPctInvalid(o: { unit: string; min: number; max: number }): st
   const example = o.unit === '%' ? '10 25 50 90' : '4 8 12 20';
   return msgError(
     o.unit === '%' ? 'percentages' : 'leg counts',
-    `Give 1 to 4 whole numbers between ${o.min} and ${o.max}. For example ${example}.`,
+    `Give 1 to 6 whole numbers between ${o.min} and ${o.max}. For example ${example}.`,
   );
 }
 

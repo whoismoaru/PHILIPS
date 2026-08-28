@@ -1709,7 +1709,7 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   flow.awaitingAmount = true;
   const a = amountCtx(flow);
   const rows: any[] = [];
-  rows.push(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `amt:${p}`)));
+  rows.push(...pctPresets.chunkButtons(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `amt:${p}`))));
   rows.push([Markup.button.callback('⬅️ Back', 'back:strategy')], [Markup.button.callback('❌ Cancel', 'cancel')]);
   // Saldo (1 RPC, gagal → '?': jangan pernah memblokir langkah ini).
   const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
@@ -2238,8 +2238,8 @@ async function renderLegStep(ctx: any, flow: AddFlow, edit: boolean) {
   const cheap = opts.filter((_, i) => pctPresets.get('legs')[i] < 15);
   const pricey = opts.filter((_, i) => pctPresets.get('legs')[i] >= 15);
   const rows = [
-    ...(cheap.length ? [cheap] : []),
-    ...(pricey.length ? [pricey] : []),
+    ...pctPresets.chunkButtons(cheap),
+    ...pctPresets.chunkButtons(pricey),
     [Markup.button.callback('⬅️ Back', 'back:shape'), Markup.button.callback('❌ Cancel', 'cancel')],
   ];
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
@@ -2916,7 +2916,7 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   // persentase saldo — sejajar dengan /sell dan wizard /add, yang sudah punya
   // tombol persen. "Custom %" untuk angka di luar preset.
   const rows: any[] = [];
-  rows.push(pctPresets.get('buy').map((p) => Markup.button.callback(`${p}%`, `buypct:${p}`)));
+  rows.push(...pctPresets.chunkButtons(pctPresets.get('buy').map((p) => Markup.button.callback(`${p}%`, `buypct:${p}`))));
   const multiBase = basesFor(cc).length > 1;
   const backSize = multiBase ? 'buyback:base' : flow.fromHub ? 'hub:back' : 'buyback:safety';
   rows.push([Markup.button.callback('⬅️ Back', backSize), Markup.button.callback('❌ Cancel', 'cancel')]);
@@ -3459,7 +3459,7 @@ function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   // Masuk dari hub = tak ada daftar holdings untuk dituju; pulangkan ke kartu token.
   const back = flow.sellList ? 'sellback:list' : flow.fromHub ? 'hub:back' : 'cancel';
   const rows = [
-    pctPresets.get('sell').map((p) => Markup.button.callback(`${p}%`, `sellpct:${p}`)),
+    ...pctPresets.chunkButtons(pctPresets.get('sell').map((p) => Markup.button.callback(`${p}%`, `sellpct:${p}`))),
     [Markup.button.callback('Type an amount', 'sellpct:custom')],
     [Markup.button.callback('⬅️ Back', back), Markup.button.callback('❌ Cancel', 'cancel')],
   ];

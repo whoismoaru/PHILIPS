@@ -10,7 +10,12 @@ assert.equal(p.sanitize([], 'buy'), null);
 assert.equal(p.sanitize([0, 50], 'buy'), null);
 assert.equal(p.sanitize([150], 'buy'), null);
 assert.equal(p.sanitize([12.5], 'buy'), null, 'pecahan bukan tombol persen yang sah');
-assert.equal(p.sanitize([10, 20, 30, 40, 50], 'buy'), null, 'lebih dari 4 tombol terpotong di layar sempit');
+assert.deepEqual(p.sanitize([10, 20, 30, 40, 50], 'buy'), [10, 20, 30, 40, 50], 'lima angka harus diterima');
+assert.deepEqual(p.sanitize([10, 25, 50, 75, 90, 100], 'buy'), [10, 25, 50, 75, 90, 100], 'enam angka masih sah');
+assert.equal(p.sanitize([1, 2, 3, 4, 5, 6, 7], 'buy'), null, 'tujuh angka melewati batas');
+// Tombolnya dipecah, jadi banyak angka tak lagi terpotong di layar sempit.
+assert.deepEqual(p.chunkButtons([1, 2, 3, 4, 5, 6]), [[1, 2, 3, 4], [5, 6]]);
+assert.deepEqual(p.chunkButtons([1, 2]), [[1, 2]]);
 
 // Withdraw 100% = menutup posisi, dan itu jalur lain (close, bukan decrease).
 assert.equal(p.sanitize([25, 100], 'stop'), null);
