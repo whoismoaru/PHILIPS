@@ -111,6 +111,14 @@ export type V4Position = {
   currentTick: number | null; // tick pool saat ini — kartu memakainya utk mcap "now"
   converted: boolean; // out-of-range & 100% token seberang (target tercapai)
   impliedTokenEthPrice: number | null; // harga token dlm ETH menurut slot0 pool INI (buat cek pool sekarat)
+  // Jumlah token SEBERANG yang dipegang posisi ini. `valueBaseWei` menilainya pada
+  // harga pool sekarang (mark-to-market) — dan itu BUKAN yang akan kamu terima:
+  // menjualnya menggerakkan harga. Kartu memakai angka ini untuk meminta quote
+  // nyata sebelum menyebutnya "nilai".
+  otherAmountWei: bigint | null;
+  otherAddress: string | null;
+  otherDecimals: number | null;
+  baseAmountWei: bigint | null; // sisi base yang dipegang — ini tak perlu dijual
 };
 
 /** Tentukan aset dasar pasangan + apakah base = currency0. */
@@ -527,6 +535,10 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
           poolKey,
           valueBaseWei: val ? val.valueBaseWei : null,
           feesBaseWei: val ? val.feesBaseWei : null,
+          otherAmountWei: val ? (val.baseIsCurrency0 ? val.amount1 : val.amount0) : null,
+          otherAddress: val ? (val.baseIsCurrency0 ? pk.currency1 : pk.currency0) : null,
+          otherDecimals: val ? await tokenDecimals(val.baseIsCurrency0 ? pk.currency1 : pk.currency0, cc).catch(() => 18) : null,
+          baseAmountWei: val ? (val.baseIsCurrency0 ? val.amount0 : val.amount1) : null,
           currentTick: val ? val.currentTick : null,
           rangePctHigh: val ? val.rangePctHigh : null,
           rangePctLow: val ? val.rangePctLow : null,

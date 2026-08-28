@@ -935,6 +935,13 @@ async function adoptStrayV4(cc: ReturnType<typeof getChain>, from: bigint): Prom
  * Memetakannya mati ke 'usdg' membuat desimal & simbolnya salah begitu v4
  * dinyalakan di chain lain.
  */
+/** Alamat aset base v4 di chain ini — dipakai meminta quote sisi token. */
+function baseAddrOf(cc: ChainCtx, base: 'ETH' | 'USDG' | null): string | null {
+  if (base === 'ETH') return cc.wethAddress;
+  if (base !== 'USDG') return null;
+  return cc.bases.find((b) => isStableBase(b.kind))?.address ?? null;
+}
+
 function v4Kind(cc: ChainCtx, base: 'ETH' | 'USDG' | null): store.PosRecord['baseKind'] {
   if (base !== 'USDG') return 'weth';
   return (cc.bases.find((b) => isStableBase(b.kind))?.kind ?? 'usdg') as store.PosRecord['baseKind'];
@@ -1066,6 +1073,9 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
         let lo: number | null = null;
         let hi: number | null = null;
         let seen = 0;
+        let baseWei = 0n;
+        let otherWei = 0n;
+        let otherAddr: string | null = null;
         for (const l of legs) {
           depWei += BigInt(l.entryBaseWei || '0');
           const x = byId.get(l.tokenId);
@@ -1075,10 +1085,30 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
           else if (x.converted) filled++;
           if (x.valueBaseWei !== null) valWei += x.valueBaseWei;
           feeWei += x.feesBaseWei ?? 0n;
+          baseWei += x.baseAmountWei ?? 0n;
+          otherWei += x.otherAmountWei ?? 0n;
+          otherAddr = otherAddr ?? x.otherAddress;
           lo = lo === null ? x.tickLower : Math.min(lo, x.tickLower);
           hi = hi === null ? x.tickUpper : Math.max(hi, x.tickUpper);
         }
-        const val = Number(ethers.formatUnits(valWei + feeWei, dec));
+        // NILAI YANG BISA DIDAPAT, bukan harga pasar semu.
+        //
+        // valueBaseWei menilai sisi token pada harga pool SEKARANG. Untuk posisi
+        // sebesar kedalaman pool-nya, angka itu tak pernah bisa diambil: menjualnya
+        // menggerakkan harga. 28 Agu 2026 kartu menulis "+10.2%" lalu tutupnya
+        // menghasilkan -5.5% — Relay menolak rutenya dengan "swap impact 31.06%".
+        // Jadi sisi token DIKUTIP dengan quote nyata; gagal quote → jatuh ke harga
+        // pool, tapi ditandai supaya tak terbaca sebagai angka pasti.
+        let quotedOtherWei: bigint | null = null;
+        if (otherWei > 0n && otherAddr && baseAddrOf(cc, p.base)) {
+          const q = await previewSwapOut(otherAddr, baseAddrOf(cc, p.base)!, otherWei, cc).catch(() => null);
+          quotedOtherWei = q ? q.out : null;
+        }
+        const realWei = quotedOtherWei === null ? valWei : baseWei + quotedOtherWei;
+        const markVal = Number(ethers.formatUnits(valWei + feeWei, dec));
+        const val = Number(ethers.formatUnits(realWei + feeWei, dec));
+        // Selisih besar antara harga pasar & hasil jual = kedalaman pool tipis.
+        const impactPct = markVal > 0 ? ((markVal - val) / markVal) * 100 : 0;
         const dep = Number(ethers.formatUnits(depWei, dec));
         const pnl = val - dep;
         const pct = dep > 0 ? (pnl / dep) * 100 : 0;
@@ -1097,6 +1127,12 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
         }
         return {
           valueLabel: seen ? `${val.toFixed(dec >= 18 ? 5 : 2)} ${p.base ?? ''}` : undefined,
+          exitNote:
+            quotedOtherWei === null && otherWei > 0n
+              ? 'token side priced at pool rate, not a live quote'
+              : impactPct >= 2
+                ? `after ${msg.fmtPct(-impactPct)} price impact on the token side`
+                : undefined,
           feesLabel: feeWei > 0n ? `${Number(ethers.formatUnits(feeWei, dec)).toFixed(dec >= 18 ? 5 : 2)} ${p.base ?? ''}` : undefined,
           pnlText: seen
             ? usdPer !== null

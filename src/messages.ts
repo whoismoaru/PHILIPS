@@ -383,6 +383,8 @@ export function msgV4Position(p: {
     // Ringkasan SELURUH ladder — inti fitur bid-ask. Tanpa ini kartu leg hanya
     // memperlihatkan satu anak tangga, padahal yang disetor user adalah ladder.
     valueLabel?: string; feesLabel?: string; pnlText?: string; mcRange?: string;
+    // Kenapa "Value now" bukan sekadar harga pasar — lihat catatan di index.ts.
+    exitNote?: string;
     filled?: number; active?: number; waiting?: number }; // leg dari grup ladder
 }): string {
   // Samakan layout dengan kartu V3 (msgPositionCard): satu fakta satu baris,
@@ -436,6 +438,7 @@ export function msgV4Position(p: {
             ? [
                 `💰 ${bold('Value now:')} ${esc(p.ladder!.valueLabel)}`,
                 ...(p.ladder!.feesLabel ? [italic(`↳ incl. fees ${esc(p.ladder!.feesLabel)}`)] : []),
+                ...(p.ladder!.exitNote ? [italic(`↳ ${esc(p.ladder!.exitNote)}`)] : []),
               ]
             : []),
           ...(p.ladder!.pnlText ? [`📈 ${bold('Ladder PnL:')} ${esc(p.ladder!.pnlText)}`] : []),
