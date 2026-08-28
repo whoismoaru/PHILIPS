@@ -213,6 +213,150 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+export type CalendarCardOpts = {
+  title: string; // 'Robinhood · USDG'
+  subtitle: string; // '30 days'
+  days: Array<{ date: Date; net: number; trades: number }>;
+  unit: string;
+  netLabel: string; // '+42.10 USDG'
+  positive: boolean;
+  stats: Array<{ label: string; value: string }>; // <=4
+  footerLeft: string;
+};
+
+/**
+ * Kalender PnL 30 hari — TANPA artwork, murni data.
+ *
+ * Warna kotak = arah hari itu, kepekatan = besarnya relatif terhadap hari terkuat.
+ * Skala relatif, bukan absolut: satu hari besar tak boleh membuat sisanya rata abu.
+ * Hari tanpa trade digambar sebagai kotak kosong bergaris, bukan hijau/merah pucat —
+ * "tak ada trade" bukan "impas".
+ */
+export async function renderCalendarCard(o: CalendarCardOpts, scale = 2): Promise<Buffer> {
+  ensureFonts();
+  const canvas = createCanvas(Math.round(W * scale), Math.round(H * scale));
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+  const accent = o.positive ? COL.green : COL.red;
+
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, COL.bg0);
+  g.addColorStop(1, COL.bg1);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(150, 120, 10, 150, 120, 640);
+  glow.addColorStop(0, accent + '1E');
+  glow.addColorStop(1, accent + '00');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  const X = 76;
+  ctx.fillStyle = COL.muted;
+  ctx.font = '19px PhSansB';
+  ctx.fillText('PHILIPS', X, 78);
+  ctx.fillStyle = COL.text;
+  ctx.font = '29px PhSansB';
+  ctx.fillText(o.title, X, 120);
+  ctx.fillStyle = COL.muted;
+  ctx.font = '17px PhSans';
+  ctx.fillText(o.subtitle, X, 148);
+
+  // Angka besar di kiri; kalender mengisi sisi kanan.
+  ctx.fillStyle = accent;
+  ctx.font = '19px PhSansB';
+  ctx.fillText(o.positive ? 'NET PROFIT' : 'NET LOSS', X, 206);
+  ctx.fillRect(X, 214, ctx.measureText(o.positive ? 'NET PROFIT' : 'NET LOSS').width, 2);
+  const sp = o.netLabel.indexOf(' ');
+  const num = sp < 0 ? o.netLabel : o.netLabel.slice(0, sp);
+  const unit = sp < 0 ? '' : o.netLabel.slice(sp + 1);
+  let npx = 76;
+  ctx.font = `${npx}px PhSansB`;
+  while (npx > 36 && ctx.measureText(num).width > 300) {
+    npx -= 3;
+    ctx.font = `${npx}px PhSansB`;
+  }
+  ctx.fillText(num, X - 2, 292);
+  if (unit) {
+    const nw = ctx.measureText(num).width;
+    ctx.font = `${Math.round(npx * 0.42)}px PhSansB`;
+    ctx.fillText(unit, X - 2 + nw + 12, 292);
+  }
+
+  // Statistik ringkas di bawah angka.
+  o.stats.slice(0, 4).forEach((st, i) => {
+    const sx = X + (i % 2) * 190;
+    const sy = 372 + Math.floor(i / 2) * 74;
+    ctx.fillStyle = COL.muted;
+    ctx.font = '14px PhSansB';
+    ctx.fillText(st.label.toUpperCase(), sx, sy);
+    ctx.fillStyle = COL.text;
+    ctx.font = '23px PhSansB';
+    ctx.fillText(st.value, sx, sy + 30);
+  });
+
+  // ── Kalender: 6 kolom × 5 baris, urut tanggal, terbaru di kanan-bawah ──
+  const COLS = 6;
+  const CELL = 62;
+  const GAP = 10;
+  const gx = W - 76 - (COLS * CELL + (COLS - 1) * GAP);
+  const gy = 168;
+  const peak = Math.max(...o.days.map((d) => Math.abs(d.net)), 0);
+  o.days.forEach((d, i) => {
+    const x = gx + (i % COLS) * (CELL + GAP);
+    const y = gy + Math.floor(i / COLS) * (CELL + GAP);
+    if (d.trades === 0) {
+      ctx.fillStyle = COL.card;
+      roundRect(ctx, x, y, CELL, CELL, 10);
+      ctx.fill();
+      ctx.strokeStyle = COL.line;
+      ctx.lineWidth = 1;
+      roundRect(ctx, x + 0.5, y + 0.5, CELL - 1, CELL - 1, 10);
+      ctx.stroke();
+    } else {
+      // 0.22 lantai kepekatan: hari bertrade kecil tetap harus terbaca sebagai warna.
+      const a = peak > 0 ? 0.22 + 0.78 * Math.min(1, Math.abs(d.net) / peak) : 0.5;
+      ctx.fillStyle = (d.net >= 0 ? COL.green : COL.red) + Math.round(a * 255).toString(16).padStart(2, '0');
+      roundRect(ctx, x, y, CELL, CELL, 10);
+      ctx.fill();
+    }
+    ctx.fillStyle = d.trades === 0 ? COL.muted : '#0B0E14';
+    ctx.font = '15px PhSansB';
+    const label = String(d.date.getDate());
+    ctx.fillText(label, x + CELL / 2 - ctx.measureText(label).width / 2, y + CELL / 2 + 6);
+  });
+
+  // Legenda kecil di bawah kalender.
+  ctx.fillStyle = COL.muted;
+  ctx.font = '14px PhSans';
+  const legendY = gy + 5 * (CELL + GAP) + 26;
+  ctx.fillText('no trades', gx + 26, legendY + 5);
+  ctx.fillStyle = COL.card;
+  roundRect(ctx, gx, legendY - 8, 18, 18, 5);
+  ctx.fill();
+  ctx.strokeStyle = COL.line;
+  ctx.lineWidth = 1;
+  roundRect(ctx, gx + 0.5, legendY - 7.5, 17, 17, 5);
+  ctx.stroke();
+  const lossX = gx + 130;
+  ctx.fillStyle = COL.red;
+  roundRect(ctx, lossX, legendY - 8, 18, 18, 5);
+  ctx.fill();
+  ctx.fillStyle = COL.muted;
+  ctx.fillText('loss', lossX + 26, legendY + 5);
+  const winX = lossX + 90;
+  ctx.fillStyle = COL.green;
+  roundRect(ctx, winX, legendY - 8, 18, 18, 5);
+  ctx.fill();
+  ctx.fillStyle = COL.muted;
+  ctx.fillText('profit', winX + 26, legendY + 5);
+
+  ctx.fillStyle = COL.muted;
+  ctx.font = '17px PhMono';
+  ctx.fillText(o.footerLeft, X, H - 42);
+
+  return canvas.toBuffer('image/png');
+}
+
 // Kartu POSITION (daftar LP aktif) — dirender sebagai PNG, bukan teks Telegram.
 // Alasan: kolom lurus butuh lebar karakter yang bisa diukur. Di pesan Telegram
 // itu hanya mungkin dengan font monospace; di kanvas kita ukur sendiri

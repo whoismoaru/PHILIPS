@@ -262,6 +262,49 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
  * Base) muncul sendiri begitu ada trade pertamanya, dan chain lama yang sudah tak
  * dipakai (mis. 'stable') tetap bisa dilihat riwayatnya.
  */
+/**
+ * PnL harian 30 hari terakhir untuk SATU buku (chain + satuan).
+ *
+ * Satu buku saja, bukan gabungan: menjumlahkan USDG dengan ETH menghasilkan angka
+ * yang tak punya satuan. Buku dipilih pemanggil (biasanya yang paling banyak trade).
+ * Hari tanpa trade tetap ada di daftar dengan net 0 dan trades 0 — kalender butuh
+ * kotak kosongnya, dan "tak ada trade" berbeda dari "impas".
+ */
+export function dailyFor(
+  chain: string,
+  unit: string,
+  days = 30,
+): Array<{ date: Date; net: number; trades: number }> {
+  const me = currentWallet();
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  const startMs = start.getTime();
+
+  const buckets = Array.from({ length: days }, (_, i) => {
+    const d = new Date(startMs);
+    d.setDate(d.getDate() + i);
+    return { date: d, net: 0, trades: 0 };
+  });
+
+  for (const e of read(Number.MAX_SAFE_INTEGER)) {
+    if ((e.closedAt ?? 0) < startMs) continue;
+    if ((e.chain ?? 'robinhood') !== chain) continue;
+    if (me && e.wallet !== me) continue;
+    if (e.resultEthWei === undefined || BigInt(e.resultEthWei) === 0n) continue;
+    if (unitOf(e.chain, e.baseKind) !== unit) continue;
+    // Indeks hari dihitung dari tengah malam LOKAL, bukan pembagian milidetik:
+    // pembagian akan meleset tiap kali zona waktu bergeser setengah jam.
+    const d = new Date(e.closedAt);
+    d.setHours(0, 0, 0, 0);
+    const i = Math.round((d.getTime() - startMs) / 86_400_000);
+    if (i < 0 || i >= days) continue;
+    buckets[i].net += e.pnlEth;
+    buckets[i].trades += 1;
+  }
+  return buckets;
+}
+
 export function chainsWithHistory(): Array<{ key: string; trades: number }> {
   const me = currentWallet();
   const n = new Map<string, number>();

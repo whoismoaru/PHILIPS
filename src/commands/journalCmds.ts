@@ -2,7 +2,7 @@ import { Markup, Input } from 'telegraf';
 import { config } from '../config.js';
 import { bot, html } from '../core.js';
 import { CHAINS } from '../chains.js';
-import { renderProfitCard } from '../card.js';
+import { renderProfitCard, renderCalendarCard } from '../card.js';
 import * as journal from '../journal.js';
 import * as msg from '../messages.js';
 
@@ -62,6 +62,7 @@ const periodKb = (chain: string, active?: journal.PeriodKey) =>
     ...rows2(Object.keys(journal.PERIODS) as journal.PeriodKey[], (k) =>
       Markup.button.callback(`${active === k ? '• ' : ''}${journal.PERIODS[k].label}`, `pnl:${chain}:${k}`),
     ),
+    [Markup.button.callback('🗓 30-day calendar', `pnlcal:${chain}`)],
     [Markup.button.callback('‹ Chains', 'pnlback'), Markup.button.callback('📜 History', 'history')],
   ]);
 
@@ -180,6 +181,57 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
       return swap(ctx, text, { ...html, ...kb }); // media tak bisa di-edit → teks saja
     });
 }
+
+/**
+ * Kalender PnL 30 hari — kartu TANPA artwork, murni data harian.
+ *
+ * Satu buku saja (chain + satuan), diambil dari buku dengan trade terbanyak:
+ * mencampur USDG dengan ETH di satu kalender menghasilkan angka tanpa satuan.
+ */
+bot.action(/^pnlcal:(\w+)$/, async (ctx: any) => {
+  const chain = ctx.match[1];
+  await ctx.answerCbQuery().catch(() => {});
+  const s = journal.statsFor(Date.now() - 30 * 24 * 3600_000, chain);
+  const main = s.books[0];
+  const kb = periodKb(chain, '1m');
+  if (!main) {
+    return swap(ctx, msg.msgPnl({
+      dryRun: config.safety.dryRun, chainLabel: chainLabel(chain), periodLabel: '1 Month',
+      known: 0, count: s.count, untracked: s.untracked, excluded: s.excluded,
+      recovered: s.recovered, books: [],
+    }), { ...html, ...kb });
+  }
+  const days = journal.dailyFor(chain, main.unit, 30);
+  const net = days.reduce((a, d) => a + d.net, 0);
+  const active = days.filter((d) => d.trades > 0);
+  const green = active.filter((d) => d.net > 0).length;
+  const best = active.reduce((a, d) => (a === null || d.net > a.net ? d : a), null as (typeof days)[number] | null);
+  const worst = active.reduce((a, d) => (a === null || d.net < a.net ? d : a), null as (typeof days)[number] | null);
+  const buf = await renderCalendarCard({
+    title: `${chainLabel(chain)} · ${main.unit}`,
+    subtitle: 'last 30 days',
+    days,
+    unit: main.unit,
+    netLabel: n2(net, main.unit),
+    positive: net >= 0,
+    stats: [
+      { label: 'best day', value: best ? n2(best.net, main.unit).split(' ')[0] : '—' },
+      { label: 'worst day', value: worst ? n2(worst.net, main.unit).split(' ')[0] : '—' },
+      { label: 'active days', value: `${active.length} of 30` },
+      { label: 'green days', value: active.length ? `${green} of ${active.length}` : '—' },
+    ],
+    footerLeft: `${active.reduce((a, d) => a + d.trades, 0)} trades · ${new Date().toISOString().slice(0, 10)}`,
+  }).catch(() => null);
+  if (!buf) return ctx.reply(msg.msgError('pnl', 'Could not draw the calendar.'), html);
+  const doc = Input.fromBuffer(buf, `philips-pnl-calendar-${chain}.png`);
+  const caption = `🗓 <b>30-day calendar</b> · <b>${chainLabel(chain)}</b> · ${main.unit}`;
+  return ctx
+    .editMessageMedia({ type: 'document', media: doc, caption, parse_mode: 'HTML' }, kb)
+    .catch(async () => {
+      await ctx.deleteMessage().catch(() => {});
+      return ctx.replyWithDocument(doc, { caption, parse_mode: 'HTML', ...kb });
+    });
+});
 
 // Kembali ke pemilih chain — EDIT kartu yang sama, jangan kirim pesan baru.
 bot.action('pnlback', async (ctx: any) => {
