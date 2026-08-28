@@ -22,4 +22,13 @@ assert.ok(/Could not read v4 position #\$\{id\}/.test(v4), 'gagal baca disamakan
 assert.ok(/r\.gone\?\.length/.test(idx), 'leg hantu tak dibuang dari catatan');
 assert.ok(/no longer exist on-chain/i.test(idx), 'grup hantu penuh tak dibersihkan');
 
-console.log('OK — ghost legs: leg hantu disaring & dibuang, gagal baca tetap dilempar.');
+// Pembersih berkala: catatan hantu tak boleh menunggu sampai user mencoba menutup.
+const mon = readFileSync(join(process.cwd(), 'src', 'monitor.ts'), 'utf8');
+assert.ok(/async function reapDeadV4/.test(mon), 'tak ada pembersih catatan v4 mati');
+assert.ok(/await reapDeadV4\(\);/.test(mon), 'pembersih tak pernah dipanggil');
+assert.ok(
+  /if \(!\/NOT_MINTED\|invalid token id\|nonexistent\/i\.test\(m\)\) continue;/.test(mon),
+  'pembersih menghapus catatan saat RPC gagal — itu cara kehilangan posisi',
+);
+
+console.log('OK — ghost legs: disaring saat tutup, dibersihkan berkala, RPC gagal tak dihitung hilang.');

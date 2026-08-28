@@ -8,7 +8,7 @@ import * as store from './store.js';
 import * as alerts from './alerts.js';
 import * as journal from './journal.js';
 import * as v4store from './v4store.js';
-import { checkV4Status } from './uniswapV4.js';
+import { checkV4Status, v4Supported, v4OwnerOf } from './uniswapV4.js';
 import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgIlAlert, msgConverted, msgV4Range } from './messages.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -216,6 +216,34 @@ async function sweepLeftovers(bot: Telegraf) {
     }
   }
   await sweepStuckWeth(bot);
+  await reapDeadV4();
+}
+
+/**
+ * Buang catatan v4 yang posisinya SUDAH TAK ADA di chain.
+ *
+ * Catatan hantu bukan sekadar sampah: karena penutupan ladder v4 mengemas semua
+ * leg ke SATU multicall, satu id yang tak ter-mint me-revert seluruh batch dengan
+ * 'NOT_MINTED' — jadi leg yang sehat pun ikut tak bisa ditutup. 29 Agu 2026 delapan
+ * catatan hantu memblokir sebuah ladder sampai dibersihkan tangan.
+ *
+ * HANYA revert kepemilikan yang dihitung "hilang". Gagal baca (RPC rewel) dibiarkan
+ * — menghapus catatan karena jaringan sedang goyah adalah cara kehilangan posisi.
+ */
+async function reapDeadV4(): Promise<void> {
+  for (const cc of Object.values(CHAINS)) {
+    if (!v4Supported(cc)) continue;
+    for (const r of v4store.allV4().filter((x) => x.chain === cc.key)) {
+      try {
+        await v4OwnerOf(cc, r.tokenId);
+      } catch (e) {
+        const m = (e as Error).message ?? '';
+        if (!/NOT_MINTED|invalid token id|nonexistent/i.test(m)) continue;
+        v4store.removeV4(r.tokenId);
+        console.log(`[reap-v4] #${r.tokenId} tak ada di chain — catatan dibuang`);
+      }
+    }
+  }
 }
 
 // Ambang debu WETH: < 0.00001 WETH diabaikan (gas unwrap > nilainya).

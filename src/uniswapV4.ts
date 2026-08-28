@@ -915,6 +915,13 @@ export async function v4NextTokenId(cc: ChainCtx): Promise<bigint> {
   return await new ethers.Contract(pmAddr, ['function nextTokenId() view returns (uint256)'], cc.provider).nextTokenId();
 }
 
+/** Pemilik NFT posisi v4 — revert 'NOT_MINTED' berarti posisinya sudah tak ada. */
+export async function v4OwnerOf(cc: ChainCtx, tokenId: string): Promise<string> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
+  return await new ethers.Contract(pmAddr, ['function ownerOf(uint256) view returns (address)'], cc.provider).ownerOf(tokenId);
+}
+
 /**
  * Id dalam [from, to) yang dimiliki wallet kita. Untuk memungut posisi yang
  * TERLANJUR ter-mint padahal alur open-nya gagal di tengah — tanpa ini posisi
