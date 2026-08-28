@@ -747,56 +747,95 @@ export async function executeRemoveBatch(
   const notes: string[] = [];
   for (let off = 0; off < tokenIds.length; off += MAX_LEGS_PER_MULTICALL) {
     const chunk = tokenIds.slice(off, off + MAX_LEGS_PER_MULTICALL);
-    const deadline = Math.floor(Date.now() / 1000) + 600;
-    const calls: string[] = [];
-    let live = 0;
-    for (const tokenId of chunk) {
-      // Leg yang sudah hangus (positions() revert 'Invalid token ID') → LEWATI, jangan
-      // masukkan ke multicall (burn ganda me-revert seluruh batch & bikin close macet).
-      //
-      // TAPI hanya untuk revert itu. Dulu `catch {}` menelan SEMUA kegagalan, termasuk
-      // RPC yang putus — dan itu berakhir bencana: 28 Agu 2026 delapan leg (214 USDT)
-      // gagal dibaca karena ECONNRESET, semuanya dilewati, daftar panggilan jadi kosong,
-      // dan bot melaporkan "LADDER CLOSED" padahal tak satu tx pun dikirim. Posisinya
-      // masih hidup di chain tapi sudah dihapus dari catatan. Gagal baca ≠ posisi hilang.
-      let liquidity: bigint;
-      try {
-        liquidity = BigInt((await positionManager.positions(tokenId)).liquidity);
-      } catch (e) {
-        if (isGoneErr(e)) continue;
-        throw new Error(
-          `Could not read position #${tokenId} (${(e as Error).message.slice(0, 80)}). ` +
-            'Nothing was closed. Try again when the network settles.',
-        );
-      }
-      if (liquidity > 0n) {
-        const { unprotected, ...mins } = await withdrawMins(positionManager, tokenId, liquidity, deadline, ctx);
-        if (unprotected) notes.push(WITHDRAW_UNPROTECTED_NOTE(tokenId));
-        calls.push(iface.encodeFunctionData('decreaseLiquidity', [{ tokenId, liquidity, ...mins, deadline }]));
-      }
-      calls.push(
-        iface.encodeFunctionData('collect', [
-          { tokenId, recipient: wallet.address, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 },
-        ]),
+
+    /**
+     * Susun panggilan multicall dengan lantai harga yang BARU DIHITUNG.
+     *
+     * Dipisah jadi fungsi supaya bisa diulang: lantai 0.5% dihitung dari harga
+     * saat itu, dan untuk token yang bergerak cepat harga bisa sudah lewat sebelum
+     * simulasi selesai. Menyusun ulang = memakai harga terbaru, BUKAN melonggarkan
+     * lantainya.
+     */
+    const build = async () => {
+      const deadline = Math.floor(Date.now() / 1000) + 600;
+      // Tiap leg dihitung PARALEL. Dulu berurutan: 8 leg × (staticCall + retry) bisa
+      // memakan detik, dan seluruh jeda itu jadi jarak antara harga yang dipakai
+      // lantai dengan harga saat simulasi — persis yang memicu "Price slippage check".
+      const parts = await Promise.all(
+        chunk.map(async (tokenId) => {
+          // Leg yang sudah hangus (revert 'Invalid token ID') → LEWATI. Hanya revert itu:
+          // gagal baca karena RPC putus pernah membuat bot melapor "closed" tanpa
+          // mengirim satu tx pun (28 Agu 2026), jadi kegagalan lain WAJIB dilempar.
+          let liquidity: bigint;
+          try {
+            liquidity = BigInt((await positionManager.positions(tokenId)).liquidity);
+          } catch (e) {
+            if (isGoneErr(e)) return null;
+            throw new Error(
+              `Could not read position #${tokenId} (${(e as Error).message.slice(0, 80)}). ` +
+                'Nothing was closed. Try again when the network settles.',
+            );
+          }
+          const calls: string[] = [];
+          const legNotes: string[] = [];
+          if (liquidity > 0n) {
+            const { unprotected, ...mins } = await withdrawMins(positionManager, tokenId, liquidity, deadline, ctx);
+            if (unprotected) legNotes.push(WITHDRAW_UNPROTECTED_NOTE(tokenId));
+            calls.push(iface.encodeFunctionData('decreaseLiquidity', [{ tokenId, liquidity, ...mins, deadline }]));
+          }
+          calls.push(
+            iface.encodeFunctionData('collect', [
+              { tokenId, recipient: wallet.address, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 },
+            ]),
+          );
+          calls.push(iface.encodeFunctionData('burn', [tokenId]));
+          return { calls, legNotes };
+        }),
       );
-      calls.push(iface.encodeFunctionData('burn', [tokenId]));
-      live++;
-    }
-    if (calls.length === 0) {
+      const live = parts.filter((p): p is NonNullable<typeof p> => p !== null);
+      return {
+        calls: live.flatMap((p) => p.calls),
+        legNotes: live.flatMap((p) => p.legNotes),
+        live: live.length,
+      };
+    };
+
+    let built = await build();
+    if (built.calls.length === 0) {
       // Sampai di sini artinya SETIAP leg benar-benar revert 'Invalid token ID' —
       // kegagalan baca sudah dilempar di atas, jadi ini memang sudah tertutup.
       notes.push('Batch close: all legs already closed on-chain.');
       continue;
     }
+
     // PRE-FLIGHT: simulasi dulu → gagal dengan alasan asli sebelum kirim tx.
-    try {
-      await positionManager.multicall.staticCall(calls);
-    } catch (e) {
-      throw new Error(`Ladder close batch would revert (${live} legs): ${(e as Error).message.slice(0, 140)}`);
+    // Revert karena lantai harga BUKAN alasan menyerah: harganya bergerak, bukan
+    // salah. Susun ulang dengan harga terbaru dan coba lagi, maksimal 3 kali.
+    const MAX_REBUILD = 3;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await positionManager.multicall.staticCall(built.calls);
+        break;
+      } catch (e) {
+        const emsg = (e as Error).message ?? '';
+        const movedPrice = /price slippage check/i.test(emsg);
+        if (!movedPrice || attempt >= MAX_REBUILD) {
+          throw new Error(
+            movedPrice
+              ? `Price moved faster than the withdrawal floor could be set (${built.live} legs), so nothing was sent. ` +
+                'Your positions are untouched — try again in a moment.'
+              : `Ladder close batch would revert (${built.live} legs): ${emsg.slice(0, 140)}`,
+          );
+        }
+        console.log(`[close batch] lantai harga terlewat (percobaan ${attempt}/${MAX_REBUILD}) — hitung ulang`);
+        built = await build();
+      }
     }
-    const tx = await sendTxNonceSafe(wallet as ethers.Wallet, await positionManager.multicall.populateTransaction(calls));
+
+    notes.push(...built.legNotes);
+    const tx = await sendTxNonceSafe(wallet as ethers.Wallet, await positionManager.multicall.populateTransaction(built.calls));
     const receipt = await tx.wait();
-    notes.push(`Batch close ${live} legs (tx ${receipt?.hash ?? tx.hash})`);
+    notes.push(`Batch close ${built.live} legs (tx ${receipt?.hash ?? tx.hash})`);
   }
   return { notes };
 }

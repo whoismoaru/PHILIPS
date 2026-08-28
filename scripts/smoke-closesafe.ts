@@ -16,9 +16,15 @@ const idx = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8');
 
 // 1. Hanya revert 'Invalid token ID' yang boleh dilewati; sisanya harus dilempar.
 const loop = uni.slice(uni.indexOf('export async function executeRemoveBatch'), uni.indexOf('export type PositionInfo'));
-assert.ok(/if \(isGoneErr\(e\)\) continue;/.test(loop), 'leg yang gagal dibaca masih dilewati diam-diam');
+assert.ok(/if \(isGoneErr\(e\)\) return null;/.test(loop), 'leg yang gagal dibaca masih dilewati diam-diam');
 assert.ok(/throw new Error\(\s*`Could not read position/.test(loop), 'gagal baca tak dilempar');
-assert.ok(!/\} catch \{\s*continue;/.test(loop), 'masih ada catch kosong yang menelan semua error');
+assert.ok(!/\} catch \{\s*(continue|return null);/.test(loop), 'masih ada catch kosong yang menelan semua error');
+
+// Lantai harga yang terlewat karena harga bergerak: susun ULANG dengan harga baru,
+// jangan menyerah dan jangan melonggarkan lantainya.
+assert.ok(/price slippage check/i.test(loop), 'revert lantai harga tak dikenali');
+assert.ok(/built = await build\(\);/.test(loop), 'tak ada penyusunan ulang saat harga bergerak');
+assert.ok(/Price moved faster than the withdrawal floor/.test(loop), 'pesan gagal tak menjelaskan sebabnya');
 
 // 2. Tanpa tx penarikan, jangan finalisasi apa pun sebagai tertutup.
 assert.ok(
