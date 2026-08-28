@@ -58,8 +58,10 @@ import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import './commands/feesAndRemove.js';
 import './commands/alerts.js';
 import './commands/unwrap.js';
+import './commands/send.js';
 import { handlePctReply } from './commands/wallet.js';
 import { handleBridgeAmount } from './commands/bridge.js';
+import { handleSendAddress, handleSendAmount } from './commands/send.js';
 import {
   CHAINS,
   getChain,
@@ -328,11 +330,11 @@ bot.use((ctx: any, next: any) => {
 // Perintah baca (/status /positions /pools /help) sengaja dibiarkan
 // lewat: memantau tanpa dompet itu sah, dan kartunya sendiri sudah menandai
 // "belum terhubung".
-const NEEDS_WALLET = /^\/(add_lp|remove_lp|stop|claim_fees|buy|sell|unwrap|bridge)\b/;
+const NEEDS_WALLET = /^\/(add_lp|remove_lp|stop|claim_fees|buy|sell|unwrap|bridge|send)\b/;
 // Tombol yang BENAR-BENAR mengirim tx. Guard command saja tak cukup: alur bisa
 // dimulai saat dompet terhubung lalu diputus, dan tombolnya masih bisa ditekan —
 // yang muncul lalu bukan "hubungkan dompet" tapi error mentah dari VoidSigner.
-const NEEDS_WALLET_CB = /^(addok|tswapok|close:|closev4go:|claim:|rmok:|unwrap:go|br:go)/;
+const NEEDS_WALLET_CB = /^(addok|tswapok|close:|closev4go:|claim:|rmok:|unwrap:go|br:go|sndgo)/;
 bot.use((ctx: any, next: any) => {
   const t = ctx.message?.text ?? '';
   const cb = ctx.callbackQuery?.data ?? '';
@@ -4497,6 +4499,10 @@ bot.on(message('text'), async (ctx) => {
   // Jawaban untuk prompt persen di /settings dicek lebih dulu: "25 50 75" harus
   // tersimpan sebagai setelan, bukan terbaca sebagai nominal di alur yang terbuka.
   if (await handlePctReply(ctx, raw)) return;
+  // /send: alamat lalu nominal. Diperiksa sebelum alur nominal lain supaya angka
+  // yang diketik di sini tak tertelan wizard /add atau /buy yang masih terbuka.
+  if (await handleSendAddress(ctx, raw)) return;
+  if (await handleSendAmount(ctx, raw)) return;
   if (tflow?.awaitingCA) {
     // /buy alur CA-dulu: user tempel CA → deteksi chain → safety.
     tflow.awaitingCA = false;
@@ -4647,6 +4653,7 @@ const BOT_COMMANDS = [
   { command: 'sell', description: 'Sell a token (best route)' },
   { command: 'unwrap', description: 'Convert stuck wrapped native back' },
   { command: 'bridge', description: 'Move native funds across chains' },
+  { command: 'send', description: 'Send funds to another address' },
   // Dompet & setelan
   { command: 'settings', description: 'Wallet & transaction preferences' },
   { command: 'alerts', description: 'Notification settings' },

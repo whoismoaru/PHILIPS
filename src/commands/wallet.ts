@@ -77,8 +77,9 @@ async function cmdSettings(ctx: any) {
   ]);
   rows.push([
     Markup.button.callback('🌉 Bridge %', 'pct:bridge'),
-    Markup.button.callback('🪜 Ladder legs', 'pct:legs'),
+    Markup.button.callback('📤 Send %', 'pct:send'),
   ]);
+  rows.push([Markup.button.callback('🪜 Ladder legs', 'pct:legs')]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
@@ -117,7 +118,7 @@ function pctCardKb(flow: pctPresets.PctFlow) {
   ]);
 }
 
-bot.action(/^pct:(buy|sell|add|stop|bridge|legs)$/, async (ctx) => {
+bot.action(/^pct:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   // Kembali dari prompt = batal mengetik. Tanpa ini penandanya menetap dan menelan
   // pesan teks berikutnya, di alur mana pun.
@@ -129,7 +130,7 @@ bot.action(/^pct:(buy|sell|add|stop|bridge|legs)$/, async (ctx) => {
   );
 });
 
-bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs)$/, async (ctx) => {
+bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.askEdit(ctx.from!.id, flow);
   await ctx.answerCbQuery();
@@ -139,7 +140,7 @@ bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs)$/, async (ctx) => {
   });
 });
 
-bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs)$/, async (ctx) => {
+bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.clearEdit(ctx.from!.id);
   const v = pctPresets.reset(flow);

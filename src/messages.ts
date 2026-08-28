@@ -1775,7 +1775,7 @@ export function msgSettings(
   dryRun: boolean,
   maxPerTx: string,
   gasCeiling?: string | null, // atap ongkos gas per-tx; null = tanpa atap
-  pcts?: { buy: number[]; sell: number[]; add: number[]; stop: number[]; bridge: number[] },
+  pcts?: { buy: number[]; sell: number[]; add: number[]; stop: number[]; bridge: number[]; send: number[] },
 ): string {
   return [
     `⚙️ ${bold('PHILIPS Settings')}`,
@@ -1789,7 +1789,7 @@ export function msgSettings(
     `💸 ${bold('Transaction Preferences')}`,
     `• Tx Limit: ${esc(maxPerTx)}`,
     ...(pcts
-      ? [`• Quick %: buy ${esc(pcts.buy.join('/'))} · sell ${esc(pcts.sell.join('/'))} · add ${esc(pcts.add.join('/'))} · withdraw ${esc(pcts.stop.join('/'))} · bridge ${esc(pcts.bridge.join('/'))}`]
+      ? [`• Quick %: buy ${esc(pcts.buy.join('/'))} · sell ${esc(pcts.sell.join('/'))} · add ${esc(pcts.add.join('/'))} · withdraw ${esc(pcts.stop.join('/'))} · bridge ${esc(pcts.bridge.join('/'))} · send ${esc(pcts.send.join('/'))}`]
       : []),
     `• Gas Fee: Auto-fetched from L2${gasCeiling ? ` · ceiling ${esc(gasCeiling)}/tx` : ''}`,
     // Angka slippage ditulis sesuai yang BENAR-BENAR dipakai kode: swap coba 5%
@@ -2240,4 +2240,101 @@ export function msgBridgeUnavailable(): string {
     '',
     note('bridging needs at least two chains enabled. Only one chain is active right now.'),
   ].join('\n');
+}
+
+// ─── /send: kirim ke alamat lain ────────────────────────────────────────────
+
+export function msgSendAskAddress(): string {
+  return [
+    bold('SEND'),
+    '',
+    '💬 Paste the destination address.',
+    '',
+    note('an EVM address is the same on every chain, so the bot cannot tell which one you mean from the address alone. It will show you where you have a balance and let you pick.'),
+  ].join('\n');
+}
+
+export function msgSendPickAsset(to: string, chains: string[], anyContract: boolean): string {
+  const out = [
+    bold('SEND'),
+    '',
+    `📮 ${bold('To:')} ${code(shortAddr(to))}`,
+    `🔎 ${bold('Found balances on:')} ${esc(chains.join(', '))}`,
+    '',
+    'Pick what to send.',
+  ];
+  if (anyContract) {
+    out.push('', `⚠️ ${italic('This address is a contract on at least one chain. Contracts can reject or trap plain transfers, so those rows are marked.')}`);
+  }
+  return out.join('\n');
+}
+
+export function msgSendAmount(o: {
+  to: string;
+  chainLabel: string;
+  symbol: string;
+  balance: string;
+  usable: string;
+  nativeReserve: boolean;
+  isContract: boolean;
+}): string {
+  const out = [
+    `${bold('SEND')} · ${esc(o.chainLabel)}`,
+    '',
+    `📮 ${bold('To:')} ${code(shortAddr(o.to))}`,
+    `💰 ${bold('Balance:')} ${esc(o.balance)}`,
+    `✅ ${bold('Sendable:')} ${bold(o.usable)}`,
+    '',
+    `Tap a percentage, or type the exact amount of ${bold(esc(o.symbol))} in the chat.`,
+  ];
+  if (o.nativeReserve) out.push('', note('a gas reserve is kept aside, so 100% still leaves enough to pay for the transfer'));
+  if (o.isContract) out.push('', `⚠️ ${italic('the destination is a contract on this chain')}`);
+  return out.join('\n');
+}
+
+export function msgSendConfirm(o: {
+  to: string;
+  chainLabel: string;
+  amount: string;
+  isContract: boolean;
+  dryRun: boolean;
+}): string {
+  const out = [
+    bold('SEND REVIEW'),
+    '',
+    `📤 ${bold('Amount:')} ${bold(o.amount)}`,
+    `📮 ${bold('To:')} ${code(o.to)}`,
+    `🔗 ${bold('Chain:')} ${esc(o.chainLabel)}`,
+  ];
+  if (o.isContract) {
+    out.push('', `⚠️ ${bold('That address is a contract on this chain.')} ${italic('A contract that does not handle plain transfers keeps the funds for good.')}`);
+  }
+  out.push(
+    '',
+    italic(
+      o.dryRun
+        ? '*DRY RUN, no transaction will be sent.'
+        : '*check the address one more time. A transfer cannot be reversed, and there is nobody to appeal to.',
+    ),
+  );
+  return out.join('\n');
+}
+
+export function msgSendDone(o: {
+  to: string;
+  chainLabel: string;
+  amount: string;
+  txHash: string | null;
+  dryRun: boolean;
+}): string {
+  const out = [
+    `✅ ${bold('SENT')}`,
+    '',
+    `📤 ${bold(o.amount)} → ${code(shortAddr(o.to))}`,
+    `🔗 ${esc(o.chainLabel)}`,
+  ];
+  if (o.txHash) out.push('', `🔗 ${bold('Tx:')}`, code(o.txHash));
+  if (o.dryRun) out.push('', note('DRY RUN, no transaction was sent.'));
+  out.push('', nowWib());
+  return out.join('\n');
 }

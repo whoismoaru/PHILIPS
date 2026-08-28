@@ -9,7 +9,7 @@ import { join } from 'node:path';
  * /add memakai 30/50/70/90, sisanya 25/50/75/100). Mengubahnya berarti mengedit
  * empat tempat lalu restart, jadi praktis tak pernah diubah.
  */
-export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs';
+export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs' | 'send';
 
 export const FLOW_LABEL: Record<PctFlow, string> = {
   buy: 'Buy',
@@ -18,6 +18,7 @@ export const FLOW_LABEL: Record<PctFlow, string> = {
   stop: 'Withdraw',
   bridge: 'Bridge',
   legs: 'Ladder legs',
+  send: 'Send',
 };
 
 // `stop` sengaja tanpa 100: menarik seluruhnya = menutup posisi, dan itu punya
@@ -30,6 +31,7 @@ const DEFAULTS: Record<PctFlow, number[]> = {
   bridge: [25, 50, 75, 100],
   // Bukan persen: jumlah anak tangga ladder bid-ask.
   legs: [8, 9, 10, 69],
+  send: [25, 50, 75, 100],
 };
 
 const FILE = join(process.cwd(), 'data', 'pctpresets.json');
@@ -63,6 +65,7 @@ const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
   stop: { min: 1, max: 99 },
   bridge: { min: 1, max: 100 },
   legs: { min: 2, max: 69 },
+  send: { min: 1, max: 100 },
 };
 export const boundsFor = (flow: PctFlow) => BOUNDS[flow];
 /** Satuan yang dipakai kartu setelan — '%' untuk nominal, 'legs' untuk ladder. */
