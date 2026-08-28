@@ -330,7 +330,7 @@ bot.use((ctx: any, next: any) => {
 // Perintah baca (/status /positions /pools /help) sengaja dibiarkan
 // lewat: memantau tanpa dompet itu sah, dan kartunya sendiri sudah menandai
 // "belum terhubung".
-const NEEDS_WALLET = /^\/(add_lp|remove_lp|stop|claim_fees|buy|sell|unwrap|bridge|send)\b/;
+const NEEDS_WALLET = /^\/(add_lp|stop|claim_fees|buy|sell|unwrap|bridge|send)\b/;
 // Tombol yang BENAR-BENAR mengirim tx. Guard command saja tak cukup: alur bisa
 // dimulai saat dompet terhubung lalu diputus, dan tombolnya masih bisa ditekan —
 // yang muncul lalu bukan "hubungkan dompet" tapi error mentah dari VoidSigner.
@@ -4642,9 +4642,7 @@ const BOT_COMMANDS = [
   { command: 'pnl', description: 'Lifetime PnL summary' },
   // Riset
   // LP
-  { command: 'add_lp', description: 'Open a single-side LP (or /add_lp <CA>)' },
   { command: 'claim_fees', description: 'Collect fees without closing' },
-  { command: 'remove_lp', description: 'Withdraw liquidity 25/50/75/100%' },
   { command: 'stop', description: 'Close an LP position' },
   // Swap
   { command: 'buy', description: 'Buy a token (best route)' },
@@ -4662,7 +4660,9 @@ const BOT_COMMANDS = [
  * Alias yang SENGAJA tak dipasang di menu. Penjaga menu tetap galak untuk sisanya —
  * daftar ini agar alias yang disengaja tak terbaca sebagai command yang lupa didaftar.
  */
-const HIDDEN_COMMANDS = new Set(['status']); // nama lama /portfolio
+// Alias tersembunyi: /status nama lama /portfolio; /add_lp masih jadi satu-satunya
+// pintu ke pemilih pool teratas (tanpa CA), jadi handler-nya tetap hidup.
+const HIDDEN_COMMANDS = new Set(['status', 'add_lp']);
 
 function assertMenuComplete(): void {
   const inMenu = new Set(BOT_COMMANDS.map((c) => c.command));

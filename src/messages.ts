@@ -220,9 +220,7 @@ function cockpitLines(dryRun: boolean): string[] {
     '',
     `⚙️ ${bold('Execution & Trade :')}`,
     ...grp([
-      ['/add_lp', 'Open a new LP position'],
       ['/claim_fees', 'Harvest fees without closing'],
-      ['/remove_lp', 'Withdraw 25/50/75% of liquidity'],
       ['/stop', 'Close an LP position completely'],
       ['/unwrap', 'Return stuck wrapped native to native'],
       ['/buy', 'Buy a token (best route)'],
@@ -356,9 +354,9 @@ export function msgHowItWorks(): string {
     '',
     `2️⃣ ${bold('Pick a token')} — paste a contract address (CA) straight into the chat. Every token is audited first: honeypot, buy/sell tax, locked liquidity, holder spread.`,
     '',
-    `3️⃣ ${bold('Open a single-side LP')} — /add_lp. You deposit only one token; the position works like a passive limit order that keeps earning fees while it waits for your price.`,
+    `3️⃣ ${bold('Open a single-side LP')} — paste the token's contract address into the chat. You deposit only one token; the position works like a passive limit order that keeps earning fees while it waits for your price.`,
     '',
-    `4️⃣ ${bold('Monitor & harvest')} — /positions for in/out of range status, /claim_fees to harvest, /remove_lp to withdraw.`,
+    `4️⃣ ${bold('Monitor & harvest')} — /positions for in/out of range status and /claim_fees to harvest. Open a position for its Withdraw and Close buttons.`,
     '',
     `⚠️ ${bold('Risk')}: price can move through your range (impermanent loss), and new tokens can rug. PHILIPS blocks the clearly dangerous ones, but the final call is always yours.`,
   ].join('\n');
@@ -751,7 +749,7 @@ export function msgConverted(tokenId: string, baseSym: string, tokenSym: string,
     `🔗 ${bold('Pair:')} ${esc(baseSym)} / ${esc(tokenSym)}`,
     '',
     `⚠️ ${bold('RISK NOTICE:')} Your ${esc(from)} has been 100% converted to ${esc(into)}.`,
-    `💡 ${bold('Suggestion:')} Your principal will only recover if the ${esc(tokenSym)} price ${tokenSide ? 'falls' : 'rises'} again. Consider /remove_lp to withdraw, or /stop to close and cash out.`,
+    `💡 ${bold('Suggestion:')} Your principal will only recover if the ${esc(tokenSym)} price ${tokenSide ? 'falls' : 'rises'} again. Open the position to withdraw part of it, or /stop to close and cash out.`,
     '',
     `⏱️ <i>Triggered at: ${nowWib()}</i>`,
   ].join('\n');
@@ -1835,7 +1833,7 @@ export function msgDisconnected(): string {
   ].join('\n');
 }
 
-// ─── /claim_fees & /remove_lp ──────────────────────────────────────
+// ─── /claim_fees & tarik sebagian ──────────────────────────────────────
 
 export function msgNoFees(): string {
   return [
@@ -1864,12 +1862,6 @@ export function msgClaimDone(id: string, label: string, txHash: string | null): 
     '',
     note(nowWib()),
   ].join('\n');
-}
-
-export function msgRemovePick(rows: Array<{ symbol: string; id: string }>): string {
-  const out = [`🗑️ ${bold('Withdraw Liquidity')}`, '', 'Pick the position to withdraw from :'];
-  rows.forEach((r, i) => out.push(`${i + 1}️⃣ ${bold(esc(r.symbol))} · #${esc(r.id)}`));
-  return out.join('\n');
 }
 
 export function msgRemovePct(id: string): string {

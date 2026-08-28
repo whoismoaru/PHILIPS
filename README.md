@@ -113,9 +113,8 @@ depositing, and the estimated gas. Nothing is signed until you tap confirm.
 | `/portfolio` | Total equity, and what you hold on each chain |
 | `/positions` | Your live positions; tap one for full detail |
 | `/pnl` | Profit recap from closed trades, as a picture card |
-| `/add_lp` | Open a position (or `/add_lp <contract address>`) |
+| paste a contract address | Audit the token, then open a position, buy, or sell |
 | `/claim_fees` | Take the fees, leave the position running |
-| `/remove_lp` | Withdraw part of a position and leave the rest running |
 | `/stop` | List your positions with a close button on each |
 | `/buy` · `/sell` | Swap a token via the best available route |
 | `/unwrap` | Turn stuck wrapped native back into gas, on every chain at once |

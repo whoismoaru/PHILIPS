@@ -10,8 +10,9 @@ import * as msg from '../messages.js';
 
 /**
  * /claim_fees — panen fee tanpa menutup posisi.
- * /remove_lp  — tarik 25/50/75% (posisi tetap hidup) atau 100% (dialihkan ke
- *               jalur /stop yang sudah menangani burn + jurnal + cashout).
+ * Tarik sebagian — 25/50/75% (posisi tetap hidup) atau 100% (dialihkan ke jalur
+ * /stop yang sudah menangani burn + jurnal + cashout). Masuknya lewat tombol
+ * "🗑️ Withdraw" di kartu posisi; command /remove_lp sudah dihapus.
  */
 
 // ---------- /claim_fees — panen fee tanpa menutup posisi ----------
@@ -77,21 +78,10 @@ bot.action(/^claim:(\d+)$/, async (ctx) => {
   }
 });
 
-// ---------- /remove_lp — tarik sebagian / seluruh likuiditas ----------
-async function cmdRemoveLp(ctx: any) {
-  const active = store.active();
-  if (!active.length) return ctx.reply(msg.msgNoActiveToStop(), html);
-  const rows = active.map((r) => [
-    Markup.button.callback(`${r.symbol} · #${r.tokenId}`, `rm:${r.tokenId}`),
-  ]);
-  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
-  await ctx.reply(msg.msgRemovePick(active.map((r) => ({ symbol: r.symbol, id: r.tokenId }))), {
-    ...html,
-    ...Markup.inlineKeyboard(rows),
-  });
-}
-bot.command('remove_lp', cmdRemoveLp);
-
+// ---------- Tarik sebagian likuiditas ----------
+// Command /remove_lp DIHAPUS (28 Agu 2026): isinya cuma daftar posisi dengan satu
+// tombol per posisi menuju pemilih persen di bawah, dan pemilih itu sudah dicapai
+// dari kartu posisi lewat tombol "🗑️ Withdraw" (rm:<id>). Dua pintu, satu ruangan.
 bot.action(/^rm:(\d+)$/, async (ctx) => {
   const id = ctx.match[1];
   await ctx.answerCbQuery();

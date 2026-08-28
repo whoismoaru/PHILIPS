@@ -918,7 +918,7 @@ export async function collectFeesOnly(
 
 /**
  * Tarik SEBAGIAN likuiditas (1–99%) lalu collect. Posisi TIDAK di-burn dan tetap
- * hidup — dipakai /remove_lp 25/50/75%. Untuk 100% pakai executeRemove (burn +
+ * hidup — dipakai penarikan sebagian 25/50/75%. Untuk 100% pakai executeRemove (burn +
  * jurnal + cashout), supaya tak ada dua jalur penutupan yang bisa menyimpang.
  */
 /**
