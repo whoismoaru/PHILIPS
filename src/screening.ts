@@ -112,6 +112,7 @@ export type ScreenResult = {
   priceUsd: string | null;
   marketCapUsd: number | null; // dari DexScreener (marketCap, fallback fdv)
   pairAgeHours: number | null;
+  dexName: string | null; // 'uniswap' | 'pancakeswap' | … dari DexScreener
   renounced: boolean | null; // null = tak bisa ditentukan (owner() tak ada / RPC gagal)
   gmgn: GmgnExtra | null; // pengisi celah dari GMGN; null = tak dipanggil/gagal
   sellPath: SellStatus; // simulasi jalur jual (exit-liquidity)
@@ -259,6 +260,7 @@ export async function screenToken(
   let priceUsd: string | null = null;
   let marketCapUsd: number | null = null;
   let pairAgeHours: number | null = null;
+  let dexName: string | null = null; // venue pair terlikuid — baris Liquidity menyebutnya
 
   // Hanya pair di chain yang sama (alamat token bisa eksis di banyak chain).
   const pairs: any[] = (dex?.pairs ?? []).filter((p: any) => p.chainId === ctx.dexKey);
@@ -266,6 +268,7 @@ export async function screenToken(
     // Ambil pair paling likuid.
     const p = pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
     liquidityUsd = p.liquidity?.usd ?? null;
+    dexName = p.dexId ?? null;
     volume24h = p.volume?.h24 ?? null;
     buys24h = p.txns?.h24?.buys ?? null;
     sells24h = p.txns?.h24?.sells ?? null;
@@ -339,6 +342,7 @@ export async function screenToken(
     priceUsd,
     marketCapUsd,
     pairAgeHours,
+    dexName,
     renounced,
     gmgn,
     sellPath: sell.status,
@@ -454,7 +458,9 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     const a = Math.abs(n);
     if (a >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
     if (a >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-    if (a >= 1e3) return `$${Math.round(n / 1e3)}K`;
+    // Satu desimal di rentang K: $452.5K vs $453K — token mikro-cap justru hidup
+    // di rentang ini, jadi pembulatan penuh menghapus angka yang paling dibaca.
+    if (a >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
     return `$${n.toFixed(0)}`;
   };
   const pct = (n: number | null): string => (n === null ? UNK : `${Number(n.toFixed(2))}%`);
@@ -488,60 +494,114 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   const privHas = (re: RegExp): boolean | null =>
     g?.privileges == null ? null : g.privileges.some((p) => re.test(p));
 
+  // Umur pool dibaca manusia: "1h 45m", bukan "2 hours" yang membulatkan pool
+  // berumur 1,5 jam jadi terdengar dua kali lebih matang.
+  const age = (h: number | null): string => {
+    if (h === null) return UNK;
+    const menit = Math.round(h * 60);
+    if (menit < 60) return `${menit}m`;
+    const hari = Math.floor(menit / 1440);
+    const jam = Math.floor((menit % 1440) / 60);
+    return hari > 0 ? `${hari}d ${jam}h` : `${jam}h ${menit % 60}m`;
+  };
+  const venue = s.dexName ? ` (${esc(s.dexName.replace(/^\w/, (c) => c.toUpperCase()))})` : '';
+
+  // "Authority" adalah istilah Solana; di EVM padanannya adalah privilege owner
+  // yang masih hidup di kontrak. Dibaca dari daftar privilege GMGN: daftar KOSONG
+  // = benar-benar tak ada (Disabled), payload tak terbaca = '?', BUKAN 'Disabled'.
+  // Menyebut "Disabled" tanpa data persis kebohongan yang paling mahal di kartu ini.
+  const authority = (re: RegExp): string => {
+    const v = privHas(re);
+    return v === null ? UNK : v ? 'Enabled ⚠️' : 'Disabled ✅';
+  };
+
+  // LP: burn didahulukan (permanen) atas lock (bisa kedaluwarsa).
+  const lpStatus =
+    burnt !== null && burnt >= 50
+      ? `${pct(burnt)} Burned ✅`
+      : lpLocked !== null && lpLocked >= 50
+        ? `${pct(lpLocked)} Locked ✅`
+        : burnt !== null || lpLocked !== null
+          ? `burned ${pct(burnt)} · locked ${pct(lpLocked)} ⚠️`
+          : UNK;
+
+  const taxPair =
+    (g?.buyTaxPct ?? null) === null && (g?.sellTaxPct ?? null) === null
+      ? UNK
+      : `${taxLine(g?.buyTaxPct ?? null)} / ${taxLine(g?.sellTaxPct ?? null)}`;
+
+  const dev = g?.devPct ?? null;
+  const bundle = g?.bundlerPct ?? null;
+  const snipers = g?.sniperCount ?? null;
+
+  // Pohon: tiap bagian dipisah supaya baris terakhirnya memakai └.
+  const tree = (rows: Array<[string, string]>): string[] =>
+    rows.map(([k, v], i) => `${i === rows.length - 1 ? '└' : '├'}  ${esc(k)}: ${v}`);
+
   const out: string[] = [
     bold('TOKEN SECURITY AUDIT'),
     '',
-    `📊 ${bold('Basic Info :')}`,
-    `- Name: ${esc(s.name)} (${esc(symUp)})`,
-    `- Network: ${esc(opts?.chainLabel ?? UNK)}`,
-    `- Price: ${bold(s.priceUsd ? `$${s.priceUsd}` : UNK)} · MC: ${compact(s.marketCapUsd)}`,
-    `- Pool Age: ${s.pairAgeHours === null ? UNK : `${Math.round(s.pairAgeHours)} hours`}`,
+    `📊 ${bold('BASIC STATS :')}`,
+    ...tree([
+      ['Network', esc(opts?.chainLabel ?? UNK)],
+      ['Name', `${bold(`$${esc(symUp)}`)} · ${esc(s.name)}`],
+      ['Price', s.priceUsd ? `$${esc(s.priceUsd)}` : UNK],
+      ['Market Cap', bold(compact(s.marketCapUsd))],
+      ['Liquidity', `${bold(compact(s.liquidityUsd))}${venue}`],
+      ['Age', age(s.pairAgeHours)],
+    ]),
     '',
-    `🛡 ${bold('Contract Security :')}`,
-    `- Ownership Renounced: ${yes(renounced)}`,
-    `- Contract Verified: ${yes(verified)}`,
-    `- Proxy Contract: ${no(s.isProxy)}`,
-    `- Honeypot Risk (Can sell?): ${sellable === null ? `${UNK} unreadable` : sellable ? '✅ Safe' : '🚫 Cannot sell'}`,
-    `- Transfer Pause: ${no(privHas(/paus|freeze/))}`,
-    `- Trading Cooldown: ${no(privHas(/cooldown/))}`,
+    `🛡 ${bold('CONTRACT :')}`,
+    ...tree([
+      ['Mint Authority', authority(/mint/i)],
+      ['Freeze Authority', authority(/paus|freeze|blacklist/i)],
+      ['LP Status', lpStatus],
+      ['Honeypot', sellable === null ? UNK : sellable ? 'PASS ✅' : 'FAIL 🚫 cannot sell'],
+      ['Tax (Buy/Sell)', taxPair],
+      // Verified & Proxy tak ada di naskah tapi tetap ditahan di sini: kontrak
+      // proxy bisa DIGANTI isinya sesudah audit ini, jadi menghapusnya berarti
+      // kartu "aman" untuk token yang logikanya masih bisa ditukar kapan saja.
+      ['Verified', yes(verified)],
+      ['Proxy', no(s.isProxy)],
+      ['Ownership', renounced === null ? UNK : renounced ? 'Renounced ✅' : 'Owned ⚠️'],
+    ]),
     '',
-    `💧 ${bold('Liquidity & Market :')}`,
-    `- Total Liquidity: ${bold(compact(s.liquidityUsd))}`,
-    `- Liquidity Locked: ${lpLocked === null ? UNK : `${pct(lpLocked)} ${lpLocked >= 50 ? '✅' : '⚠️'}`}${burnt ? ` · burnt ${pct(burnt)}` : ''}`,
-    `- 24H Volume: ${compact(s.volume24h)} (${num(s.buys24h)} Buys / ${num(s.sells24h)} Sells)`,
-    `- Top 10 Holders: ${top10Line}`,
+    `👥 ${bold('HOLDER RISK :')}`,
+    ...tree([
+      ['Dev Wallet', dev === null ? UNK : `${pct(dev)} ${dev >= 10 ? '🔴' : dev >= 5 ? '⚠️' : '✅'}`],
+      [
+        'Sniper Bundles',
+        bundle === null && snipers === null
+          ? UNK
+          : `${pct(bundle)}${snipers ? ` (${num(snipers)} wallets)` : ''} ${(bundle ?? 0) >= 20 ? '🔴' : (bundle ?? 0) >= 5 ? '⚠️' : '✅'}`,
+      ],
+      ['Top 10 Holders', top10Line],
+      ['Total Holders', num(s.holdersCount)],
+    ]),
+    '',
+    `💸 ${bold('MARKET :')}`,
+    ...tree([
+      ['24H Volume', compact(s.volume24h)],
+      ['24H Trades', `${num(s.buys24h)} buys / ${num(s.sells24h)} sells`],
+    ]),
   ];
-
-  // Dev & insider digabung satu baris (naskah). Jumlahnya TIDAK dijumlahkan —
-  // dompet dev bisa ikut terhitung sebagai insider, jadi menambahkannya melebihkan.
-  if (g && (g.devPct !== null || g.insidersPct !== null)) {
-    const worst = Math.max(g.devPct ?? 0, g.insidersPct ?? 0);
-    out.push(
-      `- Dev &amp; Insiders: dev ${pct(g.devPct)} · insiders ${pct(g.insidersPct)} ${worst >= 20 ? '🔴' : worst >= 5 ? '⚠️' : '✅'}`,
-    );
-  }
-
-  out.push(
-    '',
-    `💸 ${bold('Taxes / Fees :')}`,
-    `- Buy Tax -> ${taxLine(g?.buyTaxPct ?? null)}`,
-    `- Sell Tax -> ${taxLine(g?.sellTaxPct ?? null)}`,
-  );
 
   // Baris vonis DIHAPUS atas permintaan pemilik (28 Agu 2026): kartunya kini hanya
   // menyajikan angka, penilaiannya diserahkan ke pembaca. `s.verdict` sendiri TETAP
   // dihitung dan tetap dipakai alur /add untuk MEMBLOKIR token bervonis BAHAYA —
   // yang hilang cuma tampilannya, bukan penjaganya.
 
-  if (opts?.ca) out.push('', code(opts.ca));
+  if (opts?.ca) out.push('', `CA : ${code(opts.ca)}`);
 
-  out.push(
-    '',
-    `-> Holding Token: ${bold(opts?.heldLabel ? esc(opts.heldLabel) : 'No')}`,
-    `-> Active LP: ${bold(opts?.lpCount ? `${opts.lpCount} position(s)` : 'No')}`,
-    '',
-    nowWib(),
-  );
+  // Konteks kepemilikan hanya relevan bila pemanggil mengirimnya (kartu hub CA).
+  if (opts?.heldLabel || opts?.lpCount)
+    out.push(
+      '',
+      `-> Holding Token: ${bold(opts.heldLabel ? esc(opts.heldLabel) : 'No')}`,
+      `-> Active LP: ${bold(opts.lpCount ? `${opts.lpCount} position(s)` : 'No')}`,
+    );
+
+  out.push('', nowWib());
   return out.join('\n');
 }
 
