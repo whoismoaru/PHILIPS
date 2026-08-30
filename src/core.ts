@@ -145,8 +145,13 @@ export async function sendTxNonceSafe(
 export const FLOW_TTL_MS = 15 * 60_000;
 export const isStaleFlow = (startedAt: number): boolean => Date.now() - startedAt > FLOW_TTL_MS;
 
-/** Concurrency saat membangun kartu posisi. */
-export const POS_CARD_CONCURRENCY = 3;
+/**
+ * Concurrency saat membangun kartu posisi. 3 dulu dipilih untuk menjaga rate RPC,
+ * tapi pengukuran 30 Agu 2026 menunjukkan RPC jauh lebih lapang dari itu (33
+ * resolvePoolKeyV4 paralel = 77 ms) sementara satu getPositionDetail makan ~820 ms.
+ * Dengan 3, 12 posisi = 4 gelombang ≈ 3,3 dtk sebelum kartu pertama terkirim.
+ */
+export const POS_CARD_CONCURRENCY = 6;
 
 /**
  * Ketikan nominal → wei, atau null bila tak masuk akal. `Number(raw) > 0` saja
@@ -179,6 +184,43 @@ export async function mapLimit<T, R>(
   });
   await Promise.all(workers);
   return out;
+}
+
+/**
+ * Seperti mapLimit, tapi mengembalikan SATU promise per item — begitu, urutan
+ * pengiriman tetap terjaga sementara pekerjaan tetap jalan di latar.
+ *
+ * Kartu posisi dulu dibangun semua dulu (`await mapLimit`) BARU dikirim satu per
+ * satu, jadi layar diam sepanjang gelombang build terakhir walau kartu pertama
+ * sudah lama siap. Dengan ini kartu #1 terkirim segera setelah #1 jadi.
+ */
+export function mapLimitStream<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R>[] {
+  const out: Array<{ resolve: (v: R) => void; reject: (e: unknown) => void; promise: Promise<R> }> = items.map(() => {
+    let resolve!: (v: R) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<R>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    // Tanpa ini, item yang gagal jadi unhandled rejection SEBELUM pemanggil sempat
+    // meng-await-nya (Node membunuh proses) — bot mati gara-gara satu kartu error.
+    promise.catch(() => {});
+    return { resolve, reject, promise };
+  });
+  let next = 0;
+  const worker = async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        out[i].resolve(await fn(items[i], i));
+      } catch (e) {
+        out[i].reject(e);
+      }
+    }
+  };
+  void Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out.map((o) => o.promise);
 }
 
 /** Edit pesan progress existing, atau kirim baru bila gagal/tidak ada. */

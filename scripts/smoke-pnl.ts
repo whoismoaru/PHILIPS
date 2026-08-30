@@ -41,7 +41,9 @@ assert.deepEqual(nakal, [],
   'valuasi posisi tanpa feesBaseWei — PnL akan understate:\n' + nakal.join('\n'));
 
 for (const [nama, mulai, selesai] of [
-  ['renderStatus/LP', 'const vals = await mapLimit(store.active()', 'const v4 = v4Supported'],
+  // Blok ini pindah saat /portfolio diparalelkan (30 Agu 2026): valuasi v3 kini
+  // promise yang dinyalakan lebih awal, bukan await berantai.
+  ['renderStatus/LP', 'const v3ValsP = mapLimit(store.active()', 'const [network, chains]'],
   ['cmdPositions/v3', 'const v3rows = await mapLimit(active', 'const rows: PosRow[] = v3rows'],
 ] as const) {
   const i = src.indexOf(mulai);

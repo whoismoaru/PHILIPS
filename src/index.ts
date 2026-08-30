@@ -10,6 +10,7 @@ import {
   isStaleFlow,
   parseAmt,
   mapLimit,
+  mapLimitStream,
   editProgress,
   resetFlows,
   registerFlowReset,
@@ -490,7 +491,26 @@ bot.action('help', async (ctx) => {
 async function renderStatus(ctx: any, edit: boolean) {
   try {
     // Harga ETH (chain utama) sekali — dipakai valuasi semua chain ETH-native.
-    const ethUsd = await getEthUsd(getChain().wethAddress, getChain()).catch(() => null);
+    // TIDAK di-await di sini: tak ada blok di bawah yang butuh nilainya untuk MULAI,
+    // sementara await-nya menahan seluruh kartu ~700 ms. Dipetik saat benar-benar
+    // dipakai (valuasi v4 & total) — sisanya sudah jalan duluan.
+    const ccLp0 = getChain();
+    const ethUsdP = getEthUsd(ccLp0.wethAddress, ccLp0).catch(() => null);
+    // Daftar v4 & detail tiap posisi v3 juga tak bergantung pada saldo chain —
+    // dulu ketiganya berantai (harga → saldo → LP → v4) dan waktunya dijumlahkan.
+    const v4P = v4Supported(ccLp0) ? listPositionsV4(ccLp0).catch(() => [] as V4Position[]) : Promise.resolve([]);
+    const v3ValsP = mapLimit(store.active(), POS_CARD_CONCURRENCY, async (rec) => {
+      try {
+        const rcc = ctxOf(rec);
+        const d = await getPositionDetail(rec.tokenId, rcc);
+        const v = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
+        // Harga native dari CHAIN POSISI ITU: BNB dihargai WBNB, HYPE dihargai
+        // WHYPE. Dulu semua dikali harga ETH chain utama → LP HyperEVM 30x lipat.
+        return baseToUsd(d.baseKind, v, rcc);
+      } catch {
+        return undefined;
+      }
+    });
     const [network, chains] = await Promise.all([
       provider.getNetwork(),
       // Saldo native di SEMUA chain (paralel; chain gagal → amount '?', usd null).
@@ -528,21 +548,10 @@ async function renderStatus(ctx: any, edit: boolean) {
     // jumlah yang gagal dilaporkan supaya total tak terbaca sebagai fakta.
     let lpUsd: number | null = null;
     let lpFailed = 0;
+    const ethUsd = await ethUsdP;
     try {
-      const ccLp = getChain();
-      const vals = await mapLimit(store.active(), POS_CARD_CONCURRENCY, async (rec) => {
-        try {
-          const rcc = ctxOf(rec);
-          const d = await getPositionDetail(rec.tokenId, rcc);
-          const v = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
-          // Harga native dari CHAIN POSISI ITU: BNB dihargai WBNB, HYPE dihargai
-          // WHYPE. Dulu semua dikali harga ETH chain utama → LP HyperEVM 30x lipat.
-          return baseToUsd(d.baseKind, v, rcc);
-        } catch {
-          return undefined;
-        }
-      });
-      const v4 = v4Supported(ccLp) ? await listPositionsV4(ccLp).catch(() => []) : [];
+      const ccLp = ccLp0;
+      const [vals, v4] = await Promise.all([v3ValsP, v4P]);
       const v4Vals = v4.map((p) => {
         if (p.valueBaseWei === null || !p.base) return undefined;
         const v = Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), v4BaseDecimals(ccLp, p.base)));
@@ -2749,7 +2758,9 @@ async function replyActiveCards(ctx: any, header: string | null) {
   const active = store.active();
   if (active.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
   if (header) await ctx.reply(header, html);
-  const cards = await mapLimit(active, POS_CARD_CONCURRENCY, async (rec) => {
+  // Kirim mengalir: kartu #1 berangkat begitu jadi, sisanya masih dibangun di
+  // latar. Menunggu SELURUH build dulu membuat layar diam ~3 dtk pada 12 posisi.
+  const cards = mapLimitStream(active, POS_CARD_CONCURRENCY, async (rec) => {
     try {
       return await buildPositionCard(rec);
     } catch (e) {
@@ -2759,7 +2770,10 @@ async function replyActiveCards(ctx: any, header: string | null) {
       };
     }
   });
-  for (const c of cards) await ctx.reply(c.text, c.extra);
+  for (const p of cards) {
+    const c = await p;
+    await ctx.reply(c.text, c.extra);
+  }
 }
 
 // /stop — tutup posisi: kartu per posisi (v3 + v4), konfirmasi masing-masing.
@@ -2775,8 +2789,10 @@ async function cmdCloseAll(ctx: any) {
   if (v3.length) await replyActiveCards(ctx, msg.msgCloseAllPick(v3.length, v4.length));
   else await ctx.reply(msg.msgCloseAllPick(0, v4.length), html);
   const ethUsd = v4.length ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
-  for (const p of v4) {
-    const c = await buildV4Card(p, ethUsd, cc);
+  // Kartu v4 dulu dibangun DI DALAM loop kirim — build & kirim bergantian, paling
+  // lambat dari semua jalur kartu. Sekarang paralel, urutan tetap.
+  for (const p of mapLimitStream(v4, POS_CARD_CONCURRENCY, (x) => buildV4Card(x, ethUsd, cc))) {
+    const c = await p;
     await ctx.reply(c.text, c.extra);
   }
 }
@@ -3193,14 +3209,14 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
     if (c) await ctx.reply(c.text, c.extra);
   }
   if (v4.length) {
-    const list = await listPositionsV4(cc).catch(() => []);
-    const ethUsd = await getEthUsd(cc.wethAddress, cc).catch(() => null);
-    for (const id of v4) {
-      const p = list.find((x) => x.tokenId === id);
-      if (p) {
-        const c = await buildV4Card(p, ethUsd, cc);
-        await ctx.reply(c.text, c.extra);
-      }
+    const [list, ethUsd] = await Promise.all([
+      listPositionsV4(cc).catch(() => [] as V4Position[]),
+      getEthUsd(cc.wethAddress, cc).catch(() => null),
+    ]);
+    const found = v4.map((id) => list.find((x) => x.tokenId === id)).filter((p): p is V4Position => !!p);
+    for (const q of mapLimitStream(found, POS_CARD_CONCURRENCY, (p) => buildV4Card(p, ethUsd, cc))) {
+      const c = await q;
+      await ctx.reply(c.text, c.extra);
     }
   }
 });
