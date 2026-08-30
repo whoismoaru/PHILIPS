@@ -1374,9 +1374,13 @@ export function msgPoolStep(
   const out = [bold('OPEN LP · Step [1/5] Choose Pool'), ''];
   if (tokenLabel) out.push(`🎯 ${bold('Target Token:')} ${esc(tokenLabel)}`, '');
   if (pools?.length) {
-    out.push(`📊 ${bold('Available Deep Pools :')}`);
+    out.push(`📊 ${bold('AVAILABLE POOLS :')}`);
     for (const p of pools) {
-      out.push(`• ${bold(p.pair)} ${italic(`(${p.ver}, ${p.feeLabel} Fee)`)}`);
+      // Pasangan sengaja TIDAK diulang di sini: tombol pilihannya tepat di bawah
+      // dan sudah memuat `TOKEN / BASE (fee)`, jadi barisnya cuma menggandakan
+      // teks yang sama dan mendorong angka — yang sebenarnya membedakan pool —
+      // ke baris kedua. Urutan baris = urutan tombol.
+      out.push(`- ${italic(`(${p.ver}, ${p.feeLabel} Fee)`)}`);
       // 'fills≤' dipindah dari tombol ke sini: itu jarak harga sebelum posisi
       // single-side MULAI terisi — angka yang menentukan pool mana yang benar-benar
       // bekerja, dan tombol Telegram terlalu sempit untuk memuatnya.
