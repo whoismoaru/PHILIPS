@@ -1978,11 +1978,18 @@ export function msgCashOut(opts: {
   notes: string[];
   ethOut: string;
   txHashes: string[];
+  legs?: number; // ladder: jumlah leg yang ditutup bersama
+  baseSymbol?: string; // aset hasil cash-out — menentukan kalimat penutup
+  native?: boolean; // hasil di-unwrap jadi native chain (bukan stablecoin)
+  leftover?: boolean; // masih ada debu token yang belum tersapu
 }): string {
+  const ladder = (opts.legs ?? 0) > 1;
   const out = [
-    `✅ ${bold('Position Closed &amp; Cashed Out')}`,
+    `✅ ${bold(`${ladder ? 'Ladder' : 'Position'} Closed &amp; Cashed Out`)}`,
     '',
-    `🎉 ${bold('Position ID:')} #${esc(opts.tokenId)}`,
+    ladder
+      ? `🎉 ${bold('Ladder:')} #${esc(opts.tokenId)} · ${opts.legs} legs`
+      : `🎉 ${bold('Position ID:')} #${esc(opts.tokenId)}`,
     `💰 ${bold('Received:')} ${bold(opts.ethOut)}`,
   ];
 
@@ -2006,12 +2013,21 @@ export function msgCashOut(opts: {
     for (const h of extraTx) out.push(code(h));
   }
 
+  // Kalimat penutup dulu SELALU berbunyi "unwrapped back into native ETH" —
+  // termasuk pada close yang hasilnya USDT/USDG, yang tak pernah di-unwrap dan
+  // bukan ETH. Kalimatnya kini mengikuti aset yang benar-benar diterima.
+  const sym = opts.baseSymbol ?? 'ETH';
+  const akhir = opts.native
+    ? `The paired token was swapped and unwrapped back into ${bold(`native ${esc(sym)}`)}, now sitting safely in your wallet.`
+    : `The paired token was swapped into ${bold(esc(sym))} and is sitting safely in your wallet.`;
   out.push(
     '',
     `⏱️ <i>Completed at ${nowWib()}</i>`,
     '',
-    `<i>Your LP has been withdrawn. The paired token was swapped and unwrapped back into ${bold('native ETH')}, now sitting safely in your wallet.</i>`,
+    `<i>Your LP has been withdrawn. ${akhir}</i>`,
   );
+  if (opts.leftover)
+    out.push('', note('some dust had no swap route and stays in your wallet — the monitor will retry, or sell it via /sell.'));
   return out.join('\n');
 }
 

@@ -4103,8 +4103,20 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
 
     const baseSym = base.wrappable ? cc.nativeSymbol : base.symbol;
     const outLabel = base.wrappable ? `${msg.fmtEth(totalOut)} ${baseSym}` : `${msg.cleanUnits(totalOut, base.decimals)} ${baseSym}`;
+    // Kartu yang SAMA dengan close posisi tunggal: langkah, hash, dan kalimat
+    // penutupnya. Dulu ladder cuma dapat satu baris tanpa jejak transaksi —
+    // padahal justru di sinilah tx-nya paling banyak.
     await ctx.reply(
-      `✅ ${msg.bold('LADDER CLOSED')} · ${legs.length} legs\n\nTotal cashed out · ${msg.bold(msg.esc(outLabel))}`,
+      msg.msgCashOut({
+        tokenId: legs[0].tokenId,
+        legs: legs.length,
+        notes,
+        ethOut: outLabel,
+        txHashes: sw.txHashes ?? [],
+        baseSymbol: baseSym,
+        native: base.wrappable,
+        leftover: sw.leftover,
+      }),
       { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
     );
     // Kartu PnL untuk SELURUH ladder (lihat catatan yang sama di jalur v4).
@@ -4172,8 +4184,23 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
     invalidateV4ListCache();
     const dec = v4BaseDecimals(cc, r.base);
     const sym = v4BaseSymbol(cc, r.base);
+    // Kartu close yang sama dengan jalur v3. v4 tak mengembalikan daftar langkah,
+    // jadi disusun di sini dari apa yang benar-benar terjadi — tanpa ini kartunya
+    // kehilangan bagian "Steps performed" yang membuat close bisa ditelusuri.
     await ctx.reply(
-      `✅ ${msg.bold('V4 LADDER CLOSED')} · ${legs.length} legs\n\nTotal cashed out · ${msg.bold(msg.esc(`${msg.cleanUnits(r.baseOutWei, dec)} ${sym}`))}`,
+      msg.msgCashOut({
+        tokenId: legs[0].tokenId,
+        legs: legs.length,
+        notes: [
+          `Close ${legs.length}-leg v4 ladder (batched)`,
+          ...(r.cashedOut ? [`Swap: token → ${r.cashedOut}`] : []),
+          `Received ${msg.cleanUnits(r.baseOutWei, dec)} ${sym}`,
+        ],
+        ethOut: `${msg.cleanUnits(r.baseOutWei, dec)} ${sym}`,
+        txHashes: r.txHash ? [r.txHash] : [],
+        baseSymbol: sym,
+        native: r.base === 'ETH',
+      }),
       { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
     );
     // Leg yang terpaksa di-burn tanpa lantai harga harus terlihat, bukan cuma di log.
@@ -4406,11 +4433,22 @@ async function stopAndCashOut(
     notes.push('⚠️ Some tokens are left over — the monitor will retry automatically.');
   }
 
+  // Satuannya ikut CHAIN, bukan 'ETH' mati: close di BSC menerima BNB dan di
+  // HyperEVM menerima HYPE. Baris "Received" adalah angka yang paling dipercaya
+  // di kartu ini — salah satuan berarti salah membaca hasil seluruh trade.
   const ethOut = base.wrappable
-    ? `${msg.fmtEth(baseOutWei)} ETH`
+    ? `${msg.fmtEth(baseOutWei)} ${cc.nativeSymbol}`
     : `${ethers.formatUnits(baseOutWei, base.decimals)} ${base.symbol}`;
   console.log(`[cashout] #${tokenId}:`, notes.join(' | ')); // rekam ke journal
-  const text = msg.msgCashOut({ tokenId, notes, ethOut, txHashes });
+  const text = msg.msgCashOut({
+    tokenId,
+    notes,
+    ethOut,
+    txHashes,
+    baseSymbol: base.wrappable ? cc.nativeSymbol : base.symbol,
+    native: base.wrappable,
+    leftover: sw.leftover,
+  });
   // leftover = token benar-benar masih tersisa di wallet setelah semua percobaan.
   return { text, baseOutWei, leftover: sw.leftover, leftoverWei: sw.leftoverWei, feesBaseWei };
 }
@@ -4484,6 +4522,9 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   // bawah (satu-satunya tempat keduanya diketahui), dikirim setelah kartu teks.
   let cardRec: store.PosRecord | undefined;
   let cardOutWei: bigint | undefined;
+  // Hasil cash-out v4 hanya bisa diukur dari delta saldo (closePositionV4 tak
+  // mengembalikannya) — dipakai baris "Received" di kartu close.
+  let measuredOut: bigint | undefined;
   store.beginMoneyOp();
   try {
     await ctx.answerCbQuery('Processing…');
@@ -4518,6 +4559,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
           openedAt: tracked?.openedAt ?? Date.now(),
           initialWethWei: tracked?.entryBaseWei ?? '0',
         };
+        measuredOut = measured;
         journal.recordClose(rec, { resultEthWei: measured, reason: 'cashed' });
         // Kartu hanya bermakna bila modal DAN hasil sama-sama terukur; posisi v4
         // yang tak ter-track (entry 0) akan memberi PnL +∞ yang menyesatkan.
@@ -4529,17 +4571,33 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
       v4store.removeV4(tokenId); // berhenti dilacak setelah tertutup
       invalidateV4ListCache();
     }
-    await ctx.reply(
-      msg.msgV4Closed({
-        tokenId,
-        base: r.base,
-        cashedOut: r.cashedOut,
-        leftover: !!r.leftover,
-        txHash: r.txHash,
-        dryRun: !!r.dryRun,
-      }),
-      html,
-    );
+    if (r.dryRun) {
+      await ctx.reply(msg.msgV4Closed({ tokenId, base: r.base, dryRun: true }), html);
+    } else {
+      // Satu kartu untuk semua close, v3 maupun v4. Sebelumnya v4 memakai kartu
+      // ringkas tanpa langkah & tanpa hash — hasil yang sama, jejak yang jauh lebih
+      // sedikit, dan tampilan yang berbeda untuk kejadian yang sama.
+      const dec4 = v4BaseDecimals(cc, r.base);
+      const sym4 = v4BaseSymbol(cc, r.base);
+      // Tak terukur → jangan mengarang angka: '—' jujur, '0' terbaca sbg rugi total.
+      const outLabel4 = measuredOut === undefined ? '—' : `${msg.cleanUnits(measuredOut, dec4)} ${sym4}`;
+      await ctx.reply(
+        msg.msgCashOut({
+          tokenId,
+          notes: [
+            `Close v4 position #${tokenId}`,
+            ...(r.cashedOut ? [`Swap: token → ${r.cashedOut}`] : []),
+            ...(measuredOut === undefined ? [] : [`Received ${outLabel4}`]),
+          ],
+          ethOut: outLabel4,
+          txHashes: r.txHash ? [r.txHash] : [],
+          baseSymbol: sym4,
+          native: r.base === 'ETH',
+          leftover: !!r.leftover,
+        }),
+        html,
+      );
+    }
     if (r.unprotected) await ctx.reply(msg.esc(V4_UNPROTECTED_NOTE(tokenId)), html);
     if (cardOutWei !== undefined) {
       await sendProfitCard(ctx, tokenId, cardRec, cardOutWei, feesBaseWei, tracked?.shape).catch((e) =>
