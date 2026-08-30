@@ -4568,7 +4568,15 @@ bot.on(message('text'), async (ctx) => {
   const raw = (ctx.message.text || '').trim();
 
   // Alur /connect yang sedang menunggu: kunci di sini memang diminta.
-  if (awaitingSecret.has(ctx.from.id)) return handleSecret(ctx, raw);
+  // Tapi HANYA yang benar-benar berbentuk kunci. Prompt connect yang ditinggalkan
+  // dulu menelan ketikan apa pun sesudahnya — CA yang ditempel ikut DIHAPUS dari
+  // chat lalu dijawab "import failed", karena cabang ini dicek paling awal dan
+  // tak pernah melepaskan diri. Bukan kunci = user sudah pindah niat: lepaskan
+  // prompt-nya dan biarkan ketikan itu ditangani alur yang benar.
+  if (awaitingSecret.has(ctx.from.id)) {
+    if (looksLikeSecret(raw)) return handleSecret(ctx, raw);
+    awaitingSecret.delete(ctx.from.id);
+  }
 
   // Item 19 — rahasia dompet di luar alur /connect: abaikan, hapus, peringatkan.
   if (looksLikeSecret(raw)) {

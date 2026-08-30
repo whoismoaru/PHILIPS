@@ -92,7 +92,13 @@ bot.command('settings', cmdSettings);
 
 // Perintah apa pun (/add, /buy, /sell, /bridge) membatalkan prompt persen yang
 // menggantung — kalau tidak, nominal yang diketik user tertelan sebagai jawaban.
-registerFlowReset((uid) => pctPresets.clearEdit(uid));
+// awaitingSecret ikut dibersihkan: tanpa ini tombol ❌ Cancel umum (dan perintah
+// apa pun yang memanggil resetFlows) meninggalkan prompt connect tetap menunggu,
+// padahal cabangnya dicek paling awal di handler teks.
+registerFlowReset((uid) => {
+  pctPresets.clearEdit(uid);
+  awaitingSecret.delete(uid);
+});
 
 /** Satuan + batas + catatan khusus satu alur, dipakai ketiga kartu setelan. */
 function pctOpts(flow: pctPresets.PctFlow) {
