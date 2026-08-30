@@ -269,118 +269,31 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
 }
 
 /**
- * Chain yang punya riwayat di jurnal, urut terbanyak. Dipakai untuk bubble pemilih
- * chain di /pnl — dibangun dari DATA, bukan daftar keras, jadi chain baru (mis.
- * Base) muncul sendiri begitu ada trade pertamanya, dan chain lama yang sudah tak
- * dipakai (mis. 'stable') tetap bisa dilihat riwayatnya.
- */
-/**
- * PnL harian 30 hari terakhir untuk SATU buku (chain + satuan).
+ * Batas hari = tengah malam **WIB**, bukan tengah malam server.
  *
- * Satu buku saja, bukan gabungan: menjumlahkan USDG dengan ETH menghasilkan angka
- * yang tak punya satuan. Buku dipilih pemanggil (biasanya yang paling banyak trade).
- * Hari tanpa trade tetap ada di daftar dengan net 0 dan trades 0 — kalender butuh
- * kotak kosongnya, dan "tak ada trade" berbeda dari "impas".
- */
-/**
- * Batas hari kalender = tengah malam **WIB**, bukan tengah malam server.
- *
- * Bucket dulu dibuat dengan `setHours(0,0,0,0)` — tengah malam zona MESIN, dan
- * mesin ini berjalan di CST (UTC+8) sementara seluruh kartu bot berstempel WIB
- * (UTC+7). Trade yang ditutup antara 23:00–24:00 WIB jatuh ke kotak HARI
- * BERIKUTNYA, jadi kalender tak pernah cocok dengan jam yang tercetak di kartu
- * close-nya sendiri. Indeks hari kini dihitung dari epoch + 7 jam, bebas dari
- * zona waktu mesin.
- *
- * `date` yang dikembalikan adalah tengah malam UTC dari hari WIB itu — kartu
- * membacanya dengan getUTC*, sehingga label tanggal & kolom harinya tak ikut
- * bergeser di mesin dengan zona lain.
+ * Mesin ini berjalan di CST (UTC+8) sementara seluruh kartu bot berstempel WIB
+ * (UTC+7), jadi `setHours(0,0,0,0)` menggeser batas periode satu jam. Indeks
+ * hari dihitung dari epoch + 7 jam, bebas dari zona waktu mesin.
  */
 const WIB_MS = 7 * 3_600_000;
 const DAY_MS = 86_400_000;
 const wibDay = (ms: number): number => Math.floor((ms + WIB_MS) / DAY_MS);
 
 /**
- * Awal jendela 30 hari, sama persis dengan kotak pertama kalender.
+ * Awal jendela "1 Month" = 30 hari WIB PENUH, bukan rolling `now - 30 hari`.
  *
- * `Date.now() - 30 hari` (rolling) TIDAK sama dengan 30 hari kalender: hari ini
- * jendela rolling mulai 31 Jul 22:30 WIB sedangkan kalender mulai 1 Agu 00:00.
- * Karena kartu kalender ditampilkan dengan periode "1 Month" ditandai aktif,
- * keduanya harus menghitung dari batas yang sama — kalau tidak, trade yang jatuh
- * di sela itu muncul di rekap tapi tak ada kotaknya.
+ * Rolling membuat batasnya bergeser tiap kali kartu dibuka (hari ini mulai 31 Jul
+ * 22:30 WIB), jadi trade yang sama bisa masuk lalu keluar dari rekap hanya karena
+ * jam berjalan. Batas hari penuh membuat angkanya stabil sepanjang hari.
  */
 export const monthStartMs = (days = 30): number => (wibDay(Date.now()) - (days - 1)) * DAY_MS - WIB_MS;
 
-/** 30 kotak hari WIB yang berakhir hari ini. */
-function wibBuckets(days: number): Array<{ date: Date; net: number; trades: number; _i: number }> {
-  const today = wibDay(Date.now());
-  return Array.from({ length: days }, (_, k) => {
-    const i = today - (days - 1) + k;
-    return { date: new Date(i * DAY_MS), net: 0, trades: 0, _i: i };
-  });
-}
-
-export function dailyFor(
-  chain: string,
-  unit: string,
-  days = 30,
-): Array<{ date: Date; net: number; trades: number }> {
-  const me = currentWallet();
-  const buckets = wibBuckets(days);
-  const first = buckets[0]._i;
-
-  for (const e of read(Number.MAX_SAFE_INTEGER)) {
-    if (!e.closedAt) continue;
-    if ((e.chain ?? 'robinhood') !== chain) continue;
-    if (me && e.wallet !== me) continue;
-    if (e.resultEthWei === undefined || BigInt(e.resultEthWei) === 0n) continue;
-    if (unitOf(e.chain, e.baseKind) !== unit) continue;
-    const i = wibDay(e.closedAt) - first;
-    if (i < 0 || i >= days) continue;
-    buckets[i].net += e.pnlEth;
-    // 'recovery' = sisa token yang tersapu setelah posisi ditutup. Uangnya nyata
-    // (masuk net), tapi ia bukan trade — menghitungnya membuat jumlah trade di
-    // kalender lebih besar daripada di rekap yang berdiri tepat di sebelahnya.
-    if (e.reason !== 'recovery') buckets[i].trades += 1;
-  }
-  return buckets.map(({ date, net, trades }) => ({ date, net, trades }));
-}
-
 /**
- * PnL harian 30 hari untuk SEMUA chain, disatukan dalam USD.
- *
- * Menjumlahkan USDG + ETH + BNB butuh kurs, jadi pemanggil menyerahkan `usdOf(unit)`.
- * Satuan yang kursnya tak terbaca DILEWATI dan dihitung di `skipped` — lebih baik
- * memberi tahu ada yang tak masuk daripada diam-diam menghasilkan total yang kurang.
+ * Chain yang punya riwayat di jurnal, urut terbanyak. Dipakai untuk bubble pemilih
+ * chain di /pnl — dibangun dari DATA, bukan daftar keras, jadi chain baru (mis.
+ * Base) muncul sendiri begitu ada trade pertamanya, dan chain lama yang sudah tak
+ * dipakai (mis. 'stable') tetap bisa dilihat riwayatnya.
  */
-export function dailyAllUsd(
-  usdOf: (unit: string) => number | null,
-  days = 30,
-): { days: Array<{ date: Date; net: number; trades: number }>; skipped: number } {
-  const me = currentWallet();
-  const buckets = wibBuckets(days);
-  const first = buckets[0]._i;
-  let skipped = 0;
-  for (const e of read(Number.MAX_SAFE_INTEGER)) {
-    if (!e.closedAt) continue;
-    if (me && e.wallet !== me) continue;
-    if (e.resultEthWei === undefined || BigInt(e.resultEthWei) === 0n) continue;
-    const i = wibDay(e.closedAt) - first;
-    // Di luar jendela dilewati DULU: entri lama tanpa kurs dulu ikut menaikkan
-    // `skipped`, jadi kartu melaporkan "12 dilewati" untuk trade bulan lalu yang
-    // memang tak pernah masuk hitungan 30 hari ini.
-    if (i < 0 || i >= days) continue;
-    const rate = usdOf(unitOf(e.chain, e.baseKind));
-    if (rate === null) {
-      skipped++;
-      continue;
-    }
-    buckets[i].net += e.pnlEth * rate;
-    if (e.reason !== 'recovery') buckets[i].trades += 1;
-  }
-  return { days: buckets.map(({ date, net, trades }) => ({ date, net, trades })), skipped };
-}
-
 export function chainsWithHistory(): Array<{ key: string; trades: number }> {
   const me = currentWallet();
   const n = new Map<string, number>();

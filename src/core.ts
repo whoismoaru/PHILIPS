@@ -46,7 +46,7 @@ function sign(text: unknown, max: number): unknown {
   };
   wrapText('sendMessage', 1, TG_TEXT_MAX);
   wrapText('editMessageText', 3, TG_TEXT_MAX);
-  // Dokumen (kartu PnL, kalender) membawa teksnya di caption.
+  // Dokumen (kartu PnL) membawa teksnya di caption.
   for (const [name, i] of [['sendDocument', 2], ['sendPhoto', 2]] as const) {
     const orig = tg[name]?.bind(tg);
     if (!orig) continue;

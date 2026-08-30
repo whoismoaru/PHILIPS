@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { bot, html } from '../core.js';
 import { CHAINS } from '../chains.js';
 import { getEthUsd } from '../screening.js';
-import { renderProfitCard, renderCalendarCard } from '../card.js';
+import { renderProfitCard } from '../card.js';
 import * as journal from '../journal.js';
 import * as msg from '../messages.js';
 
@@ -99,7 +99,6 @@ const periodKb = (chain: string, active?: journal.PeriodKey) =>
     ...rows2(Object.keys(journal.PERIODS) as journal.PeriodKey[], (k) =>
       Markup.button.callback(`${active === k ? '• ' : ''}${journal.PERIODS[k].label}`, `pnl:${chain}:${k}`),
     ),
-    [Markup.button.callback('🗓 30-day calendar', `pnlcal:${chain}`)],
     [Markup.button.callback('‹ Chains', 'pnlback'), Markup.button.callback('📜 History', 'history')],
   ]);
 
@@ -193,7 +192,7 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
           `${journal.winrateOf(b).toFixed(1)}% WR${journal.profitFactorOf(b) === null ? '' : ` · PF ${journal.profitFactorOf(b)!.toFixed(2)}`}`,
       );
   if (usdTotal !== undefined && usdTotal !== null && s.books.length > 1)
-    lines.push('', `<b>All books ≈ ${msg.usdPlain(usdTotal)}</b> <i>(this is what the 30-day calendar sums)</i>`);
+    lines.push('', `<b>All books ≈ ${msg.usdPlain(usdTotal)}</b> <i>(books converted at current rates)</i>`);
   // Rekonsiliasi: jumlah entri jurnal HARUS bisa ditelusuri dari kartu ini.
   // Tanpa baris flat, selisih 728 vs 246 tak punya penjelasan di mana pun.
   const scored = s.books.reduce((a, b) => a + b.known, 0);
@@ -217,8 +216,8 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
   const p = journal.PERIODS[key];
   // chain === ALL → statsFor tanpa filter. Bukunya tetap dipisah per satuan, jadi
   // tak ada USDG yang dijumlahkan dengan ETH; yang digabung cuma cakupan chain-nya.
-  // '1 Month' memakai batas yang SAMA dengan kalender (30 hari WIB penuh); 1d/1w
-  // tetap rolling, karena "1 hari terakhir" memang berarti 24 jam ke belakang.
+  // '1 Month' = 30 hari WIB PENUH, jadi angkanya tak bergeser tiap kartu dibuka;
+  // 1d/1w tetap rolling, karena "1 hari terakhir" memang berarti 24 jam ke belakang.
   const since = p.ms === 0 ? 0 : key === '1m' ? journal.monthStartMs(30) : Date.now() - p.ms;
   const s = journal.statsFor(since, chain === ALL ? undefined : chain);
   const kb = periodKb(chain, key);
@@ -250,102 +249,6 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
     .catch((e: Error) => {
       if (/not modified/i.test(e.message)) return;
       return swap(ctx, text, { ...html, ...kb }); // media tak bisa di-edit → teks saja
-    });
-}
-
-/**
- * Kalender PnL 30 hari — kartu TANPA artwork, murni data harian.
- *
- * Satu buku saja (chain + satuan), diambil dari buku dengan trade terbanyak:
- * mencampur USDG dengan ETH di satu kalender menghasilkan angka tanpa satuan.
- */
-bot.action(/^pnlcal:(\w+)$/, async (ctx: any) => {
-  const chain = ctx.match[1];
-  await ctx.answerCbQuery().catch(() => {});
-  const kb = periodKb(chain, '1m');
-  // Gabungan lintas chain HARUS dikonversi: satu kalender tak bisa memuat USDG,
-  // ETH, dan BNB sekaligus tanpa satuan bersama. Satuan yang kursnya tak terbaca
-  // dilewati dan jumlahnya disebut, bukan dibuang diam-diam.
-  if (chain === ALL) {
-    const rates = await usdRates();
-    const { days, skipped } = journal.dailyAllUsd((u) => rates.get(u) ?? null, 30);
-    const buku = journal.statsFor(journal.monthStartMs(30)).books;
-    return sendCalendar(ctx, kb, {
-      title: 'All chains · USD',
-      days,
-      fmt: (v: number) => `${v >= 0 ? '+' : ''}$${Math.abs(v).toFixed(2)}`,
-      unitLabel: 'USD',
-      note: skipped ? ` · ${skipped} skipped (no rate)` : '',
-      file: 'philips-pnl-calendar-all.png',
-      // Kartu periode menampilkan SATU buku dalam satuannya sendiri; kalender ini
-      // menjumlahkan SEMUA buku dalam USD. Angkanya wajar berbeda jauh — tanpa
-      // baris ini perbedaannya terbaca sebagai salah hitung.
-      sub: `sum of ${buku.length} book${buku.length === 1 ? '' : 's'} converted to USD: ${buku.map((b) => b.unit).join(' · ')}`,
-    });
-  }
-  const s = journal.statsFor(journal.monthStartMs(30), chain);
-  const main = s.books[0];
-  if (!main) {
-    return swap(ctx, msg.msgPnl({
-      dryRun: config.safety.dryRun, chainLabel: chainLabel(chain), periodLabel: '1 Month',
-      known: 0, count: s.count, untracked: s.untracked, excluded: s.excluded,
-      recovered: s.recovered, books: [],
-    }), { ...html, ...kb });
-  }
-  const days = journal.dailyFor(chain, main.unit, 30);
-  return sendCalendar(ctx, kb, {
-    title: `${chainLabel(chain)} · ${main.unit}`,
-    days,
-    fmt: (v: number) => n2(v, main.unit).split(' ')[0],
-    unitLabel: main.unit,
-    note: '',
-    file: `philips-pnl-calendar-${chain}.png`,
-  });
-});
-
-/** Susun & kirim kartu kalender. Dipakai jalur per-chain maupun gabungan. */
-async function sendCalendar(
-  ctx: any,
-  kb: any,
-  o: {
-    title: string;
-    days: Array<{ date: Date; net: number; trades: number }>;
-    fmt: (v: number) => string;
-    unitLabel: string;
-    note: string;
-    file: string;
-    sub?: string; // penjelasan tambahan di caption (mis. konversi lintas buku)
-  },
-) {
-  const net = o.days.reduce((a, d) => a + d.net, 0);
-  const active = o.days.filter((d) => d.trades > 0);
-  const green = active.filter((d) => d.net > 0).length;
-  const best = active.reduce<null | (typeof o.days)[number]>((a, d) => (a === null || d.net > a.net ? d : a), null);
-  const worst = active.reduce<null | (typeof o.days)[number]>((a, d) => (a === null || d.net < a.net ? d : a), null);
-  const buf = await renderCalendarCard({
-    title: o.title,
-    subtitle: 'last 30 days',
-    days: o.days,
-    unit: o.unitLabel,
-    netLabel: `${o.fmt(net)} ${o.unitLabel}`,
-    positive: net >= 0,
-    stats: [
-      { label: 'best day', value: best ? o.fmt(best.net) : '—' },
-      { label: 'worst day', value: worst ? o.fmt(worst.net) : '—' },
-      { label: 'active days', value: `${active.length} of ${o.days.length}` },
-      { label: 'green days', value: active.length ? `${green} of ${active.length}` : '—' },
-    ],
-    footerLeft: `${active.reduce((a, d) => a + d.trades, 0)} trades${o.note} · ${new Date().toISOString().slice(0, 10)}`,
-  }).catch(() => null);
-  if (!buf) return ctx.reply(msg.msgError('pnl', 'Could not draw the calendar.'), html);
-  const doc = Input.fromBuffer(buf, o.file);
-  const caption =
-    `🗓 <b>30-day calendar</b> · <b>${msg.esc(o.title)}</b>` + (o.sub ? `\n<i>${msg.esc(o.sub)}</i>` : '');
-  return ctx
-    .editMessageMedia({ type: 'document', media: doc, caption, parse_mode: 'HTML' }, kb)
-    .catch(async () => {
-      await ctx.deleteMessage().catch(() => {});
-      return ctx.replyWithDocument(doc, { caption, parse_mode: 'HTML', ...kb });
     });
 }
 

@@ -744,10 +744,9 @@ export function msgPnl(opts: {
         '',
       );
   }
-  // Total lintas-buku dalam USD. Tanpa ini kartu hanya memberi 4 angka dalam 4
-  // satuan berbeda yang tak bisa dibandingkan — dan kalender 30 hari (yang MEMANG
-  // menjumlahkannya dalam USD) terbaca seolah menghitung hal lain. 0.245 ETH itu
-  // $600+; tanpa baris ini ia tampak angka terkecil di kartu.
+  // Total lintas-buku dalam USD. Tanpa ini kartu hanya memberi angka dalam
+  // beberapa satuan yang tak bisa dibandingkan: 0.245 ETH tampak paling kecil di
+  // kartu padahal $600+, jauh lebih besar dari baris 296 USDG di atasnya.
   if (opts.usdTotal !== undefined && opts.usdTotal !== null && opts.books.length > 1)
     out.push(`${dot(opts.usdTotal)} ${bold('All books')} ≈ ${bold(usdPlain(opts.usdTotal))}`, '');
   for (const b of opts.books) {
