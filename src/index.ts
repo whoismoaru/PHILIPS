@@ -2118,7 +2118,13 @@ async function continueAddlp(
   // palsu meloloskan pool kosong: 20 Agu 2026 pool `USDT/牛来 fee100` ber-TVL $2
   // (vol $83k) benar-benar tampil di top-3. Lebih baik menawarkan <3 pool nyata.
   const sized = pools.filter((p) => p.tvlUsd >= MIN_POOL_TVL_USD);
-  if (sized.length > 0) pools = sized;
+  // Ambang boleh dilonggarkan saat tak ada yang lolos (TVL gateway sering nol utk
+  // pool baru yang sebenarnya hidup) — TAPI pool tanpa TVL *dan* tanpa volume sama
+  // sekali tak punya satu pun tanda kehidupan. 30 Agu 2026 tiga pool v3 `富贵` di BSC
+  // ($0+v0) tetap ditawarkan karena kelonggaran ini membatalkan filternya sendiri.
+  // v4 selamat oleh cek likuiditas on-chain di atas; v3 tak punya, jadi hanya v3
+  // yang bisa lolos dengan $0 — setoran ke situ nyangkut di harga palsu.
+  pools = sized.length > 0 ? sized : pools.filter((p) => p.tvlUsd > 0 || (p.vol24hUsd ?? 0) > 0);
   if (pools.length === 0) {
     await editProgress(ctx, prog, msg.msgNoPools(cc.bases.map((b) => b.symbol).join('/')));
     return;
@@ -2525,7 +2531,7 @@ bot.action('addok', async (ctx) => {
       );
     } catch (err) {
       await recoverStrayWeth(getChain(chain), 'add v4').catch(() => {});
-      await ctx.reply(msg.msgError('add v4', (err as Error).message), html);
+      await ctx.reply(msg.msgError('add v4', err), html);
     } finally {
       store.endMoneyOp();
     }
@@ -2697,7 +2703,7 @@ bot.action('addok', async (ctx) => {
     // /unwrap manual sebelum mencoba /add_lp lagi.
     console.error('[open] gagal:', (err as Error).message.slice(0, 200));
     await recoverStrayWeth(getChain(flow.chain), 'add').catch(() => {});
-    await ctx.reply(msg.msgError('add', (err as Error).message), html);
+    await ctx.reply(msg.msgError('add', err), html);
   } finally {
     store.endMoneyOp();
   }
@@ -3869,7 +3875,7 @@ bot.action('tswapok', async (ctx) => {
       html,
     );
   } catch (e) {
-    await ctx.reply(msg.msgError('swap', (e as Error).message), html);
+    await ctx.reply(msg.msgError('swap', e), html);
   } finally {
     tswapInFlight.delete(uid);
     store.endMoneyOp();
@@ -4241,7 +4247,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       // berarti /unwrap manual (atau menunggu sweep monitor sampai 1 menit). Rapikan
       // di sini juga: withdraw() aman & idempoten — tak ada WETH, tak ada tx.
       await recoverStrayWeth(getChain(closingRec?.chain), 'close').catch(() => {});
-      await ctx.reply(msg.msgError('close', (err as Error).message), html);
+      await ctx.reply(msg.msgError('close', err), html);
     }
   } finally {
     closingInFlight.delete(tokenId);
@@ -4503,7 +4509,7 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     }
   } catch (e) {
     await recoverStrayWeth(cc, 'close v4').catch(() => {});
-    await ctx.reply(msg.msgError('close v4', (e as Error).message), html);
+    await ctx.reply(msg.msgError('close v4', e), html);
   } finally {
     closingInFlight.delete(key);
     store.endMoneyOp();
@@ -4629,7 +4635,7 @@ bot.on(message('text'), async (ctx) => {
       return tswapQuoteConfirm(ctx, tflow, cc, fromAddr, toAddr, amountWei, amountInLabel);
     } catch (e) {
       tswapFlows.delete(ctx.from.id);
-      return ctx.reply(msg.msgError('swap', (e as Error).message), html);
+      return ctx.reply(msg.msgError('swap', e), html);
     }
   }
 

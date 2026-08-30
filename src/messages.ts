@@ -1002,21 +1002,30 @@ export function msgTSwapDone(o: {
   ].join('\n');
 }
 
-export function msgError(where: string, err: string): string {
+export function msgError(where: string, err: unknown): string {
+  // `retryOnce` menandai error yang transaksinya SUDAH mendarat. Tanpa baris
+  // peringatan di bawah, kartu ini bilang "gagal" untuk mint yang sebenarnya
+  // sukses — dan pemilik membuka posisi kedua dengan modal yang sama.
+  const landed = typeof err === 'object' && err !== null && (err as { landed?: boolean }).landed === true;
   // Revert ethers = blok multi-baris (reason/code/transaction) yang menutupi baris
   // "lakukan ini". Ambil baris pertama saja; detail lengkap tetap ada di log service.
-  const first = String(err).split('\n')[0].trim().slice(0, 200) || 'unknown error';
+  // Pemanggil boleh mengirim string ATAU objek Error (perlu utk `landed`).
+  // `String(err)` pada Error menghasilkan "Error: pesan" — awalannya dibuang.
+  const raw = err instanceof Error ? err.message : String(err);
+  const first = raw.split('\n')[0].trim().slice(0, 200) || 'unknown error';
   // Kartu berjanji "details are in the service log" — dan janji itu dulu BOHONG:
   // 156 dari 177 catch tak menulis apa pun, jadi bagian yang dipotong hilang total
   // dan error tak bisa diaudit sesudahnya. Satu baris di sini menutup ke-42 pemanggil.
-  console.error(`[error:${where}] ${String(err).replace(/\s+/g, ' ').slice(0, 500)}`);
+  console.error(`[error:${where}] ${raw.replace(/\s+/g, ' ').slice(0, 500)}`);
   return [
     hdr('❌ TRANSACTION ERROR'),
     '',
     `${esc('Step')}   : ${bold(esc(where))}`,
     `${esc('Reason')} : ${code(first)}`,
     '',
-    note('try again — full details are in the service log.'),
+    landed
+      ? note('the transaction DID land on-chain — check /positions before retrying.')
+      : note('try again — full details are in the service log.'),
     note(nowWib()),
   ].join('\n');
 }

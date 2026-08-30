@@ -7,6 +7,10 @@
  * wasit adalah state on-chain, BUKAN jenis error-nya — pesan error tak pernah bisa
  * dipercaya soal apa yang sudah mendarat.
  *
+ * Error yang dilempar saat state SUDAH bergerak ditandai `landed = true`: tx-nya
+ * mendarat, jadi pesan "gagal" apa adanya menyesatkan (pemilik mengira uangnya
+ * tak jadi keluar lalu mencoba lagi). Lihat `msgError`.
+ *
  * `probe` mengembalikan angka yang PASTI berubah bila ada yang mendarat (saldo,
  * likuiditas, jumlah NFT posisi). -1n atau melempar = tak bisa dipastikan → dianggap
  * sudah bergerak → tidak diulang. Ragu berarti berhenti.
@@ -28,6 +32,9 @@ export async function retryOnce<T>(
     const why = (first as Error).message.slice(0, 160);
     if (before < 0n || after < 0n || after !== before) {
       log(`[retry:${label}] TAK diulang (state ${before}→${after}): ${why}`);
+      // Probe valid dan angkanya berubah = tx BENAR-BENAR mendarat (mint/close/swap
+      // sukses walau run() melempar). Probe -1n = tak terbaca → jangan mengaku tahu.
+      if (before >= 0n && after >= 0n) (first as { landed?: boolean }).landed = true;
       throw first;
     }
     log(`[retry:${label}] percobaan 1 gagal, on-chain tak berubah — ulang: ${why}`);
