@@ -171,3 +171,13 @@ assert.ok(!/0 closed · 0 scored/.test(picker), 'angka sama tak perlu ditulis du
 assert.match(picker, /Scored = wins\/losses only/, 'istilah "scored" harus dijelaskan');
 assert.match(picker, /All figures in USD/, 'pemilih harus menyebut satuannya');
 console.log('smoke-pnlaudit: rekonsiliasi OK');
+
+// Penyaring pemilik wajib gagal TERTUTUP: alamat tak terbaca → nol entri, bukan
+// seluruh jurnal. Justru saat kita tak tahu siapa pemiliknya, membuka semuanya
+// paling berbahaya.
+assert.match(
+  readFileSync('src/journal.ts', 'utf8'),
+  /export function readMine[\s\S]{0,400}?if \(!me\) return \[\];/,
+  'readMine gagal terbuka saat wallet tak terbaca',
+);
+console.log('smoke-pnlaudit: gagal-tertutup OK');

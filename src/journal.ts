@@ -383,7 +383,11 @@ export type PeriodKey = keyof typeof PERIODS;
  */
 export function readMine(limit = 20): JournalEntry[] {
   const me = currentWallet();
-  if (!me) return read(limit);
+  // Gagal tertutup. Kalau alamat wallet tak terbaca, mengembalikan SEMUA entri
+  // berarti riwayat wallet lain tampil sebagai milikmu justru di saat kita paling
+  // tak tahu siapa pemiliknya. Kosong itu jelas salah dan langsung terlihat;
+  // daftar yang tercemar terlihat benar.
+  if (!me) return [];
   const semua = read(Number.MAX_SAFE_INTEGER).filter((e) => e.wallet === me);
   return semua.slice(0, limit);
 }
