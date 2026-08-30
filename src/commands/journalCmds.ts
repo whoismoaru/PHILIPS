@@ -36,16 +36,29 @@ export function cmdHistory(ctx: any) {
 const chainLabel = (key: string): string =>
   CHAINS[key]?.label ?? key.charAt(0).toUpperCase() + key.slice(1);
 
-/** Chain yang ditawarkan = yang aktif sekarang + yang punya riwayat di jurnal. */
-function pnlChains(): Array<{ key: string; label: string; trades: number }> {
+/**
+ * Chain yang ditawarkan = yang aktif sekarang + yang punya riwayat di jurnal.
+ *
+ * Dua angka, bukan satu. `trades` = seluruh entri jurnal; `scored` = yang benar-benar
+ * masuk W/L. Bedanya besar (728 vs 246) karena 466 di antaranya impas di bawah
+ * ±$0,1, plus 11 yang hasilnya tak terbaca dan 5 sweep. Pemilih dulu hanya
+ * menyebut angka pertama sambil menulis "closed trades", lalu kartu rekap dua
+ * tap kemudian menyebut angka kedua dengan kata yang sama — seolah 600 trade
+ * hilang di antara dua layar.
+ */
+function pnlChains(): Array<{ key: string; label: string; trades: number; scored: number }> {
   const hist = new Map(journal.chainsWithHistory().map((c) => [c.key, c.trades]));
   const keys = new Set<string>([...Object.keys(CHAINS), ...hist.keys()]);
+  const scoredOf = (key?: string) =>
+    journal.statsFor(0, key).books.reduce((a, b) => a + b.known, 0);
   const per = [...keys]
-    .map((key) => ({ key, label: chainLabel(key), trades: hist.get(key) ?? 0 }))
+    .map((key) => ({ key, label: chainLabel(key), trades: hist.get(key) ?? 0, scored: scoredOf(key) }))
     .sort((a, b) => b.trades - a.trades || a.label.localeCompare(b.label));
   // Gabungan semua chain di paling atas — pertanyaan pertama biasanya "totalnya berapa".
   const total = per.reduce((a, c) => a + c.trades, 0);
-  return total > 0 ? [{ key: ALL, label: 'All chains', trades: total }, ...per] : per;
+  return total > 0
+    ? [{ key: ALL, label: 'All chains', trades: total, scored: scoredOf(undefined) }, ...per]
+    : per;
 }
 
 /** Kunci semu untuk gabungan lintas chain. */
@@ -91,8 +104,7 @@ const periodKb = (chain: string, active?: journal.PeriodKey) =>
   ]);
 
 export function cmdPnl(ctx: any) {
-  const chains = pnlChains().map((c) => ({ label: c.label, trades: c.trades }));
-  return ctx.reply(msg.msgPnlPicker(chains), { ...html, ...chainKb() });
+  return ctx.reply(msg.msgPnlPicker(pnlChains()), { ...html, ...chainKb() });
 }
 bot.command('pnl', cmdPnl);
 
@@ -182,10 +194,15 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
       );
   if (usdTotal !== undefined && usdTotal !== null && s.books.length > 1)
     lines.push('', `<b>All books ≈ ${msg.usdPlain(usdTotal)}</b> <i>(this is what the 30-day calendar sums)</i>`);
-  const tail: string[] = [];
+  // Rekonsiliasi: jumlah entri jurnal HARUS bisa ditelusuri dari kartu ini.
+  // Tanpa baris flat, selisih 728 vs 246 tak punya penjelasan di mana pun.
+  const scored = s.books.reduce((a, b) => a + b.known, 0);
+  const flats = s.books.reduce((a, b) => a + b.flats, 0);
+  const tail: string[] = [`${s.count} closed → ${scored} scored`];
+  if (flats) tail.push(`${flats} break-even`);
+  if (s.untracked) tail.push(`${s.untracked} result unknown`);
   if (s.recovered) tail.push(`${s.recovered} sweep credited`);
-  if (s.untracked) tail.push(`${s.untracked} closed outside`);
-  if (tail.length) lines.push('', `<i>${tail.join(' · ')}</i>`);
+  lines.push('', `<i>${tail.join(' · ')}</i>`);
   lines.push('', `<i>${config.safety.dryRun ? 'DRY RUN' : 'LIVE'}</i>`);
   return lines.join('\n');
 }
@@ -335,8 +352,7 @@ async function sendCalendar(
 // Kembali ke pemilih chain — EDIT kartu yang sama, jangan kirim pesan baru.
 bot.action('pnlback', async (ctx: any) => {
   await ctx.answerCbQuery().catch(() => {});
-  const chains = pnlChains().map((c) => ({ label: c.label, trades: c.trades }));
-  return swap(ctx, msg.msgPnlPicker(chains), { ...html, ...chainKb() });
+  return swap(ctx, msg.msgPnlPicker(pnlChains()), { ...html, ...chainKb() });
 });
 
 // Langkah 1 → 2: chain dipilih, langsung tampilkan All Time (jawaban paling berguna).

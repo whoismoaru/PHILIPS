@@ -7,7 +7,7 @@
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import * as journal from '../src/journal.js';
-import { msgPnl } from '../src/messages.js';
+import { msgPnl, msgPnlPicker } from '../src/messages.js';
 
 // 1) Tiap satuan yang bisa muncul di jurnal punya ambang impas yang masuk akal.
 const src = readFileSync('src/journal.ts', 'utf8');
@@ -149,3 +149,34 @@ const dariBuku = st.books.reduce((a, b) => a + b.net * (kurs.get(b.unit) ?? 0), 
 const dariKalender = journal.dailyAllUsd((u) => kurs.get(u) ?? null, 30).days.reduce((a, d) => a + d.net, 0);
 assert.ok(Math.abs(dariBuku - dariKalender) < 1e-6, `kartu $${dariBuku} ≠ kalender $${dariKalender}`);
 console.log('smoke-pnlaudit: total USD OK');
+
+// ── Rekonsiliasi: 728 entri vs 246 berskor harus bisa ditelusuri ─────────────
+// Pemilih chain dan kartu rekap sama-sama memakai kata "trades" untuk dua hal
+// berbeda; selisihnya (impas + hasil tak terbaca + sweep) wajib disebut, kalau
+// tidak terbaca sebagai ratusan trade yang hilang antar layar.
+const st0 = journal.statsFor(0);
+const berskor = st0.books.reduce((a, b) => a + b.known, 0);
+const impas = st0.books.reduce((a, b) => a + b.flats, 0);
+assert.equal(
+  berskor + impas + st0.untracked + st0.excluded + st0.recovered,
+  st0.count,
+  'entri jurnal tak bisa direkonsiliasi — ada kategori yang tak terhitung',
+);
+
+const kartu = msgPnl({
+  dryRun: false, chainLabel: 'All chains', periodLabel: 'All Time',
+  known: st0.known, count: st0.count, untracked: st0.untracked,
+  excluded: st0.excluded, recovered: st0.recovered, books: st0.books,
+});
+assert.match(kartu, new RegExp(`${st0.count} closed`), 'kartu tak menyebut jumlah entri');
+assert.match(kartu, new RegExp(`<b>${berskor}</b>`), 'kartu tak menyebut jumlah berskor');
+assert.match(kartu, /scored/, 'istilah scored harus muncul');
+if (impas) assert.match(kartu, /break-even/, 'impas tak dijelaskan di mana pun');
+
+// Pemilih chain menyebut DUA angka bila berbeda, satu angka bila sama.
+const picker = msgPnlPicker([{ label: 'Robinhood', trades: 480, scored: 161 }, { label: 'Ink', trades: 0, scored: 0 }]);
+assert.match(picker, /480 closed · 161 scored/);
+assert.match(picker, /Ink[^\n]*0 closed/);
+assert.ok(!/0 closed · 0 scored/.test(picker), 'angka sama tak perlu ditulis dua kali');
+assert.match(picker, /Scored = wins\/losses only/, 'istilah "scored" harus dijelaskan');
+console.log('smoke-pnlaudit: rekonsiliasi OK');

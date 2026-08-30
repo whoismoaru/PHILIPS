@@ -664,11 +664,26 @@ function sgEth(n: number): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(5)} ETH`;
 }
 
-export function msgPnlPicker(chains: Array<{ label: string; trades: number }>): string {
+export function msgPnlPicker(chains: Array<{ label: string; trades: number; scored?: number }>): string {
   const out = [`📈 ${bold('PnL Recap')}`, '', 'Pick a chain to recap its closed trades.', ''];
   if (chains.length) {
-    out.push(...tree(chains.map((c) => [c.label, `${c.trades} closed trade${c.trades === 1 ? '' : 's'}`]), 12), '');
+    out.push(
+      ...tree(
+        chains.map((c) => [
+          c.label,
+          // Dua angka. Kartu rekap hanya menghitung yang BERSKOR, jadi menyebut
+          // total saja di sini membuat selisihnya (impas / hasil tak terbaca)
+          // tampak seperti trade yang hilang di antara dua layar.
+          c.scored === undefined || c.scored === c.trades
+            ? `${c.trades} closed`
+            : `${c.trades} closed · ${c.scored} scored`,
+        ]),
+        12,
+      ),
+      '',
+    );
   }
+  out.push(note('Scored = wins/losses only; break-even trades under ~$0.1 are not scored.'));
   out.push(note('Books stay per denomination — ETH, BNB, USDG and USDT are never summed together.'));
   return out.join('\n');
 }
@@ -714,6 +729,21 @@ export function msgPnl(opts: {
     return `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
   };
   const out = [head, ''];
+  // Jumlah entri vs yang berskor: satu-satunya tempat selisihnya dijelaskan.
+  if (opts.count !== undefined) {
+    const scored = opts.books.reduce((a, b) => a + b.known, 0);
+    const flats = opts.books.reduce((a, b) => a + (b.flats ?? 0), 0);
+    // note() meng-escape isinya, jadi penekanan dipasang DI LUAR. Sweep & hasil
+    // tak terbaca sudah punya barisnya sendiri di kaki kartu — di sini cukup
+    // selisih yang selama ini tak dijelaskan di mana pun: impas.
+    if (opts.count !== scored)
+      out.push(
+        `${note(`${opts.count} closed →`)} ${bold(String(scored))} ${note(
+          `scored${flats ? ` · ${flats} break-even (under ~$0.1)` : ''}`,
+        )}`,
+        '',
+      );
+  }
   // Total lintas-buku dalam USD. Tanpa ini kartu hanya memberi 4 angka dalam 4
   // satuan berbeda yang tak bisa dibandingkan — dan kalender 30 hari (yang MEMANG
   // menjumlahkannya dalam USD) terbaca seolah menghitung hal lain. 0.245 ETH itu
