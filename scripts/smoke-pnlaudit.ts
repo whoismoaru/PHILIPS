@@ -181,3 +181,21 @@ assert.match(
   'readMine gagal terbuka saat wallet tak terbaca',
 );
 console.log('smoke-pnlaudit: gagal-tertutup OK');
+
+// ── Jurnal bersih: tiap entri milik SATU pemilik yang jelas ─────────────────
+// 88 entri pernah lolos penyaring dengan cap keliru — bukan penyaringnya yang
+// bocor, capnya yang salah (backfill 22 Agu 2026 menebak pemilik entri lama).
+// Penyaring hanya sekuat capnya, jadi capnya yang dijaga di sini.
+{
+  const semua = journal.read(Number.MAX_SAFE_INTEGER);
+  assert.equal(semua.filter((e) => !e.wallet).length, 0, 'ada entri tanpa cap pemilik — tak terhitung milik siapa pun');
+  const aktif = journal.currentWallet();
+  if (aktif) {
+    const milikku = journal.readMine(Number.MAX_SAFE_INTEGER);
+    assert.equal(milikku.length, semua.filter((e) => e.wallet === aktif).length, 'readMine tak sama dgn entri bercap wallet aktif');
+    assert.ok(milikku.every((e) => e.wallet === aktif), 'readMine meloloskan cap lain');
+    // Rekap harus memakai persis kumpulan itu — tak ada jalur baca kedua.
+    assert.equal(journal.statsFor(0).count, milikku.length, 'cakupan /pnl ≠ entri wallet aktif');
+  }
+}
+console.log('smoke-pnlaudit: jurnal bersih OK');
