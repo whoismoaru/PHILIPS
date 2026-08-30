@@ -28,7 +28,9 @@ assert.ok(p.get('send').length > 0, 'preset send kosong');
 assert.ok(p.sanitize(p.defaultsFor('send'), 'send'), 'bawaan send tak lolos validasinya sendiri');
 assert.equal(p.unitFor('send'), '%');
 
-// Alamat contoh tetap alamat sah (menjaga helper tak berubah arti).
+// Alamat contoh tetap alamat sah (menjaga helper tak berubah arti). Sengaja
+// alamat sintetis: menaruh dompet sungguhan di berkas yang ikut ter-push
+// mengaitkan repo publik ini dengan dompet pemiliknya.
 assert.ok(ethers.isAddress('0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed'));
 
 // Alamat base di chains.ts tak seragam kapitalnya (USDG Robinhood lowercase,
