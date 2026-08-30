@@ -9,6 +9,7 @@ import * as alerts from './alerts.js';
 import * as journal from './journal.js';
 import * as v4store from './v4store.js';
 import { checkV4Status, v4Supported, v4OwnerOf } from './uniswapV4.js';
+import { getEthUsd } from './screening.js';
 import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgIlAlert, msgConverted, msgV4Range } from './messages.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -293,7 +294,28 @@ export function startMonitor(bot: Telegraf) {
   }, INTERVAL_MS);
 }
 
+/**
+ * Segarkan kurs USD tiap satuan supaya entri jurnal bisa DICAP saat ditutup.
+ *
+ * Ditumpangkan ke denyut monitor yang memang sudah jalan tiap menit — jauh lebih
+ * murah daripada mengambil harga di dalam jalur close (yang harus cepat) dan
+ * tak menambah satu pun timer baru.
+ */
+async function refreshUsdRates(): Promise<void> {
+  await Promise.all(
+    Object.values(CHAINS).flatMap((cc) =>
+      cc.bases.map(async (b) => {
+        const unit = journal.unitOf(cc.key, b.kind);
+        journal.noteUsdRate(unit, b.kind === 'weth' ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1);
+      }),
+    ),
+  );
+}
+
 async function tick(bot: Telegraf) {
+  // Gagal ambil harga tak boleh menghentikan monitor: entri yang ditutup ronde ini
+  // sekadar tak tercap, lalu dihitung sbg taksiran di /pnl.
+  await refreshUsdRates().catch(() => {});
   // Sweep hanya saat tak ada tx uang berjalan (nonce & WETH perantara).
   if (!store.isBusy())
     await sweepLeftovers(bot).catch((e) => console.log('[sweep] gagal:', (e as Error).message.slice(0, 120)));

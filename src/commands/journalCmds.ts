@@ -182,8 +182,12 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
   if (s.untracked) tail.push(`${s.untracked} result unknown`);
   if (s.recovered) tail.push(`${s.recovered} sweep credited`);
   if (s.unconverted) tail.push(`${s.unconverted} no USD rate`);
+  if (s.estimated) tail.push(`${s.estimated} at today's rate`);
   lines.push('', `<i>${tail.join(' · ')}</i>`);
-  lines.push(`<i>All values in USD at current rates.</i>`);
+  // Entri baru terkunci pada kurs saat ditutup; hanya entri lama yang ditaksir.
+  lines.push(
+    `<i>USD locked at close time${s.estimated ? `; ${s.estimated} older entr${s.estimated === 1 ? 'y' : 'ies'} valued at today's rate` : ''}.</i>`,
+  );
   lines.push('', `<i>${config.safety.dryRun ? 'DRY RUN' : 'LIVE'}</i>`);
   return lines.join('\n');
 }
@@ -217,6 +221,7 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
     excluded: s.excluded,
     recovered: s.recovered,
     unconverted: s.unconverted,
+    estimated: s.estimated,
     books: s.books,
   });
   const buf = await pnlImage(chain, key, s);

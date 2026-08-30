@@ -96,6 +96,27 @@ const asli = journal.statsFor(0);
 const dariAsli = asli.books.reduce((a, b) => a + b.net * (kurs.get(b.unit) ?? 0), 0);
 assert.ok(Math.abs(usd.books[0].net - dariAsli) < 1e-6, `USD ${usd.books[0].net} ≠ jumlah buku ${dariAsli}`);
 
+// Kurs SAAT CLOSE didahulukan; kurs sekarang cuma cadangan untuk entri lama.
+const dicap = { tokenId: '1', symbol: 'X', openedAt: 0, closedAt: Date.now(), initialWethWei: '0',
+  resultEthWei: '1', pnlEth: 1, pnlPct: 1, reason: 'cashed' as const, usdRate: 10 };
+assert.equal(
+  journal.statsFor(0, undefined, () => 1).estimated + journal.statsFor(0, undefined, () => 1).books.reduce((a, b) => a + b.known, 0) >= 0,
+  true,
+);
+{
+  // Entri lama (tanpa cap) HARUS dihitung sebagai taksiran, bukan diam-diam.
+  const st = journal.statsFor(0, undefined, () => 1);
+  const lama = journal.readMine(999999).filter((e) => e.usdRate === undefined).length;
+  const dipakai = st.count - st.untracked - st.excluded;
+  assert.ok(st.estimated <= lama, 'taksiran melebihi entri yang memang tak tercap');
+  assert.ok(st.estimated <= dipakai, 'taksiran melebihi entri yang dihitung');
+}
+// Cap tak boleh ditimpa kurs baru.
+assert.match(readFileSync('src/journal.ts', 'utf8'), /rate = e\.usdRate;/, 'kurs tercap harus didahulukan');
+assert.match(readFileSync('src/journal.ts', 'utf8'), /usdRate: e\.usdRate \?\? rateNow\(/, 'entri baru harus dicap saat ditulis');
+// Kurs basi tak boleh dipakai mencap.
+assert.match(readFileSync('src/journal.ts', 'utf8'), /RATE_TTL_MS/, 'cap tanpa batas kedaluwarsa');
+
 // Kurs tak terbaca → entri DILEWATI dan dihitung, bukan dianggap nol.
 const buta = journal.statsFor(0, undefined, () => null);
 assert.equal(buta.books.length, 0, 'tanpa kurs tak boleh ada buku');

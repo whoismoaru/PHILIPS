@@ -684,7 +684,7 @@ export function msgPnlPicker(chains: Array<{ label: string; trades: number; scor
     );
   }
   out.push(note('Scored = wins/losses only; break-even trades under ~$0.1 are not scored.'));
-  out.push(note('All figures in USD, converted at current rates.'));
+  out.push(note('All figures in USD, locked at each trade\'s close time.'));
   return out.join('\n');
 }
 
@@ -704,6 +704,7 @@ export function msgPnl(opts: {
   excluded?: number;
   recovered?: number;
   unconverted?: number; // entri yang kursnya tak terbaca — dilewati, bukan dianggap nol
+  estimated?: number; // entri lama tanpa cap kurs — dinilai dgn kurs SEKARANG
   books: Array<{
     unit: string;
     known: number;
@@ -745,7 +746,8 @@ export function msgPnl(opts: {
       out.push(
         `${note(`${opts.count} closed →`)} ${bold(String(scored))} ${note(
           `scored${flats ? ` · ${flats} break-even (under ~$0.1)` : ''}` +
-            (opts.unconverted ? ` · ${opts.unconverted} no USD rate` : ''),
+            (opts.unconverted ? ` · ${opts.unconverted} no USD rate` : '') +
+            (opts.estimated ? ` · ${opts.estimated} at today's rate` : ''),
         )}`,
         '',
       );

@@ -23,6 +23,8 @@ export type JournalEntry = {
   pnlPct: number;
   reason: 'cashed' | 'gone' | 'burned' | 'recovery';
   wallet?: string; // alamat pemilik (huruf kecil). Kosong = entri sebelum field ini ada.
+  /** Harga USD satuan entri ini SAAT ditutup. Absen = entri lama / kurs tak terbaca. */
+  usdRate?: number;
 };
 
 const FILE = join(process.cwd(), 'data', 'journal.jsonl');
@@ -70,12 +72,41 @@ export function currentWallet(): string | undefined {
   }
 }
 
+/**
+ * Kurs USD tiap satuan, disegarkan denyut monitor (lihat `noteUsdRate`).
+ *
+ * Dipakai untuk MENCAP entri saat ditutup, bukan saat dibaca: PnL 0,245 ETH yang
+ * dicatat hari ini harus tetap bernilai $607 walau ETH bergerak besok. Tanpa cap,
+ * rekap historis ikut naik-turun mengikuti harga hari ini — bukan hasil trade-nya
+ * yang berubah, cuma kursnya.
+ *
+ * Kurs basi (> 30 menit) TIDAK dipakai: lebih baik entri tanpa cap — yang nanti
+ * dihitung dengan kurs sekarang dan dilaporkan sebagai taksiran — daripada dicap
+ * dengan harga setengah jam lalu yang terlanjur salah selamanya.
+ */
+const RATE_TTL_MS = 30 * 60_000;
+const usdRates = new Map<string, { usd: number; t: number }>();
+
+export function noteUsdRate(unit: string, usd: number | null): void {
+  if (usd !== null && Number.isFinite(usd) && usd > 0) usdRates.set(unit, { usd, t: Date.now() });
+}
+
+const rateNow = (unit: string): number | undefined => {
+  const r = usdRates.get(unit);
+  return r && Date.now() - r.t < RATE_TTL_MS ? r.usd : undefined;
+};
+
 export function record(e: JournalEntry): void {
   try {
     mkdirSync(join(process.cwd(), 'data'), { recursive: true });
     // Cap alamat pemilik: ganti wallet TIDAK boleh membuat riwayat wallet lama
     // ikut terhitung di /pnl. Sekali tercatat, entri terikat ke pemiliknya.
-    const stamped: JournalEntry = { ...e, wallet: e.wallet ?? currentWallet() };
+    const stamped: JournalEntry = {
+      ...e,
+      wallet: e.wallet ?? currentWallet(),
+      // Kurs SAAT ditutup — sekali tercatat, nilainya tak ikut bergerak lagi.
+      usdRate: e.usdRate ?? rateNow(unitOf(e.chain, e.baseKind)),
+    };
     appendFileSync(FILE, JSON.stringify(stamped) + '\n');
   } catch (err) {
     console.error('[journal] gagal menulis:', (err as Error).message);
@@ -207,6 +238,7 @@ export type PeriodStats = {
   excluded: number; // placeholder backfill lama (result 0)
   recovered: number; // entri pemulihan sisa token (masuk net, bukan trade)
   unconverted: number; // mode USD: entri yang kursnya tak terbaca — DILEWATI, bukan dianggap nol
+  estimated: number; // mode USD: entri lama tanpa cap kurs, dinilai dgn kurs SEKARANG
   books: Book[]; // urut: paling banyak trade dulu
 };
 
@@ -233,7 +265,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
       (!me || e.wallet === me),
   );
   const byUnit = new Map<string, Book>();
-  let known = 0, untracked = 0, excluded = 0, recovered = 0, unconverted = 0;
+  let known = 0, untracked = 0, excluded = 0, recovered = 0, unconverted = 0, estimated = 0;
   for (const e of all) {
     if (e.resultEthWei === undefined) { untracked++; continue; }
     if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; }
@@ -242,8 +274,19 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
     // bergerak saat ETH bergerak. Itu memang yang diminta ("semua dalam $"), tapi
     // artinya angka ini "berapa nilainya hari ini", bukan "berapa yang kudapat saat itu".
     const native = unitOf(e.chain, e.baseKind);
-    const rate = usdOf ? usdOf(native) : 1;
-    if (usdOf && rate === null) { unconverted++; continue; }
+    // Kurs SAAT ENTRI DITUTUP kalau tercap; kurs sekarang hanya sebagai cadangan
+    // untuk entri lama (sebelum pencapan ada). Yang memakai cadangan dihitung —
+    // nilainya ikut bergerak mengikuti pasar, jadi tak boleh disamakan diam-diam
+    // dengan entri yang angkanya sudah terkunci.
+    let rate: number | null | undefined = 1;
+    if (usdOf) {
+      rate = e.usdRate;
+      if (rate === undefined) {
+        rate = usdOf(native);
+        if (rate !== null) estimated++;
+      }
+      if (rate === null) { unconverted++; continue; }
+    }
     const unit = usdOf ? 'USD' : native;
     const nilai = e.pnlEth * (rate ?? 1);
     let b = byUnit.get(unit);
@@ -275,7 +318,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
     if (!b.worst || nilai < b.worst.pnl) b.worst = { symbol: e.symbol, pnl: nilai };
   }
   const books = [...byUnit.values()].sort((a, b) => b.known - a.known);
-  return { count: all.length, known, untracked, excluded, recovered, unconverted, books };
+  return { count: all.length, known, untracked, excluded, recovered, unconverted, estimated, books };
 }
 
 /**
