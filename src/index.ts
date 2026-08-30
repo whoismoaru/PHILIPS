@@ -856,6 +856,30 @@ async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean)
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
+/**
+ * Kartu detail posisi v4 yang BARU dibuka. Jalur v3 selalu mengirim dua keluaran
+ * setelah sukses — "LP Created" lalu kartu posisinya — sementara v4 (tunggal &
+ * ladder) berhenti di kartu pertama, jadi posisi v4 baru tak pernah langsung
+ * memperlihatkan rentang, strategi, dan status range-nya.
+ *
+ * Cache daftar v4 sudah di-invalidate pemanggil, jadi pembacaan di sini segar.
+ * Gagal baca tak boleh menggagalkan open yang SUDAH sukses — posisinya nyata,
+ * kartunya cuma tampilan: /positions tetap memperlihatkannya.
+ */
+async function replyV4Card(ctx: any, cc: ChainCtx, tokenId: string | null | undefined): Promise<void> {
+  if (!tokenId) return;
+  try {
+    const list = await listPositionsV4(cc);
+    const p = list.find((x) => x.tokenId === tokenId);
+    if (!p) return;
+    const ethUsd = await getEthUsd(cc.wethAddress, cc).catch(() => null);
+    const c = await buildV4Card(p, ethUsd, cc);
+    await ctx.reply(c.text, c.extra);
+  } catch (e) {
+    console.error('[open v4] kartu detail gagal:', (e as Error).message.slice(0, 120));
+  }
+}
+
 /** Tampilan detail (komposisi, nilai, fee). */
 async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolean) {
   const cc = ctxOf(rec);
@@ -2471,6 +2495,9 @@ bot.action('addok', async (ctx) => {
       }
       invalidateV4ListCache(); // posisi baru → /positions harus segar
       await ctx.editMessageText(msg.msgLadderOpened(r.tokenIds.length, legs.length, `${selected.baseSymbol} / ${selected.otherSymbol}`, ethAmount), html);
+      // Leg pertama: kartunya sudah meringkas SELURUH ladder (lihat ladderSum di
+      // buildV4Card), jadi satu kartu cukup — sama seperti jalur ladder v3.
+      await replyV4Card(ctx, cc, r.tokenIds[0]);
     } catch (err) {
       console.error('[open v4 ladder] gagal:', (err as Error).message.slice(0, 200));
       await recoverStrayWeth(getChain(chain), 'add v4 ladder').catch(() => {});
@@ -2538,6 +2565,7 @@ bot.action('addok', async (ctx) => {
         }),
         html,
       );
+      await replyV4Card(ctx, cc, r.tokenId);
     } catch (err) {
       await recoverStrayWeth(getChain(chain), 'add v4').catch(() => {});
       await ctx.reply(msg.msgError('add v4', err), html);
