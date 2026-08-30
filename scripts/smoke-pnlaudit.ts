@@ -79,3 +79,24 @@ assert.equal(berkurs.days.length, 30);
 assert.ok(semua.skipped <= berkurs.days.reduce((a, d) => a + d.trades, 0) + semua.skipped);
 
 console.log('smoke-pnlaudit OK');
+
+// ── Pemilik: tak satu pun angka boleh memuat trade wallet lain ───────────────
+// Jurnal ini memang berisi dua wallet (727 milik yang aktif, 181 milik yang lama),
+// jadi kebocoran di sini bukan hipotesis — ia akan langsung terlihat.
+const me = journal.currentWallet();
+if (me) {
+  const asing = (xs: Array<{ wallet?: string }>) => xs.filter((e) => e.wallet !== me).length;
+  assert.equal(asing(journal.readMine(999)), 0, 'readMine membocorkan wallet lain');
+  assert.equal(journal.statsFor(0).count, journal.readMine(999).length, 'cakupan /pnl ≠ cakupan riwayat');
+
+  // Pembaca yang menyentuh uang atau menampilkan riwayat WAJIB lewat readMine.
+  for (const [berkas, pola] of [
+    ['src/commands/journalCmds.ts', /journal\.readMine\(8\)/],
+    ['src/monitor.ts', /\.readMine\(80\)/],
+  ] as const)
+    assert.match(readFileSync(berkas, 'utf8'), pola, `${berkas} memakai read() polos — riwayat wallet lain ikut`);
+
+  // Entri baru selalu dicap pemiliknya; tanpa cap, penyaring di atas tak berarti.
+  assert.match(readFileSync('src/journal.ts', 'utf8'), /wallet: e\.wallet \?\? currentWallet\(\)/, 'entri jurnal tak dicap pemilik');
+}
+console.log('smoke-pnlaudit: pemilik OK');

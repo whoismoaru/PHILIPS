@@ -11,7 +11,7 @@ import * as msg from '../messages.js';
 
 export function cmdHistory(ctx: any) {
   const total = journal.statsFor(0).count;
-  const items = journal.read(8).map((e) => ({
+  const items = journal.readMine(8).map((e) => ({
     tokenId: e.tokenId,
     symbol: e.symbol,
     pnlPct: e.pnlPct,

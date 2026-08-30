@@ -123,7 +123,7 @@ export function recordClose(
 export function recentTokens(limit = 80): Array<{ ca: string; chain?: string; symbol: string }> {
   const seen = new Set<string>();
   const out: Array<{ ca: string; chain?: string; symbol: string }> = [];
-  for (const e of read(limit)) {
+  for (const e of readMine(limit)) {
     if (!e.ca) continue;
     const key = `${e.chain ?? 'robinhood'}:${e.ca.toLowerCase()}`;
     if (seen.has(key)) continue;
@@ -392,7 +392,26 @@ export const PERIODS = {
 export type PeriodKey = keyof typeof PERIODS;
 
 
-/** Baca N entri terbaru (terbaru dulu). */
+/**
+ * Baca N entri terbaru MILIK WALLET YANG SEDANG DIPAKAI (terbaru dulu).
+ *
+ * `read()` mentah tak menyaring pemilik — dan setiap pembaca yang lupa
+ * menyaringnya sendiri akan menampilkan riwayat wallet lain sebagai riwayatmu.
+ * Jurnal ini sudah memuat 181 entri milik wallet lama; /history dan kandidat
+ * sweep sama-sama memakai `read()` polos, jadi keduanya bocor begitu wallet
+ * berganti. /pnl sendiri sudah menyaring sejak awal — inilah yang menyamakannya.
+ *
+ * Entri TANPA cap pemilik ikut dibuang: lebih baik satu baris hilang daripada
+ * satu baris milik orang lain tampil sebagai milikmu.
+ */
+export function readMine(limit = 20): JournalEntry[] {
+  const me = currentWallet();
+  if (!me) return read(limit);
+  const semua = read(Number.MAX_SAFE_INTEGER).filter((e) => e.wallet === me);
+  return semua.slice(0, limit);
+}
+
+/** Baca N entri terbaru (terbaru dulu). TIDAK menyaring pemilik — lihat readMine. */
 export function read(limit = 20): JournalEntry[] {
   try {
     if (!existsSync(FILE)) return [];

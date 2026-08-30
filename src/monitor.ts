@@ -120,7 +120,7 @@ async function sweepLeftovers(bot: Telegraf) {
         cap: r.leftoverWei ? BigInt(r.leftoverWei) : undefined,
       })),
     ...journal
-      .read(80)
+      .readMine(80)
       .filter((e) => e.ca && Date.now() - e.closedAt < SWEEP_RECENT_MS)
       .map((e) => ({
         tokenId: e.tokenId,
