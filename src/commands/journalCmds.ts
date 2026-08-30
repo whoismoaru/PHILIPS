@@ -155,8 +155,22 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   }).catch(() => null);
 }
 
+/**
+ * Jumlah semua buku dalam USD, atau null bila ADA satu saja kurs yang tak terbaca.
+ * Setengah total lebih buruk daripada tak ada total: ia terbaca sebagai fakta.
+ */
+function usdTotalOf(s: journal.PeriodStats, rates: Map<string, number | null>): number | null {
+  let t = 0;
+  for (const b of s.books) {
+    const r = rates.get(b.unit);
+    if (r === null || r === undefined) return null;
+    t += b.net * r;
+  }
+  return t;
+}
+
 /** Caption ringkas — detailnya sudah terbaca di gambar (batas caption 1024 char). */
-function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStats): string {
+function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStats, usdTotal?: number | null): string {
   const p = journal.PERIODS[key];
   const lines = [`📈 <b>PnL Recap</b> · <b>${chain === ALL ? 'All chains' : chainLabel(chain)}</b> · ${p.label}`, ''];
   if (s.books.length === 0) lines.push('<i>no closed trades with a measured result in this period.</i>');
@@ -166,6 +180,8 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
         `${b.net >= 0 ? '🟢' : '🔴'} <b>${b.unit}</b> ${n2(b.net, b.unit)} · ${b.known} trades · ` +
           `${journal.winrateOf(b).toFixed(1)}% WR${journal.profitFactorOf(b) === null ? '' : ` · PF ${journal.profitFactorOf(b)!.toFixed(2)}`}`,
       );
+  if (usdTotal !== undefined && usdTotal !== null && s.books.length > 1)
+    lines.push('', `<b>All books ≈ ${msg.usdPlain(usdTotal)}</b> <i>(this is what the 30-day calendar sums)</i>`);
   const tail: string[] = [];
   if (s.recovered) tail.push(`${s.recovered} sweep credited`);
   if (s.untracked) tail.push(`${s.untracked} closed outside`);
@@ -189,6 +205,7 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
   const since = p.ms === 0 ? 0 : key === '1m' ? journal.monthStartMs(30) : Date.now() - p.ms;
   const s = journal.statsFor(since, chain === ALL ? undefined : chain);
   const kb = periodKb(chain, key);
+  const usdTotal = s.books.length > 1 ? usdTotalOf(s, await usdRates()) : null;
   const text = msg.msgPnl({
     dryRun: config.safety.dryRun,
     chainLabel: chain === ALL ? 'All chains' : chainLabel(chain),
@@ -198,13 +215,14 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
     untracked: s.untracked,
     excluded: s.excluded,
     recovered: s.recovered,
+    usdTotal,
     books: s.books,
   });
   const buf = await pnlImage(chain, key, s);
   if (!buf) return fresh ? ctx.reply(text, { ...html, ...kb }) : swap(ctx, text, { ...html, ...kb });
 
   const doc = Input.fromBuffer(buf, `philips-pnl-${chain}-${key}.png`);
-  const caption = pnlCaption(chain, key, s);
+  const caption = pnlCaption(chain, key, s, usdTotal);
   if (fresh) {
     // Pesan pemilih chain berupa TEKS — tak bisa di-edit jadi dokumen. Ganti utuh.
     await ctx.deleteMessage().catch(() => {});

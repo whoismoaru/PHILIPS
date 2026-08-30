@@ -688,6 +688,7 @@ export function msgPnl(opts: {
   untracked?: number;
   excluded?: number;
   recovered?: number;
+  usdTotal?: number | null; // jumlah semua buku dlm USD; null = ada kurs tak terbaca
   books: Array<{
     unit: string;
     known: number;
@@ -713,6 +714,12 @@ export function msgPnl(opts: {
     return `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
   };
   const out = [head, ''];
+  // Total lintas-buku dalam USD. Tanpa ini kartu hanya memberi 4 angka dalam 4
+  // satuan berbeda yang tak bisa dibandingkan — dan kalender 30 hari (yang MEMANG
+  // menjumlahkannya dalam USD) terbaca seolah menghitung hal lain. 0.245 ETH itu
+  // $600+; tanpa baris ini ia tampak angka terkecil di kartu.
+  if (opts.usdTotal !== undefined && opts.usdTotal !== null && opts.books.length > 1)
+    out.push(`${dot(opts.usdTotal)} ${bold('All books')} ≈ ${bold(usdPlain(opts.usdTotal))}`, '');
   for (const b of opts.books) {
     // Impas (PnL tepat 0) tak masuk penyebut winrate — kalau ikut, winrate naik
     // tanpa satu pun trade tambahan yang benar-benar menang.

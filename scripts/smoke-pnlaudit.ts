@@ -7,6 +7,7 @@
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import * as journal from '../src/journal.js';
+import { msgPnl } from '../src/messages.js';
 
 // 1) Tiap satuan yang bisa muncul di jurnal punya ambang impas yang masuk akal.
 const src = readFileSync('src/journal.ts', 'utf8');
@@ -126,3 +127,25 @@ for (const chain of ['robinhood', 'bsc', 'base']) {
   assert.ok(Math.abs(net - main.net) < 1e-9, `${chain}: kalender ${net} ≠ rekap ${main.net}`);
 }
 console.log('smoke-pnlaudit: jendela OK');
+
+// ── Total lintas-buku: satu angka yang bisa dibandingkan dgn kalender ────────
+const buku = [
+  { unit: 'USDG', known: 1, wins: 1, losses: 0, flats: 0, net: 296.46, grossWin: 296.46, grossLoss: 0 },
+  { unit: 'ETH', known: 1, wins: 1, losses: 0, flats: 0, net: 0.24524, grossWin: 0.24524, grossLoss: 0 },
+];
+const dgn = msgPnl({ dryRun: false, chainLabel: 'All chains', periodLabel: '1 Month', known: 2, usdTotal: 903.9, books: buku });
+assert.match(dgn, /All books/, 'kartu multi-buku wajib punya total USD');
+assert.match(dgn, /\$903\.90/);
+// Satu kurs tak terbaca → JANGAN tampilkan total separuh.
+assert.ok(!/All books/.test(msgPnl({ dryRun: false, chainLabel: 'All chains', periodLabel: '1 Month', known: 2, usdTotal: null, books: buku })),
+  'total separuh terbaca sebagai fakta');
+// Satu buku tak butuh konversi.
+assert.ok(!/All books/.test(msgPnl({ dryRun: false, chainLabel: 'BSC', periodLabel: '1 Month', known: 1, usdTotal: 296.46, books: [buku[0]] })));
+
+// Total di kartu = yang dijumlahkan kalender: dua-duanya net × kurs, buku per buku.
+const kurs = new Map<string, number | null>([['USDG', 1], ['USDT', 1], ['ETH', 2478], ['HYPE', 83.76]]);
+const st = journal.statsFor(journal.monthStartMs(30));
+const dariBuku = st.books.reduce((a, b) => a + b.net * (kurs.get(b.unit) ?? 0), 0);
+const dariKalender = journal.dailyAllUsd((u) => kurs.get(u) ?? null, 30).days.reduce((a, d) => a + d.net, 0);
+assert.ok(Math.abs(dariBuku - dariKalender) < 1e-6, `kartu $${dariBuku} ≠ kalender $${dariKalender}`);
+console.log('smoke-pnlaudit: total USD OK');
