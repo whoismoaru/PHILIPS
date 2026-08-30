@@ -684,7 +684,7 @@ export function msgPnlPicker(chains: Array<{ label: string; trades: number; scor
     );
   }
   out.push(note('Scored = wins/losses only; break-even trades under ~$0.1 are not scored.'));
-  out.push(note('Books stay per denomination — ETH, BNB, USDG and USDT are never summed together.'));
+  out.push(note('All figures in USD, converted at current rates.'));
   return out.join('\n');
 }
 
@@ -703,7 +703,7 @@ export function msgPnl(opts: {
   untracked?: number;
   excluded?: number;
   recovered?: number;
-  usdTotal?: number | null; // jumlah semua buku dlm USD; null = ada kurs tak terbaca
+  unconverted?: number; // entri yang kursnya tak terbaca — dilewati, bukan dianggap nol
   books: Array<{
     unit: string;
     known: number;
@@ -720,13 +720,18 @@ export function msgPnl(opts: {
   const head = `📈 ${bold('PnL Recap')} · ${bold(esc(opts.chainLabel))} · ${esc(opts.periodLabel)}`;
   if (opts.known === 0) {
     const out = [head, '', note('no closed trades with a measured result in this period.')];
+    if (opts.unconverted)
+      out.push(note(`Not counted: ${opts.unconverted} with no USD rate.`));
     if (opts.untracked) out.push(note(`${opts.untracked} closed outside the bot (result unknown).`));
     out.push('', note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
     return out.join('\n');
   }
+  // Satuan asli (ETH/BNB/HYPE) butuh 5 desimal; USD & stablecoin cukup 2.
   const num = (v: number, unit: string): string => {
-    const d = unit === 'USDG' || unit === 'USDT' ? 2 : 5;
-    return `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
+    const d = unit === 'ETH' || unit === 'BNB' || unit === 'HYPE' ? 5 : 2;
+    return unit === 'USD'
+      ? `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
+      : `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
   };
   const out = [head, ''];
   // Jumlah entri vs yang berskor: satu-satunya tempat selisihnya dijelaskan.
@@ -739,16 +744,12 @@ export function msgPnl(opts: {
     if (opts.count !== scored)
       out.push(
         `${note(`${opts.count} closed →`)} ${bold(String(scored))} ${note(
-          `scored${flats ? ` · ${flats} break-even (under ~$0.1)` : ''}`,
+          `scored${flats ? ` · ${flats} break-even (under ~$0.1)` : ''}` +
+            (opts.unconverted ? ` · ${opts.unconverted} no USD rate` : ''),
         )}`,
         '',
       );
   }
-  // Total lintas-buku dalam USD. Tanpa ini kartu hanya memberi angka dalam
-  // beberapa satuan yang tak bisa dibandingkan: 0.245 ETH tampak paling kecil di
-  // kartu padahal $600+, jauh lebih besar dari baris 296 USDG di atasnya.
-  if (opts.usdTotal !== undefined && opts.usdTotal !== null && opts.books.length > 1)
-    out.push(`${dot(opts.usdTotal)} ${bold('All books')} ≈ ${bold(usdPlain(opts.usdTotal))}`, '');
   for (const b of opts.books) {
     // Impas (PnL tepat 0) tak masuk penyebut winrate — kalau ikut, winrate naik
     // tanpa satu pun trade tambahan yang benar-benar menang.
@@ -758,7 +759,7 @@ export function msgPnl(opts: {
     const avgWin = b.wins > 0 ? b.grossWin / b.wins : 0;
     const avgLoss = b.losses > 0 ? b.grossLoss / b.losses : 0;
     out.push(
-      `${dot(b.net)} ${bold(`${esc(b.unit)} book`)} : ${bold(num(b.net, b.unit))}`,
+      `${dot(b.net)} ${bold(b.unit === 'USD' ? 'Net' : `${esc(b.unit)} book`)} : ${bold(num(b.net, b.unit))}`,
       ...tree(
         [
           ['Trades', `${b.known} (${b.wins}W / ${b.losses}L)`],

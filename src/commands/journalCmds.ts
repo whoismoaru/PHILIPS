@@ -128,7 +128,7 @@ const swap = async (ctx: any, text: string, extra: any) => {
 };
 
 const n2 = (v: number, unit: string): string => {
-  const d = unit === 'USDG' || unit === 'USDT' ? 2 : 5;
+  const d = unit === 'ETH' || unit === 'BNB' || unit === 'HYPE' ? 5 : 2;
   return `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
 };
 
@@ -149,15 +149,11 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
     { label: 'profit', value: n2(main.grossWin, main.unit) },
     { label: 'loss', value: n2(main.grossLoss, main.unit) },
   ];
-  // Gambar ini cuma memuat SATU buku (yang paling banyak trade). Judulnya dulu
-  // berbunyi "All chains · All Time" di atas angka yang sebenarnya hanya USDG —
-  // terbaca sebagai total seluruh chain, padahal USDT & ETH tak ikut. Satuannya
-  // kini disebut di judul, dan buku lain yang tak muat dihitung di kotak stats:
-  // kartu ini paling sering di-screenshot, jadi ia harus berdiri sendiri.
-  const lain = s.books.length - 1;
-  if (lain > 0) stats.push({ label: 'other books', value: `${lain} (see caption)` });
+  // Semuanya sudah satu buku USD, jadi gambar ini memuat SELURUH periode — tak ada
+  // lagi buku lain yang tertinggal di luar bingkai (dulu judulnya berbunyi "All
+  // chains" di atas angka yang sebenarnya cuma USDG).
   return renderProfitCard({
-    pair: `${chain === ALL ? 'All chains' : chainLabel(chain)} · ${main.unit} · ${journal.PERIODS[key].label}`,
+    pair: `${chain === ALL ? 'All chains' : chainLabel(chain)} · ${journal.PERIODS[key].label}`,
     positive: main.net >= 0,
     pnlBig: n2(main.net, main.unit),
     pnlPct: `${wr.toFixed(1)}% winrate`,
@@ -166,22 +162,8 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   }).catch(() => null);
 }
 
-/**
- * Jumlah semua buku dalam USD, atau null bila ADA satu saja kurs yang tak terbaca.
- * Setengah total lebih buruk daripada tak ada total: ia terbaca sebagai fakta.
- */
-function usdTotalOf(s: journal.PeriodStats, rates: Map<string, number | null>): number | null {
-  let t = 0;
-  for (const b of s.books) {
-    const r = rates.get(b.unit);
-    if (r === null || r === undefined) return null;
-    t += b.net * r;
-  }
-  return t;
-}
-
 /** Caption ringkas — detailnya sudah terbaca di gambar (batas caption 1024 char). */
-function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStats, usdTotal?: number | null): string {
+function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStats): string {
   const p = journal.PERIODS[key];
   const lines = [`📈 <b>PnL Recap</b> · <b>${chain === ALL ? 'All chains' : chainLabel(chain)}</b> · ${p.label}`, ''];
   if (s.books.length === 0) lines.push('<i>no closed trades with a measured result in this period.</i>');
@@ -191,8 +173,6 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
         `${b.net >= 0 ? '🟢' : '🔴'} <b>${b.unit}</b> ${n2(b.net, b.unit)} · ${b.known} trades · ` +
           `${journal.winrateOf(b).toFixed(1)}% WR${journal.profitFactorOf(b) === null ? '' : ` · PF ${journal.profitFactorOf(b)!.toFixed(2)}`}`,
       );
-  if (usdTotal !== undefined && usdTotal !== null && s.books.length > 1)
-    lines.push('', `<b>All books ≈ ${msg.usdPlain(usdTotal)}</b> <i>(books converted at current rates)</i>`);
   // Rekonsiliasi: jumlah entri jurnal HARUS bisa ditelusuri dari kartu ini.
   // Tanpa baris flat, selisih 728 vs 246 tak punya penjelasan di mana pun.
   const scored = s.books.reduce((a, b) => a + b.known, 0);
@@ -201,7 +181,9 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
   if (flats) tail.push(`${flats} break-even`);
   if (s.untracked) tail.push(`${s.untracked} result unknown`);
   if (s.recovered) tail.push(`${s.recovered} sweep credited`);
+  if (s.unconverted) tail.push(`${s.unconverted} no USD rate`);
   lines.push('', `<i>${tail.join(' · ')}</i>`);
+  lines.push(`<i>All values in USD at current rates.</i>`);
   lines.push('', `<i>${config.safety.dryRun ? 'DRY RUN' : 'LIVE'}</i>`);
   return lines.join('\n');
 }
@@ -219,9 +201,12 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
   // '1 Month' = 30 hari WIB PENUH, jadi angkanya tak bergeser tiap kartu dibuka;
   // 1d/1w tetap rolling, karena "1 hari terakhir" memang berarti 24 jam ke belakang.
   const since = p.ms === 0 ? 0 : key === '1m' ? journal.monthStartMs(30) : Date.now() - p.ms;
-  const s = journal.statsFor(since, chain === ALL ? undefined : chain);
+  // SEMUA angka rekap dalam USD (permintaan pemilik). Buku per denominasi tetap
+  // ada di penyimpanan; yang berubah hanya satuan yang ditampilkan — tanpa ini
+  // kartu memberi 4 angka dalam 4 satuan yang tak bisa dibandingkan satu sama lain.
+  const rates = await usdRates();
+  const s = journal.statsFor(since, chain === ALL ? undefined : chain, (u) => rates.get(u) ?? null);
   const kb = periodKb(chain, key);
-  const usdTotal = s.books.length > 1 ? usdTotalOf(s, await usdRates()) : null;
   const text = msg.msgPnl({
     dryRun: config.safety.dryRun,
     chainLabel: chain === ALL ? 'All chains' : chainLabel(chain),
@@ -231,14 +216,14 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
     untracked: s.untracked,
     excluded: s.excluded,
     recovered: s.recovered,
-    usdTotal,
+    unconverted: s.unconverted,
     books: s.books,
   });
   const buf = await pnlImage(chain, key, s);
   if (!buf) return fresh ? ctx.reply(text, { ...html, ...kb }) : swap(ctx, text, { ...html, ...kb });
 
   const doc = Input.fromBuffer(buf, `philips-pnl-${chain}-${key}.png`);
-  const caption = pnlCaption(chain, key, s, usdTotal);
+  const caption = pnlCaption(chain, key, s);
   if (fresh) {
     // Pesan pemilih chain berupa TEKS — tak bisa di-edit jadi dokumen. Ganti utuh.
     await ctx.deleteMessage().catch(() => {});

@@ -159,6 +159,7 @@ const FLAT_EPS: Record<string, number> = {
   USDT: 0.1,
   USDG: 0.1,
   USDC: 0.1,
+  USD: 0.1,
   ETH: 0.00005, // ~$0,11 @ $2.300
   BNB: 0.0002, // ~$0,13 @ $650
   HYPE: 0.0012, // ~$0,10 @ $83
@@ -205,6 +206,7 @@ export type PeriodStats = {
   untracked: number; // gone/burned — hasil tak diketahui
   excluded: number; // placeholder backfill lama (result 0)
   recovered: number; // entri pemulihan sisa token (masuk net, bukan trade)
+  unconverted: number; // mode USD: entri yang kursnya tak terbaca — DILEWATI, bukan dianggap nol
   books: Book[]; // urut: paling banyak trade dulu
 };
 
@@ -220,7 +222,7 @@ export type PeriodStats = {
  * Tetap dikecualikan: resultEthWei undefined (gone/burned, hasil tak diketahui) dan
  * == 0 (placeholder backfill trade lama; cashout nyata selalu > 0).
  */
-export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
+export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => number | null): PeriodStats {
   const me = currentWallet();
   const all = read(Number.MAX_SAFE_INTEGER).filter(
     (e) =>
@@ -231,11 +233,19 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
       (!me || e.wallet === me),
   );
   const byUnit = new Map<string, Book>();
-  let known = 0, untracked = 0, excluded = 0, recovered = 0;
+  let known = 0, untracked = 0, excluded = 0, recovered = 0, unconverted = 0;
   for (const e of all) {
     if (e.resultEthWei === undefined) { untracked++; continue; }
     if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; }
-    const unit = unitOf(e.chain, e.baseKind);
+    // Mode USD: SEMUA entri masuk satu buku, tiap nilai dikalikan kurs satuannya.
+    // Kursnya kurs SEKARANG, bukan kurs saat trade ditutup — jadi PnL ETH lama ikut
+    // bergerak saat ETH bergerak. Itu memang yang diminta ("semua dalam $"), tapi
+    // artinya angka ini "berapa nilainya hari ini", bukan "berapa yang kudapat saat itu".
+    const native = unitOf(e.chain, e.baseKind);
+    const rate = usdOf ? usdOf(native) : 1;
+    if (usdOf && rate === null) { unconverted++; continue; }
+    const unit = usdOf ? 'USD' : native;
+    const nilai = e.pnlEth * (rate ?? 1);
     let b = byUnit.get(unit);
     if (!b) {
       b = { unit, known: 0, wins: 0, losses: 0, flats: 0, net: 0, grossWin: 0, grossLoss: 0 };
@@ -245,27 +255,27 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
     // NYATA (masuk net & profit), tapi itu bukan trade tersendiri — menghitungnya
     // sebagai trade akan menggelembungkan jumlah trade sekaligus memalsukan winrate.
     if (e.reason === 'recovery') {
-      b.net += e.pnlEth;
-      b.grossWin += e.pnlEth;
+      b.net += nilai;
+      b.grossWin += nilai;
       recovered++;
       continue;
     }
-    b.net += e.pnlEth;
+    b.net += nilai;
     // Trade yang hasilnya bukan untung maupun rugi (di bawah ~$0,1) TIDAK dihitung
     // sebagai menang MAUPUN kalah: ia cuma impas. Dulu `pnlEth >= 0` melemparnya ke
     // kolom menang dan menggelembungkan winrate (BSC: 10 entri impas menaikkan
     // 91,2% → 93,2%). Uangnya tetap masuk `net` — yang tak dihitung hanya SKOR-nya.
     const eps = FLAT_EPS[unit] ?? FLAT_EPS_UNKNOWN;
-    if (e.pnlEth > eps) { b.wins++; b.grossWin += e.pnlEth; }
-    else if (e.pnlEth < -eps) { b.losses++; b.grossLoss += e.pnlEth; }
+    if (nilai > eps) { b.wins++; b.grossWin += nilai; }
+    else if (nilai < -eps) { b.losses++; b.grossLoss += nilai; }
     else { b.flats++; continue; }
     known++;
     b.known++;
-    if (!b.best || e.pnlEth > b.best.pnl) b.best = { symbol: e.symbol, pnl: e.pnlEth };
-    if (!b.worst || e.pnlEth < b.worst.pnl) b.worst = { symbol: e.symbol, pnl: e.pnlEth };
+    if (!b.best || nilai > b.best.pnl) b.best = { symbol: e.symbol, pnl: nilai };
+    if (!b.worst || nilai < b.worst.pnl) b.worst = { symbol: e.symbol, pnl: nilai };
   }
   const books = [...byUnit.values()].sort((a, b) => b.known - a.known);
-  return { count: all.length, known, untracked, excluded, recovered, books };
+  return { count: all.length, known, untracked, excluded, recovered, unconverted, books };
 }
 
 /**

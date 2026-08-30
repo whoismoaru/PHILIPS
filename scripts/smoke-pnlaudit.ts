@@ -21,8 +21,10 @@ assert.ok(unknown < 1e-6, `fallback ${unknown} masih cukup besar untuk menelan t
 // 2) Judul kartu gambar menyebut BUKU-nya, bukan cuma cakupan chain.
 const jc = readFileSync('src/commands/journalCmds.ts', 'utf8');
 const img = jc.slice(jc.indexOf('async function pnlImage'), jc.indexOf('function pnlCaption'));
-assert.match(img, /pair: `\$\{chain === ALL[^`]*\$\{main\.unit\}/, 'judul kartu wajib menyebut satuan bukunya');
-assert.match(img, /other books/, 'buku yang tak muat di gambar harus disebut');
+// Sejak seluruh rekap dihitung dalam USD, gambar memuat SATU buku yang sudah
+// mencakup semuanya — tak boleh ada lagi buku yang tertinggal di luar bingkai.
+assert.ok(!/other books/.test(img), 'masih ada buku yang tak muat di gambar');
+assert.match(img, /pair: `\$\{chain === ALL[^`]*PERIODS\[key\]\.label\}`/, 'judul kartu harus menyebut periodenya');
 
 // Winrate & profit factor: impas tak boleh masuk penyebut.
 assert.equal(journal.winrateOf({ wins: 3, losses: 1 }), 75);
@@ -84,23 +86,37 @@ for (const chain of ['robinhood', 'bsc', 'base']) {
 }
 console.log('smoke-pnlaudit: jendela OK');
 
-const buku = [
-  { unit: 'USDG', known: 1, wins: 1, losses: 0, flats: 0, net: 296.46, grossWin: 296.46, grossLoss: 0 },
-  { unit: 'ETH', known: 1, wins: 1, losses: 0, flats: 0, net: 0.24524, grossWin: 0.24524, grossLoss: 0 },
-];
-const dgn = msgPnl({ dryRun: false, chainLabel: 'All chains', periodLabel: '1 Month', known: 2, usdTotal: 903.9, books: buku });
-assert.match(dgn, /All books/, 'kartu multi-buku wajib punya total USD');
-assert.match(dgn, /\$903\.90/);
-// Satu kurs tak terbaca → JANGAN tampilkan total separuh.
-assert.ok(!/All books/.test(msgPnl({ dryRun: false, chainLabel: 'All chains', periodLabel: '1 Month', known: 2, usdTotal: null, books: buku })),
-  'total separuh terbaca sebagai fakta');
-// Satu buku tak butuh konversi.
-assert.ok(!/All books/.test(msgPnl({ dryRun: false, chainLabel: 'BSC', periodLabel: '1 Month', known: 1, usdTotal: 296.46, books: [buku[0]] })));
-
+// ── Semua angka rekap dalam USD ─────────────────────────────────────────────
 const kurs = new Map<string, number | null>([['USDG', 1], ['USDT', 1], ['ETH', 2478], ['HYPE', 83.76]]);
-const st = journal.statsFor(journal.monthStartMs(30));
-const dariBuku = st.books.reduce((a, b) => a + b.net * (kurs.get(b.unit) ?? 0), 0);
-assert.ok(Number.isFinite(dariBuku), 'total buku tak terhitung');
+const usd = journal.statsFor(0, undefined, (u) => kurs.get(u) ?? null);
+assert.deepEqual(usd.books.map((b) => b.unit), ['USD'], 'mode USD harus menghasilkan SATU buku');
+
+// Nilainya = jumlah net tiap buku asli × kursnya. Tak ada jalur hitung kedua.
+const asli = journal.statsFor(0);
+const dariAsli = asli.books.reduce((a, b) => a + b.net * (kurs.get(b.unit) ?? 0), 0);
+assert.ok(Math.abs(usd.books[0].net - dariAsli) < 1e-6, `USD ${usd.books[0].net} ≠ jumlah buku ${dariAsli}`);
+
+// Kurs tak terbaca → entri DILEWATI dan dihitung, bukan dianggap nol.
+const buta = journal.statsFor(0, undefined, () => null);
+assert.equal(buta.books.length, 0, 'tanpa kurs tak boleh ada buku');
+assert.ok(buta.unconverted > 0, 'entri tanpa kurs wajib dihitung');
+assert.equal(buta.unconverted + buta.untracked + buta.excluded, buta.count, 'entri hilang tanpa jejak');
+
+// Kartu mencetak dolar, bukan satuan asli, dan mengakui yang tak terkonversi.
+const kartuUsd = msgPnl({
+  dryRun: false, chainLabel: 'All chains', periodLabel: 'All Time',
+  known: usd.known, count: usd.count, untracked: usd.untracked, excluded: usd.excluded,
+  recovered: usd.recovered, unconverted: usd.unconverted, books: usd.books,
+});
+assert.match(kartuUsd, /\$/, 'kartu USD tanpa tanda dolar');
+assert.ok(!/USDG book|ETH book|HYPE book/.test(kartuUsd), 'masih ada buku per satuan di kartu USD');
+assert.match(
+  msgPnl({ dryRun: false, chainLabel: 'x', periodLabel: 'y', known: 1, count: 9, unconverted: 3,
+    books: [{ unit: 'USD', known: 1, wins: 1, losses: 0, flats: 0, net: 1, grossWin: 1, grossLoss: 0 }] }),
+  /no USD rate/,
+  'entri tanpa kurs tak diakui di kartu',
+);
+
 console.log('smoke-pnlaudit: total USD OK');
 
 // ── Rekonsiliasi: 728 entri vs 246 berskor harus bisa ditelusuri ─────────────
@@ -132,4 +148,5 @@ assert.match(picker, /480 closed · 161 scored/);
 assert.match(picker, /Ink[^\n]*0 closed/);
 assert.ok(!/0 closed · 0 scored/.test(picker), 'angka sama tak perlu ditulis dua kali');
 assert.match(picker, /Scored = wins\/losses only/, 'istilah "scored" harus dijelaskan');
+assert.match(picker, /All figures in USD/, 'pemilih harus menyebut satuannya');
 console.log('smoke-pnlaudit: rekonsiliasi OK');
