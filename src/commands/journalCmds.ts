@@ -184,7 +184,10 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
   const p = journal.PERIODS[key];
   // chain === ALL → statsFor tanpa filter. Bukunya tetap dipisah per satuan, jadi
   // tak ada USDG yang dijumlahkan dengan ETH; yang digabung cuma cakupan chain-nya.
-  const s = journal.statsFor(p.ms === 0 ? 0 : Date.now() - p.ms, chain === ALL ? undefined : chain);
+  // '1 Month' memakai batas yang SAMA dengan kalender (30 hari WIB penuh); 1d/1w
+  // tetap rolling, karena "1 hari terakhir" memang berarti 24 jam ke belakang.
+  const since = p.ms === 0 ? 0 : key === '1m' ? journal.monthStartMs(30) : Date.now() - p.ms;
+  const s = journal.statsFor(since, chain === ALL ? undefined : chain);
   const kb = periodKb(chain, key);
   const text = msg.msgPnl({
     dryRun: config.safety.dryRun,
@@ -231,6 +234,7 @@ bot.action(/^pnlcal:(\w+)$/, async (ctx: any) => {
   if (chain === ALL) {
     const rates = await usdRates();
     const { days, skipped } = journal.dailyAllUsd((u) => rates.get(u) ?? null, 30);
+    const buku = journal.statsFor(journal.monthStartMs(30)).books;
     return sendCalendar(ctx, kb, {
       title: 'All chains · USD',
       days,
@@ -238,9 +242,13 @@ bot.action(/^pnlcal:(\w+)$/, async (ctx: any) => {
       unitLabel: 'USD',
       note: skipped ? ` · ${skipped} skipped (no rate)` : '',
       file: 'philips-pnl-calendar-all.png',
+      // Kartu periode menampilkan SATU buku dalam satuannya sendiri; kalender ini
+      // menjumlahkan SEMUA buku dalam USD. Angkanya wajar berbeda jauh — tanpa
+      // baris ini perbedaannya terbaca sebagai salah hitung.
+      sub: `sum of ${buku.length} book${buku.length === 1 ? '' : 's'} converted to USD: ${buku.map((b) => b.unit).join(' · ')}`,
     });
   }
-  const s = journal.statsFor(Date.now() - 30 * 24 * 3600_000, chain);
+  const s = journal.statsFor(journal.monthStartMs(30), chain);
   const main = s.books[0];
   if (!main) {
     return swap(ctx, msg.msgPnl({
@@ -271,6 +279,7 @@ async function sendCalendar(
     unitLabel: string;
     note: string;
     file: string;
+    sub?: string; // penjelasan tambahan di caption (mis. konversi lintas buku)
   },
 ) {
   const net = o.days.reduce((a, d) => a + d.net, 0);
@@ -295,7 +304,8 @@ async function sendCalendar(
   }).catch(() => null);
   if (!buf) return ctx.reply(msg.msgError('pnl', 'Could not draw the calendar.'), html);
   const doc = Input.fromBuffer(buf, o.file);
-  const caption = `🗓 <b>30-day calendar</b> · <b>${msg.esc(o.title)}</b>`;
+  const caption =
+    `🗓 <b>30-day calendar</b> · <b>${msg.esc(o.title)}</b>` + (o.sub ? `\n<i>${msg.esc(o.sub)}</i>` : '');
   return ctx
     .editMessageMedia({ type: 'document', media: doc, caption, parse_mode: 'HTML' }, kb)
     .catch(async () => {

@@ -100,3 +100,29 @@ if (me) {
   assert.match(readFileSync('src/journal.ts', 'utf8'), /wallet: e\.wallet \?\? currentWallet\(\)/, 'entri jurnal tak dicap pemilik');
 }
 console.log('smoke-pnlaudit: pemilik OK');
+
+// ── Jendela: '1 Month' dan kalender harus mulai dari batas yang SAMA ─────────
+// Rolling `now - 30d` mulai 22:30 WIB hari ke-31; kalender mulai 00:00 WIB hari
+// ke-30. Trade yang jatuh di sela itu muncul di rekap tanpa punya kotak.
+const mulai = journal.monthStartMs(30);
+const kotak = journal.dailyFor('robinhood', 'USDG', 30);
+assert.equal(mulai + 7 * 3_600_000, kotak[0].date.getTime(), 'awal jendela 1M ≠ kotak pertama kalender');
+assert.ok(mulai > Date.now() - 31 * 86_400_000 && mulai <= Date.now(), 'jendela 1M di luar akal');
+const jc2 = readFileSync('src/commands/journalCmds.ts', 'utf8');
+assert.match(jc2, /key === '1m' \? journal\.monthStartMs\(30\)/, "'1 Month' harus memakai batas kalender");
+assert.ok(!/statsFor\(Date\.now\(\) - 30 \* 24 \* 3600_000/.test(jc2), 'masih ada jendela rolling 30 hari yang lama');
+
+// Kalender gabungan menjumlahkan SEMUA buku dalam USD, sementara kartu periode
+// menampilkan SATU buku dalam satuannya sendiri — bedanya wajar, tapi harus
+// dikatakan, kalau tidak terbaca sebagai salah hitung.
+assert.match(jc2, /sum of \$\{buku\.length\} book/, 'kalender gabungan tak menjelaskan konversinya');
+
+// Konsistensi angka: net kalender satu buku = net buku itu di rekap 30 hari.
+for (const chain of ['robinhood', 'bsc', 'base']) {
+  const st = journal.statsFor(mulai, chain);
+  const main = st.books[0];
+  if (!main) continue;
+  const net = journal.dailyFor(chain, main.unit, 30).reduce((a, d) => a + d.net, 0);
+  assert.ok(Math.abs(net - main.net) < 1e-9, `${chain}: kalender ${net} ≠ rekap ${main.net}`);
+}
+console.log('smoke-pnlaudit: jendela OK');

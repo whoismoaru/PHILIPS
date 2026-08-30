@@ -300,6 +300,17 @@ const WIB_MS = 7 * 3_600_000;
 const DAY_MS = 86_400_000;
 const wibDay = (ms: number): number => Math.floor((ms + WIB_MS) / DAY_MS);
 
+/**
+ * Awal jendela 30 hari, sama persis dengan kotak pertama kalender.
+ *
+ * `Date.now() - 30 hari` (rolling) TIDAK sama dengan 30 hari kalender: hari ini
+ * jendela rolling mulai 31 Jul 22:30 WIB sedangkan kalender mulai 1 Agu 00:00.
+ * Karena kartu kalender ditampilkan dengan periode "1 Month" ditandai aktif,
+ * keduanya harus menghitung dari batas yang sama — kalau tidak, trade yang jatuh
+ * di sela itu muncul di rekap tapi tak ada kotaknya.
+ */
+export const monthStartMs = (days = 30): number => (wibDay(Date.now()) - (days - 1)) * DAY_MS - WIB_MS;
+
 /** 30 kotak hari WIB yang berakhir hari ini. */
 function wibBuckets(days: number): Array<{ date: Date; net: number; trades: number; _i: number }> {
   const today = wibDay(Date.now());
