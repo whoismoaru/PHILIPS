@@ -161,7 +161,19 @@ const FLAT_EPS: Record<string, number> = {
   USDC: 0.1,
   ETH: 0.00005, // ~$0,11 @ $2.300
   BNB: 0.0002, // ~$0,13 @ $650
+  HYPE: 0.0012, // ~$0,10 @ $83
 };
+
+/**
+ * Satuan yang tak ada di tabel: ambangnya nyaris nol, BUKAN 0.1.
+ *
+ * Fallback lama 0.1 dipakai apa adanya untuk satuan native mana pun yang belum
+ * terdaftar — pada HYPE (~$83) itu berarti setiap trade di bawah ±$8,36 diam-diam
+ * dicap "impas" dan hilang dari W/L, winrate, dan jumlah trade. Salah menghitung
+ * debu sebagai trade jauh lebih ringan daripada menghapus trade sungguhan, jadi
+ * yang tak dikenal dibiarkan masuk skor.
+ */
+const FLAT_EPS_UNKNOWN = 1e-9;
 
 /** Winrate = menang / (menang + kalah). Impas tak masuk penyebut. */
 export const winrateOf = (b: { wins: number; losses: number }): number =>
@@ -243,7 +255,7 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
     // sebagai menang MAUPUN kalah: ia cuma impas. Dulu `pnlEth >= 0` melemparnya ke
     // kolom menang dan menggelembungkan winrate (BSC: 10 entri impas menaikkan
     // 91,2% → 93,2%). Uangnya tetap masuk `net` — yang tak dihitung hanya SKOR-nya.
-    const eps = FLAT_EPS[unit] ?? 0.1;
+    const eps = FLAT_EPS[unit] ?? FLAT_EPS_UNKNOWN;
     if (e.pnlEth > eps) { b.wins++; b.grossWin += e.pnlEth; }
     else if (e.pnlEth < -eps) { b.losses++; b.grossLoss += e.pnlEth; }
     else { b.flats++; continue; }

@@ -138,8 +138,15 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
     { label: 'profit', value: n2(main.grossWin, main.unit) },
     { label: 'loss', value: n2(main.grossLoss, main.unit) },
   ];
+  // Gambar ini cuma memuat SATU buku (yang paling banyak trade). Judulnya dulu
+  // berbunyi "All chains · All Time" di atas angka yang sebenarnya hanya USDG —
+  // terbaca sebagai total seluruh chain, padahal USDT & ETH tak ikut. Satuannya
+  // kini disebut di judul, dan buku lain yang tak muat dihitung di kotak stats:
+  // kartu ini paling sering di-screenshot, jadi ia harus berdiri sendiri.
+  const lain = s.books.length - 1;
+  if (lain > 0) stats.push({ label: 'other books', value: `${lain} (see caption)` });
   return renderProfitCard({
-    pair: `${chain === ALL ? 'All chains' : chainLabel(chain)} · ${journal.PERIODS[key].label}`,
+    pair: `${chain === ALL ? 'All chains' : chainLabel(chain)} · ${main.unit} · ${journal.PERIODS[key].label}`,
     positive: main.net >= 0,
     pnlBig: n2(main.net, main.unit),
     pnlPct: `${wr.toFixed(1)}% winrate`,

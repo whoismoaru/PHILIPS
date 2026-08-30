@@ -728,7 +728,9 @@ export function msgPnl(opts: {
           ['Trades', `${b.known} (${b.wins}W / ${b.losses}L)`],
           ['Winrate', `🎯 ${bold(`${winrate.toFixed(1)}%`)}`],
           // Impas dipisah supaya jelas ia TAK ikut menghitung winrate/PF.
-          ...((b.flats ? [['Flat', `${b.flats} trade (under ~$0.1 — not scored)`]] : []) as Array<[string, string]>),
+          ...((b.flats
+            ? [['Flat', `${b.flats} trade${b.flats === 1 ? '' : 's'} (under ~$0.1 — not scored)`]]
+            : []) as Array<[string, string]>),
           // Profit factor <1 = rugi, seberapa pun tingginya winrate.
           ['Profit factor', pf === null ? '—' : `${pf < 1 ? '🔴' : '🟢'} ${bold(pf.toFixed(2))}`],
           ['Avg win', `🟢 ${num(avgWin, b.unit)}`],
