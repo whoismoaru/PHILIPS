@@ -600,33 +600,48 @@ export function msgStatus(opts: {
     ),
   ];
 
+  // Nama pendek khusus kartu ini: baris chain-nya sempit dan yang penting justru
+  // angkanya. Hanya presentasi — chain yang tak terdaftar memakai labelnya apa adanya.
+  const SHORT: Record<string, string> = { Robinhood: 'RH', Base: 'BASE' };
+
+  const tree = (rows: string[]): string[] =>
+    rows.map((r, i) => `${i === rows.length - 1 ? '└' : '├'}  ${r}`);
+
   const parts: string[] = [
     bold('PORTFOLIO'),
     '',
-    `💰 ${bold('Equity Summary :')}`,
-    `- Total Equity = ${bold(equity)}`,
-    `- Unstaked Balance = ${bold(usdCol(opts.totalUsd))}${assetNames.length ? ` ${italic(`(${assetNames.join(', ')})`)}` : ''}`,
+    `💰 ${bold('EQUITY :')}`,
+    ...tree([
+      `Total: ${bold(equity)}`,
+      ...(opts.lpUsd === undefined
+        ? []
+        : [`In LP: ${bold(usdCol(opts.lpUsd))} · ${opts.positions} position${opts.positions === 1 ? '' : 's'}`]),
+      `Free: ${bold(usdCol(opts.totalUsd))}`,
+    ]),
   ];
-  if (opts.lpUsd !== undefined) {
-    parts.push(
-      `- Active in LP = ${bold(usdCol(opts.lpUsd))} ${italic(`(${opts.positions} Position${opts.positions === 1 ? '' : 's'})`)}`,
-    );
-  }
 
   // Rincian per CHAIN, bukan per aset lepas: stablecoin ikut baris chain tempat ia
   // benar-benar berada. Baris "USDG" berdiri sendiri dulu menyamarkan chain-nya.
   if (held.length) {
-    parts.push('', `📊 ${bold('Asset Breakdown :')}`);
-    for (const c of held) {
-      const cells: string[] = [];
-      if (Number(c.amount) > 0) {
-        cells.push(`${esc(c.amount)} ${esc(c.symbol)}${c.usd === null ? '' : ` (${usdPlain(c.usd)})`}`);
-      }
-      for (const t of c.stables ?? []) {
-        cells.push(`${esc(t.amount)} ${esc(t.symbol)}${t.usd === null ? '' : ` (${usdPlain(t.usd)})`}`);
-      }
-      parts.push(`- ${bold(c.label)} = ${cells.join(' | ')}`);
-    }
+    parts.push(
+      '',
+      `📊 ${bold('BY CHAIN :')}`,
+      ...tree(
+        held.map((c) => {
+          const aset: string[] = [];
+          if (Number(c.amount) > 0) aset.push(`${esc(c.amount)} ${esc(c.symbol)}`);
+          for (const t of c.stables ?? []) aset.push(`${esc(t.amount)} ${esc(t.symbol)}`);
+          // Nilai chain = native + seluruh stablecoin di chain itu. Satu USD yang
+          // tak terbaca membuat SELURUH baris '—': menjumlahkan sisanya diam-diam
+          // akan menampilkan angka yang lebih kecil dari isi dompet sebenarnya.
+          const bagian: Array<number | null | undefined> = [c.usd, ...(c.stables ?? []).map((t) => t.usd)];
+          const nilai = bagian.some((u) => u === null || u === undefined)
+            ? '—'
+            : usdPlain(bagian.reduce<number>((a, u) => a + (u ?? 0), 0));
+          return `${bold(esc(SHORT[c.label] ?? c.label))}: ${nilai}${aset.length ? ` ${italic(`(${aset.join(' · ')})`)}` : ''}`;
+        }),
+      ),
+    );
   }
 
   if (opts.lpFailed) parts.push('', `⚠️ ${note(`${opts.lpFailed} position(s) failed to read — total is incomplete`)}`);
@@ -636,7 +651,10 @@ export function msgStatus(opts: {
   // portofolio melainkan saran. Peringatan di atas TETAP ada karena ia hanya
   // muncul saat ada sumber yang gagal dibaca — tanpa itu angkanya terbaca
   // sebagai fakta padahal sebagian datanya hilang.
-  parts.push('', `${opts.dryRun ? '⚪ DRY RUN' : '✅ LIVE'}: ${nowWib()}`);
+  //
+  // Mode LIVE tak lagi diberi label: itu keadaan normal, dan menuliskannya di
+  // tiap kartu membuat kata "DRY RUN" jadi tak menonjol justru saat ia penting.
+  parts.push('', opts.dryRun ? `⚪ ${bold('DRY RUN')} · ${nowWib()}` : nowWib());
 
   return parts.join('\n');
 }
