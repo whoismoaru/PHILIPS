@@ -8,15 +8,16 @@ assert.equal(days.length, 30, 'harus tepat 30 hari, termasuk yang tanpa trade');
 assert.ok(days.every((d) => d.date instanceof Date), 'tiap hari punya tanggal');
 assert.ok(days.every((d) => d.trades >= 0), 'jumlah trade tak boleh negatif');
 
-// Hari berurutan naik, tepat sehari terpisah — indeks dihitung dari tengah malam
-// lokal, bukan pembagian milidetik yang meleset saat zona waktu bergeser.
+// Hari berurutan naik, tepat sehari terpisah.
 for (let i = 1; i < days.length; i++) {
   const gap = days[i].date.getTime() - days[i - 1].date.getTime();
-  assert.ok(gap >= 23 * 3600_000 && gap <= 25 * 3600_000, `jarak hari ke-${i} tak wajar: ${gap}ms`);
+  assert.equal(gap, 86_400_000, `jarak hari ke-${i} tak wajar: ${gap}ms`);
 }
-// Hari terakhir = hari ini.
-const today = new Date(); today.setHours(0, 0, 0, 0);
-assert.equal(days[29].date.getTime(), today.getTime(), 'hari terakhir harus hari ini');
+// Hari terakhir = hari ini menurut WIB — zona yang dipakai SELURUH stempel waktu
+// bot. Mesin ini berjalan di CST (UTC+8); memakai tengah malam mesin membuat
+// trade jam 23:xx WIB melompat ke kotak hari berikutnya.
+const hariIniWib = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+assert.equal(days[29].date.toISOString().slice(0, 10), hariIniWib, 'hari terakhir harus hari WIB ini');
 
 // "tak ada trade" berbeda dari "impas": net 0 boleh, tapi hanya bila trades 0 juga 0.
 assert.ok(days.every((d) => d.trades > 0 || d.net === 0), 'hari tanpa trade tak boleh punya net');

@@ -42,8 +42,31 @@ for (const b of s.books) {
 const days = journal.dailyFor('robinhood', 'USDG', 30);
 assert.equal(days.length, 30);
 for (let i = 1; i < days.length; i++)
-  assert.ok(days[i].date.getTime() > days[i - 1].date.getTime(), 'tanggal harus menaik');
+  assert.equal(days[i].date.getTime() - days[i - 1].date.getTime(), 86_400_000, 'kotak harus persis 1 hari');
 assert.ok(days.every((d) => d.trades > 0 || d.net === 0), 'hari tanpa trade harus net 0');
+
+// Batas hari = tengah malam WIB, bukan tengah malam mesin (mesin ini CST/UTC+8).
+// Kotak terakhir wajib hari WIB HARI INI, dan tiap kotak tengah malam UTC pas.
+const wibHariIni = new Date(Date.now() + 7 * 3_600_000).toISOString().slice(0, 10);
+assert.equal(days[29].date.toISOString().slice(0, 10), wibHariIni, 'kotak terakhir bukan hari WIB ini');
+for (const d of days)
+  assert.equal(d.date.getTime() % 86_400_000, 0, 'date harus tengah malam UTC dari hari WIB itu');
+assert.match(
+  readFileSync('src/journal.ts', 'utf8'),
+  /const wibDay = \(ms: number\): number => Math\.floor\(\(ms \+ WIB_MS\) \/ DAY_MS\)/,
+  'indeks hari harus bebas zona waktu mesin',
+);
+// Kartu membaca tanggalnya dengan getUTC* — kalau tidak, kolom & label bergeser.
+const card = readFileSync('src/card.ts', 'utf8');
+assert.match(card, /getUTCDay\(\)/, 'kolom hari harus dibaca UTC');
+assert.match(card, /getUTCDate\(\)/, 'label tanggal harus dibaca UTC');
+
+// 'recovery' bukan trade: uangnya masuk net, hitungannya tidak.
+const jsrc = readFileSync('src/journal.ts', 'utf8');
+for (const fn of ['dailyFor', 'dailyAllUsd']) {
+  const blok = jsrc.slice(jsrc.indexOf(`export function ${fn}`), jsrc.indexOf(`export function ${fn}`) + 1600);
+  assert.match(blok, /reason !== 'recovery'/, `${fn}: sweep dihitung sebagai trade`);
+}
 
 // Gabungan USD: satuan tanpa kurs DILEWATI dan dihitung, bukan dianggap nol.
 const semua = journal.dailyAllUsd(() => null, 30);
@@ -51,5 +74,8 @@ assert.equal(semua.days.reduce((a, d) => a + d.trades, 0), 0, 'tanpa kurs, tak a
 assert.ok(semua.skipped > 0, 'yang dilewati wajib dihitung, bukan hilang diam-diam');
 const berkurs = journal.dailyAllUsd((u) => (u === 'USDG' || u === 'USDT' ? 1 : 2500), 30);
 assert.equal(berkurs.skipped, 0);
+assert.equal(berkurs.days.length, 30);
+// 'skipped' hanya boleh menghitung entri DI DALAM jendela 30 hari.
+assert.ok(semua.skipped <= berkurs.days.reduce((a, d) => a + d.trades, 0) + semua.skipped);
 
 console.log('smoke-pnlaudit OK');

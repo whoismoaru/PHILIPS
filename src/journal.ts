@@ -282,39 +282,57 @@ export function statsFor(sinceMs = 0, chain?: string): PeriodStats {
  * Hari tanpa trade tetap ada di daftar dengan net 0 dan trades 0 — kalender butuh
  * kotak kosongnya, dan "tak ada trade" berbeda dari "impas".
  */
+/**
+ * Batas hari kalender = tengah malam **WIB**, bukan tengah malam server.
+ *
+ * Bucket dulu dibuat dengan `setHours(0,0,0,0)` — tengah malam zona MESIN, dan
+ * mesin ini berjalan di CST (UTC+8) sementara seluruh kartu bot berstempel WIB
+ * (UTC+7). Trade yang ditutup antara 23:00–24:00 WIB jatuh ke kotak HARI
+ * BERIKUTNYA, jadi kalender tak pernah cocok dengan jam yang tercetak di kartu
+ * close-nya sendiri. Indeks hari kini dihitung dari epoch + 7 jam, bebas dari
+ * zona waktu mesin.
+ *
+ * `date` yang dikembalikan adalah tengah malam UTC dari hari WIB itu — kartu
+ * membacanya dengan getUTC*, sehingga label tanggal & kolom harinya tak ikut
+ * bergeser di mesin dengan zona lain.
+ */
+const WIB_MS = 7 * 3_600_000;
+const DAY_MS = 86_400_000;
+const wibDay = (ms: number): number => Math.floor((ms + WIB_MS) / DAY_MS);
+
+/** 30 kotak hari WIB yang berakhir hari ini. */
+function wibBuckets(days: number): Array<{ date: Date; net: number; trades: number; _i: number }> {
+  const today = wibDay(Date.now());
+  return Array.from({ length: days }, (_, k) => {
+    const i = today - (days - 1) + k;
+    return { date: new Date(i * DAY_MS), net: 0, trades: 0, _i: i };
+  });
+}
+
 export function dailyFor(
   chain: string,
   unit: string,
   days = 30,
 ): Array<{ date: Date; net: number; trades: number }> {
   const me = currentWallet();
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - (days - 1));
-  const startMs = start.getTime();
-
-  const buckets = Array.from({ length: days }, (_, i) => {
-    const d = new Date(startMs);
-    d.setDate(d.getDate() + i);
-    return { date: d, net: 0, trades: 0 };
-  });
+  const buckets = wibBuckets(days);
+  const first = buckets[0]._i;
 
   for (const e of read(Number.MAX_SAFE_INTEGER)) {
-    if ((e.closedAt ?? 0) < startMs) continue;
+    if (!e.closedAt) continue;
     if ((e.chain ?? 'robinhood') !== chain) continue;
     if (me && e.wallet !== me) continue;
     if (e.resultEthWei === undefined || BigInt(e.resultEthWei) === 0n) continue;
     if (unitOf(e.chain, e.baseKind) !== unit) continue;
-    // Indeks hari dihitung dari tengah malam LOKAL, bukan pembagian milidetik:
-    // pembagian akan meleset tiap kali zona waktu bergeser setengah jam.
-    const d = new Date(e.closedAt);
-    d.setHours(0, 0, 0, 0);
-    const i = Math.round((d.getTime() - startMs) / 86_400_000);
+    const i = wibDay(e.closedAt) - first;
     if (i < 0 || i >= days) continue;
     buckets[i].net += e.pnlEth;
-    buckets[i].trades += 1;
+    // 'recovery' = sisa token yang tersapu setelah posisi ditutup. Uangnya nyata
+    // (masuk net), tapi ia bukan trade — menghitungnya membuat jumlah trade di
+    // kalender lebih besar daripada di rekap yang berdiri tepat di sebelahnya.
+    if (e.reason !== 'recovery') buckets[i].trades += 1;
   }
-  return buckets;
+  return buckets.map(({ date, net, trades }) => ({ date, net, trades }));
 }
 
 /**
@@ -329,33 +347,27 @@ export function dailyAllUsd(
   days = 30,
 ): { days: Array<{ date: Date; net: number; trades: number }>; skipped: number } {
   const me = currentWallet();
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - (days - 1));
-  const startMs = start.getTime();
-  const buckets = Array.from({ length: days }, (_, i) => {
-    const d = new Date(startMs);
-    d.setDate(d.getDate() + i);
-    return { date: d, net: 0, trades: 0 };
-  });
+  const buckets = wibBuckets(days);
+  const first = buckets[0]._i;
   let skipped = 0;
   for (const e of read(Number.MAX_SAFE_INTEGER)) {
-    if ((e.closedAt ?? 0) < startMs) continue;
+    if (!e.closedAt) continue;
     if (me && e.wallet !== me) continue;
     if (e.resultEthWei === undefined || BigInt(e.resultEthWei) === 0n) continue;
+    const i = wibDay(e.closedAt) - first;
+    // Di luar jendela dilewati DULU: entri lama tanpa kurs dulu ikut menaikkan
+    // `skipped`, jadi kartu melaporkan "12 dilewati" untuk trade bulan lalu yang
+    // memang tak pernah masuk hitungan 30 hari ini.
+    if (i < 0 || i >= days) continue;
     const rate = usdOf(unitOf(e.chain, e.baseKind));
     if (rate === null) {
       skipped++;
       continue;
     }
-    const d = new Date(e.closedAt);
-    d.setHours(0, 0, 0, 0);
-    const i = Math.round((d.getTime() - startMs) / 86_400_000);
-    if (i < 0 || i >= days) continue;
     buckets[i].net += e.pnlEth * rate;
-    buckets[i].trades += 1;
+    if (e.reason !== 'recovery') buckets[i].trades += 1;
   }
-  return { days: buckets, skipped };
+  return { days: buckets.map(({ date, net, trades }) => ({ date, net, trades })), skipped };
 }
 
 export function chainsWithHistory(): Array<{ key: string; trades: number }> {

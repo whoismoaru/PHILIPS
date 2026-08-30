@@ -358,7 +358,10 @@ export async function renderCalendarCard(o: CalendarCardOpts, scale = 2): Promis
   });
 
   // Senin = 0. Hari pertama digeser ke kolom hari-nya sendiri.
-  const wd = (d: Date) => (d.getDay() + 6) % 7;
+  // getUTC*, bukan getDay/getDate: `date` adalah tengah malam UTC yang MEWAKILI
+  // satu hari WIB (lihat wibBuckets). Membacanya dengan getter lokal akan
+  // menggeser kolom & label tanggal begitu zona waktu mesin berubah.
+  const wd = (d: Date) => (d.getUTCDay() + 6) % 7;
   const lead = o.days.length ? wd(o.days[0].date) : 0;
   const peak = Math.max(...o.days.map((d) => Math.abs(d.net)), 0);
   const traded = o.days.filter((d) => d.trades > 0);
@@ -393,7 +396,7 @@ export async function renderCalendarCard(o: CalendarCardOpts, scale = 2): Promis
     }
     ctx.fillStyle = d.trades === 0 ? COL.muted : '#0B0E14';
     ctx.font = '15px PhSansB';
-    const label = String(d.date.getDate());
+    const label = String(d.date.getUTCDate());
     ctx.fillText(label, x + CELL / 2 - ctx.measureText(label).width / 2, y + CELL / 2 + 1);
     if (d.trades > 0) {
       ctx.font = '11px PhSansB';
