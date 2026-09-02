@@ -119,7 +119,6 @@ export type ScreenResult = {
   gmgn: GmgnExtra | null; // pengisi celah dari GMGN; null = tak dipanggil/gagal
   insightx: InsightXMetrics | null; // klaster holder InsightX; null = chain tak didukung/gagal
   goplus: GoPlusInfo | null; // penambal BSC (chain tanpa Blockscout); null = tak dipakai/gagal
-  transfersCount: number | null; // total transfer sepanjang umur token (Blockscout)
   scamFlag: boolean; // token ditandai scam oleh explorer
   sellPath: SellStatus; // simulasi jalur jual (exit-liquidity)
   flags: Flag[];
@@ -222,7 +221,10 @@ export async function screenToken(
     (tokenInfo?.holders_count ? Number(tokenInfo.holders_count) : null) ??
     goplus?.holderCount ??
     null;
-  const transfersCount = counters?.transfers_count ? Number(counters.transfers_count) : null;
+  // transfers_count dari /counters SENGAJA tidak dipakai: ia melaporkan 44.604
+  // transfer seumur hidup untuk token berumur 20 jam yang pada periode sama
+  // mencatat ~80 ribu swap — angka yang dikuatkan DexScreener DAN GeckoTerminal
+  // secara terpisah. Indeksnya tertinggal; memajangnya = memajang angka salah.
   // Explorer menandai kontrak yang dilaporkan scam. Field ini sudah ikut dalam
   // payload yang memang kita tarik — nol panggilan tambahan, tapi selama ini dibuang.
   const scamFlag = tokenInfo?.reputation === 'scam' || tokenInfo?.is_scam === true;
@@ -293,9 +295,22 @@ export async function screenToken(
     const p = pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
     liquidityUsd = p.liquidity?.usd ?? null;
     dexName = p.dexId ?? null;
-    volume24h = p.volume?.h24 ?? null;
-    buys24h = p.txns?.h24?.buys ?? null;
-    sells24h = p.txns?.h24?.sells ?? null;
+    // Volume & trade 24j DIJUMLAHKAN dari SELURUH pair token ini di chain-nya.
+    // Dulu diambil dari pair terlikuid saja: UBIK punya 30 pair, pair teratas
+    // $3,0jt sementara totalnya $24,1jt — meleset 8x. Lebih buruk, angkanya
+    // melompat tiap kali peringkat likuiditas bertukar (kartu yang sama sempat
+    // menulis $15,4jt sejam sebelumnya). Volume adalah metrik ALIRAN: totalnya
+    // milik token, bukan milik satu pool.
+    //
+    // Liquidity SENGAJA tetap pair terdalam — itu kolam yang benar-benar akan
+    // dimasuki /add, dan baris kartunya menyebut nama venue-nya.
+    const sum = (f: (x: any) => number | null | undefined): number | null => {
+      const vals = pairs.map(f).filter((v): v is number => typeof v === 'number');
+      return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+    };
+    volume24h = sum((x) => x.volume?.h24);
+    buys24h = sum((x) => x.txns?.h24?.buys);
+    sells24h = sum((x) => x.txns?.h24?.sells);
     priceUsd = p.priceUsd ?? null;
     marketCapUsd = p.marketCap ?? p.fdv ?? null;
     if (p.pairCreatedAt) pairAgeHours = (Date.now() - p.pairCreatedAt) / 3_600_000;
@@ -371,7 +386,6 @@ export async function screenToken(
     gmgn,
     insightx,
     goplus,
-    transfersCount,
     scamFlag,
     sellPath: sell.status,
     flags,
@@ -638,7 +652,6 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     ...tree([
       ['24H Volume', compact(s.volume24h)],
       ['24H Trades', `${num(s.buys24h)} buys / ${num(s.sells24h)} sells`],
-      ['Total Transfers', num(s.transfersCount)],
     ]),
   ];
 
