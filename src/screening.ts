@@ -4,6 +4,7 @@ import { getChain, basesFor, type ChainCtx } from './chains.js';
 import { EXPLORER_HEADERS } from './chain.js';
 import { gmgnExtra, gmgnPrice, type GmgnExtra } from './gmgn.js';
 import { insightxMetrics, type InsightXMetrics } from './insightx.js';
+import { goplusInfo, type GoPlusInfo } from './goplus.js';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
@@ -101,7 +102,7 @@ export type ScreenResult = {
   name: string;
   symbol: string;
   verified: boolean | null;
-  isProxy: boolean;
+  isProxy: boolean | null;
   holdersCount: number | null;
   top1Pct: number | null;
   top10Pct: number | null;
@@ -117,6 +118,9 @@ export type ScreenResult = {
   renounced: boolean | null; // null = tak bisa ditentukan (owner() tak ada / RPC gagal)
   gmgn: GmgnExtra | null; // pengisi celah dari GMGN; null = tak dipanggil/gagal
   insightx: InsightXMetrics | null; // klaster holder InsightX; null = chain tak didukung/gagal
+  goplus: GoPlusInfo | null; // penambal BSC (chain tanpa Blockscout); null = tak dipakai/gagal
+  transfersCount: number | null; // total transfer sepanjang umur token (Blockscout)
+  scamFlag: boolean; // token ditandai scam oleh explorer
   sellPath: SellStatus; // simulasi jalur jual (exit-liquidity)
   flags: Flag[];
   verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA';
@@ -192,7 +196,7 @@ export async function screenToken(
   const bs = ctx.blockscout; // null = explorer tak tersedia (mis. BSC)
 
   // Jalankan semua permintaan sekaligus (termasuk simulasi jalur jual on-chain).
-  const [tokenInfo, holders, contract, dex, sell, renounced, gmgn, insightx] = await Promise.all([
+  const [tokenInfo, holders, contract, dex, sell, renounced, gmgn, insightx, goplus, counters] = await Promise.all([
     bs ? fetchJson(`${bs}/tokens/${addr}`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/tokens/${addr}/holders`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/smart-contracts/${addr}`) : Promise.resolve(null),
@@ -201,6 +205,8 @@ export async function screenToken(
     readRenounced(addr, ctx),
     gmgnExtra(addr, ctx.key).catch(() => null), // fail-open: data tambahan
     insightxMetrics(addr, ctx.key).catch(() => null), // fail-open: klaster holder
+    goplusInfo(addr, ctx.key).catch(() => null), // fail-open: penambal BSC
+    bs ? fetchJson(`${bs}/tokens/${addr}/counters`) : Promise.resolve(null),
   ]);
   if (sell.flag) flags.push(sell.flag);
 
@@ -209,12 +215,26 @@ export async function screenToken(
   )?.baseToken;
   const name = tokenInfo?.name ?? dexBase?.name ?? 'Tidak diketahui';
   const symbol = tokenInfo?.symbol ?? dexBase?.symbol ?? '???';
-  const holdersCount = tokenInfo?.holders_count ? Number(tokenInfo.holders_count) : null;
+  // Total holder: /counters lebih mutakhir daripada payload token (terukur 5311
+  // vs 5223 pada CA yang sama); GoPlus menambal BSC yang tak punya explorer.
+  const holdersCount =
+    (counters?.token_holders_count ? Number(counters.token_holders_count) : null) ??
+    (tokenInfo?.holders_count ? Number(tokenInfo.holders_count) : null) ??
+    goplus?.holderCount ??
+    null;
+  const transfersCount = counters?.transfers_count ? Number(counters.transfers_count) : null;
+  // Explorer menandai kontrak yang dilaporkan scam. Field ini sudah ikut dalam
+  // payload yang memang kita tarik — nol panggilan tambahan, tapi selama ini dibuang.
+  const scamFlag = tokenInfo?.reputation === 'scam' || tokenInfo?.is_scam === true;
+  if (scamFlag) flags.push({ level: 'BAHAYA', msg: 'Explorer flags this contract as a SCAM' });
   const totalSupply = tokenInfo?.total_supply ? BigInt(tokenInfo.total_supply) : null;
 
   // --- Verifikasi kontrak ---
   let verified: boolean | null = null;
-  let isProxy = false;
+  // null = TAK BISA DITENTUKAN. Dulu di-default `false` lalu dibiarkan begitu di
+  // chain tanpa explorer, sehingga BSC selalu mencetak 'Proxy: ✅ No' tanpa satu
+  // pun bukti — persis jenis kebohongan-ke-arah-aman yang dilarang kartu ini.
+  let isProxy: boolean | null = null;
   if (contract) {
     verified = Boolean(contract.source_code || contract.is_verified || contract.is_fully_verified);
     isProxy = Boolean(
@@ -223,8 +243,9 @@ export async function screenToken(
         /proxy/i.test(contract.name ?? ''),
     );
   } else {
-    // Tanpa explorer (BSC) verifikasi tak bisa dicek → null, jangan flag palsu.
-    verified = bs ? false : null;
+    // Tanpa explorer (BSC) jawabannya datang dari GoPlus; kalau itu pun kosong → null.
+    verified = bs ? false : (goplus?.verified ?? null);
+    isProxy = goplus?.isProxy ?? null;
   }
   if (verified === false) flags.push({ level: 'HATI-HATI', msg: 'Contract is NOT verified (source code unavailable)' });
   if (isProxy) flags.push({ level: 'INFO', msg: 'Upgradeable contract (proxy) — the dev can change its logic' });
@@ -349,6 +370,9 @@ export async function screenToken(
     renounced,
     gmgn,
     insightx,
+    goplus,
+    transfersCount,
+    scamFlag,
     sellPath: sell.status,
     flags,
     verdict: worst(flags),
@@ -457,8 +481,8 @@ export async function getEthUsd(
  */
 export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?: string; heldLabel?: string | null; lpCount?: number }): string {
   const UNK = '?';
-  const compact = (n: number | null): string => {
-    if (n === null) return UNK;
+  const compact = (n: number | null | undefined): string => {
+    if (n == null) return UNK;
     const a = Math.abs(n);
     if (a >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
     if (a >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
@@ -467,36 +491,52 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     if (a >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
     return `$${n.toFixed(0)}`;
   };
-  const pct = (n: number | null): string => (n === null ? UNK : `${Number(n.toFixed(2))}%`);
+  const pct = (n: number | null | undefined): string => (n == null ? UNK : `${Number(n.toFixed(2))}%`);
   // Jawaban ya/tidak: '?' bila datanya memang tak terbaca — JANGAN mengarang '✅'.
   const yes = (v: boolean | null): string => (v === null ? `${UNK} unreadable` : v ? '✅ Yes' : '❌ No');
   const no = (v: boolean | null): string => (v === null ? `${UNK} unreadable` : v ? '⚠️ Yes' : '✅ No');
 
   const g = s.gmgn;
+  const gp = s.goplus; // penambal BSC
   const symUp = s.symbol.toUpperCase().replace(/^\$+/, '');
 
   // NoHoneypot: simulasi jalur jual PHILIPS lebih dipercaya (on-chain, live) —
   // GMGN dipakai hanya bila simulasi tak memberi jawaban.
   const sellable =
-    s.sellPath === 'ok' ? true : s.sellPath === 'blocked' ? false : g?.honeypot == null ? null : !g.honeypot;
+    s.sellPath === 'ok'
+      ? true
+      : s.sellPath === 'blocked'
+        ? false
+        : g?.honeypot != null
+          ? !g.honeypot
+          : gp?.honeypot == null
+            ? null
+            : !gp.honeypot;
 
   // Top 10: UTAMAKAN GMGN. Angka Blockscout menghitung kontrak pool sebagai
   // 'holder' sehingga melambung (terukur 41.27% vs 16.72% pada CA yang sama).
   const top10 = g?.top10Pct != null ? g.top10Pct : s.top10Pct;
   const top10Line =
     top10 === null ? UNK : `${pct(top10)} ${top10 >= 50 ? '🔴 (high whale risk)' : top10 >= 20 ? '⚠️ (moderate whale risk)' : '✅'}`;
-  const verified = s.verified !== null ? s.verified : (g?.openSource ?? null);
-  const renounced = s.renounced !== null ? s.renounced : (g?.renounced ?? null);
+  const verified = s.verified !== null ? s.verified : (g?.openSource ?? gp?.verified ?? null);
+  const renounced = s.renounced !== null ? s.renounced : (g?.renounced ?? gp?.renounced ?? null);
   const taxLine = (n: number | null): string => (n === null ? UNK : `${Number(n.toFixed(1))}% ${n <= 5 ? '✅' : n <= 10 ? '⚠️' : '🔴'}`);
   const lpLocked = g?.lpLockedPct ?? null;
   const burnt = g?.burntPct ?? null;
 
-  const num = (n: number | null): string => (n === null ? UNK : n.toLocaleString('en-US'));
+  const num = (n: number | null | undefined): string => (n == null ? UNK : n.toLocaleString('en-US'));
 
   // Pausable / cooldown: GMGN mengirim daftar privilege owner. Daftar KOSONG =
   // jawaban 'tak ada', bukan 'tak tahu'; payload tak terbaca (null) tetap '?'.
-  const privHas = (re: RegExp): boolean | null =>
-    g?.privileges == null ? null : g.privileges.some((p) => re.test(p));
+  const privHas = (re: RegExp): boolean | null => {
+    if (g?.privileges != null) return g.privileges.some((p) => re.test(p));
+    // BSC tak punya payload privilege GMGN; GoPlus menjawab dua yang paling penting.
+    if (gp) {
+      if (/mint/i.test(re.source)) return gp.mintable;
+      if (/paus|freeze|blacklist/i.test(re.source)) return gp.pausable;
+    }
+    return null;
+  };
 
   // Umur pool dibaca manusia: "1h 45m", bukan "2 hours" yang membulatkan pool
   // berumur 1,5 jam jadi terdengar dua kali lebih matang.
@@ -529,12 +569,11 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
           ? `burned ${pct(burnt)} · locked ${pct(lpLocked)} ⚠️`
           : UNK;
 
-  const taxPair =
-    (g?.buyTaxPct ?? null) === null && (g?.sellTaxPct ?? null) === null
-      ? UNK
-      : `${taxLine(g?.buyTaxPct ?? null)} / ${taxLine(g?.sellTaxPct ?? null)}`;
+  const buyTax = g?.buyTaxPct ?? gp?.buyTaxPct ?? null;
+  const sellTax = g?.sellTaxPct ?? gp?.sellTaxPct ?? null;
+  const taxPair = buyTax === null && sellTax === null ? UNK : `${taxLine(buyTax)} / ${taxLine(sellTax)}`;
 
-  const dev = g?.devPct ?? null;
+  const dev = g?.devPct ?? gp?.creatorPct ?? null;
   const snipers = g?.sniperCount ?? null;
   // InsightX menghitung dari SELURUH holder; angka tag GMGN hanya dari 100
   // terbesar (tagsFromTop100). Kalau keduanya ada, yang lebih lengkap menang.
@@ -599,6 +638,7 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     ...tree([
       ['24H Volume', compact(s.volume24h)],
       ['24H Trades', `${num(s.buys24h)} buys / ${num(s.sells24h)} sells`],
+      ['Total Transfers', num(s.transfersCount)],
     ]),
   ];
 
