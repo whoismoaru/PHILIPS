@@ -3,6 +3,7 @@ import { bold, code, esc, italic, nowWib } from './messages.js';
 import { getChain, basesFor, type ChainCtx } from './chains.js';
 import { EXPLORER_HEADERS } from './chain.js';
 import { gmgnExtra, gmgnPrice, type GmgnExtra } from './gmgn.js';
+import { insightxMetrics, type InsightXMetrics } from './insightx.js';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
@@ -115,6 +116,7 @@ export type ScreenResult = {
   dexName: string | null; // 'uniswap' | 'pancakeswap' | … dari DexScreener
   renounced: boolean | null; // null = tak bisa ditentukan (owner() tak ada / RPC gagal)
   gmgn: GmgnExtra | null; // pengisi celah dari GMGN; null = tak dipanggil/gagal
+  insightx: InsightXMetrics | null; // klaster holder InsightX; null = chain tak didukung/gagal
   sellPath: SellStatus; // simulasi jalur jual (exit-liquidity)
   flags: Flag[];
   verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA';
@@ -190,7 +192,7 @@ export async function screenToken(
   const bs = ctx.blockscout; // null = explorer tak tersedia (mis. BSC)
 
   // Jalankan semua permintaan sekaligus (termasuk simulasi jalur jual on-chain).
-  const [tokenInfo, holders, contract, dex, sell, renounced, gmgn] = await Promise.all([
+  const [tokenInfo, holders, contract, dex, sell, renounced, gmgn, insightx] = await Promise.all([
     bs ? fetchJson(`${bs}/tokens/${addr}`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/tokens/${addr}/holders`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/smart-contracts/${addr}`) : Promise.resolve(null),
@@ -198,6 +200,7 @@ export async function screenToken(
     simulateSellPath(addr, ctx),
     readRenounced(addr, ctx),
     gmgnExtra(addr, ctx.key).catch(() => null), // fail-open: data tambahan
+    insightxMetrics(addr, ctx.key).catch(() => null), // fail-open: klaster holder
   ]);
   if (sell.flag) flags.push(sell.flag);
 
@@ -345,6 +348,7 @@ export async function screenToken(
     dexName,
     renounced,
     gmgn,
+    insightx,
     sellPath: sell.status,
     flags,
     verdict: worst(flags),
@@ -531,8 +535,18 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
       : `${taxLine(g?.buyTaxPct ?? null)} / ${taxLine(g?.sellTaxPct ?? null)}`;
 
   const dev = g?.devPct ?? null;
-  const bundle = g?.bundlerPct ?? null;
   const snipers = g?.sniperCount ?? null;
+  // InsightX menghitung dari SELURUH holder; angka tag GMGN hanya dari 100
+  // terbesar (tagsFromTop100). Kalau keduanya ada, yang lebih lengkap menang.
+  const ix = s.insightx;
+  const bundle = ix?.bundlersPct ?? g?.bundlerPct ?? null;
+  const insiders = ix?.insidersPct ?? g?.insidersPct ?? null;
+  const cluster = ix?.clusterPct ?? null;
+
+  // Ambang sama untuk ketiganya: >=20% merah, >=5% kuning. Bukan angka ajaib —
+  // sekadar konsisten dengan baris Sniper Bundles yang sudah ada sejak awal.
+  const risky = (n: number | null): string =>
+    n === null ? UNK : `${pct(n)} ${n >= 20 ? '\u{1F534}' : n >= 5 ? '\u26A0\uFE0F' : '\u2705'}`;
 
   // Pohon: tiap bagian dipisah supaya baris terakhirnya memakai └.
   const tree = (rows: Array<[string, string]>): string[] =>
@@ -575,6 +589,8 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
           ? UNK
           : `${pct(bundle)}${snipers ? ` (${num(snipers)} wallets)` : ''} ${(bundle ?? 0) >= 20 ? '🔴' : (bundle ?? 0) >= 5 ? '⚠️' : '✅'}`,
       ],
+      ['Insiders', risky(insiders)],
+      ['Cluster', risky(cluster)],
       ['Top 10 Holders', top10Line],
       ['Total Holders', num(s.holdersCount)],
     ]),
