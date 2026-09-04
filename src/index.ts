@@ -59,6 +59,7 @@ import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import './commands/feesAndRemove.js';
 import './commands/alerts.js';
 import './commands/unwrap.js';
+import './commands/gas.js';
 import './commands/send.js';
 import { handlePctReply } from './commands/wallet.js';
 import { handleBridgeAmount } from './commands/bridge.js';
@@ -4836,6 +4837,7 @@ const BOT_COMMANDS = [
   { command: 'bridge', description: 'Move native funds across chains' },
   { command: 'send', description: 'Send funds to another address' },
   // Dompet & setelan
+  { command: 'gas', description: 'Current gas cost per chain (USD & IDR)' },
   { command: 'settings', description: 'Wallet & transaction preferences' },
   { command: 'alerts', description: 'Notification settings' },
 ] as const;
