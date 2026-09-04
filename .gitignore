@@ -10,3 +10,7 @@ FLOW.md
 scripts/*
 !scripts/smoke*.ts
 docs/
+
+# Salinan .env (backup sebelum diedit) — isinya PRIVATE_KEY & WALLET_SECRET.
+.env.bak-*
+.env.*.bak
