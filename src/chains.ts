@@ -192,6 +192,10 @@ const DEFS: Record<string, Def> = {
     quoter: config.uniswap.quoter,
     weth: config.uniswap.weth,
     usdg: '0x5fc5360d0400a0fd4f2af552add042d716f1d168', // Global Dollar (USDG), 6 desimal — terverifikasi on-chain
+    // Alchemy tetap utama. Cadangan dipakai saat utama 403/503/stall — keduanya
+    // sudah diuji melayani eth_call, eth_getCode, dan eth_getLogs (RPC lama
+    // StableChain gugur justru di situ, lihat .env baris 40).
+    fallbackRpc: ['https://rpc.mainnet.chain.robinhood.com', 'https://robinhood-rpc.publicnode.com'],
   },
   ...(config.bsc.enabled
     ? {
