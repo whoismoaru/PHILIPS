@@ -20,11 +20,17 @@ import { bold, esc, italic } from '../messages.js';
 /** Median gas terpakai per operasi, diukur dari 704 tx sukses wallet ini (14 hari).
  *  Kirim native tetap 21.000 — itu konstanta protokol, bukan hasil ukur. */
 const OPS: Array<[string, bigint]> = [
-  ['Send native', 21_000n],
-  ['Approve', 46_000n],
   ['Swap', 280_000n],
   ['Open LP', 447_000n],
   ['Close LP', 267_000n],
+];
+
+/** Operasi murah di semua chain: tak layak satu seksi peringkat sendiri-sendiri,
+ *  tapi tetap ditampilkan penuh — meringkasnya jadi "di bawah RpX" berarti memasang
+ *  klaim yang diam-diam jadi bohong begitu gas bergerak. */
+const MINOR: Array<[string, bigint]> = [
+  ['Send', 21_000n],
+  ['Approve', 46_000n],
 ];
 
 /** Kurs USD→IDR. Indodax UTAMA (pasar kripto lokal, live) — itu kurs yang benar-benar
@@ -75,38 +81,81 @@ const usd = (v: number): string =>
 const idr = (v: number): string =>
   `Rp${Math.round(v).toLocaleString('id-ID')}`;
 
-async function blockOf(cc: ChainCtx, rate: number | null): Promise<string[]> {
-  const [price, nativeUsd] = await Promise.all([gasPriceOf(cc), getEthUsd(cc.wethAddress, cc).catch(() => null)]);
-  if (price === null) return [bold(cc.label), italic('RPC unreachable — try again shortly.')];
+type Row = { label: string; usd: number | null; native: number; sym: string };
 
-  const head = `${bold(cc.label)} · ${esc(gwei(price))} gwei${nativeUsd ? ` · ${esc(cc.nativeSymbol)} ${esc(usd(nativeUsd))}` : ''}`;
-  // Tanpa harga native, ongkosnya cuma bisa disebut dalam satuan native — menuliskan
-  // "$0.00" di situ akan mengaku tahu sesuatu yang tak kita tahu.
-  const rows = OPS.map(([label, units]) => {
-    const wei = price * units;
-    const native = Number(ethers.formatEther(wei));
-    if (!nativeUsd) return `${esc(label)} · ${bold(`${native.toFixed(6)} ${cc.nativeSymbol}`)}`;
-    const d = native * nativeUsd;
-    return `${esc(label)} · ${bold(usd(d))}${rate ? ` · ${bold(idr(d * rate))}` : ''}`;
+/** Ongkos tiap operasi di satu chain. `null` = RPC chain itu tak menjawab. */
+async function costsOf(cc: ChainCtx): Promise<{ label: string; gwei: string; nativeUsd: number | null; rows: Map<string, Row> } | null> {
+  const [price, nativeUsd] = await Promise.all([gasPriceOf(cc), getEthUsd(cc.wethAddress, cc).catch(() => null)]);
+  if (price === null) return null;
+  const rows = new Map<string, Row>();
+  for (const [label, units] of [...OPS, ...MINOR]) {
+    const native = Number(ethers.formatEther(price * units));
+    rows.set(label, { label, usd: nativeUsd === null ? null : native * nativeUsd, native, sym: cc.nativeSymbol });
+  }
+  return { label: cc.label, gwei: gwei(price), nativeUsd, rows };
+}
+
+type Chain = NonNullable<Awaited<ReturnType<typeof costsOf>>>;
+
+/** Satu seksi: chain diurut dari termurah untuk operasi ini.
+ *  Chain tanpa harga native TIDAK ikut diperingkat — mengurutkannya butuh angka USD
+ *  yang justru tak kita punya; ia ditaruh di bawah dengan ongkos dalam satuan native. */
+function section(op: string, chains: Chain[], rate: number | null): string[] {
+  const withUsd = chains.filter((c) => c.rows.get(op)!.usd !== null).sort((a, b) => a.rows.get(op)!.usd! - b.rows.get(op)!.usd!);
+  const noUsd = chains.filter((c) => c.rows.get(op)!.usd === null);
+  const lines = withUsd.map((c, i) => {
+    const r = c.rows.get(op)!;
+    return `${i + 1}. ${esc(c.label)} · ${bold(usd(r.usd!))}${rate ? ` · ${bold(idr(r.usd! * rate))}` : ''}`;
   });
-  return [head, ...rows];
+  for (const c of noUsd) {
+    const r = c.rows.get(op)!;
+    lines.push(`— ${esc(c.label)} · ${bold(`${r.native.toFixed(6)} ${r.sym}`)} ${italic('(no USD price)')}`);
+  }
+  return [bold(op.toUpperCase()), ...lines];
 }
 
 /** Kartu penuh. Diekspor supaya bisa diuji tanpa Telegram (scripts/smoke-gas.ts). */
 export async function gasCard(): Promise<string> {
   const rate = await usdToIdr();
-  const blocks = await Promise.all(Object.values(CHAINS).map((cc) => blockOf(cc, rate)));
+  const all = await Promise.all(Object.values(CHAINS).map(async (cc) => [cc.label, await costsOf(cc)] as const));
+  const chains = all.filter((x): x is readonly [string, Chain] => x[1] !== null).map((x) => x[1]);
+  const down = all.filter((x) => x[1] === null).map((x) => x[0]);
+
+  if (!chains.length) return [bold('⛽ GAS NOW'), '', italic('No chain responded — every RPC is down. Try again shortly.')].join('\n');
+
+  // SEND & APPROVE digabung satu baris per chain: dua operasi termurah, dan
+  // memberi masing-masing seksi peringkat sendiri cuma menggandakan daftar
+  // yang urutannya selalu sama dengan seksi di atasnya.
+  const minor = chains
+    .slice()
+    .sort((a, b) => (a.rows.get('Send')!.usd ?? Infinity) - (b.rows.get('Send')!.usd ?? Infinity))
+    .map((c) => {
+      const cell = (op: string) => {
+        const r = c.rows.get(op)!;
+        if (r.usd === null) return `${r.native.toFixed(6)} ${r.sym}`;
+        return rate ? idr(r.usd * rate) : usd(r.usd);
+      };
+      return `${esc(c.label)} · ${bold(cell('Send'))} / ${bold(cell('Approve'))}`;
+    });
+
   return [
     bold('⛽ GAS NOW'),
-    rate ? italic(`USD→IDR ${idr(rate)} · live`) : italic('USD→IDR unavailable — showing USD only'),
+    rate ? italic(`${idr(rate)}/$ · read ${clock()}`) : italic(`USD only — IDR rate unavailable · read ${clock()}`),
     '',
-    ...blocks.flatMap((b) => [...b, '']),
+    ...OPS.flatMap(([op]) => [...section(op, chains, rate), '']),
+    bold('SEND & APPROVE'),
+    ...minor,
+    '',
+    ...(down.length ? [italic(`Unreachable: ${down.join(', ')}`), ''] : []),
     italic('Gas units = median of this wallet’s real transactions (14 d). Prices read live from each chain’s own RPC.'),
-    // Jam baca membuat Refresh JUJUR: tanpanya, menekan tombol saat gas tak
-    // bergerak menghasilkan pesan identik — Telegram menolaknya ("not modified")
-    // dan kartunya diam, seolah tombolnya rusak.
-    italic(`Read ${new Date().toLocaleTimeString('en-GB', { hour12: false })} ${offsetLabel()}`),
   ].join('\n');
+}
+
+/** Jam baca + zona server. Membuat Refresh JUJUR: tanpanya, menekan tombol saat gas
+ *  tak bergerak menghasilkan pesan identik, Telegram menolaknya ("not modified"),
+ *  dan kartunya diam seolah tombolnya rusak. */
+function clock(): string {
+  return `${new Date().toLocaleTimeString('en-GB', { hour12: false })} ${offsetLabel()}`;
 }
 
 /** Tombol tunggal: baca ulang semua chain. */
