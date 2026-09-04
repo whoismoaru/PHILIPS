@@ -1,4 +1,5 @@
 import { ethers } from 'ethers';
+import { Markup } from 'telegraf';
 import { bot, html } from '../core.js';
 import { CHAINS, type ChainCtx } from '../chains.js';
 import { getEthUsd } from '../screening.js';
@@ -101,13 +102,39 @@ export async function gasCard(): Promise<string> {
     '',
     ...blocks.flatMap((b) => [...b, '']),
     italic('Gas units = median of this wallet’s real transactions (14 d). Prices read live from each chain’s own RPC.'),
+    // Jam baca membuat Refresh JUJUR: tanpanya, menekan tombol saat gas tak
+    // bergerak menghasilkan pesan identik — Telegram menolaknya ("not modified")
+    // dan kartunya diam, seolah tombolnya rusak.
+    italic(`Read ${new Date().toLocaleTimeString('en-GB', { hour12: false })} ${offsetLabel()}`),
   ].join('\n');
+}
+
+/** Tombol tunggal: baca ulang semua chain. */
+export const gasKeyboard = () => Markup.inlineKeyboard([[Markup.button.callback('🔄 Refresh', 'gas:refresh')]]);
+
+/** Label zona waktu server, supaya jam di kartu tak ambigu. */
+function offsetLabel(): string {
+  const m = -new Date().getTimezoneOffset();
+  if (m === 0) return 'UTC';
+  const sign = m > 0 ? '+' : '-';
+  return `UTC${sign}${String(Math.floor(Math.abs(m) / 60)).padStart(2, '0')}:${String(Math.abs(m) % 60).padStart(2, '0')}`;
 }
 
 bot.command('gas', async (ctx) => {
   const wait = await ctx.reply('⛽ Reading gas from each chain…');
   const text = await gasCard();
-  await ctx.telegram.editMessageText(wait.chat.id, wait.message_id, undefined, text, html).catch(async () => {
-    await ctx.reply(text, html);
+  const opts = { ...html, ...gasKeyboard() };
+  await ctx.telegram.editMessageText(wait.chat.id, wait.message_id, undefined, text, opts).catch(async () => {
+    await ctx.reply(text, opts);
   });
+});
+
+bot.action('gas:refresh', async (ctx) => {
+  await ctx.answerCbQuery('Reading gas…');
+  try {
+    await ctx.editMessageText(await gasCard(), { ...html, ...gasKeyboard() });
+  } catch (e) {
+    // "message is not modified" = angkanya belum bergerak — bukan kegagalan.
+    if (!/not modified/i.test((e as Error).message)) throw e;
+  }
 });

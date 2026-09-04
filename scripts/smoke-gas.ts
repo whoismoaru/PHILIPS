@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { gasCard } from '../src/commands/gas.js';
+import { gasCard, gasKeyboard } from '../src/commands/gas.js';
 import { CHAINS } from '../src/chains.js';
 
 /**
@@ -18,4 +18,12 @@ assert.ok(/Rp[\d.]{3,}/.test(card), 'tak ada nominal Rupiah — kurs gagal & tak
 assert.ok(!/\$0\.00\b/.test(card), 'ada ongkos $0.00 — RPC/harga gagal tapi kartu mengaku tahu');
 assert.ok(/Swap · <b>\$/.test(card), 'baris Swap tak berharga USD');
 
-console.log('\nok — kartu /gas sehat: semua chain terbaca, USD & IDR terisi');
+// Refresh hanya berguna kalau kartunya BERUBAH tiap dibaca; kalau tidak, Telegram
+// menolak edit-nya dan tombolnya terlihat mati.
+const kb = gasKeyboard();
+assert.ok(JSON.stringify(kb).includes('gas:refresh'), 'tombol Refresh hilang');
+assert.ok(/Read \d\d:\d\d:\d\d/.test(card), 'tak ada jam baca — Refresh akan kena "not modified"');
+await new Promise((r) => setTimeout(r, 1100));
+assert.notEqual(await gasCard(), card, 'kartu identik antar-baca — Refresh takkan pernah tampak jalan');
+
+console.log('\nok — kartu /gas sehat: semua chain terbaca, USD & IDR terisi, Refresh hidup');
