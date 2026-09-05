@@ -243,8 +243,32 @@ const V4_WRITE_ABI = [
   'function modifyLiquidities(bytes unlockData, uint256 deadline) payable',
 ];
 
-/** Lantai slippage penarikan v4 — disamakan dengan v3 (WITHDRAW_SLIPPAGE_BPS). */
-const BURN_SLIPPAGE_BPS = 50n; // 0.5%
+/**
+ * Lebar PITA HARGA yang ditoleransi saat burn v4 (0.5%).
+ *
+ * Ini BUKAN potongan persentase pada tiap sisi — lihat `burnMinsV4` untuk alasannya.
+ */
+const BURN_BAND_BPS = 50n; // 0.5%
+
+/** Bantalan pembulatan bilangan bulat. Tanpa ini lantai bisa meleset 1 wei ke atas. */
+const BURN_ROUNDING_BPS = 1n;
+
+/** Akar kuadrat bilangan bulat (Newton). Dipakai menggeser sqrtPriceX96 ke tepi pita. */
+function isqrt(n: bigint): bigint {
+  if (n < 2n) return n;
+  let x = n;
+  let y = (x + 1n) / 2n;
+  while (y < x) {
+    x = y;
+    y = (x + n / x) / 2n;
+  }
+  return x;
+}
+
+/** sqrtPriceX96 pada harga × (bps/10000). Harga bergerak → akarnya bergerak seakar. */
+const SQRT_SCALE = 1_000_000n;
+const shiftSqrt = (sqrtP: bigint, bps: bigint): bigint =>
+  (sqrtP * isqrt((bps * SQRT_SCALE * SQRT_SCALE) / 10_000n)) / SQRT_SCALE;
 
 /** Catatan yang ikut ke kartu close saat burn v4 terpaksa tanpa lantai harga. */
 export const V4_UNPROTECTED_NOTE = (ids: string) =>
@@ -259,13 +283,50 @@ export const V4_UNPROTECTED_NOTE = (ids: string) =>
  * tx-nya tetap "sukses" sehingga tak ada yang menandai. v3 sudah dijaga sejak lama
  * (withdrawMins); ini menutup lubang yang sama di v4.
  *
- * Lantainya dihitung dari PRINSIPAL saja (harga pool sekarang, dikurangi 0.5%),
- * sedangkan cek slippage on-chain mengukur prinsipal + fee. Fee hanya menambah, jadi
- * lantai ini konservatif — tak akan menolak burn yang sehat.
+ * Lantainya dihitung dari PRINSIPAL saja (harga pool sekarang), sedangkan cek
+ * slippage on-chain mengukur prinsipal + fee. Fee hanya menambah, jadi lantai ini
+ * konservatif — tak akan menolak burn yang sehat.
+ *
+ * CARA MENGHITUNGNYA — dan kenapa cara lama gagal.
+ *
+ * Dulu: `min0 = amount0 × 99,5%` dan `min1 = amount1 × 99,5%`, dua-duanya sekaligus.
+ * Untuk likuiditas terkonsentrasi itu salah. Saat harga mendekati tepi rentang,
+ * posisi hampir seluruhnya jadi satu aset dan sisi minornya tinggal remah — lalu
+ * remah itu berubah PERSENTASE-nya sangat cepat. Gerak harga 0,2% yang sepenuhnya
+ * wajar bisa memangkas sisi minor jauh lebih dari 0,5%, `MinimumAmountInsufficient`
+ * (0x12816f22) terpicu, dan close gagal berulang kali padahal tak ada serangan.
+ * Yang lebih buruk: lantai per-sisi tak benar-benar menjaga NILAI — ia menjaga
+ * KOMPOSISI, hal yang memang bergerak sendiri.
+ *
+ * Sekarang: jumlah token adalah fungsi deterministik dari harga (likuiditas tetap).
+ * Jadi lantainya diambil dari PITA HARGA ±0,5%: hitung amounts di kedua tepi pita,
+ * ambil yang terkecil per sisi. Karena amount0 turun saat harga naik dan amount1
+ * naik saat harga naik, hasilnya = amount0 di tepi atas dan amount1 di tepi bawah.
+ * Gerak wajar di dalam pita lolos; dorongan harga di luar pita — yang justru
+ * dipakai penyerang — tetap ditolak.
  *
  * Tak bisa dihitung → {0,0} + tanda `unprotected` (dana user > risiko MEV), dan
  * tandanya DIBAWA KE ATAS supaya muncul di kartu, bukan cuma di log server.
  */
+/**
+ * Bagian MURNI dari lantai burn — tanpa RPC, jadi bisa diuji langsung
+ * (scripts/smoke-burnmins.ts). Lihat `burnMinsV4` untuk alasan pita harga.
+ */
+export function burnFloors(
+  sqrtP: bigint,
+  sqrtA: bigint,
+  sqrtB: bigint,
+  liquidity: bigint,
+): { min0: bigint; min1: bigint } {
+  // Kedua tepi pita harga. Amounts monoton terhadap harga, jadi minimum tiap sisi
+  // pasti berada di salah satu tepi — cukup hitung dua titik, bukan menyapu.
+  const bawah = amountsForLiquidity(shiftSqrt(sqrtP, 10_000n - BURN_BAND_BPS), sqrtA, sqrtB, liquidity);
+  const atas = amountsForLiquidity(shiftSqrt(sqrtP, 10_000n + BURN_BAND_BPS), sqrtA, sqrtB, liquidity);
+  const kecil = (a: bigint, b: bigint) => (a < b ? a : b);
+  const floor = (v: bigint) => (v * (10_000n - BURN_ROUNDING_BPS)) / 10_000n;
+  return { min0: floor(kecil(bawah.amount0, atas.amount0)), min1: floor(kecil(bawah.amount1, atas.amount1)) };
+}
+
 async function burnMinsV4(
   cc: ChainCtx,
   pm: ethers.Contract,
@@ -280,9 +341,7 @@ async function burnMinsV4(
     const tickLower = signExt24((BigInt(info) >> 8n) & 0xffffffn);
     const tickUpper = signExt24((BigInt(info) >> 32n) & 0xffffffn);
     const { sqrtPriceX96 } = await readPoolState(cc, pk);
-    const { amount0, amount1 } = amountsForLiquidity(sqrtPriceX96, sqrtAtTick(tickLower), sqrtAtTick(tickUpper), liquidity);
-    const floor = (v: bigint) => (v * (10000n - BURN_SLIPPAGE_BPS)) / 10000n;
-    return { min0: floor(amount0), min1: floor(amount1), unprotected: false };
+    return { ...burnFloors(sqrtPriceX96, sqrtAtTick(tickLower), sqrtAtTick(tickUpper), liquidity), unprotected: false };
   } catch (e) {
     console.log(`[v4] ⚠️ lantai slippage TAK tersedia (#${tokenId}) — burn tanpa proteksi harga:`, (e as Error).message.slice(0, 80));
     return { min0: 0n, min1: 0n, unprotected: true };
@@ -589,7 +648,7 @@ export function invalidateV4ListCache(): void {
 }
 
 // ── Add (mint) posisi v4 single-sided ──────────────────────────────────────
-const sqrtAtTick = (tick: number): bigint => BigInt(TickMath.getSqrtRatioAtTick(tick).toString());
+export const sqrtAtTick = (tick: number): bigint => BigInt(TickMath.getSqrtRatioAtTick(tick).toString());
 function liqForAmount0(a: bigint, b: bigint, amt0: bigint): bigint {
   if (a > b) [a, b] = [b, a];
   return (amt0 * ((a * b) / Q96)) / (b - a);
@@ -997,7 +1056,7 @@ function amount1Delta(a: bigint, b: bigint, L: bigint): bigint {
   if (a > b) [a, b] = [b, a];
   return (L * (b - a)) / Q96;
 }
-function amountsForLiquidity(sqrtP: bigint, sqrtA: bigint, sqrtB: bigint, L: bigint): { amount0: bigint; amount1: bigint } {
+export function amountsForLiquidity(sqrtP: bigint, sqrtA: bigint, sqrtB: bigint, L: bigint): { amount0: bigint; amount1: bigint } {
   if (sqrtA > sqrtB) [sqrtA, sqrtB] = [sqrtB, sqrtA];
   if (sqrtP <= sqrtA) return { amount0: amount0Delta(sqrtA, sqrtB, L), amount1: 0n };
   if (sqrtP < sqrtB) return { amount0: amount0Delta(sqrtP, sqrtB, L), amount1: amount1Delta(sqrtA, sqrtP, L) };
