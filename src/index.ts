@@ -84,13 +84,13 @@ import {
 } from './chains.js';
 import { swapExactInBest, previewSwapOut } from './swapRoute.js';
 
-// Posisi sudah di-burn/tak ada di chain (NFT hilang).
+// The position has been burned or no longer exists on chain (the NFT is gone).
 
 /**
- * PHILIPS LP Bot — otak utama.
- * Command aktif: /start /help /portfolio /positions /history /pnl /explore /add /stop
+ * PHILIPS LP Bot — the main brain.
+ * Live commands: /start /help /portfolio /positions /history /pnl /explore /add /stop
  * /buy /sell /unwrap
- * Screening token berjalan otomatis di dalam /add.
+ * Token screening runs automatically inside /add.
  */
 
 
@@ -98,29 +98,31 @@ import { swapExactInBest, previewSwapOut } from './swapRoute.js';
 
 
 /**
- * Ketikan nominal → wei, atau null bila tak masuk akal. `Number(raw) > 0` saja
- * meloloskan '1e-9' / desimal berlebih yang lalu membuat parseUnits melempar DI LUAR
- * try (kartu ERROR mentah). Desimal berlebih DIPOTONG (tak pernah membesarkan nominal).
+ * A typed amount to wei, or null when it makes no sense. `Number(raw) > 0` alone lets
+ * '1e-9' and over-precise decimals through, and parseUnits then throws OUTSIDE the try
+ * (a raw ERROR card). Excess decimals are TRUNCATED, never rounded up.
  */
-// Berapa kali maksimum ulangi swap saat cash-out sampai token benar-benar habis.
+// How many times a cash-out swap may repeat until the token balance is really zero.
 const MAX_CLOSE_SWEEP = 4;
-/** Max token hold ditampilkan di /portfolio (setelah filter saldo > 0). */
+/** Max token holdings shown in /portfolio (after filtering to balance > 0). */
 const SELL_HOLDINGS_CAP = 12; // maks token di daftar /sell
-/** Max kandidat CA dicek balance (jurnal + posisi). */
+/** Max CA candidates whose balance gets checked (journal plus positions). */
 const HOLDINGS_CAND_MAX = 20;
-/** Concurrency saat membangun kartu posisi. */
+/** Concurrency while building position cards. */
 
-/** Jalankan fn pada items dengan batas concurrency (jaga rate RPC). */
+/** Run fn over items with a concurrency cap (to stay within RPC rate limits). */
 
 
 /**
- * Swap SELURUH saldo token (bukan delta) ke ETH, ulang sampai saldo = 0.
- * Mengatasi: token sisa dari close sebelumnya, RPC telat update, Relay no-op,
- * dan swap parsial. Setiap iterasi menukar saldo penuh yang tersisa.
+ * Swap the ENTIRE token balance (not just the delta) to ETH, repeating until the
+ * balance reaches zero. This covers leftovers from an earlier close, an RPC that has
+ * not caught up, a Relay no-op, and partial swaps. Each pass swaps whatever full
+ * balance remains.
  *
- * DISENGAJA memakai saldo penuh, bukan hasil posisi ini saja (dikonfirmasi pemilik
- * 1 Agu 2026): "tutup posisi" berarti berakhir di ETH, bukan menyisakan bag. Efek
- * sampingnya — bag spot token yang sama ikut terjual — didokumentasikan di README.
+ * Using the full balance rather than only this position's proceeds is DELIBERATE
+ * (confirmed by the owner, 1 Aug 2026): "close the position" means ending in ETH, not
+ * keeping a bag. The side effect — a spot bag of the same token gets sold too — is
+ * documented in the README.
  */
 async function sweepTokenToBase(
   otherAddr: string,
@@ -135,7 +137,7 @@ async function sweepTokenToBase(
   let prev = -1n;
   for (let attempt = 1; attempt <= MAX_CLOSE_SWEEP; attempt++) {
     const total: bigint = await otherC.balanceOf(cc.wallet.address);
-    // Jual HANYA yang dihasilkan posisi ini (di atas bag yang sudah dipegang).
+    // Sell ONLY what this position produced, on top of any bag already held.
     const bal = total > keepFloor ? total - keepFloor : 0n;
     if (bal === 0n) break;
     if (bal === prev) {
@@ -145,7 +147,7 @@ async function sweepTokenToBase(
     prev = bal;
     try {
       if (isStableBase(base.kind)) {
-        // Stablecoin base (USDG/USDT): swap token → base (fungsi generik pakai base.address).
+        // A stablecoin base (USDG/USDT): swap token -> base (the generic function takes base.address).
         const r = await swapTokenToUsdgRobust(otherAddr, bal, base.address, cc);
         baseOut += r.outWei;
         txHashes.push(...r.txHashes);
@@ -158,11 +160,12 @@ async function sweepTokenToBase(
       }
     } catch (e) {
       notes.push(`Swap attempt ${attempt} failed: ${(e as Error).message.slice(0, 140)}`);
-      // ORPHAN GUARD: error swap kadang PALSU — tx-nya (mis. nonce bentrok) diam-diam
-      // TERKIRIM & mendarat beberapa blok kemudian (kasus LIGER #774283: token kejual
-      // tapi bot ngira gagal → PnL salah). Jangan langsung nyerah: tunggu & cek apakah
-      // token benar-benar KELUAR dari wallet. Kalau turun → swap sebenarnya jalan,
-      // lanjut loop supaya sisa & hasil kebaca; kalau tidak → memang gagal, berhenti.
+      // ORPHAN GUARD: a swap error is sometimes FALSE — the tx (on a nonce clash, say)
+      // was quietly sent and lands a few blocks later (the LIGER #774283 case: the
+      // token sold but the bot believed it had failed, so PnL came out wrong). Do not
+      // give up immediately: wait and check whether the token actually LEFT the
+      // wallet. If the balance fell the swap really did run, so continue the loop and
+      // let the remainder and proceeds be read; if not, it genuinely failed, so stop.
       let landed = false;
       for (let probe = 0; probe < 4; probe++) {
         await sleep(4000);
@@ -185,9 +188,10 @@ async function sweepTokenToBase(
 }
 
 /**
- * Pre-flight gas untuk ladder N leg: pastikan saldo native cukup buat gas
- * (+ deposit bila base native/wrappable). Gagal → pesan ramah "top up", bukan
- * revert 'insufficient funds' mentah. ~350k gas/leg + buffer 20%.
+ * Gas pre-flight for an N-leg ladder: make sure the native balance covers gas (plus
+ * the deposit when the base is native or wrappable). On failure it gives a friendly
+ * "top up" message rather than a raw 'insufficient funds' revert. ~350k gas per leg
+ * plus a 20% buffer.
  */
 async function ensureGasForLegs(cc: ChainCtx, legs: number, nativeValueWei: bigint): Promise<void> {
   const [feeData, nativeBal] = await Promise.all([cc.provider.getFeeData(), cc.provider.getBalance(cc.wallet.address)]);
@@ -203,9 +207,10 @@ async function ensureGasForLegs(cc: ChainCtx, legs: number, nativeValueWei: bigi
   }
 }
 
-/** Hitung biaya jaringan (est) + kebutuhan untuk buka LP, base-aware.
- *  WETH: deposit (wrap) + gas keduanya dari ETH native. USDG: deposit dari saldo
- *  USDG (harus dipegang, tak bisa wrap) + gas dari ETH native terpisah. */
+/** Estimated network cost plus what is needed to open an LP, base-aware.
+ *  WETH: both the deposit (the wrap) and gas come from native ETH. USDG: the deposit
+ *  comes from the USDG balance (which must be held, as it cannot be wrapped) and gas
+ *  from native ETH separately. */
 async function estimateAddCost(cc: ChainCtx, base: import('./chains.js').BaseAsset, depositAmount: string) {
   const depositWei = ethers.parseUnits(depositAmount, base.decimals);
   const [feeData, nativeBal] = await Promise.all([
@@ -242,7 +247,7 @@ async function estimateAddCost(cc: ChainCtx, base: import('./chains.js').BaseAss
   };
 }
 
-// Alur wizard /add (bisa maju–mundur antar langkah).
+// The /add wizard flow (steps can move forward and back).
 type AddFlow = {
   token: string;
   chain: string; // kunci chain tempat token berada
@@ -267,31 +272,31 @@ type AddFlow = {
 const flows = new Map<number, AddFlow>();
 
 /**
- * Buang SEMUA alur yang setengah jalan milik user. Handler teks memilih tujuan
- * berdasarkan prioritas statis, jadi sisa alur lama bisa menelan ketikan nominal
- * alur baru (mis. sisa /buy menangkap nominal wizard /add → kartu BELI).
- * Dipanggil di pintu masuk tiap alur + tombol Batal.
+ * Drop EVERY half-finished flow belonging to a user. The text handler picks its
+ * destination by static priority, so a stale flow can swallow an amount typed for a
+ * new one (a leftover /buy catching the /add wizard's amount and producing a BUY card).
+ * Called at the entry point of every flow, and by the Cancel button.
  */
 /**
- * HUB TOKEN — tempel CA telanjang → satu kartu identitas + 4 aksi.
- * Teks & keyboard disimpan supaya tombol "Kembali" dari alur mana pun bisa
- * merender ulang TANPA screening ulang (0 RPC).
+ * TOKEN HUB — paste a bare CA and get one identity card plus four actions.
+ * The text and keyboard are stored so a "Back" button from any flow can re-render it
+ * WITHOUT screening again (zero RPCs).
  */
 type Hub = { ca: string; chainKey: string; text: string; kb: any; sym: string; dec: number; screenText: string; bahaya: boolean; reasons: string[]; failed: boolean };
 const hubs = new Map<number, Hub>();
 
-// Semua state per-user didaftarkan ke pembersih pusat. Handler teks memilih
-// tujuan berdasarkan prioritas statis, jadi sisa alur lama bisa menelan ketikan
-// nominal alur baru (mis. sisa /buy menangkap nominal wizard /add_lp).
+// Every piece of per-user state is registered with the central cleaner. The text
+// handler picks its destination by static priority, so a stale flow can swallow an
+// amount typed for a new one (a leftover /buy catching the /add_lp wizard's amount).
 registerFlowReset((uid) => {
   flows.delete(uid);
   tswapFlows.delete(uid);
   hubs.delete(uid);
 });
-// Sesi wizard/swap kedaluwarsa: bila user tinggalkan lalu ketik angka lain jauh
-// kemudian, jangan sampai termakan flow basi. 15 menit.
+// Wizard and swap sessions expire: if a user walks away and types some other number
+// much later, it must not be eaten by a stale flow. 15 minutes.
 
-// Pilihan lebar rentang (%) + label risiko.
+// Range width choices (%) with their risk labels.
 const RANGE_OPTIONS = [
   { pct: 10, label: 'Conservative' },
   { pct: 30, label: 'Moderate' },
@@ -300,15 +305,16 @@ const RANGE_OPTIONS = [
   { pct: 90, label: 'Extreme' },
 ];
 
-/** Pilihan jumlah leg ladder Bid-Ask. 8-10 = sweet spot free-tier; 69 butuh RPC
- *  berbayar (free-tier + VM 2-core → /positions & monitor berat). Auto-cap ke spacing. */
+/** Leg-count choices for a Bid-Ask ladder. 8-10 is the free-tier sweet spot; 69 needs
+ *  a paid RPC (on a free tier plus a 2-core VM, /positions and the monitor get heavy).
+ *  Auto-capped to the spacing. */
 
 
-/** Edit pesan progress existing, atau kirim baru bila gagal/tidak ada. */
-// --- Penjaga: hanya pemilik yang boleh memakai bot ---
+/** Edit an existing progress message, or send a new one if that fails or none exists. */
+// --- Guard: only the owner may use the bot ---
 bot.use((ctx, next) => {
-  // Diam-diam abaikan: membalas orang asing = mengonfirmasi bot ini ada & bisa
-  // dipaksa membalas. Grup juga ditolak (kartu saldo terbaca semua anggota).
+  // Ignore silently: replying to a stranger confirms this bot exists and can be made
+  // to answer. Groups are refused too (a balance card would be readable by everyone).
   if (ctx.from?.id !== config.telegram.allowedUserId || (ctx.chat && ctx.chat.type !== 'private')) {
     console.log('[guard] tolak', ctx.from?.id, ctx.chat?.type);
     return;
@@ -316,10 +322,10 @@ bot.use((ctx, next) => {
   return next();
 });
 
-// --- answerCbQuery tak boleh menjatuhkan handler ---
-// Callback query kedaluwarsa setelah ~15 detik. Kalau alur di belakang tombol
-// lebih lama dari itu (cash-out, swap), balasan "Memuat…" gagal 400 dan
-// melempar SEBELUM kerja intinya jalan. Sekadar toast — telan errornya.
+// --- answerCbQuery must never take a handler down ---
+// A callback query expires after ~15 seconds. When the flow behind a button takes
+// longer than that (a cash-out, a swap), the "Loading..." reply fails with a 400 and
+// throws BEFORE the real work runs. It is only a toast — swallow the error.
 bot.use((ctx: any, next: any) => {
   if (typeof ctx.answerCbQuery === 'function') {
     const orig = ctx.answerCbQuery.bind(ctx);
@@ -328,14 +334,14 @@ bot.use((ctx: any, next: any) => {
   return next();
 });
 
-// --- Penjaga: perintah yang menggerakkan dana butuh dompet terhubung ---
-// Perintah baca (/status /positions /pools /help) sengaja dibiarkan
-// lewat: memantau tanpa dompet itu sah, dan kartunya sendiri sudah menandai
-// "belum terhubung".
+// --- Guard: commands that move money need a connected wallet ---
+// Read-only commands (/status /positions /pools /help) are deliberately let through:
+// watching without a wallet is legitimate, and those cards already mark themselves
+// "not connected".
 const NEEDS_WALLET = /^\/(add_lp|stop|claim_fees|buy|sell|unwrap|bridge|send)\b/;
-// Tombol yang BENAR-BENAR mengirim tx. Guard command saja tak cukup: alur bisa
-// dimulai saat dompet terhubung lalu diputus, dan tombolnya masih bisa ditekan —
-// yang muncul lalu bukan "hubungkan dompet" tapi error mentah dari VoidSigner.
+// Buttons that ACTUALLY send a tx. Guarding commands alone is not enough: a flow can
+// start with a wallet connected and then be disconnected, leaving the button still
+// tappable — and what appears then is not "connect your wallet" but a raw VoidSigner error.
 const NEEDS_WALLET_CB = /^(addok|tswapok|close:|closev4go:|claim:|rmok:|unwrap:go|br:go|sndgo)/;
 bot.use((ctx: any, next: any) => {
   const t = ctx.message?.text ?? '';
@@ -347,12 +353,12 @@ bot.use((ctx: any, next: any) => {
   return next();
 });
 
-// ---------- Fase 1 ----------
+// ---------- Phase 1 ----------
 /**
- * Sinkron store dengan realita on-chain (chain aktif): impor posisi LP yang ada
- * di wallet tapi belum tercatat (mis. dibuka manual di Uniswap/CLI), dan tandai
- * posisi ter-track yang sudah tak ada on-chain sebagai 'gone'. Fail-safe: bila
- * pembacaan on-chain gagal → TIDAK menyentuh store (hindari salah tandai gone).
+ * Sync the store with on-chain reality (active chain): import LP positions the wallet
+ * holds but the store does not know about (opened manually in Uniswap or the CLI, say),
+ * and mark tracked positions that no longer exist on chain as 'gone'. Fail-safe: if the
+ * on-chain read fails it does NOT touch the store, so nothing is wrongly marked gone.
  */
 async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ imported: number; gone: number }> {
   let onchain: Awaited<ReturnType<typeof listPositions>>;
@@ -365,11 +371,11 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
   const onchainIds = new Set(onchain.map((p) => p.tokenId));
   let imported = 0;
   let gone = 0;
-  // ① Impor posisi on-chain (liquidity > 0) yang belum ada di store.
+  // (1) Import on-chain positions (liquidity > 0) missing from the store.
   for (const p of onchain) {
     if (p.liquidity === 0n || store.get(p.tokenId)) continue;
-    // Jangan impor pool tanpa base yang dikenal: bot tak punya rute cash-out
-    // dua sisi untuk pool semacam itu (lihat stopAndCashOut).
+    // Do not import a pool with no recognised base: the bot has no two-sided cash-out
+    // route for one of those (see stopAndCashOut).
     const base = detectBase(cc, p.token0, p.token1);
     if (!base) continue;
     const isBase0 = base.address.toLowerCase() === p.token0.toLowerCase();
@@ -383,7 +389,7 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
     });
     imported++;
   }
-  // ② Posisi ter-track (chain ini) yang sudah tak ada on-chain → gone.
+  // (2) Tracked positions on this chain that no longer exist on chain become 'gone'.
   for (const rec of store.active()) {
     if ((rec.chain ?? cc.key) !== cc.key) continue;
     if (!onchainIds.has(rec.tokenId)) {
@@ -395,12 +401,12 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
   return { imported, gone };
 }
 
-// Keyboard inline /start (sama dgn /help tapi tombol Help, bukan Close All).
-// 'portfolio' & 'status' kini kartu yang SAMA (kartu uang) — cukup satu tombol.
-// Action 'portfolio' tetap hidup untuk tombol di pesan-pesan lama.
-// Tombol Add Liquidity dibuang atas permintaan: membuka LP dimulai dari menempel
-// CA, jadi tombol itu cuma membuka kartu "cara memakai" — satu tap yang tak
-// mengerjakan apa pun. Connect Wallet tetap ada karena ia memang bertindak.
+// The /start inline keyboard (same as /help but with a Help button rather than Close
+// All). 'portfolio' and 'status' are now the SAME card (the money card), so one button
+// covers both. The 'portfolio' action stays alive for buttons in older messages.
+// The Add Liquidity button was dropped on request: opening an LP starts by pasting a
+// CA, so that button only opened a "how to use" card — one tap that did nothing.
+// Connect Wallet stays, because it genuinely acts.
 const startKeyboard = () =>
   Markup.inlineKeyboard([
     ...(walletStore.isConnected() ? [] : [[Markup.button.callback('🔗 Connect Wallet', 'connect')]]),
@@ -423,8 +429,8 @@ bot.start(async (ctx) => {
     { ...html, ...startKeyboard() },
   );
 });
-// Tutup kartu alert. Hapus pesannya; bila Telegram menolak (pesan >48 jam),
-// jatuh ke edit teks supaya tombolnya tetap hilang.
+// Dismiss an alert card. Delete the message; if Telegram refuses (a message older than
+// 48 hours) fall back to editing the text so the buttons still go away.
 bot.action('dismiss', async (ctx) => {
   await ctx.answerCbQuery('Dismissed');
   await ctx.deleteMessage().catch(() => ctx.editMessageReplyMarkup(undefined).catch(() => {}));
@@ -444,8 +450,8 @@ bot.action('howto:add', async (ctx) => {
   });
 });
 
-// Keyboard inline aksi cepat pada kartu /help (di samping reply-keyboard persisten).
-// Grid 2 kolom (thumb-friendly, perbaikan.md §1.3); aksi uang di baris sendiri.
+// Quick-action inline keyboard on the /help card (alongside the persistent reply
+// keyboard). A 2-column grid (thumb-friendly); money actions get their own row.
 const helpKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('💰 Portfolio', 'portfolio'), Markup.button.callback('📊 Active LPs', 'positions')],
@@ -457,7 +463,7 @@ bot.command('help', (ctx) =>
   ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, ...helpKeyboard() }),
 );
 
-// Tombol inline /help → jalankan command terkait (ctx.reply bekerja dari callback).
+// /help inline buttons run the matching command (ctx.reply works from a callback).
 bot.action('portfolio', async (ctx) => {
   await ctx.answerCbQuery();
   return renderStatus(ctx, false);
@@ -488,20 +494,20 @@ bot.action('help', async (ctx) => {
   return ctx.reply(msg.msgHelp(config.safety.dryRun), { ...html, ...helpKeyboard() });
 });
 
-// Waktu render /status terakhir → footer "Refresh N detik lalu" (owner-only bot).
+// When /status last rendered, for the "Refreshed N seconds ago" footer (owner-only bot).
 async function renderStatus(ctx: any, edit: boolean) {
   try {
-    // Harga ETH (chain utama) sekali — dipakai valuasi semua chain ETH-native.
-    // TIDAK di-await di sini: tak ada blok di bawah yang butuh nilainya untuk MULAI,
-    // sementara await-nya menahan seluruh kartu ~700 ms. Dipetik saat benar-benar
-    // dipakai (valuasi v4 & total) — sisanya sudah jalan duluan.
+    // The ETH price (main chain) once, used to value every ETH-native chain.
+    // NOT awaited here: nothing below needs its value to START, while awaiting it holds
+    // the whole card for ~700ms. It is picked up where it is actually used (v4 valuation
+    // and the total) — the rest has already been running by then.
     const ccLp0 = getChain();
     const ethUsdP = getEthUsd(ccLp0.wethAddress, ccLp0).catch(() => null);
-    // Daftar v4 & detail tiap posisi v3 juga tak bergantung pada saldo chain —
-    // dulu ketiganya berantai (harga → saldo → LP → v4) dan waktunya dijumlahkan.
-    // SEMUA chain ber-v4, bukan chain aktif saja — sama seperti /positions. Posisi
-    // v4 BSC dulu tak pernah ikut dihitung, jadi total LP kartu ini diam-diam
-    // kekurangan seluruh nilainya tanpa satu pun tanda.
+    // The v4 list and each v3 position's detail do not depend on chain balances either;
+    // all three used to be chained (price -> balances -> LP -> v4) and their times added up.
+    // EVERY v4-capable chain, not just the active one — same as /positions. BSC v4
+    // positions were never counted, so this card's LP total was quietly missing their
+    // entire value with nothing to indicate it.
     const v4P = Promise.all(
       Object.values(CHAINS)
         .filter((c) => v4Supported(c))
@@ -514,8 +520,9 @@ async function renderStatus(ctx: any, edit: boolean) {
         const rcc = ctxOf(rec);
         const d = await getPositionDetail(rec.tokenId, rcc);
         const v = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
-        // Harga native dari CHAIN POSISI ITU: BNB dihargai WBNB, HYPE dihargai
-        // WHYPE. Dulu semua dikali harga ETH chain utama → LP HyperEVM 30x lipat.
+        // The native price comes from THAT POSITION'S chain: BNB priced by WBNB, HYPE by
+        // WHYPE. Multiplying everything by the main chain's ETH price once inflated
+        // HyperEVM LP value 30-fold.
         return baseToUsd(d.baseKind, v, rcc);
       } catch {
         return undefined;
@@ -523,11 +530,11 @@ async function renderStatus(ctx: any, edit: boolean) {
     });
     const [network, chains] = await Promise.all([
       provider.getNetwork(),
-      // Saldo native di SEMUA chain (paralel; chain gagal → amount '?', usd null).
+      // Native balances on EVERY chain (in parallel; a failed chain gives amount '?' and null usd).
       Promise.all(
         Object.values(CHAINS).map(async (c) => {
-          // Stablecoin base dibaca DI CHAIN-NYA SENDIRI: USDG milik Robinhood, USDT
-          // milik BSC. Satu baris "USDG" berdiri sendiri dulu menyamarkan chain-nya.
+          // A stablecoin base is read ON ITS OWN CHAIN: USDG belongs to Robinhood, USDT
+          // to BSC. A standalone "USDG" row used to hide which chain it was on.
           const stables: Array<{ symbol: string; amount: string; usd: number | null }> = [];
           for (const b of basesFor(c)) {
             if (!isStableBase(b.kind)) continue;
@@ -537,14 +544,14 @@ async function renderStatus(ctx: any, edit: boolean) {
               const amt = Number(ethers.formatUnits(raw, b.decimals));
               if (amt > 0) stables.push({ symbol: b.symbol, amount: amt.toFixed(2), usd: amt }); // ≈ $1
             } catch {
-              /* stablecoin tak terbaca → lewati, jangan gagalkan kartu */
+            /* an unreadable stablecoin is skipped rather than failing the card */
             }
           }
           try {
             const b = await c.provider.getBalance(c.wallet.address);
             const amt = Number(ethers.formatEther(b));
-            // Harga native diambil dari wrapped-native CHAIN ITU SENDIRI: BNB dihargai
-            // dengan WBNB, bukan dengan harga ETH. Tak terbaca → null ("$?"), tak dijumlah.
+            // The native price comes from THAT chain's own wrapped native: BNB priced
+            // with WBNB, not with ETH. Unreadable gives null ("$?") and is not summed.
             const px = await getEthUsd(c.wethAddress, c).catch(() => null);
             const usd = px !== null ? amt * px : amt === 0 ? 0 : null;
             return { label: c.label, amount: amt.toFixed(4), symbol: c.nativeSymbol, usd, stables };
@@ -554,14 +561,14 @@ async function renderStatus(ctx: any, edit: boolean) {
         }),
       ),
     ]);
-    // Nilai posisi LP aktif (v3 + v4). Gagal baca satu posisi tak boleh menggagalkan kartu;
-    // jumlah yang gagal dilaporkan supaya total tak terbaca sebagai fakta.
+    // The value of live LP positions (v3 + v4). One position failing to read must not
+    // fail the card; the number that failed is reported so the total does not read as fact.
     let lpUsd: number | null = null;
     let lpFailed = 0;
     const ethUsd = await ethUsdP;
     try {
       const [vals, v4] = await Promise.all([v3ValsP, v4P]);
-      // Harga native CHAIN POSISI ITU, bukan harga chain aktif.
+      // The native price of THAT POSITION'S chain, not the active chain's.
       const pxOf = new Map<string, number | null>();
       for (const { cc: pcc } of v4)
         if (!pxOf.has(pcc.key)) pxOf.set(pcc.key, await getEthUsd(pcc.wethAddress, pcc).catch(() => null));
@@ -578,7 +585,7 @@ async function renderStatus(ctx: any, edit: boolean) {
     } catch {
       lpUsd = null;
     }
-    // Total USD: null bila harga ETH tak terbaca (ETH mendominasi → total tak sahih).
+    // Total USD: null when the ETH price is unreadable (ETH dominates, so the total would not be sound).
     const stablesUsd = chains.reduce(
       (s, c) => s + (c.stables ?? []).reduce((t, x) => t + (x.usd ?? 0), 0),
       0,
@@ -602,16 +609,16 @@ async function renderStatus(ctx: any, edit: boolean) {
     };
     await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
   } catch (err) {
-    // "message is not modified" = refresh saat data tak berubah → benign, abaikan
-    // (kalau tidak, tertangkap di sini & salah tampil sbg ❌ ERROR · network).
+    // "message is not modified" means a refresh with unchanged data — benign, ignore
+    // it. Otherwise it is caught here and shown wrongly as ❌ ERROR · network.
     if (/not modified/i.test((err as Error).message)) return;
     await ctx.reply(msg.msgError('network', (err as Error).message), html);
   }
 }
 
 bot.command('portfolio', (ctx) => renderStatus(ctx, false));
-// Nama lama tetap hidup: yang sudah terbiasa mengetik /status tak menabrak dinding.
-// Tak dipasang di menu — satu nama saja yang ditawarkan.
+// The old name stays alive so anyone used to typing /status does not hit a wall.
+// It is not in the menu — only one name is advertised.
 bot.command('status', (ctx) => renderStatus(ctx, false));
 
 bot.action('refresh:status', async (ctx) => {
@@ -619,12 +626,12 @@ bot.action('refresh:status', async (ctx) => {
   try {
     await renderStatus(ctx, true);
   } catch (e) {
-    // "message is not modified" = data tak berubah — bukan error nyata.
+    // "message is not modified" means the data has not changed — not a real error.
     if (!/not modified/i.test((e as Error).message)) throw e;
   }
 });
 
-/** Nilai base (float) → USD. WETH: ×ethUsd (bisa null). USDG: 1:1 dollar. */
+/** A base value (float) to USD. WETH: x ethUsd (may be null). USDG: 1:1 with the dollar. */
 async function baseToUsd(baseKind: BaseKind, amountFloat: number, cc: ChainCtx): Promise<number | null> {
   if (isStableBase(baseKind)) return amountFloat; // USDG/USDT ≈ $1
   const eu = await getEthUsd(cc.wethAddress, cc);
@@ -639,7 +646,7 @@ async function positionPnlText(
 ): Promise<string> {
   const dec = d.baseDecimals;
   if (rec?.imported) {
-    // Posisi impor: modal awal tak diketahui → tampilkan nilai sekarang, bukan PnL palsu.
+    // An imported position has no known cost basis, so show its current value rather than a fake PnL.
     const curVal = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec));
     const usdV = await baseToUsd(d.baseKind, curVal, cc);
     const valLabel = usdV !== null ? msg.usdPlain(usdV) : `${curVal.toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`;
@@ -647,9 +654,10 @@ async function positionPnlText(
   }
   const initF = rec ? Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec)) : 0;
   const curF = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, dec));
-  // PnL USD ala LP Agent: modal awal dinilai USD pada harga base SAAT ENTRY,
-  // nilai sekarang pada harga base SEKARANG. Gerak harga base (ETH) ikut terhitung
-  // — beda dari view ETH lama yang cuma mengalikan selisih WETH dg harga now.
+  // LP Agent-style USD PnL: the cost basis is valued in USD at the base price AT
+  // ENTRY, and the current value at the base price NOW. Movement in the base asset
+  // (ETH) is therefore counted — unlike the old ETH view, which simply multiplied the
+  // WETH difference by today's price.
   if (rec?.entryEthUsd && rec.entryEthUsd > 0) {
     const nowUsdPer = isStableBase(d.baseKind) ? 1 : await getEthUsd(cc.wethAddress, cc);
     if (nowUsdPer !== null) {
@@ -660,7 +668,7 @@ async function positionPnlText(
       return `${msg.usdSigned(pnlUsd)} (${msg.fmtPct(pct)})`;
     }
   }
-  // Fallback (posisi lama tanpa entryEthUsd): view ETH-denominated.
+  // Fallback for older positions without entryEthUsd: the ETH-denominated view.
   const pnlF = curF - initF;
   const pct = initF > 0 ? (pnlF / initF) * 100 : 0;
   const usd = await baseToUsd(d.baseKind, pnlF, cc);
@@ -669,7 +677,7 @@ async function positionPnlText(
     : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol} (${msg.fmtPct(pct)})`;
 }
 
-/** Bangun teks+keyboard kartu posisi (RPC). Side-effect: finalizeClose bila NFT gone. */
+/** Build a position card's text and keyboard (uses RPC). Side effect: finalizeClose when the NFT is gone. */
 async function buildPositionCard(
   rec: store.PosRecord,
 ): Promise<{ text: string; extra: Record<string, unknown> }> {
@@ -687,15 +695,16 @@ async function buildPositionCard(
     return { text: msg.msgPositionReadFail(rec.tokenId, (e as Error).message), extra: html };
   }
   const cc = ctxOf(rec);
-  // Warm ethUsd cache sekali per chain (getEthUsd sudah TTL 60s).
+  // Warm the ethUsd cache once per chain (getEthUsd already has a 60s TTL).
   if (d.baseKind === 'weth') await getEthUsd(cc.wethAddress, cc);
   const pnlText = await positionPnlText(rec, d, cc);
-  // Jarak batas range dari HARGA SEKARANG — "berapa jauh lagi ke tiap ujung dari
-  // sini", jadi ikut bergerak saat token turun. Dulu dipatok ke entryPrice supaya
-  // angkanya diam; akibatnya kartu memberi tahu keadaan saat POSISI DIBUKA, bukan
-  // keadaan sekarang: token turun 26% dan barisnya tetap menulis -0.7% ⇄ -90.2%
-  // padahal dari harga kini batasnya +34.7% ⇄ -86.8%. Batas absolutnya tetap diam
-  // dan ditunjukkan baris mcap di bawah (dipatok ke entry). Sama seperti kartu v4.
+  // The distance from the CURRENT PRICE to each range edge — "how much further to
+  // either end from here" — so it moves as the token falls. It used to be pinned to
+  // entryPrice to keep the number still, which meant the card described the state when
+  // the POSITION WAS OPENED rather than now: the token fell 26% and the line still read
+  // -0.7% to -90.2%, when from today's price the edges were +34.7% to -86.8%. The
+  // absolute bounds do stay still, and are shown by the mcap line below (pinned to
+  // entry). Same as the v4 card.
   const range = (() => {
     const now = Number(d.currentPrice);
     if (now > 0) {
@@ -703,33 +712,34 @@ async function buildPositionCard(
       const [a, b] = [pf(d.priceUpper), pf(d.priceLower)].sort((x, y) => y - x);
       return `${msg.fmtPct(a)} ⇄ ${msg.fmtPct(b)}`;
     }
-    // Harga live tak terbaca → pakai tick (sumber yang sama, jalur berbeda).
+    // The live price is unreadable, so use the tick (same source, different path).
     const sgn = d.baseIsToken0 ? -1 : 1;
     const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
     const pcts = [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a);
     return `${msg.fmtPct(pcts[0])} ⇄ ${msg.fmtPct(pcts[1])}`;
   })();
-  // Rentang yang sama, dibaca sebagai kapitalisasi pasar. MC berskala LINIER
-  // terhadap harga (suplai tetap), jadi MC di batas = MC sekarang × (harga batas
-  // ÷ harga sekarang). Rasio itu tanpa satuan, jadi harga boleh tetap dalam base.
+  // The same range read as market capitalisation. MC scales LINEARLY with price (supply
+  // is fixed), so MC at an edge = MC now x (edge price / current price). That ratio is
+  // unitless, so the prices can stay denominated in base.
   const mcRange = await (async () => {
     const [hi, lo] = Number(d.priceUpper) >= Number(d.priceLower)
       ? [d.priceUpper, d.priceLower]
       : [d.priceLower, d.priceUpper];
-    // Batas mcap DIPATOK ke ENTRY: mcEntry × (hargaBatas ÷ hargaEntry). Keduanya
-    // nilai TERSIMPAN, jadi angka batas benar-benar diam. Dulu dipakai mcNow ÷ hargaNow
-    // yang mencampur mcap DexScreener & harga on-chain (dua sumber, tak sinkron) →
-    // batas ikut bergoyang tiap refresh walau tick posisi tetap.
+    // The mcap bounds are PINNED to ENTRY: mcEntry x (edge price / entry price). Both
+    // are STORED values, so the bounds really do stay still. It used to use mcNow /
+    // priceNow, mixing DexScreener's mcap with an on-chain price — two sources, out of
+    // step — so the bounds wobbled on every refresh even though the position's ticks
+    // had not moved.
     if (rec.entryMcap && rec.entryPrice && Number(rec.entryPrice) > 0) {
       const e = Number(rec.entryPrice);
       const at = (p: string) => explore.usdShort((rec.entryMcap! * Number(p)) / e);
-      // "now" DITURUNKAN dari harga pool yang baru saja dibaca, bukan ditarik dari
-      // DexScreener. Mcap berskala linier terhadap harga, jadi mcEntry × (hargaKini ÷
-      // hargaEntry) memberi angka yang bergerak SEKETIKA tiap refresh — sementara
-      // DexScreener di-cache 2 menit dan datang dari sumber lain, sehingga "now"
-      // bisa tak sebaris dengan batas rentang, status IN RANGE, dan PnL di kartu
-      // yang sama. Ini pula yang sudah dipakai kartu v4. Harga pool tak terbaca →
-      // baru jatuh ke DexScreener.
+      // "now" is DERIVED from the pool price just read, not pulled from DexScreener.
+      // Mcap scales linearly with price, so mcEntry x (price now / price at entry) gives
+      // a figure that moves IMMEDIATELY on each refresh — whereas DexScreener is cached
+      // for 2 minutes and comes from a different source, so "now" could fall out of line
+      // with the range bounds, the IN RANGE status and the PnL on the same card. This is
+      // what the v4 card already does. Only when the pool price is unreadable does it
+      // fall back to DexScreener.
       const nowPrice = Number(d.currentPrice);
       const derived = nowPrice > 0 ? (rec.entryMcap * nowPrice) / e : null;
       const shown = derived ?? (await explore.tokenMarketCap(cc, d.otherAddress).catch(() => null));
@@ -737,7 +747,7 @@ async function buildPositionCard(
       return `${at(hi)} ⇄ ${at(lo)}${nowStr}`;
     }
     const mcNow = await explore.tokenMarketCap(cc, d.otherAddress).catch(() => null);
-    // Posisi lama tanpa entryMcap: jatuh ke perhitungan live (bergoyang, tapi ada acuan).
+    // Older positions without entryMcap fall back to the live calculation (it wobbles, but it is a reference).
     const now = Number(d.currentPrice);
     if (mcNow === null || !(now > 0)) return undefined;
     const at = (p: string) => explore.usdShort((mcNow * Number(p)) / now);
@@ -746,8 +756,8 @@ async function buildPositionCard(
   const invest = rec.imported
     ? '—'
     : (rec.nominalEth ?? msg.cleanUnits(BigInt(rec.initialWethWei), baseDecimalsOf(rec.chain, rec.baseKind)));
-  // Ladder: total modal SEGRUP (jumlah semua leg) supaya kartu leg tak terlihat
-  // seperti posisi tunggal kecil.
+  // Ladder: the WHOLE GROUP's capital (every leg summed) so a leg card does not look
+  // like a small standalone position.
   const ladder = rec.groupId
     ? await (async () => {
         const legs = store.group(rec.groupId!);
