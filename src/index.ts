@@ -1112,7 +1112,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     // entry value is stored.
     if (anchoredPcts && tracked?.entryMcap) {
       const at = (pct: number) => explore.usdShort(tracked.entryMcap! * (1 + pct / 100));
-      // "now" dari tick pool → sebaris dengan batas rentang, status IN RANGE, dan PnL.
+      // "now" comes from the pool tick, keeping it in line with the range bounds, the IN RANGE status and PnL.
       mcPool = anchored?.nowPct != null ? tracked.entryMcap * (1 + anchored.nowPct / 100) : null;
       const shown = mcPool ?? mcNow;
       const nowStr = shown !== null ? ` · now ${explore.usdShort(shown)}` : '';
@@ -1122,9 +1122,9 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       mcRange = `${at(p.rangePctHigh)} ⇄ ${at(p.rangePctLow)} · now ${explore.usdShort(mcNow)}`;
     }
   }
-  // Guard pool sekarat: bandingkan mcap versi pool (dipakai kartu) dgn mcap pasar.
-  // Menggantikan cek lama yang hanya jalan utk pasangan ETH — pasangan USDG dulu
-  // lolos tanpa pemeriksaan sama sekali.
+  // Dying-pool guard: compare the pool's mcap (the one the card uses) with the market's.
+  // Replaces the old check, which only ran for ETH pairs — USDG pairs used to pass with
+  // no inspection at all.
   if (mcPool !== null && mcMarket !== null && mcPool > 0 && mcMarket > 0) {
     const ratio = mcPool / mcMarket;
     if (ratio > 1.25 || ratio < 0.8) {
@@ -1132,10 +1132,10 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       priceWarn = `this pool prices the token ${x.toFixed(1)}× the market (market ${explore.usdShort(mcMarket)}) — liquidity is thin, and the value and range above follow this pool, not the market.`;
     }
   }
-  // Ringkasan SELURUH ladder untuk kartu satu leg. Yang disetor user adalah
-  // ladder, bukan satu anak tangga — tanpa blok ini kartu leg memperlihatkan
-  // nilai & PnL sepersekian modal dan terbaca menyesatkan. Datanya dari daftar
-  // v4 yang sudah ter-cache (45 dtk), jadi tak ada pembacaan per-leg.
+  // A summary of the WHOLE ladder for a single leg's card. What the user deposited is a
+  // ladder, not one rung, and without this block the leg card shows a value and PnL for
+  // a fraction of the capital and reads misleadingly. The data comes from the already
+  // cached v4 list (45s), so there is no per-leg read.
   const ladderSum = tracked?.groupId
     ? await (async () => {
         const legs = v4store.groupV4(tracked.groupId!);
@@ -1168,14 +1168,14 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
           lo = lo === null ? x.tickLower : Math.min(lo, x.tickLower);
           hi = hi === null ? x.tickUpper : Math.max(hi, x.tickUpper);
         }
-        // NILAI YANG BISA DIDAPAT, bukan harga pasar semu.
+        // THE VALUE YOU CAN ACTUALLY GET, not a notional market price.
         //
-        // valueBaseWei menilai sisi token pada harga pool SEKARANG. Untuk posisi
-        // sebesar kedalaman pool-nya, angka itu tak pernah bisa diambil: menjualnya
-        // menggerakkan harga. 28 Agu 2026 kartu menulis "+10.2%" lalu tutupnya
-        // menghasilkan -5.5% — Relay menolak rutenya dengan "swap impact 31.06%".
-        // Jadi sisi token DIKUTIP dengan quote nyata; gagal quote → jatuh ke harga
-        // pool, tapi ditandai supaya tak terbaca sebagai angka pasti.
+        // valueBaseWei marks the token side at the CURRENT pool price. For a position as
+        // large as its pool is deep, that figure can never be realised: selling moves the
+        // price. On 28 Aug 2026 the card read "+10.2%" and the close came out at -5.5% —
+        // Relay refused the route with "swap impact 31.06%". So the token side is QUOTED
+        // for real; if the quote fails it falls back to the pool price, but is flagged so
+        // it is not read as a firm number.
         let quotedOtherWei: bigint | null = null;
         if (otherWei > 0n && otherAddr && baseAddrOf(cc, p.base)) {
           const q = await previewSwapOut(otherAddr, baseAddrOf(cc, p.base)!, otherWei, cc).catch(() => null);
@@ -1184,20 +1184,20 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
         const realWei = quotedOtherWei === null ? valWei : baseWei + quotedOtherWei;
         const markVal = Number(ethers.formatUnits(valWei + feeWei, dec));
         const val = Number(ethers.formatUnits(realWei + feeWei, dec));
-        // Selisih besar antara harga pasar & hasil jual = kedalaman pool tipis.
+        // A wide gap between the market price and the sale proceeds means a thin pool.
         const impactPct = markVal > 0 ? ((markVal - val) / markVal) * 100 : 0;
         const dep = Number(ethers.formatUnits(depWei, dec));
         const pnl = val - dep;
         const pct = dep > 0 ? (pnl / dep) * 100 : 0;
         const usdPer = p.base === 'USDG' ? 1 : ethUsdV4;
-        // Rentang ladder = ujung terluar seluruh leg, dipatok ke entry yang sama
-        // dengan baris mcap leg supaya kedua baris bisa dibandingkan langsung.
+        // The ladder's range spans the outermost edges of every leg, pinned to the same
+        // entry as the leg's mcap line so the two lines can be compared directly.
         let mcRangeLadder: string | undefined;
         if (lo !== null && hi !== null && tracked.entryMcap && tracked.entryTick !== undefined) {
           const sgn = tracked.baseIsCurrency0 ? -1 : 1;
           const mcOf = (tk: number) => tracked.entryMcap! * Math.pow(1.0001, sgn * (tk - tracked.entryTick!));
-          // Urutkan berdasarkan NILAI, bukan urutan tick: base = currency0 membuat
-          // tick naik berarti mcap turun, jadi tick tertinggi justru batas bawah.
+          // Sort by VALUE, not by tick order: with base = currency0 a rising tick means a
+          // falling mcap, so the highest tick is actually the lower bound.
           const ends = [mcOf(lo), mcOf(hi)].sort((x, y) => y - x);
           const nowStr = p.currentTick !== null ? ` · now ${explore.usdShort(mcOf(p.currentTick))}` : '';
           mcRangeLadder = `${explore.usdShort(ends[0])} ⇄ ${explore.usdShort(ends[1])}${nowStr}`;
@@ -1244,9 +1244,9 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       ? (() => {
           const legs = v4store.groupV4(tracked.groupId!);
           const depWei = legs.reduce((s, l) => s + BigInt(l.entryBaseWei || '0'), 0n);
-          // Porsi modal leg ini dari seluruh ladder — murni dari data tersimpan,
-          // nol RPC tambahan. Bid-ask menaruh bobot terkecil di leg teratas,
-          // jadi leg yang duluan habis biasanya justru yang paling kecil.
+          // This leg's share of the whole ladder's capital, purely from stored data with
+          // no extra RPC. Bid-ask puts the smallest weight on the top leg, so the leg that
+          // fills first is usually the smallest one.
           const mine = BigInt(tracked.entryBaseWei || '0');
           return {
             sharePct: depWei > 0n ? Number((mine * 10000n) / depWei) / 100 : undefined,
@@ -1259,8 +1259,8 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
         })()
       : undefined,
   });
-  // Tombol "➕ <size> ETH" dihapus: jalur uang tanpa screening/preview/cap dengan
-  // rentang default ~170% yang tak pernah ditampilkan. Tambah modal lewat /add.
+  // The "➕ <size> ETH" button was removed: a money path with no screening, no preview
+  // and no cap, using a default range of ~170% that was never shown. Add capital via /add.
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
@@ -1294,7 +1294,7 @@ type PosRow = {
   legShape?: string | null; // 'bidask' | 'spot'
 };
 
-/** Gabung baris leg satu grup ladder jadi SATU baris agregat (mutasi array). */
+/** Merge one ladder group's leg rows into a SINGLE aggregate row (mutates the array). */
 function collapseLadderRows(rows: PosRow[]): void {
   const groups = new Map<string, PosRow[]>();
   for (const r of rows) if (r.groupId) groups.set(r.groupId, [...(groups.get(r.groupId) ?? []), r]);
@@ -1315,9 +1315,9 @@ function collapseLadderRows(rows: PosRow[]): void {
     base.wethEq = sumWethEq;
     base.inRange = legs.some((r) => r.inRange);
     base.rangeLabel = `${legs.length}-leg ${base.legShape ?? 'ladder'} · ${base.rangeLabel ?? ''}`;
-    // Leg selain yang pertama DIBUANG dari array di bawah, jadi fee-nya harus
-    // dipindahkan ke baris gabungan dulu — kalau tidak, ladder 8-leg cuma
-    // melaporkan fee leg 1 (dan footer total ikut kehilangan sisanya).
+    // Every leg but the first is DROPPED from the array below, so their fees have to move
+    // onto the merged row first — otherwise an 8-leg ladder reports only leg 1's fees (and
+    // the footer total loses the rest with it).
     const feeVals = legs.map((r) => r.feesBase).filter((v): v is number => typeof v === 'number');
     if (feeVals.length) {
       const sumFee = feeVals.reduce((a, b) => a + b, 0);
@@ -1328,7 +1328,7 @@ function collapseLadderRows(rows: PosRow[]): void {
         .filter((v): v is number => v !== null && Number.isFinite(v));
       base.feesUsdLabel = usdVals.length === feeVals.length ? `+${msg.usdPlain(usdVals.reduce((a, b) => a + b, 0))}` : null;
     }
-    // Buang leg selain yang pertama dari array.
+    // Drop every leg but the first from the array.
     for (const r of legs.slice(1)) {
       const i = rows.indexOf(r);
       if (i >= 0) rows.splice(i, 1);
@@ -1336,20 +1336,21 @@ function collapseLadderRows(rows: PosRow[]): void {
   }
 }
 
-// /positions — SATU pesan konsolidasi: ringkasan + pohon per-posisi (v3 + v4).
+// /positions — ONE consolidated message: a summary plus a per-position tree (v3 + v4).
 async function cmdPositions(ctx: any, edit = false) {
   const cc = getChain();
-  // Tarik posisi on-chain yang belum tercatat (mis. dibuka setelah /start terakhir)
-  // supaya /positions tak melewatkannya. Fungsi ini fail-safe: gagal baca = store
-  // tak disentuh. Sebelumnya sync hanya di /start → posisi baru tak pernah muncul.
+  // Pull in on-chain positions that are not yet recorded (opened since the last /start,
+  // say) so /positions does not miss them. This function is fail-safe: a failed read
+  // leaves the store untouched. Sync used to run only on /start, so a new position never
+  // appeared.
   await syncOnChainPositions(cc).catch(() => {});
   const active = store.active();
-  // v4 dari SEMUA chain yang mendukungnya, bukan chain aktif saja.
+  // v4 from EVERY chain that supports it, not just the active one.
   //
-  // Sisi v3 sudah lintas-chain sejak awal (`store.active()` + `ctxOf(rec)`), tapi
-  // v4 hanya pernah membaca `cc` — chain default. Akibatnya tiga posisi v4 BSC
-  // yang tercatat rapi di v4store tak pernah muncul di /positions selama chain
-  // aktif masih Robinhood: bukan hilang, cuma tak pernah ditanyakan.
+  // The v3 side has been cross-chain from the start (`store.active()` + `ctxOf(rec)`), but
+  // v4 only ever read `cc` — the default chain. So three BSC v4 positions, recorded
+  // perfectly well in v4store, never appeared in /positions while the active chain was
+  // Robinhood: not lost, just never asked about.
   const v4 = (
     await Promise.all(
       Object.values(CHAINS)
@@ -1363,7 +1364,7 @@ async function cmdPositions(ctx: any, edit = false) {
   }
   const ethUsd = await getEthUsd(cc.wethAddress, cc).catch(() => null);
 
-  // v3 (RPC paralel, urutan stabil). Posisi hilang (NFT burned) → finalize & buang.
+  // v3 (parallel RPC, stable order). A position that is gone (NFT burned) is finalised and dropped.
   const v3rows = await mapLimit(active, POS_CARD_CONCURRENCY, async (rec): Promise<PosRow | null> => {
     try {
       const rcc = ctxOf(rec); // chain POSISI, bukan chain utama
@@ -1374,7 +1375,7 @@ async function cmdPositions(ctx: any, edit = false) {
       let pnlUsd: number | null = null;
       let pnlPct: number | null = null;
       if (initF !== null && initF > 0) {
-        // PnL USD ala LP Agent bila entryEthUsd tersimpan; kalau tidak, view ETH lama.
+        // LP Agent-style USD PnL when entryEthUsd is stored; otherwise the old ETH view.
         if (rec.entryEthUsd && rec.entryEthUsd > 0) {
           const nowUsdPer = isStableBase(d.baseKind) ? 1 : await getEthUsd(rcc.wethAddress, rcc).catch(() => null);
           if (nowUsdPer !== null) {
@@ -1401,19 +1402,19 @@ async function cmdPositions(ctx: any, edit = false) {
         pnlUsd,
         pnlPct,
         inRange: d.inRange,
-        // Setara-native utk baris TOTAL: stable dibagi harga native CHAIN INI
-        // (USDT BSC → BNB), bukan harga ETH chain utama.
+        // Native equivalent for the TOTAL row: a stable is divided by THIS CHAIN's native
+        // price (USDT on BSC by BNB), not the main chain's ETH price.
         wethEq: d.baseKind === 'weth' ? investNum : (nativeUsd ? investNum / nativeUsd : 0),
         natSym: rcc.nativeSymbol,
-        // tickLower/Upper dalam istilah TICK; dalam istilah HARGA TOKEN urutannya
-        // bisa terbalik (tergantung sisi base di pool) → urutkan menaik dulu.
-        // Dibaca kembali oleh kartu untuk menentukan sisi — pakai penanda stabil
-        // ('token'/'base'), bukan kalimat yang bisa berubah saat teks diterjemahkan.
+        // tickLower/Upper is in TICK terms; in TOKEN PRICE terms the order can be reversed
+        // (depending which side the base sits on), so sort ascending first.
+        // The card reads this back to decide the side, so use a stable marker
+        // ('token'/'base') rather than a sentence that could change when text is reworded.
         strategy: rec.side === 'token' ? 'token' : 'base',
         baseSymbol: d.baseSymbol,
-        // Terkonversi penuh = harga menembus SELURUH rentang ke arah tujuan:
-        // sisi base menunggu harga TURUN (selesai saat 'below'), sisi token
-        // menunggu harga NAIK (selesai saat 'above').
+        // Fully converted means price has crossed the WHOLE range in its intended
+        // direction: the base side waits for a FALL (done at 'below'), the token side
+        // waits for a RISE (done at 'above').
         converted: !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below'),
         convertedInto: rec.side === 'token' ? d.baseSymbol : rec.symbol,
         rangeLabel: (() => {
@@ -1422,8 +1423,8 @@ async function cmdPositions(ctx: any, edit = false) {
           return `${lo} — ${hi} ${d.baseSymbol} per ${rec.symbol}`;
         })(),
         feesLabel: `${Number(ethers.formatUnits(d.feesBaseWei, dec)).toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`,
-        // Fee dalam USD (design memakai satuan dolar). Harga tak terbaca → null,
-        // dan kartu jatuh ke satuan base; JANGAN tampilkan $0.00 palsu.
+        // Fees in USD (the design uses dollars). An unreadable price gives null and the
+        // card falls back to base units; NEVER show a fake $0.00.
         feesUsdLabel: await baseToUsd(d.baseKind, Number(ethers.formatUnits(d.feesBaseWei, dec)), rcc)
           .then((v) => (v === null ? null : `+${msg.usdPlain(v)}`))
           .catch(() => null),
@@ -1450,14 +1451,14 @@ async function cmdPositions(ctx: any, edit = false) {
 
   const rows: PosRow[] = v3rows.filter((r): r is PosRow => r !== null);
 
-  // Harga native tiap chain, dibaca sekali. Memakai harga chain aktif untuk semua
-  // pernah membuat nilai LP HyperEVM 30x lipat (lihat catatan yang sama di /pnl).
+  // Each chain's native price, read once. Using the active chain's price for all of them
+  // once inflated HyperEVM LP value 30-fold (see the same note in /pnl).
   const usdPerChain = new Map<string, number | null>();
   for (const { cc: pcc } of v4)
     if (!usdPerChain.has(pcc.key))
       usdPerChain.set(pcc.key, await getEthUsd(pcc.wethAddress, pcc).catch(() => null));
 
-  // v4 (baca-saja + PnL bila dikelola bot).
+  // v4 (read-only, plus PnL when bot-managed).
   for (const { cc: pcc, p } of v4) {
     const ethUsd = usdPerChain.get(pcc.key) ?? null;
     const dec = v4BaseDecimals(pcc, p.base);
@@ -1497,16 +1498,16 @@ async function cmdPositions(ctx: any, edit = false) {
       inRange: p.inRange ?? false, // null (tak diketahui) → dianggap out (konservatif)
       wethEq: p.base === 'USDG' ? (ethUsd ? investNum / ethUsd : 0) : investNum,
       natSym: pcc.nativeSymbol,
-      // Fee v4 DULU tak pernah diisi di baris daftar, jadi posisi v4 yang sudah
-      // lama in-range tetap terbaca "Uncollected Fees: —" seolah tak panen apa pun.
-      // Datanya sudah ada di p.feesBaseWei — cuma tak pernah diteruskan ke sini.
+      // v4 fees USED to be left out of the list row, so a v4 position that had been in
+      // range for a long time still read "Uncollected Fees: —" as though it had harvested
+      // nothing. The data was already in p.feesBaseWei — it just never got passed through.
       ...(p.feesBaseWei !== null && p.feesBaseWei !== undefined
         ? (() => {
             const f = Number(ethers.formatUnits(p.feesBaseWei, dec));
             const usdPer = p.base === 'USDG' ? 1 : ethUsd;
             return {
               feesLabel: `${f.toFixed(dec >= 18 ? 5 : 2)} ${sym}`,
-              // Harga tak terbaca → null, kartu jatuh ke satuan base. Jangan $0.00 palsu.
+              // An unreadable price gives null and the card falls back to base units. No fake $0.00.
               feesUsdLabel: usdPer !== null ? `+${msg.usdPlain(f * usdPer)}` : null,
               feesBase: f,
             };
@@ -1517,9 +1518,9 @@ async function cmdPositions(ctx: any, edit = false) {
 
   collapseLadderRows(rows);
   const totalWethEq = rows.reduce((s, r) => s + r.wethEq, 0);
-  // Menjumlahkan ETH dengan BNB lalu melabelinya "WETH" adalah angka fiksi. Total
-  // hanya ditampilkan bila SEMUA posisi berdenominasi native yang sama; kalau
-  // campur, baris totalnya disembunyikan (per-posisi tetap benar).
+  // Adding ETH to BNB and labelling it "WETH" produces a fictional number. The total is
+  // only shown when EVERY position shares the same native denomination; when they are
+  // mixed the total row is hidden (per-position figures stay correct).
   const units = new Set(rows.map((r) => r.natSym).filter(Boolean));
   const totalUnit = units.size === 1 ? [...units][0]! : null;
   const pnlVals = rows.map((r) => r.pnlUsd).filter((x): x is number => x !== null);
@@ -1532,8 +1533,8 @@ async function cmdPositions(ctx: any, edit = false) {
     outOfRange: rows.filter((r) => !r.inRange).length,
     listDegraded: v4Supported(cc) && v4ListDegraded(),
     totalFeesLabel: (() => {
-      // Fee total hanya bisa dijumlah bila semua posisi memakai base yang sama;
-      // sekarang base tunggal (WETH), tapi tetap jaga-jaga: lewati bila tak ada data.
+      // Fees can only be totalled when every position uses the same base. Today that is a
+      // single base (WETH), but keep the guard anyway: skip when there is no data.
       if (!totalUnit) return null;
       const vals = rows.map((r) => r.feesBase).filter((v): v is number => typeof v === 'number');
       return vals.length ? `≈ ${vals.reduce((a, b) => a + b, 0).toFixed(5)} ${totalUnit}` : null;
@@ -1541,12 +1542,12 @@ async function cmdPositions(ctx: any, edit = false) {
     rows,
   });
 
-  // Maks 6 tombol id (posisi ke-7+ tetap tercantum di daftar & bisa lewat /stop).
-  // Label = "#id Details": #id selalu unik, jadi dua posisi pada token yang sama
-  // tak pernah menghasilkan tombol kembar yang tak bisa dibedakan.
+  // At most 6 id buttons (a 7th position onward is still listed and reachable via /stop).
+  // The label is "#id Details": #id is always unique, so two positions on the same token
+  // never produce twin buttons that cannot be told apart.
   const top = rows.slice(0, 6);
   const idBtns = top.map((r) => Markup.button.callback(`🔍 #${r.id} Details`, `pos_detail_${r.id}`));
-  // Satu tombol per baris, sesuai design.
+  // One button per row, per the design.
   const kbRows: ReturnType<typeof Markup.button.callback>[][] = idBtns.map((b) => [b]);
   kbRows.push([
     Markup.button.callback('⬅️ Back', 'positions_back'),
