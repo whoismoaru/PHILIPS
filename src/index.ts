@@ -1595,9 +1595,16 @@ bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
     }
   }
   try {
-    const cc = getChain();
-    const p = (await listPositionsV4(cc).catch(() => [])).find((x) => x.tokenId === id);
-    if (!p) return ctx.reply(msg.msgError('detail', 'position not found.'), html);
+    // EVERY v4-capable chain, not just the default one. This looked only at getChain(),
+    // so tapping Details on a BSC v4 position while pointed at Robinhood answered
+    // "position not found" for a position sitting right there in the list above.
+    let found: { cc: ReturnType<typeof getChain>; p: V4Position } | undefined;
+    for (const c of Object.values(CHAINS).filter((x) => v4Supported(x))) {
+      const hit = (await listPositionsV4(c).catch(() => [])).find((x) => x.tokenId === id);
+      if (hit) { found = { cc: c, p: hit }; break; }
+    }
+    if (!found) return ctx.reply(msg.msgError('detail', 'position not found.'), html);
+    const { cc, p } = found;
     const ethUsdV4 = p.base === 'ETH' ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
     const c = await buildV4Card(p, ethUsdV4, cc);
     return ctx.reply(c.text, c.extra);
@@ -2490,7 +2497,10 @@ bot.action('addok', async (ctx) => {
       const legs = await planLadderV4(cc, pk, selected.baseIsCurrency0!, ethers.parseUnits(ethAmount, base.decimals), flow.rangePct, flow.legs!, 'bidask');
       await ensureGasForLegs(cc, legs.length, base.wrappable ? legs.reduce((s, l) => s + l.baseAmountWei, 0n) : 0n);
       await ctx.editMessageText(msg.msgProgress(`opening ${legs.length}-leg v4 ladder (1 atomic tx)…`), html);
-      const entryEthUsd = selected.base === 'usdg' ? 1 : ((await getEthUsd(cc.wethAddress, cc).catch(() => null)) ?? undefined);
+      // isStableBase, NOT `=== 'usdg'`: on BSC the stable base is USDT, so the old test
+      // stamped a stablecoin position with the NATIVE price. The card then valued 300
+      // USDT of capital at 300 x $775 and reported -99.9% on an untouched position.
+      const entryEthUsd = isStableBase(selected.base) ? 1 : ((await getEthUsd(cc.wethAddress, cc).catch(() => null)) ?? undefined);
       const tokenAddr = selected.baseIsCurrency0! ? pk.currency1 : pk.currency0;
       const [entryTick, entryMcap] = await Promise.all([
         currentTickV4(cc, pk).catch(() => undefined),
@@ -2529,7 +2539,7 @@ bot.action('addok', async (ctx) => {
           fee: pk.fee,
           tickSpacing: pk.tickSpacing,
           hooks: pk.hooks,
-          base: selected.base === 'usdg' ? 'USDG' : 'ETH',
+          base: isStableBase(selected.base) ? 'USDG' : 'ETH', // 'USDG' means "this chain's stable base"
           baseIsCurrency0: selected.baseIsCurrency0!,
           entryBaseWei: legs[i].baseAmountWei.toString(),
           entryEthUsd,
@@ -2591,13 +2601,12 @@ bot.action('addok', async (ctx) => {
           fee: pk.fee,
           tickSpacing: pk.tickSpacing,
           hooks: pk.hooks,
-          base: selected.base === 'usdg' ? 'USDG' : 'ETH',
+          base: isStableBase(selected.base) ? 'USDG' : 'ETH', // 'USDG' means "this chain's stable base"
           baseIsCurrency0: r.baseIsCurrency0,
           entryBaseWei: amountWei.toString(),
-          entryEthUsd:
-            selected.base === 'usdg'
-              ? 1
-              : (await getEthUsd(cc.wethAddress, cc).catch(() => null)) ?? undefined,
+          entryEthUsd: isStableBase(selected.base)
+            ? 1
+            : (await getEthUsd(cc.wethAddress, cc).catch(() => null)) ?? undefined,
           entryTick,
           entryMcap: entryMcap ?? undefined,
         });
