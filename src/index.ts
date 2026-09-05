@@ -2836,8 +2836,9 @@ async function replyActiveCards(ctx: any, header: string | null) {
   const active = store.active();
   if (active.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
   if (header) await ctx.reply(header, html);
-  // Kirim mengalir: kartu #1 berangkat begitu jadi, sisanya masih dibangun di
-  // latar. Menunggu SELURUH build dulu membuat layar diam ~3 dtk pada 12 posisi.
+  // Streamed sending: card #1 goes out as soon as it is ready while the rest are still
+  // built in the background. Waiting for the WHOLE build first left the screen still for
+  // ~3s on 12 positions.
   const cards = mapLimitStream(active, POS_CARD_CONCURRENCY, async (rec) => {
     try {
       return await buildPositionCard(rec);
@@ -2855,11 +2856,11 @@ async function replyActiveCards(ctx: any, header: string | null) {
 }
 
 // /stop — tutup posisi: kartu per posisi (v3 + v4), konfirmasi masing-masing.
-// Dulu terpisah dari /closeall; keduanya melakukan hal yang sama, bedanya cuma
-// /closeall ikut menampilkan posisi v4 — jadi yang tersisa versi lengkapnya.
+// This used to be separate from /closeall; both did the same thing, the only difference
+// being that /closeall also showed v4 positions — so the complete version is what remains.
 async function cmdCloseAll(ctx: any) {
-  // Kartu /positions memperlihatkan posisi v4, jadi tombol "Tutup Semua" yang hanya
-  // menampilkan v3 = user mengira sudah bersih padahal v4 masih terbuka.
+  // The /positions card shows v4 positions, so a "Close All" button listing only v3 would
+  // leave the user believing everything was closed while v4 stayed open.
   const cc = getChain();
   const v4 = v4Supported(cc) ? await listPositionsV4(cc).catch(() => []) : [];
   const v3 = store.active();
@@ -2867,8 +2868,8 @@ async function cmdCloseAll(ctx: any) {
   if (v3.length) await replyActiveCards(ctx, msg.msgCloseAllPick(v3.length, v4.length));
   else await ctx.reply(msg.msgCloseAllPick(0, v4.length), html);
   const ethUsd = v4.length ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
-  // Kartu v4 dulu dibangun DI DALAM loop kirim — build & kirim bergantian, paling
-  // lambat dari semua jalur kartu. Sekarang paralel, urutan tetap.
+  // v4 cards used to be built INSIDE the send loop, alternating build and send, making it
+  // the slowest of all the card paths. Now they build in parallel, order preserved.
   for (const p of mapLimitStream(v4, POS_CARD_CONCURRENCY, (x) => buildV4Card(x, ethUsd, cc))) {
     const c = await p;
     await ctx.reply(c.text, c.extra);
@@ -2906,19 +2907,19 @@ type TSwapFlow = {
 const tswapFlows = new Map<number, TSwapFlow>();
 const tswapInFlight = new Set<number>();
 
-/** Chain yang mendukung swap token (punya router+quoter) — kini hanya Robinhood. */
+/** Chains that support token swaps (they have a router and quoter) — currently Robinhood only. */
 const swapTokenChains = (): ChainCtx[] =>
   Object.values(CHAINS);
 
-// /buy = alur CA-dulu · /sell = alur holdings-dulu (di bawah).
+// /buy is the CA-first flow; /sell is the holdings-first flow (below).
 // Backend quote (tswapQuoteConfirm) + eksekusi (tswapok) dipakai bersama keduanya.
 
-// ── /buy = alur CA-dulu ─────────────────────────────────────────────────────
+// ── /buy = the CA-first flow ────────────────────────────────────────────────
 // /buy <CA> → Deteksi Chain → Detail+Safety → Pilih Aset → Pilih Size →
 //   Preview Order → Konfirmasi → Hasil. Backend quote+eksekusi dipakai bersama /sell.
 function buyAskCA(ctx: any, edit: boolean) {
-  // Pintasan stablecoin base di SEMUA chain aktif: alamatnya sudah kita ketahui,
-  // jadi memaksa user menempel CA-nya sendiri hanya menambah langkah & risiko salah tempel.
+  // A shortcut for the stablecoin base on EVERY active chain: we already know its address,
+  // so making the user paste it adds a step and a chance to paste the wrong thing.
   const quick: ReturnType<typeof Markup.button.callback>[][] = [];
   for (const c of Object.values(CHAINS)) {
     for (const b of basesFor(c)) {
@@ -2941,7 +2942,7 @@ function buyAskCA(ctx: any, edit: boolean) {
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
-// Pintasan: CA dibawa DI callback (bukan state) → tombol lama tetap benar.
+// Shortcut: the CA rides IN the callback (not in state), so older buttons stay correct.
 bot.action(/^bca:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   await ctx.answerCbQuery();
   const prog = ctx.callbackQuery?.message
@@ -2956,7 +2957,7 @@ async function buyDetectChains(ca: string): Promise<ChainCtx[]> {
   return (await detectChains(ca)).filter((c) => swapKeys.has(c.key));
 }
 
-// Langkah 1: pilih chain (hanya bila token ada di >1 chain didukung).
+// Step 1: pick a chain (only when the token exists on more than one supported chain).
 function buyChainStep(ctx: any, flow: TSwapFlow, keys: string[], edit: boolean) {
   flow.chainOptions = keys;
   const rows = keys.map((k) => [Markup.button.callback(CHAINS[k]!.label, `buychain:${k}`)]);
@@ -2966,12 +2967,13 @@ function buyChainStep(ctx: any, flow: TSwapFlow, keys: string[], edit: boolean) 
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
-// Langkah 2: Detail + Safety. Screening di-cache di flow → tombol Kembali tak re-scan.
+// Step 2: Detail plus Safety. Screening is cached in the flow, so Back does not re-scan.
 async function buySafetyStep(ctx: any, flow: TSwapFlow, prog: { message_id: number } | null, edit: boolean) {
   const cc = CHAINS[flow.chainKey]!;
   if (flow.tokenDec === undefined) {
-    // symbol + decimals WAJIB (dipakai est-out & eksekusi). Menebak 18 bisa salah
-    // 10^9 untuk token 9-dec — dan angka itu dasar keputusan beli. Gagal = batal.
+    // symbol and decimals are MANDATORY (used by the estimate and by execution). Guessing
+    // 18 can be wrong by 10^9 for a 9-decimal token — and that number underpins the buy
+    // decision. A failure aborts.
     try {
       const t = new ethers.Contract(flow.token!, ['function symbol() view returns (string)', 'function decimals() view returns (uint8)'], cc.provider);
       const [sym, dec] = await Promise.all([t.symbol().catch(() => flow.tokenSym ?? '?'), t.decimals()]);
@@ -3011,7 +3013,7 @@ async function buySafetyStep(ctx: any, flow: TSwapFlow, prog: { message_id: numb
 // Langkah 3: pilih aset bayar (ETH/USDG). Stable → auto USDT, langsung ke size.
 function buyBaseStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   const cc = CHAINS[flow.chainKey]!;
-  // Membeli USDT dengan USDT bukan pilihan — buang dari daftar aset bayar.
+  // Buying USDT with USDT is not a choice, so drop it from the paying-asset list.
   const bases = basesFor(cc).filter((b) => b.address.toLowerCase() !== (flow.token ?? '').toLowerCase());
   if (bases.length <= 1) {
     flow.base = bases[0];
@@ -3029,11 +3031,14 @@ function buyBaseStep(ctx: any, flow: TSwapFlow, edit: boolean) {
 
 // Langkah 4: pilih size (preset /size aset terpilih + ketik nominal). Preview back → size.
 /**
- * Saldo base yang BENAR-BENAR bisa dibelanjakan di /buy.
+/**
+ * The base balance that can ACTUALLY be spent in /buy.
  *
- * Base wrappable dibiayai native, dan native juga yang membayar gas — 100% dari
- * saldo mentah berarti wrap sukses lalu swap gagal "insufficient funds for gas".
- * Cadangan gas dipotong lebih dulu, sama seperti tombol persen di wizard /add.
+ * A wrappable base is funded from native, and native also pays the gas — so 100% of the
+ * raw balance would leave nothing for the transaction itself.
+ * The gas reserve is deducted first, exactly as it is for the percentage buttons in the
+ * /add wizard.
+ */
  */
 async function buyUsableWei(flow: TSwapFlow): Promise<bigint> {
   const cc = CHAINS[flow.chainKey]!;
@@ -3053,9 +3058,9 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   let balLine = '';
   try {
     if (base.wrappable) {
-      // Yang membiayai = NATIVE chain itu (bot mem-wrap sendiri). Simbolnya WAJIB
-      // ikut chain: menulis 'ETH' saat berada di BSC menyebut aset yang tak pernah
-      // dipegang, dan angkanya jadi terbaca sebagai saldo chain yang salah.
+      // What funds it is THAT chain's NATIVE asset (the bot wraps it itself). The symbol
+      // MUST follow the chain: writing 'ETH' while on BSC names an asset that is never
+      // held, and makes the figure read as the wrong chain's balance.
       const b = await cc.provider.getBalance(cc.wallet.address);
       balLine = msg.note(`balance: ${Number(ethers.formatEther(b)).toFixed(5)} ${cc.nativeSymbol}`);
     } else {
@@ -3067,8 +3072,8 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
     /* saldo opsional */
   }
   // Nominal boleh diketik di chat (flow.awaitingAmount) ATAU dipilih sebagai
-  // persentase saldo — sejajar dengan /sell dan wizard /add, yang sudah punya
-  // tombol persen. "Custom %" untuk angka di luar preset.
+  // Percentages of the balance, in line with /sell and the /add wizard, which already have
+  // percentage buttons. "Custom %" covers anything outside the presets.
   const rows: any[] = [];
   rows.push(...pctPresets.chunkButtons(pctPresets.get('buy').map((p) => Markup.button.callback(`${p}%`, `buypct:${p}`))));
   const multiBase = basesFor(cc).length > 1;
@@ -3079,12 +3084,12 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
-// Mulai alur beli dari CA: deteksi chain → (pilih chain bila banyak) → safety.
-/** Posisi LP aktif (v3 + v4) untuk sebuah CA di chain tertentu. */
+// Start the buy flow from a CA: detect the chain, pick one if there are several, then safety.
+/** Live LP positions (v3 + v4) for a CA on a given chain. */
 async function lpForToken(ca: string, cc: ChainCtx): Promise<{ v3: store.PosRecord[]; v4: string[] }> {
   const low = ca.toLowerCase();
   const v3 = store.active().filter((r) => (r.chain ?? 'robinhood') === cc.key && r.ca?.toLowerCase() === low);
-  // v4store menyimpan currency0/currency1, BUKAN ca — cocokkan ke dua-duanya.
+  // v4store keeps currency0/currency1, NOT the ca, so match against both.
   const v4 = v4store
     .allV4()
     .filter(
@@ -3097,7 +3102,7 @@ async function lpForToken(ca: string, cc: ChainCtx): Promise<{ v3: store.PosReco
 
 /**
  * Render HUB TOKEN. Satu screening + satu baca saldo melayani 4 aksi.
- * Tombol keluar (Tutup LP / Jual) hanya dirender bila memang ada yang bisa dikeluarkan —
+/** The exit buttons (Close LP / Sell) are only rendered when there is something to exit — */
  * tombol mati = tap sia-sia + afordans palsu.
  */
 async function renderTokenHub(
@@ -3137,8 +3142,8 @@ async function renderTokenHub(
     sc && sc.liquidityUsd != null
       ? `liquidity ${msg.usdCompact(sc.liquidityUsd)}${sc.pairAgeHours != null ? ` · pool ${Math.round(sc.pairAgeHours)}h old` : ''}`
       : undefined;
-  // Kartu yang TAMPIL = kartu DETAIL TOKEN hasil screening (bukan lagi msgTokenHub):
-  // satu kartu, bukan dua yang isinya tumpang-tindih.
+  // The card SHOWN is the screening TOKEN DETAIL card (no longer msgTokenHub): one card,
+  // rather than two with overlapping contents.
   const text = sc
     ? formatScreen(sc, {
         ca,
@@ -3148,9 +3153,9 @@ async function renderTokenHub(
       })
     : msg.msgScreeningFailed();
 
-  // Tombol KELUAR muncul hanya bila ada yang bisa dikeluarkan: Close LP saat ada
-  // posisi, Sell Token saat saldo > 0. Tak ada = cuma jalur masuk yang tampil.
-  // Buy/Sell Token juga butuh chain dengan rute swap bot.
+  // EXIT buttons appear only when there is something to exit: Close LP when a position
+  // exists, Sell Token when the balance is above zero. With neither, only the entry paths
+  // show. Buy/Sell Token also require a chain with a swap route.
   const swappable = swapTokenChains().some((c) => c.key === cc.key);
   const hasLp = v3.length + v4.length > 0;
 
@@ -3166,8 +3171,8 @@ async function renderTokenHub(
   const kb = Markup.inlineKeyboard([
     rowLp,
     ...(rowTok.length ? [rowTok] : []),
-    // Kartu ini statis: harganya beku di detik kamu menempel CA. Untuk token yang
-    // baru lahir, satu menit sudah jauh — jadi sediakan cara memperbaruinya di tempat.
+    // This card is static: its prices are frozen at the second you pasted the CA. For a
+    // newly born token a minute is already a long time, so offer a way to refresh in place.
     [Markup.button.callback('🔄 Refresh', `ca:refresh:${ca}`), Markup.button.callback('❌ Cancel', 'cancel')],
   ]);
 
@@ -3187,16 +3192,19 @@ async function renderTokenHub(
 }
 
 /**
- * Router 4 tombol hub → alur yang SUDAH ADA. Tak ada jalur uang baru:
- * screening dioper (tak di-scan ulang), semua konfirmasi & guard tetap milik alur asal.
+/**
+ * A 4-button router from the hub into flows that ALREADY EXIST. No new money path:
+ * screening is handed over (never re-scanned), and every confirmation and guard still
+ * belongs to the original flow.
+ */
  */
 bot.action(/^ca:refresh:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const ca = ethers.getAddress(ctx.match[1]);
   const h = hubs.get(ctx.from!.id);
   if (!h || h.ca.toLowerCase() !== ca.toLowerCase()) return ctx.answerCbQuery('Expired — paste the CA again.');
   await ctx.answerCbQuery('Refreshing…');
-  // Cache 60 detik dibuang dulu; kalau tidak, tombol ini cuma menggambar ulang
-  // angka yang sama dan terasa seperti tak bekerja.
+  // The 60-second cache is dropped first; otherwise this button just redraws the same
+  // numbers and feels like it did nothing.
   bustScreenCache(ca);
   const prog = ctx.callbackQuery?.message
     ? { message_id: (ctx.callbackQuery.message as { message_id: number }).message_id }
@@ -3215,12 +3223,12 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
     : null;
 
   if (what === 'add') {
-    // Wizard /add penuh; screening dari hub dioper → kartu SCREEN tak dikirim dua kali.
+    // The full /add wizard; screening is passed from the hub so the SCREEN card is not sent twice.
     return continueAddlp(ctx, ca, h.chainKey, prog, { bahaya: h.bahaya, failed: h.failed, reasons: h.reasons });
   }
 
-  // Guard tetap ada walau tombolnya kondisional: hub disimpan di memori, jadi tombol
-  // dari kartu lama masih bisa ditekan setelah keadaan berubah.
+  // The guard stays even though the button is conditional: the hub is kept in memory, so a
+  // button on an older card can still be tapped after the state has changed.
   if ((what === 'buy' || what === 'sell') && !swapTokenChains().some((c) => c.key === h.chainKey)) {
     return ctx.editMessageText(
       msg.msgError(what === 'buy' ? 'buy' : 'sell', `${cc.label} has no bot swap route — only Add LP / Close LP are available there.`),
@@ -3229,7 +3237,7 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   }
 
   if (what === 'buy') {
-    // Kartu SAFETY dilewati (verdikt sudah tampil di hub) → langsung pilih base/nominal.
+    // The SAFETY card is skipped (the verdict is already on the hub), going straight to base and amount.
     tswapFlows.set(ctx.from!.id, {
       chainKey: h.chainKey,
       buy: true,
@@ -3299,7 +3307,7 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   }
 });
 
-/** Pintu masuk hub dari CA telanjang: deteksi chain dulu (pemilih bila >1). */
+/** Hub entry from a bare CA: detect the chain first (with a picker when there is more than one). */
 async function startTokenHub(ctx: any, ca: string) {
   resetFlows(ctx.from.id);
   const prog = await ctx.reply(msg.msgProgress('detecting chain…'), html);
@@ -3329,7 +3337,7 @@ bot.action(/^hubchn:(\w+):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   await renderTokenHub(ctx, ctx.match[2], ctx.match[1], prog);
 });
 
-/** Kembali ke hub dari alur mana pun — render ulang dari memori (0 RPC). */
+/** Back to the hub from any flow — re-rendered from memory (zero RPC). */
 bot.action('hub:back', async (ctx) => {
   const h = hubs.get(ctx.from!.id);
   if (!h) return ctx.answerCbQuery('Expired — paste the CA again.');
@@ -3423,7 +3431,7 @@ bot.action('buyback:base', async (ctx) => {
   await ctx.answerCbQuery();
   await buyBaseStep(ctx, flow, true);
 });
-/** Persen saldo → nominal beli. Sumbernya saldo yang BISA DIPAKAI (gas sudah disisihkan). */
+/** A percentage of the balance to a buy amount. The source is the USABLE balance (gas already set aside). */
 bot.action(/^buypct:(\d+)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
   if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired — start again with /buy.');
@@ -3457,7 +3465,7 @@ bot.action('buyback:size', async (ctx) => {
 });
 
 // Prompt ketik alamat token — Kembali ke base (chain multi-base) atau ke chain (base tunggal).
-// ── /sell = alur holdings-dulu ───────────────────────────────────────────────
+// ── /sell = the holdings-first flow ──────────────────────────────────────────
 // /sell → daftar token dipegang → pilih token → %/jumlah → Preview → Konfirmasi →
 //   Hasil. Base TERIMA dipilih OTOMATIS (nilai USD terbaik: ETH vs USDG/USDT).
 type SellHolding = {
@@ -3482,13 +3490,13 @@ async function bsFetch(url: string): Promise<any | null> {
   }
 }
 
-// Token ERC20 (bukan base) dgn saldo > 0 di wallet. Blockscout dulu; fallback on-chain.
+// ERC20 tokens (not bases) with a balance above zero. Blockscout first, on-chain fallback.
 async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
-  // Hanya wrapped-native yang dilewati (itu urusan /unwrap, bukan swap).
-  // Stablecoin base (USDT/USDG) SENGAJA ikut: mengubahnya kembali ke native adalah
-  // hal yang wajar diminta, dan tanpa ini USDT di BSC tak punya jalan keluar.
+  // Only wrapped-native is skipped (that is /unwrap's job, not a swap).
+  // The stablecoin bases (USDT/USDG) are DELIBERATELY included: turning them back into
+  // native is a reasonable thing to ask, and without it USDT on BSC has no way out.
   const skip = new Set<string>([cc.wethAddress.toLowerCase()]);
-  // Token yang PERNAH kita sentuh (beli/LP) — dianggap sah walau tanpa harga pasar.
+  // Tokens we have TOUCHED before (bought or LP'd) count as legitimate even without a market price.
   const known = new Set<string>();
   for (const t of journal.recentTokens(80)) if (t.ca) known.add(t.ca.toLowerCase());
   for (const p of store.active()) if (p.ca) known.add(p.ca.toLowerCase());
@@ -3505,9 +3513,9 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
       try { balWei = BigInt(it.value ?? '0'); } catch { continue; }
       if (balWei <= 0n) continue;
       const rate = Number(tk.exchange_rate ?? 0);
-      // Anti-spam airdrop: hanya token BERNILAI (punya exchange_rate) ATAU yang pernah kita trade.
+      // Airdrop spam guard: only tokens with VALUE (an exchange_rate) or ones we have traded.
       if (!(rate > 0) && !known.has(cal)) continue;
-      // Blockscout kadang tak mengisi decimals; menebak 18 membuat jumlah jual salah.
+      // Blockscout sometimes leaves decimals empty, and guessing 18 gets the sell amount wrong.
       let dec: number;
       if (tk.decimals != null) dec = Number(tk.decimals);
       else {
@@ -3525,7 +3533,7 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
     out.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
     return out.slice(0, SELL_HOLDINGS_CAP);
   }
-  // Fallback (chain tanpa Blockscout, mis. Stable): kandidat dari jurnal + posisi aktif.
+  // Fallback for a chain without Blockscout (Stable, say): candidates from the journal plus live positions.
   const cand = new Map<string, string>();
   for (const t of journal.recentTokens(40)) if (t.ca) cand.set(t.ca.toLowerCase(), t.symbol);
   for (const p of store.active()) if (p.ca) cand.set(p.ca.toLowerCase(), p.symbol);
@@ -3546,13 +3554,16 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
   return out.slice(0, SELL_HOLDINGS_CAP);
 }
 
-/** Sisa native yang WAJIB ditinggal untuk gas — menjual habis = tx-nya sendiri gagal. */
+/** Native that MUST be left behind for gas — selling every last bit fails the tx itself. */
 const NATIVE_SELL_RESERVE = ethers.parseEther('0.0005');
 
 /**
- * Saldo NATIVE (ETH/BNB) sebagai kandidat jual → stablecoin. Dicatat dengan alamat
- * wrapped-native: jalur eksekusi mem-wrap seperlunya sebelum swap, dan sisi
- * penerima otomatis jatuh ke stablecoin (base yang sama dgn token dibuang).
+/**
+ * The NATIVE balance (ETH/BNB) as a sell candidate into a stablecoin. It is recorded
+ * under the wrapped-native address: the execution path wraps as needed before swapping,
+ * and the receiving side falls to the stablecoin automatically (the same base the sold
+ * token is dropped for).
+ */
  */
 async function addNativeHolding(cc: ChainCtx, out: SellHolding[]): Promise<void> {
   if (!cc.hasWethBase) return;
@@ -3572,13 +3583,13 @@ async function addNativeHolding(cc: ChainCtx, out: SellHolding[]): Promise<void>
       usd: px !== null ? amountNum * px : null,
     });
   } catch {
-    /* saldo native tak terbaca → lewati */
+    /* an unreadable native balance is skipped */
   }
 }
 
-/** Saldo stablecoin base chain ini (USDT/USDG) sebagai kandidat jual. */
+/** This chain's stablecoin base balance (USDT/USDG) as a sell candidate. */
 async function addStableBases(cc: ChainCtx, out: SellHolding[]): Promise<void> {
-  // Butuh lawan native: tanpa itu tak ada tujuan swap yang masuk akal.
+  // It needs a native counterpart: without one there is no sensible swap destination.
   if (!cc.hasWethBase) return;
   for (const b of basesFor(cc)) {
     if (!isStableBase(b.kind)) continue;
@@ -3590,7 +3601,7 @@ async function addStableBases(cc: ChainCtx, out: SellHolding[]): Promise<void> {
       const amountNum = Number(ethers.formatUnits(balWei, b.decimals));
       out.push({ ca: ethers.getAddress(b.address), symbol: b.symbol, dec: b.decimals, balWei, amountNum, usd: amountNum });
     } catch {
-      /* lewati bila tak terbaca */
+      /* skip when unreadable */
     }
   }
 }
