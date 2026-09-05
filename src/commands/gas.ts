@@ -75,8 +75,19 @@ const gwei = (wei: bigint): string => {
   return g >= 1 ? g.toFixed(2) : g.toPrecision(2);
 };
 
-const usd = (v: number): string =>
-  v >= 1 ? `$${v.toFixed(2)}` : v >= 0.01 ? `$${v.toFixed(3)}` : `$${v.toFixed(5)}`;
+/**
+ * Ongkos dalam dolar, selalu dengan angka berarti.
+ *
+ * Pembulatan tetap (5 desimal) mencetak "$0" untuk operasi termurah — dan "$0"
+ * itu bohong: gasnya tetap dibayar, cuma terlalu kecil untuk formatnya. Di bawah
+ * satu sen dipakai 3 angka penting, jadi $0,0000045 tetap terbaca apa adanya.
+ */
+const usd = (v: number): string => {
+  if (v >= 1) return `$${v.toFixed(2)}`;
+  if (v >= 0.01) return `$${v.toFixed(3)}`;
+  if (v === 0) return '$0';
+  return `$${Number(v.toPrecision(3))}`;
+};
 
 const idr = (v: number): string =>
   `Rp${Math.round(v).toLocaleString('id-ID')}`;
@@ -105,11 +116,11 @@ function section(op: string, chains: Chain[], rate: number | null): string[] {
   const noUsd = chains.filter((c) => c.rows.get(op)!.usd === null);
   const lines = withUsd.map((c, i) => {
     const r = c.rows.get(op)!;
-    return `${i + 1}. ${esc(c.label)} · ${bold(usd(r.usd!))}${rate ? ` · ${bold(idr(r.usd! * rate))}` : ''}`;
+    return `${i + 1}. ${esc(c.label)} = ${bold(usd(r.usd!))} / ${bold(rate ? idr(r.usd! * rate) : '—')}`;
   });
   for (const c of noUsd) {
     const r = c.rows.get(op)!;
-    lines.push(`— ${esc(c.label)} · ${bold(`${r.native.toFixed(6)} ${r.sym}`)} ${italic('(no USD price)')}`);
+    lines.push(`— ${esc(c.label)} = ${bold(`${r.native.toFixed(6)} ${r.sym}`)} ${italic('(no USD price)')}`);
   }
   return [bold(op.toUpperCase()), ...lines];
 }
@@ -121,33 +132,23 @@ export async function gasCard(): Promise<string> {
   const chains = all.filter((x): x is readonly [string, Chain] => x[1] !== null).map((x) => x[1]);
   const down = all.filter((x) => x[1] === null).map((x) => x[0]);
 
-  if (!chains.length) return [bold('⛽ GAS NOW'), '', italic('No chain responded — every RPC is down. Try again shortly.')].join('\n');
-
-  // SEND & APPROVE digabung satu baris per chain: dua operasi termurah, dan
-  // memberi masing-masing seksi peringkat sendiri cuma menggandakan daftar
-  // yang urutannya selalu sama dengan seksi di atasnya.
-  const minor = chains
-    .slice()
-    .sort((a, b) => (a.rows.get('Send')!.usd ?? Infinity) - (b.rows.get('Send')!.usd ?? Infinity))
-    .map((c) => {
-      const cell = (op: string) => {
-        const r = c.rows.get(op)!;
-        if (r.usd === null) return `${r.native.toFixed(6)} ${r.sym}`;
-        return rate ? idr(r.usd * rate) : usd(r.usd);
-      };
-      return `${esc(c.label)} · ${bold(cell('Send'))} / ${bold(cell('Approve'))}`;
-    });
+  if (!chains.length)
+    return [bold('⛽️ GAS FEE'), '', italic('No chain responded — every RPC is down. Try again shortly.')].join('\n');
 
   return [
-    bold('⛽ GAS NOW'),
-    rate ? italic(`${idr(rate)}/$ · read ${clock()}`) : italic(`USD only — IDR rate unavailable · read ${clock()}`),
+    bold('⛽️ GAS FEE'),
     '',
     ...OPS.flatMap(([op]) => [...section(op, chains, rate), '']),
-    bold('SEND & APPROVE'),
-    ...minor,
+    // SEND & APPROVE dipatok pada APPROVE, angka yang lebih MAHAL dari keduanya.
+    // Memakai Send (21k) di seksi bernama "Send & Approve" akan memasang angka
+    // yang meleset 55% ke bawah untuk separuh operasi yang dijanjikannya.
+    ...section('Approve', chains, rate).map((l, i) => (i === 0 ? bold('SEND & APPROVE') : l)),
     '',
     ...(down.length ? [italic(`Unreachable: ${down.join(', ')}`), ''] : []),
-    italic('Gas units = median of this wallet’s real transactions (14 d). Prices read live from each chain’s own RPC.'),
+    italic(
+      `${rate ? `${idr(rate)}/$ · ` : 'IDR rate unavailable · '}${clock()}` +
+        ` · approve shown; send is ~55% less`,
+    ),
   ].join('\n');
 }
 

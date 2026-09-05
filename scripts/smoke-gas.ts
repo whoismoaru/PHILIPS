@@ -12,17 +12,20 @@ import { CHAINS } from '../src/chains.js';
 const card = await gasCard();
 console.log(card.replace(/<[^>]+>/g, ''));
 
-assert.ok(card.includes('GAS NOW'), 'judul hilang');
+assert.ok(card.includes('GAS FEE'), 'judul hilang');
 for (const cc of Object.values(CHAINS)) assert.ok(card.includes(cc.label), `chain ${cc.label} tak muncul`);
 assert.ok(/Rp[\d.]{3,}/.test(card), 'tak ada nominal Rupiah — kurs gagal & tak ada kabarnya');
 assert.ok(!/\$0\.00\b/.test(card), 'ada ongkos $0.00 — RPC/harga gagal tapi kartu mengaku tahu');
-for (const op of ['SWAP', 'OPEN LP', 'CLOSE LP']) assert.ok(card.includes(`<b>${op}</b>`), `seksi ${op} hilang`);
-assert.ok(/1\. \w[^\n]*<b>\$/.test(card), 'peringkat #1 tak berharga USD');
+for (const op of ['SWAP', 'OPEN LP', 'CLOSE LP', 'SEND &amp; APPROVE'])
+  assert.ok(card.includes(`<b>${op}</b>`), `seksi ${op} hilang`);
+assert.ok(/1\. \w[^\n]*= <b>\$/.test(card), 'peringkat #1 tak berharga USD');
+// "$0" untuk ongkos yang nyata dibayar itu bohong — seksi termurah paling rawan.
+assert.ok(!/= <b>\$0<\/b>/.test(card), 'ada ongkos yang dicetak "$0" padahal gasnya dibayar');
 
 // Inti desain ini: chain diurut dari TERMURAH. Urutan yang salah tetap terlihat
 // rapi, jadi hanya tes yang bisa menangkapnya.
-const plain = card.replace(/<[^>]+>/g, '');
-for (const op of ['SWAP', 'OPEN LP', 'CLOSE LP']) {
+const plain = card.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&');
+for (const op of ['SWAP', 'OPEN LP', 'CLOSE LP', 'SEND & APPROVE']) {
   const blok = plain.split(op + '\n')[1].split('\n\n')[0].split('\n');
   const angka = blok.map((l) => Number((l.match(/\$([\d.]+)/) ?? [])[1])).filter((n) => isFinite(n));
   assert.ok(angka.length >= 2, `seksi ${op} kosong`);
@@ -34,7 +37,7 @@ for (const op of ['SWAP', 'OPEN LP', 'CLOSE LP']) {
 // menolak edit-nya dan tombolnya terlihat mati.
 const kb = gasKeyboard();
 assert.ok(JSON.stringify(kb).includes('gas:refresh'), 'tombol Refresh hilang');
-assert.ok(/read \d\d:\d\d:\d\d/.test(card), 'tak ada jam baca — Refresh akan kena "not modified"');
+assert.ok(/\d\d:\d\d:\d\d UTC/.test(card), 'tak ada jam baca — Refresh akan kena "not modified"');
 await new Promise((r) => setTimeout(r, 1100));
 assert.notEqual(await gasCard(), card, 'kartu identik antar-baca — Refresh takkan pernah tampak jalan');
 
