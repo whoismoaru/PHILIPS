@@ -25,6 +25,16 @@ export type JournalEntry = {
   wallet?: string; // alamat pemilik (huruf kecil). Kosong = entri sebelum field ini ada.
   /** Harga USD satuan entri ini SAAT ditutup. Absen = entri lama / kurs tak terbaca. */
   usdRate?: number;
+  /**
+   * Penanda LADDER: semua leg dari satu posisi logis memakai id yang sama.
+   *
+   * Tanpa ini jurnal tak punya cara tahu bahwa 8 baris itu satu close. Skornya
+   * lalu menghitung satu ladder sebagai 8 trade, dan — jauh lebih merusak —
+   * membagi PnL-nya jadi ~1/8 sehingga tiap leg jatuh di bawah ambang debu dan
+   * lenyap dari W/L. Uangnya tetap benar; yang bohong cuma jumlah & winrate.
+   * Absen = entri tunggal, atau entri lama (dikelompokkan mundur, lihat `groupKey`).
+   */
+  groupId?: string;
 };
 
 const FILE = join(process.cwd(), 'data', 'journal.jsonl');
@@ -124,7 +134,7 @@ export function recordClose(
     openedAt: number;
     initialWethWei: string;
   },
-  opts: { resultEthWei?: bigint; reason: JournalEntry['reason'] },
+  opts: { resultEthWei?: bigint; reason: JournalEntry['reason']; groupId?: string },
 ): void {
   // Desimal WAJIB dari konfigurasi chain: USDG Robinhood 6, USDT BSC 18. Menulis
   // "stable = 6" di sini pernah membuat 48 USDT tercatat sebagai 48.000.000.000.000.
@@ -147,6 +157,7 @@ export function recordClose(
     pnlEth,
     pnlPct,
     reason: opts.reason,
+    groupId: opts.groupId,
   });
 }
 
@@ -232,8 +243,14 @@ export type Book = {
 };
 
 export type PeriodStats = {
-  count: number; // entri jurnal dalam periode
-  known: number; // trade BERKEPUTUSAN (menang/kalah); impas tak dihitung
+  count: number; // entri jurnal dalam periode (satu ladder = beberapa entri)
+  /**
+   * POSISI yang berhasil dinilai — satu ladder 8-leg dihitung SEKALI. Inilah
+   * penyebut yang benar untuk skor: `positions === known + flats`.
+   */
+  positions: number;
+  legs: number; // entri yang masuk penilaian (sebelum digabung jadi posisi)
+  known: number; // POSISI berkeputusan (menang/kalah); impas tak dihitung
   untracked: number; // gone/burned — hasil tak diketahui
   excluded: number; // placeholder backfill lama (result 0)
   recovered: number; // entri pemulihan sisa token (masuk net, bukan trade)
@@ -256,23 +273,38 @@ export type PeriodStats = {
  */
 export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => number | null): PeriodStats {
   const me = currentWallet();
+  // Gagal TERTUTUP, sama seperti readMine. Tanpa alamat pemilik, filter di bawah
+  // dulu dilewati diam-diam dan seluruh jurnal ikut terhitung — 269 entri wallet
+  // lama tampil sebagai PnL-mu, justru di saat kita paling tak tahu siapa
+  // pemiliknya. /history kosong sementara /pnl menggelembung.
+  if (!me)
+    return { count: 0, positions: 0, legs: 0, known: 0, untracked: 0, excluded: 0, recovered: 0, unconverted: 0, estimated: 0, books: [] };
   const all = read(Number.MAX_SAFE_INTEGER).filter(
     (e) =>
       (e.closedAt ?? 0) >= sinceMs &&
       (!chain || (e.chain ?? 'robinhood') === chain) &&
       // Hanya trade wallet yang SEDANG dipakai. Entri tanpa cap pemilik dianggap
       // milik wallet lain — mencampurnya membuat PnL berbohong setelah ganti wallet.
-      (!me || e.wallet === me),
+      e.wallet === me,
   );
   const byUnit = new Map<string, Book>();
   let known = 0, untracked = 0, excluded = 0, recovered = 0, unconverted = 0, estimated = 0;
+  const bookOf = (unit: string): Book => {
+    let b = byUnit.get(unit);
+    if (!b) {
+      b = { unit, known: 0, wins: 0, losses: 0, flats: 0, net: 0, grossWin: 0, grossLoss: 0 };
+      byUnit.set(unit, b);
+    }
+    return b;
+  };
+  // Langkah 1 — nilai tiap entri. NET dijumlah di sini, per-entri: uangnya tak
+  // peduli pengelompokan, dan menjumlahkannya dua kali lewat grup hanya menambah
+  // jalan untuk salah.
+  type Skor = { e: JournalEntry; unit: string; nilai: number };
+  const skor: Skor[] = [];
   for (const e of all) {
     if (e.resultEthWei === undefined) { untracked++; continue; }
     if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; }
-    // Mode USD: SEMUA entri masuk satu buku, tiap nilai dikalikan kurs satuannya.
-    // Kursnya kurs SEKARANG, bukan kurs saat trade ditutup — jadi PnL ETH lama ikut
-    // bergerak saat ETH bergerak. Itu memang yang diminta ("semua dalam $"), tapi
-    // artinya angka ini "berapa nilainya hari ini", bukan "berapa yang kudapat saat itu".
     const native = unitOf(e.chain, e.baseKind);
     // Kurs SAAT ENTRI DITUTUP kalau tercap; kurs sekarang hanya sebagai cadangan
     // untuk entri lama (sebelum pencapan ada). Yang memakai cadangan dihitung —
@@ -289,36 +321,99 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
     }
     const unit = usdOf ? 'USD' : native;
     const nilai = e.pnlEth * (rate ?? 1);
-    let b = byUnit.get(unit);
-    if (!b) {
-      b = { unit, known: 0, wins: 0, losses: 0, flats: 0, net: 0, grossWin: 0, grossLoss: 0 };
-      byUnit.set(unit, b);
-    }
+    bookOf(unit).net += nilai;
     // 'recovery' = sisa token yang baru tersapu setelah posisinya ditutup. Uangnya
     // NYATA (masuk net & profit), tapi itu bukan trade tersendiri — menghitungnya
     // sebagai trade akan menggelembungkan jumlah trade sekaligus memalsukan winrate.
     if (e.reason === 'recovery') {
-      b.net += nilai;
-      b.grossWin += nilai;
+      bookOf(unit).grossWin += nilai;
       recovered++;
       continue;
     }
-    b.net += nilai;
+    skor.push({ e, unit, nilai });
+  }
+  // Langkah 2 — SKOR per POSISI, bukan per leg. Satu ladder 8-leg adalah satu
+  // trade; menilainya per leg memecah PnL-nya jadi ~1/8 sehingga tiap potongan
+  // jatuh di bawah ambang debu dan hilang dari W/L. Pada jurnal 705 entri, 522 di
+  // antaranya leg ladder: skor per-leg membaca 705 trade / 84,5% WR / 454 impas,
+  // padahal yang sebenarnya terjadi 230 trade / 90,5% WR / 72 impas.
+  const grup2 = groupOf(skor);
+  for (const grup of grup2) {
+    const unit = grup[0].unit;
+    const b = bookOf(unit);
+    const nilai = grup.reduce((a, g) => a + g.nilai, 0);
     // Trade yang hasilnya bukan untung maupun rugi (di bawah ~$0,1) TIDAK dihitung
     // sebagai menang MAUPUN kalah: ia cuma impas. Dulu `pnlEth >= 0` melemparnya ke
-    // kolom menang dan menggelembungkan winrate (BSC: 10 entri impas menaikkan
-    // 91,2% → 93,2%). Uangnya tetap masuk `net` — yang tak dihitung hanya SKOR-nya.
+    // kolom menang dan menggelembungkan winrate. Uangnya sudah masuk `net` di atas —
+    // yang tak dihitung di sini hanya SKOR-nya.
     const eps = FLAT_EPS[unit] ?? FLAT_EPS_UNKNOWN;
     if (nilai > eps) { b.wins++; b.grossWin += nilai; }
     else if (nilai < -eps) { b.losses++; b.grossLoss += nilai; }
     else { b.flats++; continue; }
     known++;
     b.known++;
-    if (!b.best || nilai > b.best.pnl) b.best = { symbol: e.symbol, pnl: nilai };
-    if (!b.worst || nilai < b.worst.pnl) b.worst = { symbol: e.symbol, pnl: nilai };
+    const symbol = grup[0].e.symbol;
+    if (!b.best || nilai > b.best.pnl) b.best = { symbol, pnl: nilai };
+    if (!b.worst || nilai < b.worst.pnl) b.worst = { symbol, pnl: nilai };
   }
   const books = [...byUnit.values()].sort((a, b) => b.known - a.known);
-  return { count: all.length, known, untracked, excluded, recovered, unconverted, estimated, books };
+  // `count` tetap JUMLAH ENTRI, bukan jumlah posisi: itulah yang direkonsiliasi
+  // caption ("N closed → M scored") terhadap panjang jurnal.
+  return {
+    count: all.length,
+    positions: grup2.length,
+    legs: skor.length,
+    known,
+    untracked,
+    excluded,
+    recovered,
+    unconverted,
+    estimated,
+    books,
+  };
+}
+
+/**
+ * Jarak maksimum antar leg satu ladder yang ditutup bersama. Legnya dijurnalkan
+ * dalam satu loop, jadi selisihnya milidetik; 30 detik memberi ruang lebar untuk
+ * batch tx yang lambat tanpa pernah menyatukan dua close yang berbeda.
+ */
+const LADDER_GAP_MS = 30_000;
+
+/**
+ * Kelompokkan leg jadi posisi.
+ *
+ * `groupId` dipakai kalau ada. Entri LAMA tak punya — ditulis sebelum field ini
+ * ada — jadi dikelompokkan mundur lewat (chain, ca, waktu tutup berdekatan).
+ * Ini bukan tebakan longgar: pada jurnal sungguhan hasilnya 230 kelompok, dan
+ * angkanya tak bergeser sama sekali saat ambangnya diubah 5s→60s.
+ *
+ * Dikelompokkan dengan MERAPATKAN entri berurutan, bukan membulatkan waktu ke
+ * ember: pembulatan memisahkan dua leg yang cuma terpaut 1 ms bila keduanya
+ * kebetulan jatuh di sisi berlawanan batas ember.
+ */
+function groupOf<T extends { e: JournalEntry }>(items: T[]): T[][] {
+  const kunci = (x: T) => `${x.e.chain ?? 'robinhood'}|${(x.e.ca ?? x.e.symbol).toLowerCase()}`;
+  const urut = [...items].sort(
+    (a, b) => kunci(a).localeCompare(kunci(b)) || a.e.closedAt - b.e.closedAt,
+  );
+  const out: T[][] = [];
+  let cur: T[] = [];
+  for (const x of urut) {
+    const prev = cur[cur.length - 1];
+    const sama =
+      prev !== undefined &&
+      (prev.e.groupId !== undefined || x.e.groupId !== undefined
+        ? prev.e.groupId === x.e.groupId
+        : kunci(prev) === kunci(x) && x.e.closedAt - prev.e.closedAt <= LADDER_GAP_MS);
+    if (sama) cur.push(x);
+    else {
+      if (cur.length) out.push(cur);
+      cur = [x];
+    }
+  }
+  if (cur.length) out.push(cur);
+  return out;
 }
 
 /**

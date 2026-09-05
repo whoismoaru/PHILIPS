@@ -675,14 +675,15 @@ export function msgPnlPicker(chains: Array<{ label: string; trades: number; scor
           // total saja di sini membuat selisihnya (impas / hasil tak terbaca)
           // tampak seperti trade yang hilang di antara dua layar.
           c.scored === undefined || c.scored === c.trades
-            ? `${c.trades} closed`
-            : `${c.trades} closed · ${c.scored} scored`,
+            ? `${c.trades} positions`
+            : `${c.trades} positions · ${c.scored} scored`,
         ]),
         12,
       ),
       '',
     );
   }
+  out.push(note('One ladder counts as one position, however many legs it was closed in.'));
   out.push(note('Scored = wins/losses only; break-even trades under ~$0.1 are not scored.'));
   out.push(note('All figures in USD, locked at each trade\'s close time.'));
   return out.join('\n');

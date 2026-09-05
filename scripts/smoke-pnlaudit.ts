@@ -91,10 +91,14 @@ const kurs = new Map<string, number | null>([['USDG', 1], ['USDT', 1], ['ETH', 2
 const usd = journal.statsFor(0, undefined, (u) => kurs.get(u) ?? null);
 assert.deepEqual(usd.books.map((b) => b.unit), ['USD'], 'mode USD harus menghasilkan SATU buku');
 
-// Nilainya = jumlah net tiap buku asli × kursnya. Tak ada jalur hitung kedua.
-const asli = journal.statsFor(0);
-const dariAsli = asli.books.reduce((a, b) => a + b.net * (kurs.get(b.unit) ?? 0), 0);
-assert.ok(Math.abs(usd.books[0].net - dariAsli) < 1e-6, `USD ${usd.books[0].net} ≠ jumlah buku ${dariAsli}`);
+// Jalur hitung kedua, dari entri mentah. Menjumlahkan net tiap buku native lalu
+// mengalikannya dengan kurs uji TIDAK sah lagi sejak entri dicap `usdRate`: entri
+// bercap memakai kurs saat ditutup, bukan kurs uji, jadi kedua angka memang beda.
+const dariAsli = journal
+  .readMine(Number.MAX_SAFE_INTEGER)
+  .filter((e) => e.resultEthWei !== undefined && BigInt(e.resultEthWei) !== 0n)
+  .reduce((a, e) => a + e.pnlEth * (e.usdRate ?? kurs.get(journal.unitOf(e.chain, e.baseKind)) ?? 0), 0);
+assert.ok(Math.abs(usd.books[0].net - dariAsli) < 1e-6, `USD ${usd.books[0].net} ≠ jumlah entri ${dariAsli}`);
 
 // Kurs SAAT CLOSE didahulukan; kurs sekarang cuma cadangan untuk entri lama.
 const dicap = { tokenId: '1', symbol: 'X', openedAt: 0, closedAt: Date.now(), initialWethWei: '0',
@@ -117,11 +121,20 @@ assert.match(readFileSync('src/journal.ts', 'utf8'), /usdRate: e\.usdRate \?\? r
 // Kurs basi tak boleh dipakai mencap.
 assert.match(readFileSync('src/journal.ts', 'utf8'), /RATE_TTL_MS/, 'cap tanpa batas kedaluwarsa');
 
-// Kurs tak terbaca → entri DILEWATI dan dihitung, bukan dianggap nol.
+// Kurs tak terbaca → entri DILEWATI dan dihitung, bukan dianggap nol. Entri yang
+// SUDAH bercap tak butuh kurs hidup dan tetap masuk buku — itu memang gunanya cap.
 const buta = journal.statsFor(0, undefined, () => null);
-assert.equal(buta.books.length, 0, 'tanpa kurs tak boleh ada buku');
+const bercap = journal
+  .readMine(Number.MAX_SAFE_INTEGER)
+  .filter((e) => e.resultEthWei !== undefined && BigInt(e.resultEthWei) !== 0n && e.usdRate !== undefined).length;
+assert.equal(buta.books.length, bercap > 0 ? 1 : 0, 'hanya entri bercap yang boleh bertahan tanpa kurs hidup');
 assert.ok(buta.unconverted > 0, 'entri tanpa kurs wajib dihitung');
-assert.equal(buta.unconverted + buta.untracked + buta.excluded, buta.count, 'entri hilang tanpa jejak');
+assert.equal(buta.estimated, 0, 'tanpa kurs hidup tak ada yang boleh ditaksir');
+assert.equal(
+  buta.unconverted + buta.untracked + buta.excluded + bercap,
+  buta.count,
+  'entri hilang tanpa jejak',
+);
 
 // Kartu mencetak dolar, bukan satuan asli, dan mengakui yang tak terkonversi.
 const kartuUsd = msgPnl({
@@ -144,14 +157,19 @@ console.log('smoke-pnlaudit: total USD OK');
 // Pemilih chain dan kartu rekap sama-sama memakai kata "trades" untuk dua hal
 // berbeda; selisihnya (impas + hasil tak terbaca + sweep) wajib disebut, kalau
 // tidak terbaca sebagai ratusan trade yang hilang antar layar.
+// Dua tingkat, karena satu ladder = beberapa ENTRI tapi satu POSISI:
+//   entri   = leg dinilai + tak terbaca + placeholder + sweep
+//   posisi  = berskor + impas
 const st0 = journal.statsFor(0);
 const berskor = st0.books.reduce((a, b) => a + b.known, 0);
 const impas = st0.books.reduce((a, b) => a + b.flats, 0);
 assert.equal(
-  berskor + impas + st0.untracked + st0.excluded + st0.recovered,
+  st0.legs + st0.untracked + st0.excluded + st0.recovered + st0.unconverted,
   st0.count,
   'entri jurnal tak bisa direkonsiliasi — ada kategori yang tak terhitung',
 );
+assert.equal(berskor + impas, st0.positions, 'posisi tak bisa direkonsiliasi dari skor');
+assert.ok(st0.positions <= st0.legs, 'posisi tak mungkin lebih banyak dari leg-nya');
 
 const kartu = msgPnl({
   dryRun: false, chainLabel: 'All chains', periodLabel: 'All Time',
@@ -165,9 +183,9 @@ if (impas) assert.match(kartu, /break-even/, 'impas tak dijelaskan di mana pun')
 
 // Pemilih chain menyebut DUA angka bila berbeda, satu angka bila sama.
 const picker = msgPnlPicker([{ label: 'Robinhood', trades: 480, scored: 161 }, { label: 'Ink', trades: 0, scored: 0 }]);
-assert.match(picker, /480 closed · 161 scored/);
-assert.match(picker, /Ink[^\n]*0 closed/);
-assert.ok(!/0 closed · 0 scored/.test(picker), 'angka sama tak perlu ditulis dua kali');
+assert.match(picker, /480 positions · 161 scored/);
+assert.match(picker, /Ink[^\n]*0 positions/);
+assert.ok(!/0 positions · 0 scored/.test(picker), 'angka sama tak perlu ditulis dua kali');
 assert.match(picker, /Scored = wins\/losses only/, 'istilah "scored" harus dijelaskan');
 assert.match(picker, /All figures in USD/, 'pemilih harus menyebut satuannya');
 console.log('smoke-pnlaudit: rekonsiliasi OK');
