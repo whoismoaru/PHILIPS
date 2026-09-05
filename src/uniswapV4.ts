@@ -812,8 +812,7 @@ function ladderWeightsV4(n: number, shape: 'spot' | 'bidask'): number[] {
 /**
  * Plan a single-sided v4 ladder (base side, buy-the-dip): split the range [now ...
  * -X%] into N weighted legs. Mirrors v3's planLadderSingleSided but uses v4 tick
- * maths (readPoolState + liqForAmount). N is auto-capped to the spacing's capacity.
- */
+  * maths (readPoolState + liqForAmount). N is auto-capped to the spacing's capacity.
  */
 export async function planLadderV4(
   cc: ChainCtx,
@@ -868,7 +867,6 @@ export async function planLadderV4(
  * BATCH mint a v4 ladder: N legs in ONE atomic modifyLiquidities (N x MINT_POSITION
  * + 1 x SETTLE_PAIR, plus SWEEP when native). The cheapest route, settling the base
  * once at the end.
- */
  */
 export async function openLadderV4(
   cc: ChainCtx,
@@ -929,7 +927,6 @@ export async function openLadderV4(
  * The PositionManager's next position NFT id. Used to BRACKET the range of ids one
  * open attempt might produce: read before sending, read again afterwards.
  * Authoritative (straight from the contract) and independent of any indexer.
- */
  */
 export async function v4NextTokenId(cc: ChainCtx): Promise<bigint> {
   const pmAddr = V4_PM[cc.key];
