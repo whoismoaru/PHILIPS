@@ -155,7 +155,9 @@ export async function gasCard(): Promise<string> {
  *  tak bergerak menghasilkan pesan identik, Telegram menolaknya ("not modified"),
  *  dan kartunya diam seolah tombolnya rusak. */
 function clock(): string {
-  return `${new Date().toLocaleTimeString('en-GB', { hour12: false })} ${offsetLabel()}`;
+  const d = new Date();
+  const tanggal = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  return `${tanggal} · ${d.toLocaleTimeString('en-GB', { hour12: false })} ${offsetLabel()}`;
 }
 
 /** Tombol tunggal: baca ulang semua chain. */
