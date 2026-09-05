@@ -1,21 +1,22 @@
 /**
- * Metrik klaster holder dari InsightX (https://api.insightx.network).
+ * Holder-cluster metrics from InsightX (https://api.insightx.network).
  *
- * Satu panggilan `dex-metrics overview` mengembalikan enam angka sekaligus
- * (~180 byte). Endpoint rincinya — /clusters, /bundlers, /insiders — mengirim
- * 300-400 KB per token; itu bukan untuk kartu Telegram, jadi tak dipakai.
+ * A single `dex-metrics overview` call returns all six numbers at once (~180
+ * bytes). The detailed endpoints — /clusters, /bundlers, /insiders — ship 300-400
+ * KB per token, which is not something a Telegram card should be pulling, so they
+ * are left alone.
  *
- * SEMUA kegagalan fail-open (null), sama seperti gmgn.ts: ini data TAMBAHAN.
+ * EVERY failure fails open (null), same as gmgn.ts: this is supplementary data.
  */
 
 const BASE = 'https://api.insightx.network/dex-metrics/v1';
 const TIMEOUT_MS = 4_000;
 
 /**
- * PHILIPS key → nama chain InsightX. Tak ada di peta = tak dipanggil sama sekali.
+ * PHILIPS key -> InsightX chain name. Not in the map means no call is made.
  *
- * `robinhood` SENGAJA tidak ada: API-nya menolaknya dengan 422 ("Input should be
- * 'eth', 'sol', 'base', 'bsc' or 'sui'"). Memetakannya cuma membakar kuota.
+ * `robinhood` is absent DELIBERATELY: the API rejects it with 422 ("Input should
+ * be 'eth', 'sol', 'base', 'bsc' or 'sui'"). Mapping it would only burn quota.
  */
 const CHAIN: Record<string, string> = { bsc: 'bsc' };
 
@@ -53,11 +54,11 @@ export async function insightxMetrics(
     });
     if (res.ok) {
       const d: any = await res.json();
-      // Token yang chain-nya belum terindeks tetap dijawab 200 — dengan SEMUA
-      // field 0, bukan error. Dibaca apa adanya, kartu menulis "cluster 0% ✅"
-      // untuk token yang sebenarnya tak diperiksa siapa pun: audit yang berbohong
-      // ke arah aman. Penanda palsunya adalah top10_pct — mustahil 0 pada token
-      // yang punya holder. Nol di situ = TAK ADA DATA, jadi null.
+      // A token on an unindexed chain still comes back 200 — with EVERY field 0,
+      // not an error. Taken at face value the card prints "cluster 0% ✅" for a
+      // token nobody checked: an audit lying in the safe direction. The tell is
+      // top10_pct, which cannot be 0 for a token that has holders. Zero there
+      // means NO DATA, so null.
       if (num(d?.top10_pct)) {
         v = {
           clusterPct: num(d.cluster_pct),
@@ -68,7 +69,7 @@ export async function insightxMetrics(
       }
     }
   } catch {
-    /* fail-open */
+    /* fail open */
   } finally {
     clearTimeout(t);
   }

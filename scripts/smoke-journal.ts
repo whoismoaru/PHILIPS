@@ -29,11 +29,11 @@ for (const e of journal.read(50)) {
   assert.equal(Math.abs(e.pnlEth) < 1000, true, `pnlEth di luar nalar: ${e.tokenId} ${e.pnlEth}`);
 }
 
-// Identitas sebuah POSISI bukan `tokenId` saja: v3 dan v4 punya ruang id terpisah,
-// jadi #894861 sah dipakai dua posisi berbeda (ETH/Liluni v4, lalu HOOD10 v3 lima
-// hari kemudian). Yang benar-benar ingin ditangkap di sini adalah satu posisi yang
-// TERJURNAL DUA KALI — tombol close ditekan ulang — dan itu berarti tokenId DAN
-// waktu buka sama persis.
+// A POSITION is not identified by `tokenId` alone: v3 and v4 have separate id
+// spaces, so #894861 legitimately covers two different positions (ETH/Liluni on
+// v4, then HOOD10 on v3 five days later). What this is actually here to catch is
+// one position JOURNALLED TWICE — the close button tapped again — and that means
+// the same tokenId AND the same open time.
 const seen = new Map<string, string[]>();
 for (const e of journal.read(Number.MAX_SAFE_INTEGER)) {
   if (e.reason === 'recovery') continue;

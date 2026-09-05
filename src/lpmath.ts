@@ -1,9 +1,9 @@
 /**
- * Matematika likuiditas terkonsentrasi yang dipakai BERSAMA oleh v3 dan v4.
+ * Concentrated-liquidity maths shared by v3 and v4.
  *
- * Berdiri sendiri (tanpa RPC, tanpa ChainCtx) karena dua alasan: bisa diuji
- * langsung, dan supaya uniswap.ts tak perlu mengimpor uniswapV4.ts hanya untuk
- * rumus yang sebenarnya milik keduanya.
+ * Kept standalone (no RPC, no ChainCtx) for two reasons: it can be tested
+ * directly, and uniswap.ts no longer has to import uniswapV4.ts just to reach
+ * formulas that belong to both.
  */
 
 const Q96 = 1n << 96n;
@@ -19,7 +19,7 @@ function amount1Delta(a: bigint, b: bigint, L: bigint): bigint {
   return (L * (b - a)) / Q96;
 }
 
-/** Jumlah token0/token1 sebuah posisi pada harga `sqrtP`. */
+/** A position's token0/token1 amounts at price `sqrtP`. */
 export function amountsForLiquidity(
   sqrtP: bigint,
   sqrtA: bigint,
@@ -32,13 +32,13 @@ export function amountsForLiquidity(
   return { amount0: 0n, amount1: amount1Delta(sqrtA, sqrtB, L) };
 }
 
-/** Lebar PITA HARGA yang ditoleransi saat menarik likuiditas (0,5%). */
+/** Width of the PRICE BAND tolerated when withdrawing liquidity (0.5%). */
 export const WITHDRAW_BAND_BPS = 50n;
 
-/** Bantalan pembulatan bilangan bulat — tanpa ini lantai bisa meleset 1 wei ke atas. */
+/** Integer-rounding cushion; without it a floor can land 1 wei too high. */
 const ROUNDING_BPS = 1n;
 
-/** Akar kuadrat bilangan bulat (Newton). */
+/** Integer square root (Newton). */
 export function isqrt(n: bigint): bigint {
   if (n < 2n) return n;
   let x = n;
@@ -50,27 +50,28 @@ export function isqrt(n: bigint): bigint {
   return x;
 }
 
-/** sqrtPriceX96 pada harga × (bps/10000). Harga bergerak → akarnya bergerak seakar. */
+/** sqrtPriceX96 at price x (bps/10000). Price moves, its root moves by the root. */
 const SQRT_SCALE = 1_000_000n;
 export const shiftSqrt = (sqrtP: bigint, bps: bigint): bigint =>
   (sqrtP * isqrt((bps * SQRT_SCALE * SQRT_SCALE) / 10_000n)) / SQRT_SCALE;
 
 /**
- * amount0Min/amount1Min untuk penarikan likuiditas — v3 maupun v4.
+ * amount0Min/amount1Min for a liquidity withdrawal, v3 and v4 alike.
  *
- * Cara LAMA (dan kenapa ia gagal): `min = jumlah_sekarang × 99,5%` diterapkan pada
- * KEDUA sisi sekaligus. Untuk likuiditas terkonsentrasi itu salah sasaran. Jumlah
- * tiap sisi berubah jauh lebih cepat daripada harga, jadi pada rentang sempit gerak
- * harga 0,2% yang sepenuhnya wajar sudah memangkas satu sisi lebih dari 0,5% —
- * `MinimumAmountInsufficient` terpicu tanpa ada serangan apa pun. Lebih buruk lagi,
- * lantai per-sisi menjaga KOMPOSISI, hal yang memang bergerak sendiri, bukan NILAI.
+ * The OLD way, and why it broke: `min = current_amount x 99.5%` applied to BOTH
+ * sides at once. For concentrated liquidity that guards the wrong thing. Each
+ * side's amount moves far faster than price does, so in a narrow range a
+ * perfectly ordinary 0.2% price move already cuts one side by more than 0.5% —
+ * `MinimumAmountInsufficient` fires with no attack anywhere in sight. Worse, a
+ * per-side floor pins COMPOSITION, which is meant to move, instead of VALUE.
  *
- * Cara SEKARANG: jumlah token adalah fungsi deterministik dari harga selama
- * likuiditas tetap. Jadi lantainya diambil dari PITA HARGA ±0,5% — hitung jumlah di
- * kedua tepi pita, ambil yang terkecil per sisi. Karena amount0 turun saat harga
- * naik dan amount1 naik saat harga naik, hasilnya = amount0 di tepi atas dan
- * amount1 di tepi bawah. Gerak wajar di dalam pita lolos; dorongan harga di luar
- * pita — alat yang justru dipakai penyerang — tetap ditolak.
+ * The way it works now: token amounts are a deterministic function of price as
+ * long as liquidity is fixed. So the floor comes from a PRICE BAND of +/-0.5% —
+ * compute the amounts at both edges and take the smaller of each side. Since
+ * amount0 falls as price rises and amount1 rises with it, that lands on amount0
+ * at the upper edge and amount1 at the lower one. Ordinary movement inside the
+ * band passes; shoving the price outside it, which is the attacker's actual
+ * tool, still gets rejected.
  */
 export function withdrawFloors(
   sqrtP: bigint,
@@ -78,8 +79,8 @@ export function withdrawFloors(
   sqrtB: bigint,
   liquidity: bigint,
 ): { min0: bigint; min1: bigint } {
-  // Amounts monoton terhadap harga, jadi minimum tiap sisi pasti ada di salah satu
-  // tepi pita — cukup hitung dua titik, tak perlu menyapu.
+  // Amounts are monotonic in price, so each side's minimum has to sit at one of
+  // the band's edges. Two points is enough; no need to sweep.
   const bawah = amountsForLiquidity(shiftSqrt(sqrtP, 10_000n - WITHDRAW_BAND_BPS), sqrtA, sqrtB, liquidity);
   const atas = amountsForLiquidity(shiftSqrt(sqrtP, 10_000n + WITHDRAW_BAND_BPS), sqrtA, sqrtB, liquidity);
   const kecil = (a: bigint, b: bigint) => (a < b ? a : b);
