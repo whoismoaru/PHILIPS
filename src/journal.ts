@@ -142,8 +142,16 @@ export function recordClose(
   const initF = Number(ethers.formatUnits(BigInt(rec.initialWethWei || '0'), dec));
   const has = opts.resultEthWei !== undefined;
   const resF = has ? Number(ethers.formatUnits(opts.resultEthWei as bigint, dec)) : 0;
-  const pnlEth = has ? resF - initF : 0;
+  // Hasil ADA tapi modal nol = modalnya tak pernah terekam (posisi tak ter-track),
+  // BUKAN modal nol sungguhan. `resF - 0` akan membukukan seluruh cash-out sebagai
+  // laba murni — tiga entri seperti ini pernah menambah $662 laba yang tak ada ke
+  // /pnl. Catat hasilnya (uangnya nyata, sweep tetap butuh ca-nya), tapi biarkan
+  // PnL-nya nol supaya statsFor bisa mengenalinya dan melewatinya.
+  const modalHilang = has && initF <= 0 && opts.reason !== 'recovery';
+  const pnlEth = has && !modalHilang ? resF - initF : 0;
   const pnlPct = has && initF > 0 ? (pnlEth / initF) * 100 : 0;
+  if (modalHilang)
+    console.warn(`[journal] ${rec.symbol} ${rec.tokenId}: hasil terukur tapi modal tak terekam — PnL dilewati`);
   record({
     tokenId: rec.tokenId,
     symbol: rec.symbol,
@@ -253,6 +261,13 @@ export type PeriodStats = {
   known: number; // POSISI berkeputusan (menang/kalah); impas tak dihitung
   untracked: number; // gone/burned — hasil tak diketahui
   excluded: number; // placeholder backfill lama (result 0)
+  /**
+   * MODAL tak terekam (initialWethWei 0) padahal hasilnya terukur. Dilewati:
+   * `pnlEth = hasil - 0` membukukan SELURUH cash-out sebagai laba murni. Pada
+   * jurnal sungguhan cuma 3 entri, tapi ketiganya menyumbang $662 — 36% dari net
+   * yang dilaporkan. Hasil tanpa modal bukan laba besar, ia laba yang TAK TERHITUNG.
+   */
+  noCapital: number;
   recovered: number; // entri pemulihan sisa token (masuk net, bukan trade)
   unconverted: number; // mode USD: entri yang kursnya tak terbaca — DILEWATI, bukan dianggap nol
   estimated: number; // mode USD: entri lama tanpa cap kurs, dinilai dgn kurs SEKARANG
@@ -278,7 +293,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
   // lama tampil sebagai PnL-mu, justru di saat kita paling tak tahu siapa
   // pemiliknya. /history kosong sementara /pnl menggelembung.
   if (!me)
-    return { count: 0, positions: 0, legs: 0, known: 0, untracked: 0, excluded: 0, recovered: 0, unconverted: 0, estimated: 0, books: [] };
+    return { count: 0, positions: 0, legs: 0, known: 0, untracked: 0, excluded: 0, noCapital: 0, recovered: 0, unconverted: 0, estimated: 0, books: [] };
   const all = read(Number.MAX_SAFE_INTEGER).filter(
     (e) =>
       (e.closedAt ?? 0) >= sinceMs &&
@@ -288,7 +303,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
       e.wallet === me,
   );
   const byUnit = new Map<string, Book>();
-  let known = 0, untracked = 0, excluded = 0, recovered = 0, unconverted = 0, estimated = 0;
+  let known = 0, untracked = 0, excluded = 0, noCapital = 0, recovered = 0, unconverted = 0, estimated = 0;
   const bookOf = (unit: string): Book => {
     let b = byUnit.get(unit);
     if (!b) {
@@ -305,6 +320,10 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
   for (const e of all) {
     if (e.resultEthWei === undefined) { untracked++; continue; }
     if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; }
+    // Hasil ADA tapi modal tak pernah tercatat → PnL tak bisa dihitung, bukan
+    // "untung sebesar seluruh hasil". 'recovery' memang bermodal nol dan itu sah:
+    // modalnya sudah dibukukan di entri close aslinya, ini cuma sisa yang menyusul.
+    if (e.reason !== 'recovery' && BigInt(e.initialWethWei || '0') === 0n) { noCapital++; continue; }
     const native = unitOf(e.chain, e.baseKind);
     // Kurs SAAT ENTRI DITUTUP kalau tercap; kurs sekarang hanya sebagai cadangan
     // untuk entri lama (sebelum pencapan ada). Yang memakai cadangan dihitung —
@@ -366,6 +385,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
     known,
     untracked,
     excluded,
+    noCapital,
     recovered,
     unconverted,
     estimated,
