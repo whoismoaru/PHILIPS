@@ -4,6 +4,7 @@ import {
   Pool,
   Position,
   TICK_SPACINGS,
+  TickMath,
   nearestUsableTick,
   tickToPrice,
   type FeeAmount,
@@ -20,6 +21,7 @@ const { Token, Percent, CurrencyAmount } = sdkCore;
 (TICK_SPACINGS as Record<number, number>)[2500] = 50;
 import { ERC20_ABI, approveExact } from './chain.js';
 import { sendTxNonceSafe, isGoneErr } from './core.js';
+import { withdrawFloors } from './lpmath.js';
 import { getChain, baseOf, basesFor, detectBase, type ChainCtx, type BaseAsset, type BaseKind } from './chains.js';
 
 const MAX_UINT128 = (1n << 128n) - 1n;
@@ -933,7 +935,10 @@ export async function collectFeesOnly(
  * situ. Kalau harga digeser antara pembacaan dan eksekusi, tx REVERT — itu hasil
  * yang benar: gas hangus jauh lebih murah daripada ditutup di harga sembarang.
  */
-const WITHDRAW_SLIPPAGE_BPS = 50n; // 0.5%
+/** Lantai jalur CADANGAN (potongan per sisi), dipakai hanya saat harga pool tak
+ *  terbaca. Sengaja longgar: di jalur ini kita tak punya tick posisi, jadi ambang
+ *  ketat justru menggagalkan penarikan yang sehat — persis bug yang baru diperbaiki. */
+const WITHDRAW_FALLBACK_BPS = 200n; // 2%
 
 /** Catatan yang ikut ke kartu hasil close saat penarikan terpaksa tanpa lantai harga. */
 const WITHDRAW_UNPROTECTED_NOTE = (tokenId: string) =>
@@ -946,7 +951,7 @@ async function expectedBurnAmounts(
   tokenId: string,
   liquidity: bigint,
   ctx: ChainCtx,
-): Promise<{ amount0: bigint; amount1: bigint }> {
+): Promise<{ amount0: bigint; amount1: bigint; sqrtPriceX96: bigint; sqrtLower: bigint; sqrtUpper: bigint }> {
   const p = await ctx.positionManager.positions(tokenId);
   const fee = Number(p.fee);
   const [m0, m1] = await Promise.all([getTokenMeta(p.token0, ctx), getTokenMeta(p.token1, ctx)]);
@@ -961,7 +966,14 @@ async function expectedBurnAmounts(
   const t1 = new Token(ctx.chainId, ethers.getAddress(p.token1), m1.decimals, m1.symbol);
   const sdkPool = new Pool(t0, t1, sdkFee(fee, ctx), slot0[0].toString(), liq.toString(), Number(slot0[1]));
   const pos = new Position({ pool: sdkPool, liquidity: liquidity.toString(), tickLower: Number(p.tickLower), tickUpper: Number(p.tickUpper) });
-  return { amount0: BigInt(pos.amount0.quotient.toString()), amount1: BigInt(pos.amount1.quotient.toString()) };
+  return {
+    amount0: BigInt(pos.amount0.quotient.toString()),
+    amount1: BigInt(pos.amount1.quotient.toString()),
+    // Bahan lantai pita harga: harga pool sekarang + kedua tepi rentang posisi.
+    sqrtPriceX96: BigInt(slot0[0].toString()),
+    sqrtLower: BigInt(TickMath.getSqrtRatioAtTick(Number(p.tickLower)).toString()),
+    sqrtUpper: BigInt(TickMath.getSqrtRatioAtTick(Number(p.tickUpper)).toString()),
+  };
 }
 
 async function withdrawMins(
@@ -971,23 +983,30 @@ async function withdrawMins(
   deadline: number,
   ctx: ChainCtx,
 ): Promise<{ amount0Min: bigint; amount1Min: bigint; unprotected: boolean }> {
-  const floor = (v: bigint) => (BigInt(v) * (10000n - WITHDRAW_SLIPPAGE_BPS)) / 10000n;
-  // Retry: kegagalan staticCall paling lazim TRANSIEN (RPC rewel sesaat) — bukan
-  // alasan menutup tanpa proteksi. Coba 3x sebelum menyerah ke jalur cadangan.
+  // Retry: kegagalan baca paling lazim TRANSIEN (RPC rewel sesaat) — bukan alasan
+  // menarik tanpa proteksi. Coba 3x sebelum menyerah.
+  //
+  // Lantainya dari PITA HARGA, bukan potongan persen pada jumlah saat ini — lihat
+  // `withdrawFloors`. Cara lama gagal di rentang sempit untuk gerak harga sewajarnya
+  // (0,2% sudah cukup), dan v4 pernah kena persis itu sampai close gagal berulang.
   for (let i = 0; i < 3; i++) {
     try {
-      const [a0, a1] = await positionManager.decreaseLiquidity.staticCall({ tokenId, liquidity, amount0Min: 0n, amount1Min: 0n, deadline });
-      return { amount0Min: floor(a0), amount1Min: floor(a1), unprotected: false };
+      const exp = await expectedBurnAmounts(tokenId, liquidity, ctx);
+      const f = withdrawFloors(exp.sqrtPriceX96, exp.sqrtLower, exp.sqrtUpper, liquidity);
+      return { amount0Min: f.min0, amount1Min: f.min1, unprotected: false };
     } catch {
       if (i < 2) await new Promise((r) => setTimeout(r, 800));
     }
   }
-  // Cadangan: hitung lantai dari harga pool + SDK. Proteksi sandwich TETAP ADA
-  // walau PM tak bisa disimulasikan — dulu di sini langsung {0,0} (bocor senyap).
   try {
-    const exp = await expectedBurnAmounts(tokenId, liquidity, ctx);
-    console.log(`[withdraw] staticCall gagal, pakai lantai dari harga pool (#${tokenId})`);
-    return { amount0Min: floor(exp.amount0), amount1Min: floor(exp.amount1), unprotected: false };
+    // Cadangan: PM sendiri yang memberi jumlahnya. Tanpa tick posisi, pita harga tak
+    // bisa dihitung di sini — jadi potongan persen dipakai, dan sengaja LEBIH LONGGAR
+    // (2%) supaya jalur cadangan tidak menggagalkan penarikan seperti dulu. Ia cuma
+    // dipakai saat pembacaan pool gagal tiga kali berturut-turut.
+    const [a0, a1] = await positionManager.decreaseLiquidity.staticCall({ tokenId, liquidity, amount0Min: 0n, amount1Min: 0n, deadline });
+    const longgar = (v: bigint) => (BigInt(v) * (10_000n - WITHDRAW_FALLBACK_BPS)) / 10_000n;
+    console.log(`[withdraw] harga pool tak terbaca, pakai lantai longgar dari staticCall (#${tokenId})`);
+    return { amount0Min: longgar(a0), amount1Min: longgar(a1), unprotected: false };
   } catch {
     // Benar-benar tak bisa hitung → jangan blokir penarikan (dana user > risiko MEV).
     // Ini SATU-SATUNYA jalur yang menarik tanpa lantai harga. Dulu hanya masuk log

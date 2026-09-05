@@ -29,12 +29,18 @@ for (const e of journal.read(50)) {
   assert.equal(Math.abs(e.pnlEth) < 1000, true, `pnlEth di luar nalar: ${e.tokenId} ${e.pnlEth}`);
 }
 
+// Identitas sebuah POSISI bukan `tokenId` saja: v3 dan v4 punya ruang id terpisah,
+// jadi #894861 sah dipakai dua posisi berbeda (ETH/Liluni v4, lalu HOOD10 v3 lima
+// hari kemudian). Yang benar-benar ingin ditangkap di sini adalah satu posisi yang
+// TERJURNAL DUA KALI — tombol close ditekan ulang — dan itu berarti tokenId DAN
+// waktu buka sama persis.
 const seen = new Map<string, string[]>();
 for (const e of journal.read(Number.MAX_SAFE_INTEGER)) {
   if (e.reason === 'recovery') continue;
-  seen.set(e.tokenId, [...(seen.get(e.tokenId) ?? []), e.reason]);
+  const key = `${e.chain ?? 'robinhood'}|${e.tokenId}|${e.openedAt}`;
+  seen.set(key, [...(seen.get(key) ?? []), e.reason]);
 }
 const dupes = [...seen].filter(([, rs]) => rs.length > 1);
-assert.equal(dupes.length, 0, `entri jurnal ganda: ${JSON.stringify(dupes)}`);
+assert.equal(dupes.length, 0, `posisi yang sama terjurnal dua kali: ${JSON.stringify(dupes)}`);
 
 console.log('OK — akuntansi jurnal waras');
