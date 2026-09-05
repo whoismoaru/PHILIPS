@@ -29,7 +29,9 @@ You will need two things before you start :
 | Your Telegram id | Message [@userinfobot](https://t.me/userinfobot) |
 
 An RPC endpoint helps too. Use a keyed one (Alchemy, your own node).
-Free public endpoints rate-limit, and then every read fails at once.
+Free public endpoints rate-limit, and then every read fails at once. Every chain
+also carries a public backup that takes over when the primary errors or stalls, so
+one bad endpoint no longer takes the bot down with it.
 
 ---
 
@@ -117,6 +119,8 @@ depositing, and the estimated gas. Nothing is signed until you tap confirm.
 | `/buy` · `/sell` | Swap a token via the best available route |
 | `/unwrap` | Turn stuck wrapped native back into gas, on every chain at once |
 | `/bridge` | Move funds between chains |
+| `/send` | Send a token or native to another address |
+| `/gas` | What a transaction costs right now on every chain, in USD and Rupiah |
 | `/settings` | Wallet, transaction limits, quick percentages |
 | `/alerts` | Which notifications you want |
 
@@ -195,9 +199,53 @@ PORTFOLIO
 ✅ LIVE: 21:50 WIB
 ```
 
+`/gas` answers the question you ask before every move, which chain is cheapest
+right now:
+
+```
+⛽️ GAS FEE
+
+SWAP
+1. HyperEVM = $0.00238 / Rp42
+2. Base = $0.00412 / Rp73
+3. BSC = $0.011 / Rp189
+4. Robinhood = $0.271 / Rp4,760
+
+OPEN LP
+1. HyperEVM = $0.00381 / Rp67
+2. Base = $0.00658 / Rp116
+3. BSC = $0.017 / Rp302
+4. Robinhood = $0.432 / Rp7,600
+
+CLOSE LP
+1. HyperEVM = $0.00227 / Rp40
+2. Base = $0.00393 / Rp69
+3. BSC = $0.010 / Rp180
+4. Robinhood = $0.258 / Rp4,539
+
+SEND & APPROVE
+1. HyperEVM = $0.000392 / Rp7
+2. Base = $0.000678 / Rp12
+3. BSC = $0.00177 / Rp31
+4. Robinhood = $0.044 / Rp782
+
+06 Sep 2026 · 22:42:51 UTC+08:00
+```
+
+Every section is ranked cheapest first. The gas price comes from each chain's own
+RPC, the same number the bot pays with. The gas *units* are the median of this
+wallet's real transactions over 14 days, not a textbook estimate, because a v4
+`modifyLiquidities` burns more than 260k and that is the operation you use most.
+The Rupiah column uses Indodax, the rate you actually face selling crypto locally.
+
 `/pnl` sums up the trades you have closed, per chain and per period:
 
 ![Lifetime PnL recap](assets/pnl-recap.jpg)
+
+A ladder counts as **one** position there, however many legs it was closed in. It
+opens as one deposit and closes in one transaction, so scoring it per leg would
+split the result eight ways and drop every slice under the break-even threshold,
+inflating the trade count while quietly deleting most of the wins and losses.
 
 All figures on this page are examples, not anyone's real history.
 
@@ -211,17 +259,22 @@ way the bot withdraws the liquidity, collects the fees, swaps the token side bac
 what you deposited, and sends you a result card: deposit, received, how long you held
 it, and the fees you earned.
 
-That card is the image at the top of this page. The artwork behind it is just a
-file. Drop your own `data/PHILIPS ANIME.jpg` in and every card uses it instead.
-Wide images with the subject on one side work best; the text sits on the other.
+The artwork behind that card is just a file. Drop your own `data/PHILIPS ANIME.jpg`
+in and every card uses it instead. Wide images with the subject on one side work
+best; the text sits on the other.
 
 The result is always reported in **the asset you deposited**. Deposit USDG, get the
 answer in USDG. Converting it to dollars would fold the base asset's own price swing
 into a number that is supposed to measure the position alone.
 
-Withdrawals carry a price floor. If someone pushes the pool to the edge of your
-range while the transaction is in flight, it reverts instead of filling at whatever
-price they made. On the rare occasion the floor cannot be worked out, the bot says
+Withdrawals carry a price floor, on v3 and v4 alike. If someone pushes the pool
+while your transaction is in flight, it reverts instead of filling at whatever price
+they made. The floor is a **price band**: the amounts are computed at both edges of a
+0.5% move and the smaller of each side is taken. A per-side percentage would be the
+obvious way to do it and it is the wrong one, because in a narrow range each side's
+amount moves far faster than price does, so a perfectly ordinary 0.2% drift is enough
+to fail a healthy close. Bounding the price instead bounds the thing an attacker
+actually controls. On the rare occasion the floor cannot be worked out, the bot says
 so on the card rather than staying quiet.
 
 ---
@@ -248,13 +301,17 @@ Your choices live in `data/pctpresets.json` and survive restarts.
 
 Five are configured out of the box. Turn the extra ones on in `.env`:
 
-| Chain | DEX | You can deposit |
-|---|---|---|
-| Robinhood | Uniswap v3 + v4 | ETH · USDG |
-| BSC | PancakeSwap v3 + Uniswap v3 | BNB · USDT |
-| Base | Uniswap v3 | ETH · USDC |
-| HyperEVM | HyperSwap v3 | HYPE · USDT0 |
-| Ink | Velodrome Slipstream | ETH · USDT0 |
+| Chain | DEX | You can deposit | On by default |
+|---|---|---|---|
+| Robinhood | Uniswap v3 + v4 | ETH · USDG | yes (primary) |
+| BSC | PancakeSwap v3 + Uniswap v3 + v4 | BNB · USDT | yes |
+| Base | Uniswap v3 | ETH · USDC | yes |
+| HyperEVM | HyperSwap v3 | HYPE · USDT0 | yes |
+| Ink | Velodrome Slipstream | ETH · USDT0 | no, too quiet to be worth the RPC |
+
+`/positions` and `/portfolio` read v4 on **every** chain that has it, not just the
+one you are pointed at, so a BSC v4 ladder shows up while your primary chain is
+Robinhood.
 
 The primary chain is whatever you put in `.env`. It was built and tested against
 Robinhood Chain. Pointing it at a different EVM chain works, but you'll need to
@@ -335,9 +392,10 @@ npx tsx scripts/smoke-journal.ts     # accounting sanity
 for f in scripts/smoke-*.ts; do npx tsx "$f"; done   # all of them
 ```
 
-The `smoke-*` scripts also stand in for a test suite. They cover the parts where a
-mistake costs money: slippage ladders, approval amounts, withdrawal price floors,
-sell routing, and PnL accounting.
+The `smoke-*` scripts stand in for a test suite, 42 of them at the time of writing.
+They cover the parts where a mistake costs money: slippage ladders, approval amounts,
+withdrawal price floors, sell routing, and PnL accounting. Several are pure maths and
+need no network at all; the rest read live chains but never sign anything.
 
 ---
 
