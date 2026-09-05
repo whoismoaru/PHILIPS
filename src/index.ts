@@ -3010,7 +3010,8 @@ async function buySafetyStep(ctx: any, flow: TSwapFlow, prog: { message_id: numb
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
-// Langkah 3: pilih aset bayar (ETH/USDG). Stable → auto USDT, langsung ke size.
+// Step 3: pick the paying asset (ETH/USDG). On a stable chain it auto-selects USDT and
+// goes straight to size.
 function buyBaseStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   const cc = CHAINS[flow.chainKey]!;
   // Buying USDT with USDT is not a choice, so drop it from the paying-asset list.
@@ -3070,7 +3071,7 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   } catch {
     /* saldo opsional */
   }
-  // Nominal boleh diketik di chat (flow.awaitingAmount) ATAU dipilih sebagai
+  // The amount can be typed in chat (flow.awaitingAmount) OR picked as a percentage.
   // Percentages of the balance, in line with /sell and the /add wizard, which already have
   // percentage buttons. "Custom %" covers anything outside the presets.
   const rows: any[] = [];
@@ -3113,8 +3114,8 @@ async function renderTokenHub(
   const cc = getChain(chainKey);
   prog = await editProgress(ctx, prog, msg.msgProgress(`auditing token on ${cc.label}…`));
 
-  // Identitas token: symbol+decimals WAJIB (dipakai semua alur turunan). Gagal = batal,
-  // jangan tebak 18 (PRD §8.9).
+  // Token identity: symbol and decimals are MANDATORY (every downstream flow uses them).
+  // A failure aborts; do not guess 18 (PRD §8.9).
   let sym = '?';
   let dec = 18;
   try {
@@ -3461,7 +3462,8 @@ bot.action('buyback:size', async (ctx) => {
   await buySizeStep(ctx, flow, true);
 });
 
-// Prompt ketik alamat token — Kembali ke base (chain multi-base) atau ke chain (base tunggal).
+// The token-address prompt. Back goes to the base picker on a multi-base chain, or to the
+// chain picker when there is only one base.
 // ── /sell = the holdings-first flow ──────────────────────────────────────────
 // /sell → daftar token dipegang → pilih token → %/jumlah → Preview → Konfirmasi →
 //   Hasil. Base TERIMA dipilih OTOMATIS (nilai USD terbaik: ETH vs USDG/USDT).
@@ -3685,7 +3687,7 @@ async function cmdSell(ctx: any) {
   return editProgress(ctx, prog, msg.msgSellList(list.length), { ...html, ...sellListKb(list, multiChain) });
 }
 bot.command('sell', cmdSell);
-// Tombol "💱 Quick Sell" di kartu /status.
+// The "💱 Quick Sell" button on the /status card.
 bot.action('sell:start', async (ctx) => {
   await ctx.answerCbQuery();
   return cmdSell(ctx);
@@ -3788,7 +3790,7 @@ async function tswapQuoteConfirm(
 
   // The balance AT STAKE goes on the card. For a buy with a wrappable base, what funds it
   // is native ETH (the execution path wraps), not the WETH balance.
-  // memakai saldo WETH di sini melahirkan false-green.
+  // using the WETH balance here would produce a false green.
   let balanceLabel: string | undefined;
   let shortLabel: string | null = null;
   try {
@@ -3839,7 +3841,7 @@ async function tswapQuoteConfirm(
  * now WETH, and even /unwrap needs the gas that is already gone — stuck until the wallet
  * is topped up. Better to refuse here.
  */
-/** Umur maksimum angka di kartu Preview /buy & /sell (sama dgn /bridge). */
+/** How long the figures on a /buy or /sell Preview card stay valid (same as /bridge). */
 /**
  * Unwrap stray WETH back to native. Called after an add or close fails part-way, so no
  * manual /unwrap is needed and there is no waiting for the monitor's sweep (a 1-minute
@@ -3909,7 +3911,7 @@ bot.action('tswapok', async (ctx) => {
     // The price floor is the number the user ACTUALLY saw on the Preview card, minus 3%.
     // The execution route has its own slippage fallback up to 15% and re-quotes itself;
     // without this comparison nothing ties the executed result back to the figure shown.
-    // disetujui. Cek dilakukan SEBELUM tx pertama — batal di sini hanya buang 1 RPC.
+    // agreed to. The check runs BEFORE the first tx, so aborting here costs 1 RPC.
     if (flow.quotedOutWei && flow.quotedOutWei > 0n) {
       const [qFrom, qTo] = buy ? [base!.address, token!] : [token!, base!.address];
       const fresh = await previewSwapOut(qFrom, qTo, amountWei, cc).catch(() => null);
@@ -3949,7 +3951,7 @@ bot.action('tswapok', async (ctx) => {
           route: r.route,
         };
       }
-      // JUAL token biasa berakhir di native ETH (permintaan pemilik 2 Agu 2026).
+      // Selling an ordinary token ends in native ETH (owner's request, 2 Aug 2026).
       // A token with only a USDG pool is still served, through the internal 2-hop route.
       // swapTokenToEthRobust (token→USDG→ETH).
       const r = await swapTokenToEthRobust(token!, amountWei, cc, MAX_SLIP_PCT);
@@ -4068,8 +4070,8 @@ async function sendProfitCard(
 }
 
 /**
- * Tutup seluruh leg satu grup ladder secara BATCH: remove+collect+burn semua leg
- * via multicall (~1 tx/chunk), lalu SATU swap token→base agregat. Hasil dibagi
+ * Close every leg of a ladder group as a BATCH: remove+collect+burn all legs through
+ * multicall (~1 tx per chunk), then ONE aggregate token->base swap. Proceeds are split
  * proportionally to each leg (by capital) so the per-leg PnL journal stays correct.
  */
 async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
@@ -4128,7 +4130,7 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
 
     let totalOut: bigint;
     if (base.wrappable) {
-      // WETH: pokok + hasil swap semuanya mendarat sbg WETH → ukur kenaikan lalu unwrap.
+      // WETH: principal and swap proceeds all land as WETH, so measure the rise then unwrap.
       const wethBal: bigint = await cc.weth.balanceOf(cc.wallet.address).catch(() => 0n);
       totalOut = wethBal > baseBefore ? wethBal - baseBefore : sw.baseOut;
       if (wethBal > 0n) {
@@ -4143,7 +4145,8 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       totalOut = baseAfter > baseBefore ? baseAfter - baseBefore : sw.baseOut;
     }
 
-    // Bagi hasil proporsional ke modal tiap leg → jurnal PnL per-leg tetap masuk akal.
+    // Split the proceeds proportionally to each leg's capital, so the per-leg PnL journal
+    // still makes sense.
     const totalInit = legs.reduce((s, l) => s + BigInt(l.initialWethWei || '0'), 0n);
     let attributed = 0n;
     legs.forEach((l, i) => {
@@ -4222,7 +4225,7 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
       )
     ).reduce((a, b) => a + b, 0n);
     const r = await closeLadderV4(tokenIds, cc, { dryRun: false });
-    // Bagi hasil proporsional ke modal tiap leg → jurnal PnL per-leg benar.
+    // Split the proceeds proportionally to each leg's capital, keeping the per-leg PnL journal correct.
     const totalInit = legs.reduce((s, l) => s + BigInt(l.entryBaseWei || '0'), 0n);
     let attributed = 0n;
     legs.forEach((l, i) => {
@@ -4326,7 +4329,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
   const closingRec = store.get(tokenId); // tangkap SEBELUM finalizeClose menghapus
   // A close is remove + collect + swap + unwrap and can take 1-2 minutes. Without this
   // marker the monitor's sweep (every minute) could run in the middle of it from the same
-  // tabrakan nonce, atau WETH milik close ini ikut disapu.
+  // wallet: a nonce clash, or this close's WETH being swept along with it.
   store.beginMoneyOp();
   try {
     await ctx.answerCbQuery('Processing…');
@@ -4334,26 +4337,26 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       await ctx.editMessageText(msg.msgDryRunClose(tokenId), html);
       return;
     }
-    // WAJIB venue-aware: posisi yang dibuka di Uniswap v3 BSC harus ditutup lewat
-    // PositionManager Uniswap. Dengan getChain() saja, PM PancakeSwap yang dipakai
-    // dan positions(tokenId) menunjuk posisi ORANG LAIN — detectBase gagal dan close
-    // berhenti dengan "pool is not paired with WETH/USDG/USDT".
+    // MUST be venue-aware: a position opened on Uniswap v3 on BSC has to be closed through
+    // Uniswap's PositionManager. With getChain() alone it uses PancakeSwap's PM, and
+    // positions(tokenId) points at SOMEONE ELSE'S position — detectBase fails and the close
+    // stops with "pool is not paired with WETH/USDG/USDT".
     const ccClose = closingRec ? ctxOf(closingRec) : getChain();
     const baseSym = isStableBase(closingRec?.baseKind ?? 'weth')
       ? baseSymbolOf(closingRec?.baseKind, ccClose)
       : ccClose.nativeSymbol;
     await ctx.editMessageText(msg.msgClosing(baseSym), html);
-    // Probe = likuiditas posisi. Sudah berkurang → decreaseLiquidity/burn mendarat,
-    // mengulang dari awal hanya akan revert (dan bisa menjual dua kali). Posisi sudah
-    // hangus → pm.positions melempar → probe -1n → juga tak diulang.
+    // The probe is the position's liquidity. A drop means decreaseLiquidity or the burn
+    // landed, so starting over would only revert (and could sell twice). A position already
+    // gone makes pm.positions throw, giving probe -1n — also not retried.
     const summary = await retryOnce(
       'close',
       async () => BigInt((await ccClose.positionManager.positions(tokenId)).liquidity),
       () => stopAndCashOut(tokenId, ccClose),
       { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
     );
-    // resultEthWei = 0 adalah PLACEHOLDER backfill di jurnal (dikecualikan dari PnL).
-    // Hasil yang benar-benar tak terukur harus undefined, bukan 0.
+    // resultEthWei = 0 is a backfill PLACEHOLDER in the journal (excluded from PnL). A
+    // genuinely unmeasurable result must be undefined, not 0.
     finalizeClose(tokenId, {
       ...(summary.baseOutWei > 0n ? { resultEthWei: summary.baseOutWei } : {}),
       reason: 'cashed',
@@ -4375,9 +4378,9 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
       finalizeClose(tokenId, { reason: 'gone' });
       await ctx.reply(msg.msgAlreadyClosed(tokenId), html);
     } else {
-      // Close gagal separuh jalan biasanya menyisakan WETH hasil remove. Dulu itu
-      // berarti /unwrap manual (atau menunggu sweep monitor sampai 1 menit). Rapikan
-      // di sini juga: withdraw() aman & idempoten — tak ada WETH, tak ada tx.
+      // A close that fails part-way usually leaves WETH from the remove behind. That used
+      // to mean a manual /unwrap (or waiting up to a minute for the monitor's sweep). Tidy
+      // it up here too: withdraw() is safe and idempotent — no WETH means no tx.
       await recoverStrayWeth(getChain(closingRec?.chain), 'close').catch(() => {});
       await ctx.reply(msg.msgError('close', err), html);
     }
@@ -4387,17 +4390,17 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
   }
 });
 
-/** Remove + collect, lalu swap seluruh aset hasil LP ke ETH (token via Relay, WETH di-unwrap). */
+/** Remove + collect, then swap every LP asset to ETH (tokens via Relay, WETH unwrapped). */
 async function stopAndCashOut(
   tokenId: string,
   cc: ChainCtx = getChain(),
 ): Promise<{ text: string; baseOutWei: bigint; leftover: boolean; leftoverWei: bigint; feesBaseWei?: bigint }> {
   const { positionManager: pm, weth: wethC, wallet: w } = cc;
   const p = await pm.positions(tokenId);
-  // Pool tanpa base yang kita kenal (mis. TOKENA/TOKENB hasil impor): tak ada rute
-  // cash-out dua sisi. Fallback ke WETH akan membakar posisi lalu salah hitung
-  // (unwrap WETH milik operasi lain) dan meninggalkan satu sisi token selamanya.
-  // Gagal SEBELUM burn — dana tetap utuh di posisi.
+  // A pool with no base we recognise (an imported TOKENA/TOKENB, say) has no two-sided
+  // cash-out route. Falling back to WETH would burn the position, then miscalculate
+  // (unwrapping WETH belonging to another operation) and leave one token side stranded.
+  // Failed BEFORE the burn, so the funds are still intact in the position.
   const base = detectBase(cc, p.token0, p.token1);
   if (!base) {
     throw new Error(
@@ -4408,12 +4411,12 @@ async function stopAndCashOut(
   const otherC = new ethers.Contract(otherAddr, ERC20_ABI, w);
   const baseC = base.wrappable ? wethC : new ethers.Contract(base.address, ERC20_ABI, w);
   const baseBefore: bigint = await baseC.balanceOf(w.address);
-  // Saldo token SEBELUM burn = bag spot yang mungkin kamu pegang terpisah. Cash-out
-  // hanya boleh menjual yang dihasilkan POSISI ini (delta di atas ini), bukan bag-mu.
+  // The token balance BEFORE the burn is any spot bag you hold separately. The cash-out may
+  // only sell what THIS position produced (the delta above it), never your bag.
   const otherBefore: bigint = await otherC.balanceOf(w.address).catch(() => 0n);
 
-  // Fee belum diklaim DIBACA SEBELUM burn: sesudahnya posisi lenyap dan fee sudah
-  // melebur ke dalam hasil cash-out, tak bisa dipisah lagi. Gagal baca ≠ gagal
+  // Unclaimed fees are READ BEFORE the burn: afterwards the position is gone and the fees
+  // have merged into the cash-out proceeds, never to be separated. A failed read is not
   // close — kartu cuma kehilangan satu kotak.
   const feesBaseWei = await getPositionDetail(tokenId, cc)
     .then((d) => d.feesBaseWei)
@@ -4424,10 +4427,11 @@ async function stopAndCashOut(
   await sleep(1500); // beri waktu collect settle sebelum baca saldo
 
   const txHashes: string[] = [];
-  // ① Swap token hasil posisi (di atas bag lama) → base, ulang sampai habis (bukan
-  //    sekali/delta). Menutup celah: token sisa dari close lama, RPC telat, no-op.
-  // NFT sudah di-burn di atas: mulai sini TAK BOLEH melempar, kalau tidak user
-  // hanya melihat ERROR mentah & tak tahu posisinya sudah ditarik (PnL pun hilang).
+  // (1) Swap the position's token proceeds (above the old bag) to base, repeating until
+  //     none remain (not once, and not by delta). This covers leftovers from an older close,
+  //     a lagging RPC, and no-ops.
+  // The NFT is already burned above: from here on NOTHING may throw, or the user sees only
+  // a raw ERROR and never learns the position was withdrawn (losing the PnL with it).
   let sw: { baseOut: bigint; txHashes: string[]; leftover: boolean; leftoverWei: bigint } = {
     baseOut: 0n,
     txHashes: [],
@@ -4446,14 +4450,14 @@ async function stopAndCashOut(
     // ② WETH: unwrap SELURUH saldo (pokok + hasil swap) → ETH native.
     const wethBal: bigint = await wethC.balanceOf(w.address).catch(() => 0n);
 
-    // Hasil posisi = WETH yang BERTAMBAH selama close ini, diukur SEBELUM unwrap.
-    //
-    // Dua kesalahan yang dulu ada di sini, dua-duanya membuat kartu PnL bohong:
-    //  • memakai seluruh saldo dompet, bukan pertambahannya → WETH sisa operasi lain
-    //    (mis. 0,12 yang sempat nyangkut) dihitung sebagai untung posisi ini;
-    //  • menghitung dari hasil unwrap, sehingga unwrap yang GAGAL tercatat hasil 0
-    //    dan jurnal melaporkan −100% padahal dananya utuh, cuma masih berbentuk WETH.
-    // Unwrap itu urusan bentuk (WETH vs ETH), bukan urusan nilai.
+    // The position's proceeds are the WETH that ACCUMULATED during this close, measured
+    // BEFORE the unwrap.
+    // Two mistakes used to live here, both making the PnL card lie:
+    //  - using the whole wallet balance rather than the increase, so WETH left over from
+    //    another operation (the 0.12 that was once stranded) counted as this position's gain;
+    //  - computing from the unwrap's result, so a FAILED unwrap recorded a result of 0 and
+    //    the journal reported -100% while the money was intact, merely still in WETH form.
+    // Unwrapping is about form (WETH against ETH), not about value.
     const gainedWeth = wethBal > baseBefore ? wethBal - baseBefore : 0n;
     if (wethBal > gainedWeth) {
       notes.push(
@@ -4469,10 +4473,10 @@ async function stopAndCashOut(
         if (rc) txHashes.push(rc.hash);
         notes.push(`Unwrap ${msg.fmtEth(wethBal)} WETH → ETH`);
       } catch (e) {
-        // Jangan percaya pengecualian soal apa yang mendarat di chain. Pada 2 Agu 2026
-        // pesan "Unwrap failed" muncul untuk transaksi yang BERHASIL (blok 25593905,
-        // status 1) — kemungkinan wait()/RPC yang gagal, bukan transaksinya. Bacanya
-        // jadi salah dua kali: pengguna disuruh /unwrap padahal tak perlu.
+        // Do not trust an exception about what landed on chain. On 2 Aug 2026 an "Unwrap
+        // failed" message appeared for a transaction that SUCCEEDED (block 25593905, status
+        // 1) — most likely a failed wait()/RPC rather than the transaction. That reads wrong
+        // twice over: the user is told to /unwrap when there is nothing to unwrap.
         const after: bigint = await wethC.balanceOf(w.address).catch(() => wethBal);
         if (after < wethBal) {
           notes.push(`Unwrap ${msg.fmtEth(wethBal - after)} WETH → ETH (confirmed by balance)`);
@@ -4484,7 +4488,7 @@ async function stopAndCashOut(
     }
     baseOutWei = gainedWeth + sw.baseOut;
   } else {
-    // ② USDG: tetap sbg stablecoin (tak di-unwrap). Total bersih = kenaikan saldo.
+    // (2) USDG stays a stablecoin (never unwrapped). The net total is the balance increase.
     const baseAfter: bigint = await baseC.balanceOf(w.address).catch(() => baseBefore);
     baseOutWei = baseAfter > baseBefore ? baseAfter - baseBefore : sw.baseOut;
     notes.push(`Received ${ethers.formatUnits(baseOutWei, base.decimals)} ${base.symbol} (kept as stablecoin)`);
@@ -4494,9 +4498,9 @@ async function stopAndCashOut(
     notes.push('⚠️ Some tokens are left over — the monitor will retry automatically.');
   }
 
-  // Satuannya ikut CHAIN, bukan 'ETH' mati: close di BSC menerima BNB dan di
-  // HyperEVM menerima HYPE. Baris "Received" adalah angka yang paling dipercaya
-  // di kartu ini — salah satuan berarti salah membaca hasil seluruh trade.
+  // The unit follows the CHAIN rather than a hardcoded 'ETH': a close on BSC receives BNB
+  // and on HyperEVM receives HYPE. The "Received" line is the most trusted number on this
+  // card — a wrong unit means misreading the whole trade's result.
   const ethOut = base.wrappable
     ? `${msg.fmtEth(baseOutWei)} ${cc.nativeSymbol}`
     : `${ethers.formatUnits(baseOutWei, base.decimals)} ${base.symbol}`;
@@ -4510,12 +4514,12 @@ async function stopAndCashOut(
     native: base.wrappable,
     leftover: sw.leftover,
   });
-  // leftover = token benar-benar masih tersisa di wallet setelah semua percobaan.
+  // leftover means tokens genuinely still sitting in the wallet after every attempt.
   return { text, baseOutWei, leftover: sw.leftover, leftoverWei: sw.leftoverWei, feesBaseWei };
 }
 
-// ── Tutup posisi Uniswap v4 (baca-saja untuk lihat; close didukung) ──
-// Refresh satu kartu v4 (menggantikan tombol ➕ yang dihapus).
+// ── Close a Uniswap v4 position (read-only for viewing; closing is supported) ──
+// Refresh a single v4 card (replacing the removed ➕ button).
 bot.action(/^posv4:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   const cc = getChain();
@@ -4557,14 +4561,15 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   closingInFlight.set(key, Date.now());
   const cc = getChain();
   const tracked = v4store.getV4(tokenId); // tangkap SEBELUM removeV4
-  // Base dibaca dari poolKey SEBELUM close (setelah burn, info pool ikut hilang).
+  // The base is read from the poolKey BEFORE the close (after the burn, pool info is gone).
   const trackedBase = await getPoolKeyV4(cc, tokenId)
     .then((x) => v4Kind(cc, x.base))
     .catch(() => 'weth' as const);
-  // Hasil close diukur dari delta saldo BASE posisi. Base ETH → saldo native; base
-  // USDG → saldo token USDG. Dulu `afterWei` dipaksa null untuk non-ETH, sehingga
-  // SETIAP close v4 berpasangan USDG tercatat tanpa hasil: hilang dari /pnl dan tak
-  // pernah memunculkan profit card. Pool terbaik sering justru yang USDG.
+  // The close's result is measured from the position's BASE balance delta. An ETH base uses
+  // the native balance; a USDG base uses the USDG token balance. `afterWei` used to be
+  // forced to null for anything non-ETH, so EVERY USDG-paired v4 close was recorded with no
+  // result: missing from /pnl and never producing a profit card. The best pools are often
+  // the USDG ones.
   const readBase = async (): Promise<bigint | null> => {
     if (trackedBase === 'usdg') {
       if (!cc.usdgAddress) return null;
@@ -4575,22 +4580,22 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     return cc.provider.getBalance(cc.wallet.address).catch(() => null);
   };
   const beforeWei = await readBase();
-  // Alasan sama dengan jalur v3: fee v4 hanya ada selama posisinya masih hidup.
+  // Same reason as the v3 path: v4 fees only exist while the position is alive.
   const feesBaseWei = await checkV4Status(cc, tokenId)
     .then((st) => st.val?.feesBaseWei)
     .catch(() => undefined);
-  // Profit card v4: butuh hasil terukur + modal awal. Diisi di cabang jurnal di
-  // bawah (satu-satunya tempat keduanya diketahui), dikirim setelah kartu teks.
+  // The v4 profit card needs a measured result plus the cost basis. It is filled in by the
+  // journal branch below (the only place both are known) and sent after the text card.
   let cardRec: store.PosRecord | undefined;
   let cardOutWei: bigint | undefined;
-  // Hasil cash-out v4 hanya bisa diukur dari delta saldo (closePositionV4 tak
-  // mengembalikannya) — dipakai baris "Received" di kartu close.
+  // A v4 cash-out can only be measured from the balance delta (closePositionV4 does not
+  // return it), and it feeds the "Received" line on the close card.
   let measuredOut: bigint | undefined;
   store.beginMoneyOp();
   try {
     await ctx.answerCbQuery('Processing…');
     await ctx.editMessageText(msg.msgProgress('closing v4 position…'), html).catch(() => {});
-    // Probe = likuiditas posisi v4: sudah turun → sebagian close mendarat, jangan ulang.
+    // The probe is the v4 position's liquidity: a drop means part of the close landed, so do not retry.
     const r = await retryOnce(
       'close v4',
       () => v4Liquidity(cc, tokenId),
@@ -4598,14 +4603,14 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
       { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
     );
     if (!r.dryRun) {
-      // Jurnalkan sebelum berhenti melacak — tanpa ini /history & /pnl buta pada v4,
-      // dan sisa token v4 tak pernah jadi kandidat sweep (ca hanya ada di jurnal).
+      // Journal before we stop tracking it — without this /history and /pnl are blind to v4,
+      // and leftover v4 tokens never become sweep candidates (the ca lives only in the journal).
       if (r.base === 'ETH' || r.base === 'USDG') {
         const afterWei = await readBase();
         // ponytail: hasil ETH = delta saldo native (ikut memotong gas → PnL konservatif).
-        // Ledger presisi baru perlu kalau v4 jadi jalur utama.
-        // Base yang diukur harus SAMA dengan base hasil close; kalau tidak, deltanya
-        // milik aset lain → lebih baik "tak terukur" daripada angka yang salah.
+        // A precise ledger only becomes worthwhile if v4 turns into the main path.
+        // The base measured must MATCH the close's base; otherwise the delta belongs to
+        // another asset, and "unmeasured" beats a wrong number.
         const sameBase = trackedBase === v4Kind(cc, r.base);
         const measured =
           sameBase && beforeWei !== null && afterWei !== null && afterWei > beforeWei
@@ -4622,16 +4627,16 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
         };
         measuredOut = measured;
         journal.recordClose(rec, { resultEthWei: measured, reason: 'cashed' });
-        // Kartu hanya bermakna bila modal DAN hasil sama-sama terukur; posisi v4
-        // yang tak ter-track (entry 0) akan memberi PnL +∞ yang menyesatkan.
+        // The card only means anything when both cost and result are measured; an untracked
+        // v4 position (entry 0) would give a misleading PnL of +infinity.
         if (measured !== undefined && tracked?.entryBaseWei) {
           cardRec = rec as store.PosRecord;
           cardOutWei = measured;
         }
       }
-      // Base v4 di luar ETH/USDG tak punya pembaca saldo, jadi hasilnya tak terukur.
-      // Tetap DIJURNALKAN tanpa hasil ('untracked') — tanpa ini posisinya dihapus
-      // dari v4store dan lenyap sepenuhnya dari /pnl & /history, tanpa jejak.
+      // A v4 base outside ETH/USDG has no balance reader, so its result is unmeasurable.
+      // It is still JOURNALLED without a result ('untracked') — without this the position is
+      // deleted from v4store and vanishes entirely from /pnl and /history, without a trace.
       else if (tracked) {
         journal.recordClose(
           {
@@ -4652,12 +4657,12 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     if (r.dryRun) {
       await ctx.reply(msg.msgV4Closed({ tokenId, base: r.base, dryRun: true }), html);
     } else {
-      // Satu kartu untuk semua close, v3 maupun v4. Sebelumnya v4 memakai kartu
-      // ringkas tanpa langkah & tanpa hash — hasil yang sama, jejak yang jauh lebih
-      // sedikit, dan tampilan yang berbeda untuk kejadian yang sama.
+      // One card for every close, v3 and v4 alike. v4 used to use a compact card with no
+      // steps and no hashes — the same outcome with far less of a trail, and a different
+      // look for the same event.
       const dec4 = v4BaseDecimals(cc, r.base);
       const sym4 = v4BaseSymbol(cc, r.base);
-      // Tak terukur → jangan mengarang angka: '—' jujur, '0' terbaca sbg rugi total.
+      // Unmeasured means inventing nothing: '—' is honest, while '0' reads as a total loss.
       const outLabel4 = measuredOut === undefined ? '—' : `${msg.cleanUnits(measuredOut, dec4)} ${sym4}`;
       await ctx.reply(
         msg.msgCashOut({
@@ -4682,9 +4687,9 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
         console.log('[profit-card] v4 failed:', (e as Error).message.slice(0, 120)),
       );
     } else if (!r.dryRun) {
-      // Kartu butuh modal DAN hasil yang sama-sama terukur. Posisi v4 yang tak
-      // tercatat bot (dibuka di luar) atau delta saldo yang tak terbaca akan
-      // menghasilkan angka karangan — sebut alasannya, jangan diam saja.
+      // The card needs cost AND result both measured. A v4 position the bot never recorded
+      // (opened elsewhere), or an unreadable balance delta, would produce a made-up figure —
+      // so say why rather than staying silent.
       await ctx.reply(msg.note('Result could not be measured, so no PnL card for this close.'), html);
     }
   } catch (e) {
@@ -4696,25 +4701,25 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   }
 });
 
-// Batal berlaku untuk semua alur (wizard /add maupun konfirmasi tutup).
+// Cancel applies to every flow (the /add wizard and close confirmations alike).
 bot.action('cancel', async (ctx) => {
   resetFlows(ctx.from!.id);
   await ctx.answerCbQuery('Cancelled');
   await ctx.editMessageText(msg.msgCancelled(), html);
 });
 
-// Penangkap ketikan nominal (didaftarkan TERAKHIR agar tak menelan command).
-// ---------- /size — preset nominal per-aset (ETH & Stablecoin) ----------
-// CRUD tombol dulu memakai Map state + 5 handler; satu baris ketikan cukup dan
+// The catch-all for typed amounts (registered LAST so it never swallows a command).
+// Button CRUD used to need a state Map and 5 handlers; one typed line covers it, and
 // menutup bug "ketikanku ditelan editor preset".
 
-// Rahasia dompet yang salah kirim ke chat. Dicek PALING AWAL, sebelum handler
-// alur mana pun, supaya kunci tak pernah singgah di flow/log. Pesannya juga
-// dihapus — menyuruh user menghapus sendiri berarti kuncinya nongkrong di chat
-// sampai dia sempat. Deteksi: private key hex 64 karakter, atau 12/24 kata BIP-39.
-// Seed dicek dengan validator BIP-39 asli (checksum + wordlist), BUKAN pola
-// "12 kata huruf kecil": kalimat biasa 12 kata akan lolos pola itu dan pesan
-// user yang tak bersalah ikut terhapus.
+// A wallet secret mistakenly pasted into the chat. Checked FIRST, before any flow's
+// handler, so the key never passes through a flow or a log. The message is also
+// deleted — telling the user to delete it themselves leaves the key sitting in the chat
+// until they get round to it. Detection: a 64-character hex private key, or a 12/24-word
+// BIP-39 phrase.
+// A seed is validated with the real BIP-39 validator (checksum plus wordlist), NOT a
+// "12 lowercase words" pattern: an ordinary 12-word sentence would match that pattern and
+// an innocent user's message would be deleted with it.
 const PRIVKEY_RE = /^(0x)?[a-fA-F0-9]{64}$/;
 function looksLikeSecret(t: string): boolean {
   const one = t.replace(/\s+/g, ' ').trim();
@@ -4731,47 +4736,46 @@ function looksLikeSecret(t: string): boolean {
 bot.on(message('text'), async (ctx) => {
   const raw = (ctx.message.text || '').trim();
 
-  // Alur /connect yang sedang menunggu: kunci di sini memang diminta.
-  // Tapi HANYA yang benar-benar berbentuk kunci. Prompt connect yang ditinggalkan
-  // dulu menelan ketikan apa pun sesudahnya — CA yang ditempel ikut DIHAPUS dari
-  // chat lalu dijawab "import failed", karena cabang ini dicek paling awal dan
-  // tak pernah melepaskan diri. Bukan kunci = user sudah pindah niat: lepaskan
-  // prompt-nya dan biarkan ketikan itu ditangani alur yang benar.
+  // A /connect flow that is waiting: a key here is exactly what was asked for.
+  // But ONLY something genuinely shaped like a key. An abandoned connect prompt used to
+  // swallow whatever was typed next — a pasted CA got DELETED from the chat and answered
+  // with "import failed", because this branch is checked first and never let go. Not a key
+  // means the user has moved on: release the prompt and let the right flow handle it.
   if (awaitingSecret.has(ctx.from.id)) {
     if (looksLikeSecret(raw)) return handleSecret(ctx, raw);
     awaitingSecret.delete(ctx.from.id);
   }
 
-  // Item 19 — rahasia dompet di luar alur /connect: abaikan, hapus, peringatkan.
+  // Item 19 — a wallet secret outside the /connect flow: ignore it, delete it, warn.
   if (looksLikeSecret(raw)) {
     await ctx.deleteMessage().catch(() => {}); // butuh hak admin di grup; di chat pribadi selalu boleh
     return ctx.reply(msg.msgSecretLeakWarning(), html);
   }
 
-  // /bridge menunggu nominal — dicek lebih dulu karena state-nya terpisah.
+  // /bridge waiting on an amount — checked first because its state is separate.
   if (await handleBridgeAmount(ctx, raw)) return;
 
-  // /buy /sell token: menunggu alamat kontrak, lalu jumlah → quote rute terbaik → konfirmasi.
+  // /buy and /sell: wait for a contract address, then an amount, then quote the best route, then confirm.
   const tflow = tswapFlows.get(ctx.from.id);
   if (tflow && (tflow.awaitingCA || tflow.awaitingToken || tflow.awaitingAmount) && isStaleFlow(tflow.startedAt)) {
     tswapFlows.delete(ctx.from.id);
     return ctx.reply(msg.msgSessionExpired(), html);
   }
-  // Jawaban untuk prompt persen di /settings dicek lebih dulu: "25 50 75" harus
-  // tersimpan sebagai setelan, bukan terbaca sebagai nominal di alur yang terbuka.
+  // An answer to the percentage prompt in /settings is checked first: "25 50 75" must be
+  // saved as a setting, not read as an amount by whichever flow happens to be open.
   if (await handlePctReply(ctx, raw)) return;
-  // /send: alamat lalu nominal. Diperiksa sebelum alur nominal lain supaya angka
-  // yang diketik di sini tak tertelan wizard /add atau /buy yang masih terbuka.
+  // /send: an address, then an amount. Checked before the other amount flows so a number
+  // typed here is not swallowed by an /add or /buy wizard still open.
   if (await handleSendAddress(ctx, raw)) return;
   if (await handleSendAmount(ctx, raw)) return;
   if (tflow?.awaitingCA) {
-    // /buy alur CA-dulu: user tempel CA → deteksi chain → safety.
+    // /buy, CA-first: the user pastes a CA, the chain is detected, then safety.
     tflow.awaitingCA = false;
     const prog = await ctx.reply(msg.msgProgress('detecting chain…'), html);
     return buyStartFromCA(ctx, raw.trim(), { message_id: prog.message_id });
   }
   if (tflow?.awaitingAmount && tflow.sellList) {
-    // /sell alur holdings: user ketik jumlah token (absolut) atau "semua".
+    // /sell, holdings flow: the user types a token amount (absolute) or "all".
     const bal = tflow.tokenBalWei ?? 0n;
     let amountWei: bigint;
     if (/^(semua|all|max)$/i.test(raw)) {
@@ -4799,7 +4803,7 @@ bot.on(message('text'), async (ctx) => {
         const w = parseAmt(raw, base.decimals);
         if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
         amountWei = w;
-        // Base wrappable dibiayai native (ETH/BNB), jadi itu yang disebut di kartu.
+        // A wrappable base is funded from native (ETH/BNB), so that is what the card names.
         amountInLabel = `${raw} ${base.wrappable ? cc.nativeSymbol : base.symbol}`;
         fromAddr = base.address;
         toAddr = tflow.token!;
@@ -4842,12 +4846,12 @@ bot.on(message('text'), async (ctx) => {
     const w = parseAmt(raw, dec);
     if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
     const num = Number(ethers.formatUnits(w, dec));
-    // Atapnya = MODAL YANG BENAR-BENAR DIPEGANG, bukan angka kebijakan. usableFor()
-    // sudah menangani kedua sisi: sisi token = saldo token, sisi base wrappable =
-    // saldo native dikurangi cadangan gas (kalau dipakai habis, tx-nya sendiri tak
-    // terbayar). Dulu hanya sisi token yang dijaga saldo; sisi base bersandar pada
-    // batas per-tx, jadi begitu batas itu dimatikan tak ada yang menahan sama sekali.
-    // Pembacaan gagal → pakai batas dari amountCtx, jangan memblokir hanya karena RPC ngadat.
+    // The ceiling is the CAPITAL ACTUALLY HELD, not a policy number. usableFor() already
+    // handles both sides: the token side is the token balance, and a wrappable base side is
+    // the native balance minus the gas reserve (spend it all and the tx itself goes unpaid).
+    // Only the token side used to be balance-guarded; the base side leaned on the per-tx
+    // limit, so the moment that limit was switched off nothing held it back at all.
+    // A failed read falls back to amountCtx's limit rather than blocking over a flaky RPC.
     let cap = a.cap;
     let capLabel = a.capLabel;
     const balWei = await usableFor(flow).catch(() => null);
@@ -4863,16 +4867,16 @@ bot.on(message('text'), async (ctx) => {
     return;
   }
 
-  // CA telanjang (tanpa command) → HUB TOKEN. Ini dicek SETELAH semua alur yang
-  // sedang menunggu ketikan, supaya tempel CA di tengah wizard tak membajaknya.
-  // (cast: isAddress adalah type-guard — tanpa ini TS menyempitkan `raw` jadi never di bawah)
+  // A bare CA (no command) goes to the TOKEN HUB. Checked AFTER every flow waiting on input,
+  // so pasting a CA mid-wizard does not hijack it.
+  // (the cast is needed because isAddress is a type guard: without it TS narrows `raw` to never below)
   const isCa = ethers.isAddress(raw) as boolean;
   if (isCa) return startTokenHub(ctx, ethers.getAddress(raw));
 
-  // Bukan command (command sudah ditangani handler lain) → unknown.
-  // Abaikan string kosong / pure number di luar konteks.
+  // Not a command (commands are handled elsewhere), so it is unknown.
+  // Ignore empty strings and bare numbers with no context.
   if (!raw || raw.startsWith('/')) {
-    // Command tak dikenal (telegraf tidak match): /foo
+    // An unrecognised command (telegraf did not match): /foo
     if (raw.startsWith('/')) {
       const cmd = raw.split(/\s+/)[0];
       return ctx.reply(msg.msgUnknown(cmd), html);
@@ -4883,7 +4887,7 @@ bot.on(message('text'), async (ctx) => {
 });
 
 bot.catch((err, ctx) => {
-  // Tombol berputar sampai timeout kalau error terjadi sebelum answerCbQuery.
+  // The button spins until it times out if an error occurs before answerCbQuery.
   if (ctx.callbackQuery) ctx.answerCbQuery('Failed — see the message.').catch(() => {});
   console.error('Bot error:', err);
   ctx.reply?.(msg.msgError('bot', (err as Error).message), html).catch(() => {});
@@ -4891,9 +4895,9 @@ bot.catch((err, ctx) => {
 
 /**
  * Daftar command menu Telegram (tombol "/" / Menu).
- * ISINYA HARUS = semua bot.command() yang terdaftar — diperiksa saat boot oleh
- * assertMenuComplete() di bawah, supaya perintah baru tak pernah lagi hidup
- * diam-diam tanpa muncul di menu.
+ * ITS CONTENTS MUST equal every registered bot.command() — verified at boot by
+ * assertMenuComplete() below, so a new command can never again be live
+ * silently without appearing in the menu.
  */
 const BOT_COMMANDS = [
   // Mulai & bantuan
@@ -4919,13 +4923,13 @@ const BOT_COMMANDS = [
   { command: 'alerts', description: 'Notification settings' },
 ] as const;
 
-/** Menu vs command terdaftar. Selisihnya dilaporkan ke log, tidak mematikan bot. */
+/** The menu against the registered commands. Any difference is logged, never fatal. */
 /**
- * Alias yang SENGAJA tak dipasang di menu. Penjaga menu tetap galak untuk sisanya —
- * daftar ini agar alias yang disengaja tak terbaca sebagai command yang lupa didaftar.
+ * Aliases DELIBERATELY kept out of the menu. The menu guard stays strict for everything
+ * else — this list simply stops an intentional alias reading as a forgotten registration.
  */
-// Alias tersembunyi: /status nama lama /portfolio; /add_lp masih jadi satu-satunya
-// pintu ke pemilih pool teratas (tanpa CA), jadi handler-nya tetap hidup.
+// Hidden aliases: /status is the old name for /portfolio; /add_lp is still the only door
+// to the top-pool picker (with no CA), so its handler stays alive.
 const HIDDEN_COMMANDS = new Set(['status', 'add_lp']);
 
 function assertMenuComplete(): void {
@@ -4938,10 +4942,10 @@ function assertMenuComplete(): void {
 }
 
 /**
- * Pasang menu command di scope yang dipakai chat private.
- * - default + all_private_chats + chat owner
- * - language_code id/en (klien ID/EN kadang tidak fallback ke default)
- * - setChatMenuButton → commands (bukan web-app kosong)
+ * Install the command menu in the scope private chats use.
+ *
+ * - language_code id/en (ID/EN clients sometimes do not fall back to the default)
+ * - setChatMenuButton -> commands (not an empty web app)
  */
 async function registerBotCommands() {
   const scopes: Array<Record<string, unknown>> = [
@@ -4952,8 +4956,8 @@ async function registerBotCommands() {
   assertMenuComplete();
   const cmds = [...BOT_COMMANDS];
 
-  // Loop deleteMyCommands dulu mengirim 9 panggilan sia-sia (scope-nya di-set ulang
-  // beberapa baris di bawah) dan memakai language_code 'in' yang bukan kode sah.
+  // The deleteMyCommands loop used to send 9 pointless calls (the scope is set again a few
+  // lines below) and used language_code 'in', which is not a valid code.
   for (const scope of scopes) {
     try {
       await bot.telegram.setMyCommands(cmds, { scope: scope as any });
@@ -4998,13 +5002,13 @@ async function registerBotCommands() {
 }
 
 // --- Nyalakan ---
-// launch() gagal (mis. 409 conflict saat deploy overlap / jaringan) → RETRY dgn
-// backoff, bukan langsung exit. 409 = instance lama masih polling; tunggu ia lepas.
+// A failed launch() (a 409 conflict during an overlapping deploy, or the network) RETRIES
+// with backoff rather than exiting. A 409 means the old instance is still polling; wait for it.
 // Menyerah setelah maxTries → exit(1), systemd auto-restart.
 function launchWithRetry(attempt = 1, maxTries = 6) {
-  // onLaunch dipanggil saat polling MULAI. Promise-nya baru selesai saat bot
-  // BERHENTI (Telegraf v4) — dulu "online" & pemasangan menu tersangkut di sana,
-  // jadi menu "/" baru terkirim saat proses mati dan selalu tertinggal satu versi.
+  // onLaunch fires when polling STARTS. Its promise only settles when the bot STOPS
+  // (Telegraf v4) — "online" and the menu installation used to hang there, so the "/" menu
+  // was only sent as the process died and was always one version behind.
   bot
     .launch(() => {
       console.log(
@@ -5014,8 +5018,8 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
         msg.modeLabel(config.safety.dryRun),
       );
       // Tanpa WALLET_SECRET, keystore dikunci memakai token bot. Ganti/cabut token
-      // di BotFather = kunci tak bisa dibuka lagi, dan bot hanya diam bilang
-      // "connect your wallet". Peringatkan sekali tiap boot, bukan diam-diam.
+      // in BotFather means the key can never be opened again, and the bot just sits there
+      // saying "connect your wallet". Warn once per boot rather than staying silent.
       if (!process.env.WALLET_SECRET) {
         console.warn(
           '[wallet] WARNING: WALLET_SECRET is not set — the keystore is encrypted with the bot token. ' +
@@ -5032,10 +5036,10 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
         const text = String((err as Error)?.message ?? err);
         const is409 = code === 409 || /409|conflict|terminated by other getUpdates/i.test(text);
 
-        // Token salah TIDAK akan sembuh dengan menunggu. Telegram membalas 401
-        // (dicabut) atau 404 pada getMe (tak dikenal) — mencoba ulang enam kali lalu
-        // keluar membuat systemd mengulangnya selamanya, dengan pesan "404: Not Found"
-        // yang tak menyebut penyebabnya sama sekali. Berhenti, dan katakan apa adanya.
+        // A wrong token will NOT heal by waiting. Telegram answers 401 (revoked) or 404 on
+        // getMe (unknown) — retrying six times and then exiting has systemd repeat it forever,
+        // with a "404: Not Found" message that names no cause at all. Stop, and say plainly what
+        // happened.
         const badToken = code === 401 || (code === 404 && /getMe/i.test(JSON.stringify((err as any)?.on ?? '')));
         if (badToken) {
           console.error(
@@ -5063,12 +5067,12 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
 launchWithRetry();
 startMonitor(bot); // auto-monitor posisi aktif
 
-// --- Watchdog liveness: telegraf long-poll bisa NGADAT diam-diam (getUpdates
-// wedged / DC bot 502) — proses tetap "hidup", tapi bot bisu berjam-jam: tak ada
-// alert anjlok/IL, tak ada respons command. systemd tak me-restart karena tak crash.
+// --- Liveness watchdog: telegraf long-polling can STALL silently (a wedged getUpdates, a
+// 502 from the bot DC) — the process stays "alive" while the bot goes mute for hours: no
+// drop or IL alerts, no command responses. systemd does not restart it, because nothing crashed.
 // Probe getMe() berkala; gagal beruntun = poll mati → exit(1), biar systemd restart
-// (memulai long-poll baru — obat yang sama yang memulihkan insiden 7 jam). getMe
-// lewat DC yang sama dgn getUpdates, jadi ikut gagal saat poll ngadat.
+// (which starts a fresh long poll — the same cure that recovered the 7-hour incident). getMe
+// goes through the same DC as getUpdates, so it fails too when polling stalls.
 function startWatchdog() {
   const EVERY_MS = 3 * 60_000;
   const TIMEOUT_MS = 10_000;
@@ -5094,7 +5098,7 @@ function startWatchdog() {
 }
 startWatchdog();
 
-// --- Auto-recovery: error tak tertangani → log + notif + restart via systemd ---
+// --- Auto-recovery: an unhandled error logs, notifies, and restarts via systemd ---
 async function notifyCrash(kind: string, err: unknown) {
   try {
     await bot.telegram.sendMessage(
@@ -5108,19 +5112,19 @@ async function notifyCrash(kind: string, err: unknown) {
 }
 process.on('uncaughtException', (err) => {
   console.error('uncaughtException:', err);
-  // Keluar DIJADWALKAN LEBIH DULU, baru notif. Penyebab crash paling lazim di bot
-  // ini adalah masalah jaringan/Telegram — persis keadaan saat sendMessage-nya ikut
-  // menggantung. Kalau exit menunggu notif, proses hidup terus dalam keadaan pasca-
-  // crash: monitor tetap menandatangani tx, systemd tak pernah me-restart.
+  // The exit is SCHEDULED FIRST, then the notification. The most common crash cause in this
+  // bot is a network or Telegram problem — exactly the situation where sendMessage hangs too.
+  // If the exit waited on the notification, the process would stay alive in a post-crash
+  // state: the monitor still signing transactions, and systemd never restarting it.
   setTimeout(() => process.exit(1), 3000).unref(); // systemd Restart=always menghidupkan lagi
   notifyCrash('uncaughtException', err).finally(() => process.exit(1));
 });
 process.on('unhandledRejection', (err) => {
-  // Jangan matikan proses untuk rejection lepas — cukup log (aman utk polling).
+  // Do not kill the process over a loose rejection — logging is enough (safe for polling).
   console.error('unhandledRejection:', err);
 });
 
-// Shutdown bersih: stop polling lalu KELUAR (sebelumnya menggantung sampai SIGKILL).
+// Clean shutdown: stop polling, then EXIT (it used to hang until SIGKILL).
 const shutdown = (sig: string) => {
   try {
     bot.stop(sig);
