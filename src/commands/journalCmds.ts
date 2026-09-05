@@ -46,19 +46,28 @@ const chainLabel = (key: string): string =>
  * tap kemudian menyebut angka kedua dengan kata yang sama — seolah 600 trade
  * hilang di antara dua layar.
  */
-function pnlChains(): Array<{ key: string; label: string; trades: number; scored: number }> {
+async function pnlChains(): Promise<Array<{ key: string; label: string; trades: number; scored: number }>> {
   const hist = new Map(journal.chainsWithHistory().map((c) => [c.key, c.trades]));
   const keys = new Set<string>([...Object.keys(CHAINS), ...hist.keys()]);
-  const scoredOf = (key?: string) =>
-    journal.statsFor(0, key).books.reduce((a, b) => a + b.known, 0);
+  // Kurs yang SAMA dengan kartu. Tanpa ini pemilih menilai dalam satuan native
+  // sementara kartu menilai dalam USD, jadi ambang debunya beda dan kedua layar
+  // menyebut angka "scored" yang berbeda untuk data yang sama (Robinhood: 174 vs 175).
+  const rates = await usdRates();
+  const usd = (u: string) => rates.get(u) ?? null;
+  // POSISI, bukan entri jurnal: satu ladder 8-leg adalah satu posisi. Memakai
+  // jumlah entri di sini membuat pemilih menjanjikan 724 trade yang tak akan
+  // pernah muncul di kartu mana pun.
+  const statOf = (key?: string) => {
+    const st = journal.statsFor(0, key, usd);
+    return { trades: st.positions, scored: st.books.reduce((a, b) => a + b.known, 0) };
+  };
   const per = [...keys]
-    .map((key) => ({ key, label: chainLabel(key), trades: hist.get(key) ?? 0, scored: scoredOf(key) }))
+    .filter((key) => (hist.get(key) ?? 0) > 0 || key in CHAINS)
+    .map((key) => ({ key, label: chainLabel(key), ...statOf(key) }))
     .sort((a, b) => b.trades - a.trades || a.label.localeCompare(b.label));
   // Gabungan semua chain di paling atas — pertanyaan pertama biasanya "totalnya berapa".
-  const total = per.reduce((a, c) => a + c.trades, 0);
-  return total > 0
-    ? [{ key: ALL, label: 'All chains', trades: total, scored: scoredOf(undefined) }, ...per]
-    : per;
+  const semua = statOf(undefined);
+  return semua.trades > 0 ? [{ key: ALL, label: 'All chains', ...semua }, ...per] : per;
 }
 
 /** Kunci semu untuk gabungan lintas chain. */
@@ -88,9 +97,9 @@ const rows2 = <T,>(items: T[], make: (x: T) => any) => {
   return out;
 };
 
-const chainKb = () =>
+const chainKb = (chains: Awaited<ReturnType<typeof pnlChains>>) =>
   Markup.inlineKeyboard([
-    ...rows2(pnlChains(), (c) => Markup.button.callback(c.label, `pnlc:${c.key}`)),
+    ...rows2(chains, (c) => Markup.button.callback(c.label, `pnlc:${c.key}`)),
     [Markup.button.callback('📜 History', 'history'), Markup.button.callback('📊 View Positions', 'positions')],
   ]);
 
@@ -102,8 +111,9 @@ const periodKb = (chain: string, active?: journal.PeriodKey) =>
     [Markup.button.callback('‹ Chains', 'pnlback'), Markup.button.callback('📜 History', 'history')],
   ]);
 
-export function cmdPnl(ctx: any) {
-  return ctx.reply(msg.msgPnlPicker(pnlChains()), { ...html, ...chainKb() });
+export async function cmdPnl(ctx: any) {
+  const chains = await pnlChains();
+  return ctx.reply(msg.msgPnlPicker(chains), { ...html, ...chainKb(chains) });
 }
 bot.command('pnl', cmdPnl);
 
@@ -145,7 +155,7 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   // pas tanpa menabrak artwork. Profit factor & rata-rata menang/kalah dipindah ke
   // caption + kartu teks, tempat yang memang muat.
   const stats: Array<{ label: string; value: string }> = [
-    { label: 'trades', value: `${main.known} (${main.wins}W/${main.losses}L)` },
+    { label: 'trades', value: `${main.known} (${main.wins}W/${main.losses}L)` }, // posisi, bukan leg
     { label: 'profit', value: n2(main.grossWin, main.unit) },
     { label: 'loss', value: n2(main.grossLoss, main.unit) },
   ];
@@ -158,7 +168,9 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
     pnlBig: n2(main.net, main.unit),
     pnlPct: `${wr.toFixed(1)}% winrate`,
     stats,
-    footerLeft: `${s.known} scored${s.books.reduce((n, b) => n + b.flats, 0) ? ` · ${s.books.reduce((n, b) => n + b.flats, 0)} flat` : ''} · ${new Date().toISOString().slice(0, 10)}`,
+    footerLeft: `${s.known} of ${s.positions} positions scored${
+      s.books.reduce((n, b) => n + b.flats, 0) ? ` · ${s.books.reduce((n, b) => n + b.flats, 0)} flat` : ''
+    } · ${new Date().toISOString().slice(0, 10)}`,
   }).catch(() => null);
 }
 
@@ -177,9 +189,19 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
   // Tanpa baris flat, selisih 728 vs 246 tak punya penjelasan di mana pun.
   const scored = s.books.reduce((a, b) => a + b.known, 0);
   const flats = s.books.reduce((a, b) => a + b.flats, 0);
-  const tail: string[] = [`${s.count} closed → ${scored} scored`];
+  // Dua tingkat, karena satu ladder ditutup sebagai banyak leg tapi satu posisi.
+  // Menyebut "724 closed → 158 scored" tanpa langkah tengahnya membuat 500-an
+  // trade terlihat menguap; angka posisi itulah yang menjelaskannya.
+  const tail: string[] = [
+    s.positions === s.legs
+      ? `${s.count} closed → ${scored} scored`
+      : `${s.count} legs → ${s.positions} positions → ${scored} scored`,
+  ];
   if (flats) tail.push(`${flats} break-even`);
   if (s.untracked) tail.push(`${s.untracked} result unknown`);
+  // Tanpa baris ini jumlah di caption berhenti berjumlah begitu ada placeholder
+  // backfill — kartu teks sudah menyebutnya sejak awal, caption gambar belum.
+  if (s.excluded) tail.push(`${s.excluded} legacy, no result data`);
   if (s.recovered) tail.push(`${s.recovered} sweep credited`);
   if (s.unconverted) tail.push(`${s.unconverted} no USD rate`);
   if (s.estimated) tail.push(`${s.estimated} at today's rate`);
@@ -245,7 +267,8 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
 // Kembali ke pemilih chain — EDIT kartu yang sama, jangan kirim pesan baru.
 bot.action('pnlback', async (ctx: any) => {
   await ctx.answerCbQuery().catch(() => {});
-  return swap(ctx, msg.msgPnlPicker(pnlChains()), { ...html, ...chainKb() });
+  const chains = await pnlChains();
+  return swap(ctx, msg.msgPnlPicker(chains), { ...html, ...chainKb(chains) });
 });
 
 // Langkah 1 → 2: chain dipilih, langsung tampilkan All Time (jawaban paling berguna).

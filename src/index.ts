@@ -929,7 +929,7 @@ async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolea
  */
 function finalizeClose(
   tokenId: string,
-  opts: { resultEthWei?: bigint; reason: journal.JournalEntry['reason']; keep?: boolean; leftoverWei?: bigint },
+  opts: { resultEthWei?: bigint; reason: journal.JournalEntry['reason']; keep?: boolean; leftoverWei?: bigint; groupId?: string },
 ) {
   // Posisi yang sedang ditutup jalur manual: hanya jalur itu ('cashed') yang boleh
   // menjurnalkan — dia yang memegang angka hasil. Render/sync yang kebetulan
@@ -4095,6 +4095,10 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       const share = i === legs.length - 1 ? totalOut - attributed : totalInit > 0n ? (totalOut * BigInt(l.initialWethWei || '0')) / totalInit : 0n;
       attributed += share;
       finalizeClose(l.tokenId, {
+        // Cap ladder: 8 leg ini SATU posisi. Tanpa cap, /pnl menghitungnya 8 trade
+        // dan membagi PnL-nya jadi ~1/8 — cukup kecil untuk dianggap debu lalu
+        // hilang dari W/L. Lihat `groupOf` di journal.ts.
+        groupId,
         ...(share > 0n ? { resultEthWei: share } : {}),
         reason: 'cashed',
         keep: i === 0 && sw.leftover,
@@ -4178,7 +4182,7 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
           openedAt: l.openedAt,
           initialWethWei: l.entryBaseWei || '0',
         },
-        { ...(share > 0n ? { resultEthWei: share } : {}), reason: 'cashed' },
+        { ...(share > 0n ? { resultEthWei: share } : {}), reason: 'cashed', groupId },
       );
       v4store.removeV4(l.tokenId);
     });
@@ -4568,6 +4572,23 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
           cardRec = rec as store.PosRecord;
           cardOutWei = measured;
         }
+      }
+      // Base v4 di luar ETH/USDG tak punya pembaca saldo, jadi hasilnya tak terukur.
+      // Tetap DIJURNALKAN tanpa hasil ('untracked') — tanpa ini posisinya dihapus
+      // dari v4store dan lenyap sepenuhnya dari /pnl & /history, tanpa jejak.
+      else if (tracked) {
+        journal.recordClose(
+          {
+            tokenId,
+            symbol: `${r.sym0}/${r.sym1}`,
+            ca: r.other,
+            chain: cc.key,
+            baseKind: v4Kind(cc, r.base),
+            openedAt: tracked.openedAt,
+            initialWethWei: tracked.entryBaseWei ?? '0',
+          },
+          { reason: 'cashed' },
+        );
       }
       v4store.removeV4(tokenId); // berhenti dilacak setelah tertutup
       invalidateV4ListCache();
