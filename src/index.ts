@@ -2163,12 +2163,12 @@ async function continueAddlp(
     )
   ).filter((p): p is explore.TokenPool => p !== null);
 
-  // Krystal duluan (TVL benar & poolKey terverifikasi), lalu sisa gateway.
+  // Krystal first (correct TVL and a verified poolKey), then whatever the gateway adds.
   let pools = [...kPools, ...gwFixed];
-  // Buang pool v4 ETH yang SEKARAT: TVL gateway sering nol/salah utk v4, dan pool
-  // liq ~$0 harganya nyangkut jauh dari pasar → dana yang disetor langsung
-  // "hilang" ke harga palsu (persis kasus PEPE di pool liq $25). Saring pakai
-  // likuiditas aktif on-chain + selisih harga vs pasar (DexScreener).
+  // Drop DYING v4 ETH pools: the gateway's TVL is often zero or wrong for v4, and a pool
+  // with ~$0 liquidity has a price stuck far from the market, so a deposit vanishes
+  // straight into a fake price (exactly the PEPE case in a $25 pool). Filter on on-chain
+  // active liquidity plus the price gap against the market (DexScreener).
   {
     const tokMkt = await getTokenEthPrice(token, cc).catch(() => null);
     pools = (
@@ -2176,11 +2176,11 @@ async function continueAddlp(
         pools.map(async (p) => {
           if (p.protocol !== 'v4' || !p.poolKey) return p;
           const h = await poolHealthV4(cc, p.poolKey).catch(() => null);
-          // Likuiditas AKTIF 0 = pool mati (TVL gateway sering bohong: mis. BULL
-          // fee 30000 "TVL $173" tapi activeLiq 0). Mint di sini → 'liquidity 0'
-          // atau dana nyangkut. Buang, apapun base-nya (ETH & USDG sama saja).
+          // Zero ACTIVE liquidity means a dead pool (the gateway's TVL often lies: BULL
+          // at fee 30000 read "TVL $173" with activeLiq 0). Minting there gives
+          // 'liquidity 0' or traps the funds. Drop it whatever the base (ETH and USDG alike).
           if (!h || h.liquidity === 0n) return null;
-          // Utk pasangan ETH ada acuan harga pasar → buang juga yang melenceng >25%.
+          // For ETH pairs there is a market reference, so also drop anything off by >25%.
           if (p.base === 'weth' && tokMkt && h.impliedTokenEthPrice) {
             const r = h.impliedTokenEthPrice / tokMkt;
             if (r > 1.25 || r < 0.8) return null;
@@ -2190,34 +2190,34 @@ async function continueAddlp(
       )
     ).filter((p): p is explore.TokenPool => p !== null);
   }
-  // Jaminan SINGLE-SIDE: hanya pool yang base-nya benar-benar didukung chain ini
-  // (ETH/USDG di Robinhood, BNB/USDT di BSC). base datang dari 3 sumber berbeda —
-  // ini penjaga terakhir supaya tiap pool yang ditawarkan pasti bisa dibuka 1-sisi.
+  // SINGLE-SIDE guarantee: only pools whose base this chain genuinely supports (ETH/USDG
+  // on Robinhood, BNB/USDT on BSC). The base arrives from three different sources, so this
+  // is the last guard ensuring every pool offered can actually be opened one-sided.
   const okBase = new Set(cc.bases.map((b) => b.kind));
   pools = pools.filter((p) => okBase.has(p.base));
-  // Ambang diuji pada TVL SENDIRI, bukan TVL+Volume. Dengan ambang gabungan, volume
-  // palsu meloloskan pool kosong: 20 Agu 2026 pool `USDT/牛来 fee100` ber-TVL $2
-  // (vol $83k) benar-benar tampil di top-3. Lebih baik menawarkan <3 pool nyata.
+  // The threshold is tested against TVL ALONE, not TVL+volume. With a combined threshold,
+  // fake volume lets an empty pool through: on 20 Aug 2026 the `USDT/牛来 fee100` pool with
+  // $2 TVL (and $83k volume) really did appear in the top 3. Better to offer fewer real pools.
   const sized = pools.filter((p) => p.tvlUsd >= MIN_POOL_TVL_USD);
-  // Ambang boleh dilonggarkan saat tak ada yang lolos (TVL gateway sering nol utk
-  // pool baru yang sebenarnya hidup) — TAPI pool tanpa TVL *dan* tanpa volume sama
-  // sekali tak punya satu pun tanda kehidupan. 30 Agu 2026 tiga pool v3 `富贵` di BSC
-  // ($0+v0) tetap ditawarkan karena kelonggaran ini membatalkan filternya sendiri.
-  // v4 selamat oleh cek likuiditas on-chain di atas; v3 tak punya, jadi hanya v3
-  // yang bisa lolos dengan $0 — setoran ke situ nyangkut di harga palsu.
+  // The threshold may be relaxed when nothing passes (gateway TVL is often zero for a new
+  // pool that is genuinely alive) — BUT a pool with no TVL *and* no volume has not one sign
+  // of life. On 30 Aug 2026 three v3 `富贵` pools on BSC ($0 and no volume) were still
+  // offered, because that relaxation cancelled its own filter. v4 is saved by the on-chain
+  // liquidity check above; v3 has none, so only v3 can slip through at $0 — and a deposit
+  // there gets stuck at a fake price.
   pools = sized.length > 0 ? sized : pools.filter((p) => p.tvlUsd > 0 || (p.vol24hUsd ?? 0) > 0);
   if (pools.length === 0) {
     await editProgress(ctx, prog, msg.msgNoPools(cc.bases.map((b) => b.symbol).join('/')));
     return;
   }
-  // Cukup TOP-3 by TVL+Volume (rankPoolsForFill), gabungan semua sumber chain ini.
+  // The TOP 3 by TVL+volume (rankPoolsForFill) is enough, across every source on this chain.
   pools = rankPoolsForFill(pools).slice(0, POOL_PICK_MAX);
   console.log(
     `[add] ${token} ${cc.key}: krystal=${kPools.length} gateway=${gwPools.length} → top${pools.length}` +
       ` | ${pools.map((p) => `${p.baseSymbol}/${p.otherSymbol} ${p.protocol} fee${p.fee} $${Math.round(p.tvlUsd)}+v${Math.round(p.vol24hUsd ?? 0)}`).join(' , ')}`,
   );
 
-  // 3) Mulai wizard — reuse bubble progress jadi step pilih pool.
+  // 3) Start the wizard, reusing the progress bubble as the pool-picker step.
   const flow: AddFlow = { token, chain: chainKey, screenBahaya, screenFailed, pools, startedAt: Date.now() };
   flows.set(ctx.from.id, flow);
   await editProgress(ctx, prog, msg.msgPoolStep(`$${pools[0]?.otherSymbol ?? '?'} (${cc.label})`, poolSummaries(pools)), {
@@ -2226,16 +2226,16 @@ async function continueAddlp(
   });
 }
 
-// Simpan token yang menunggu pilihan chain.
+// Store the token that is waiting on a chain choice.
 
 bot.command('add_lp', async (ctx: any) => {
   resetFlows(ctx.from!.id); // alur baru = buang sisa alur lama (anti-hijack ketikan)
   const [, token] = ctx.message.text.trim().split(/\s+/);
-  // Tanpa CA → langkah 1 naskah: pilih pair dari pool teratas, atau cari sendiri.
+  // With no CA, go to the briefed step 1: pick a pair from the top pools, or search.
   if (!token) return pairPicker(ctx);
   if (!ethers.isAddress(token)) return ctx.reply(msg.msgInvalidAddress(), html);
 
-  // 0) Deteksi chain — 1 bubble progress (di-edit di langkah berikutnya).
+  // 0) Detect the chain — one progress bubble, edited at the next step.
   const prog = await ctx.reply(msg.msgProgress('detecting chain…'), html);
   const found = await detectChains(token);
   if (found.length === 0) {
@@ -2252,9 +2252,9 @@ bot.command('add_lp', async (ctx: any) => {
   }
   if (found.length === 1) return continueAddlp(ctx, token, found[0].key, prog);
 
-  // Token ada di beberapa chain → ganti progress jadi pemilih chain.
-  // Token dibawa DI callback (bukan Map global): dulu `/add A` lalu `/add B`
-  // membuat tombol kartu A memproses token B.
+  // The token exists on several chains, so turn the progress message into a chain picker.
+  // The token rides IN the callback (not in a global Map): `/add A` followed by `/add B`
+  // used to leave card A's buttons processing token B.
   await editProgress(ctx, prog, msg.msgChainPick(), {
     ...html,
     ...Markup.inlineKeyboard([
@@ -2267,14 +2267,14 @@ bot.command('add_lp', async (ctx: any) => {
 bot.action(/^chn:(\w+):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const token = ctx.match[2];
   await ctx.answerCbQuery();
-  // Lanjut screening; reuse pesan chain-pick sebagai progress.
+  // Continue to screening, reusing the chain-picker message as the progress bubble.
   const prog = ctx.callbackQuery?.message
     ? { message_id: (ctx.callbackQuery.message as { message_id: number }).message_id }
     : null;
   await continueAddlp(ctx, token, ctx.match[1], prog);
 });
 
-// --- Navigasi wizard (maju & mundur) ---
+// --- Wizard navigation (forward and back) ---
 const getFlow = (ctx: any): AddFlow | undefined => flows.get(ctx.from!.id);
 
 bot.action(/^pick:(\d+)$/, async (ctx) => {
@@ -2282,8 +2282,8 @@ bot.action(/^pick:(\d+)$/, async (ctx) => {
   if (!flow) return ctx.answerCbQuery('Expired — start again with /add_lp.');
   const sel = flow.pools[Number(ctx.match[1])];
   if (!sel) return ctx.answerCbQuery('Invalid choice — start again with /add_lp.');
-  // v4: dukung base ETH-native & USDG. WETH-wrapped (bukan native) di-skip —
-  // wallet pegang ETH native (bukan WETH), jadi tak bisa mendanai.
+  // v4: supports a native-ETH base and USDG. Wrapped WETH (not native) is skipped — the
+  // wallet holds native ETH rather than WETH, so it could not fund it.
   if (sel.protocol === 'v4') {
     const pk = sel.poolKey!;
     const baseCur = sel.baseIsCurrency0 ? pk.currency0 : pk.currency1;
@@ -2300,7 +2300,7 @@ bot.action(/^pick:(\d+)$/, async (ctx) => {
   flow.rangePct = undefined;
   await ctx.answerCbQuery();
   flow.strategy = undefined;
-  // Urutan naskah: pair → strategi → nominal → rentang → konfirmasi.
+  // The briefed order: pair -> strategy -> amount -> range -> confirm.
   await renderStrategyStep(ctx, flow, true);
 });
 
@@ -2338,8 +2338,8 @@ bot.action(/^rng:(\d+)$/, async (ctx) => {
   flow.rangePct = Number(ctx.match[1]);
   flow.plan = undefined;
   flow.ladderPlans = undefined;
-  // Ladder Bid-Ask sisi BASE (buy-dip) — v3 (multicall) & v4 (batch modifyLiquidities).
-  // Sisi token → preview SPOT tunggal (perilaku lama).
+  // A Bid-Ask ladder on the BASE side (buy-the-dip) — v3 (multicall) and v4 (batched
+  // modifyLiquidities). The token side previews a single SPOT position (the old behaviour).
   if (flow.strategy === 'base') {
     await ctx.answerCbQuery();
     return renderShapeStep(ctx, flow, true);
@@ -2354,7 +2354,7 @@ bot.action(/^rng:(\d+)$/, async (ctx) => {
   }
 });
 
-/** Langkah pilih BENTUK distribusi: SPOT (rata, 1 posisi) atau BID-ASK (ladder buy-dip). */
+/** The distribution SHAPE step: SPOT (even, one position) or BID-ASK (a buy-the-dip ladder). */
 async function renderShapeStep(ctx: any, flow: AddFlow, edit: boolean) {
   const text = msg.msgShapeStep(flow.selected?.otherSymbol ?? 'token', flow.rangePct ?? 0);
   const extra = {
@@ -2368,14 +2368,14 @@ async function renderShapeStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-/** Pilih jumlah leg untuk ladder Bid-Ask (auto-cap ke spacing pool saat plan). */
+/** Choose the leg count for a Bid-Ask ladder (auto-capped to the pool's spacing when planned). */
 async function renderLegStep(ctx: any, flow: AddFlow, edit: boolean) {
   const text = msg.msgLegStep(flow.selected?.otherSymbol ?? 'token', flow.rangePct ?? 0);
-  // Pilihan leg diambil dari setelan (/settings → Ladder legs), bukan daftar mati.
+  // The leg choices come from settings (/settings -> Ladder legs), not a hardcoded list.
   const opts = pctPresets.get('legs').map((n) =>
     Markup.button.callback(n >= 15 ? `${n} legs · 💸 paid RPC` : `${n} legs`, `leg:${n}`),
   );
-  // Yang butuh RPC berbayar dipisah ke barisnya sendiri biar tak asal kepencet.
+  // The options needing a paid RPC get their own row, so they are not tapped by accident.
   const cheap = opts.filter((_, i) => pctPresets.get('legs')[i] < 15);
   const pricey = opts.filter((_, i) => pctPresets.get('legs')[i] >= 15);
   const rows = [
@@ -2472,7 +2472,7 @@ bot.action('back:amount', async (ctx) => {
 
 bot.action('addok', async (ctx) => {
   const flow = getFlow(ctx);
-  // --- Jalur LADDER v4 (batch modifyLiquidities: N leg dalam 1 tx atomik) ---
+  // --- v4 LADDER path (batched modifyLiquidities: N legs in 1 atomic tx) ---
   if (flow?.selected?.protocol === 'v4' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1) {
     if (!flow.ethAmount || flow.rangePct === undefined || !flow.v4LadderLegs?.length)
       return ctx.answerCbQuery('Expired — start again with /add_lp.');
@@ -2486,7 +2486,7 @@ bot.action('addok', async (ctx) => {
       const cc = getChain(chain);
       const pk = selected.poolKey!;
       const base = baseOf(cc, selected.base);
-      // Re-plan segar sebelum kirim (tick tak basi).
+      // Re-plan fresh before sending, so the ticks are not stale.
       const legs = await planLadderV4(cc, pk, selected.baseIsCurrency0!, ethers.parseUnits(ethAmount, base.decimals), flow.rangePct, flow.legs!, 'bidask');
       await ensureGasForLegs(cc, legs.length, base.wrappable ? legs.reduce((s, l) => s + l.baseAmountWei, 0n) : 0n);
       await ctx.editMessageText(msg.msgProgress(`opening ${legs.length}-leg v4 ladder (1 atomic tx)…`), html);
@@ -2496,16 +2496,16 @@ bot.action('addok', async (ctx) => {
         currentTickV4(cc, pk).catch(() => undefined),
         explore.tokenMarketCap(cc, tokenAddr).catch(() => null),
       ]);
-      // Kurung rentang id SEBELUM kirim. Kalau alur ini gagal setelah tx mendarat
-      // (wait timeout, log tak terbaca, revert di percobaan lanjutan), NFT sudah
-      // lahir tapi tak tercatat — itulah cara posisi jadi "hilang" dari
-      // /positions. Rentang ini membuatnya bisa dipungut lagi.
+      // Bracket the id range BEFORE sending. If this flow fails after the tx lands (a wait
+      // timeout, unreadable logs, a revert on a later attempt), the NFTs exist but are not
+      // recorded — which is exactly how a position "disappears" from /positions. This range
+      // is what makes them recoverable.
       const idBefore = await v4NextTokenId(cc).catch(() => null);
       let ids: string[];
       try {
         ids = (await openLadderV4(cc, pk, selected.baseIsCurrency0!, legs, { dryRun: false })).tokenIds;
       } catch (e) {
-        // Gagal ≠ tak jadi. Pungut dulu yang terlanjur ter-mint, baru lempar.
+        // A failure is not the same as nothing happening. Recover whatever was minted first, then rethrow.
         const stray = await adoptStrayV4(cc, idBefore, legs.length);
         if (stray.length === 0) throw e;
         ids = stray;
@@ -2514,7 +2514,7 @@ bot.action('addok', async (ctx) => {
           html,
         );
       }
-      // Sukses tapi jumlahnya kurang → sisanya juga dipungut lewat jalur yang sama.
+      // Succeeded but short: recover the remainder through the same path.
       if (ids.length < legs.length) {
         const stray = await adoptStrayV4(cc, idBefore, legs.length);
         if (stray.length > ids.length) ids = stray;
@@ -2543,8 +2543,8 @@ bot.action('addok', async (ctx) => {
       }
       invalidateV4ListCache(); // posisi baru → /positions harus segar
       await ctx.editMessageText(msg.msgLadderOpened(r.tokenIds.length, legs.length, `${selected.baseSymbol} / ${selected.otherSymbol}`, ethAmount), html);
-      // Leg pertama: kartunya sudah meringkas SELURUH ladder (lihat ladderSum di
-      // buildV4Card), jadi satu kartu cukup — sama seperti jalur ladder v3.
+      // The first leg's card already summarises the WHOLE ladder (see ladderSum in
+      // buildV4Card), so one card is enough — same as the v3 ladder path.
       await replyV4Card(ctx, cc, r.tokenIds[0]);
     } catch (err) {
       console.error('[open v4 ladder] gagal:', (err as Error).message.slice(0, 200));
@@ -2555,7 +2555,7 @@ bot.action('addok', async (ctx) => {
     }
     return;
   }
-  // --- Jalur v4 (buka posisi single-sided ETH di pool v4) ---
+  // --- v4 path (open a single-sided ETH position in a v4 pool) ---
   if (flow?.selected?.protocol === 'v4') {
     if (!flow.ethAmount || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
     const { selected, ethAmount, chain, rangePct } = flow;
@@ -2570,7 +2570,7 @@ bot.action('addok', async (ctx) => {
       const base = baseOf(cc, selected.base); // 'weth'→ETH-native / 'usdg'→USDG
       const amountWei = ethers.parseUnits(ethAmount, base.decimals);
       const widthSpacings = rangePctToSpacings(rangePct, pk.tickSpacing);
-      // Probe = jumlah NFT posisi v4 (lihat retryOnce): mint mendarat → tak diulang.
+      // The probe is the v4 position NFT count (see retryOnce): a landed mint means no retry.
       const r = await retryOnce(
         'add v4',
         () => v4PositionCount(cc),
@@ -2622,7 +2622,7 @@ bot.action('addok', async (ctx) => {
     }
     return;
   }
-  // --- Jalur LADDER Bid-Ask (v3, sisi base): mint N leg berbagi groupId ---
+  // --- Bid-Ask LADDER path (v3, base side): mint N legs sharing a groupId ---
   if (flow?.shape === 'bidask' && (flow.legs ?? 1) > 1 && flow.strategy === 'base') {
     if (flow.fee === undefined || !flow.ethAmount || flow.rangePct === undefined)
       return ctx.answerCbQuery('Expired — start again with /add_lp.');
@@ -2635,17 +2635,18 @@ bot.action('addok', async (ctx) => {
     try {
       const ccAdd = wizardCtx(flow);
       const base = baseOf(ccAdd, flow.base ?? 'weth');
-      // Plan segar tepat sebelum mint (tick tak basi). Metadata entry dihitung sekali.
+      // Plan fresh right before minting (ticks must not be stale). Entry metadata is computed once.
       const legPlans = await planLadderSingleSided(flow.token, flow.fee, flow.ethAmount, flow.rangePct, flow.legs!, 'bidask', base, ccAdd);
       const entryMcap = (await explore.tokenMarketCap(ccAdd, flow.token).catch(() => null)) ?? undefined;
       const entryEthUsd = isStableBase(base.kind) ? 1 : ((await getEthUsd(ccAdd.wethAddress, ccAdd).catch(() => null)) ?? undefined);
       const usable = legPlans.filter((lp) => lp.baseAmountWei > 0n); // buang leg debu (pembulatan)
-      // Base WETH wrappable disetor dari native → butuh native = deposit + gas; base
-      // stable → native cuma buat gas. ensureBaseReady di executeAddBatch urus wrap,
-      // tapi cek dulu supaya gagalnya ramah ("top up ETH"), bukan revert mentah.
+      // A wrappable WETH base is funded from native, so native must cover deposit plus gas;
+      // a stable base needs native for gas only. ensureBaseReady inside executeAddBatch
+      // handles the wrap, but check first so a failure is friendly ("top up ETH") rather
+      // than a raw revert.
       await ensureGasForLegs(ccAdd, usable.length, base.wrappable ? usable.reduce((s, lp) => s + lp.baseAmountWei, 0n) : 0n);
       await ctx.editMessageText(msg.msgProgress(`opening ${usable.length}-leg ladder (batched)…`), html);
-      // BATCH multicall: semua leg dalam ~1 tx atomik per chunk (tutup kelemahan N-tx).
+      // BATCH multicall: every leg in ~1 atomic tx per chunk (closing the N-tx weakness).
       const { tokenIds } = await executeAddBatch(usable, flow.token, flow.fee, ccAdd);
       for (let i = 0; i < tokenIds.length; i++) {
         const lp = usable[i];
@@ -2689,9 +2690,9 @@ bot.action('addok', async (ctx) => {
   }
   if (!flow?.plan || flow.fee === undefined || !flow.ethAmount || flow.rangePct === undefined)
     return ctx.answerCbQuery('Expired — start again with /add_lp.');
-  // Idempotency: hapus flow SEBELUM eksekusi (sinkron, sebelum await pertama) →
-  // double-tap tombol Konfirmasi tak bisa membuka posisi dobel (dobel ETH).
-  // Gagal open → flow sudah hilang, user ulangi /add (aman).
+  // Idempotency: the flow is deleted BEFORE execution (synchronously, before the first
+  // await), so double-tapping Confirm cannot open two positions (and spend twice the ETH).
+  // If the open fails the flow is already gone and the user simply runs /add again — safe.
   flows.delete(ctx.from!.id);
   await ctx.answerCbQuery('Processing…');
   if (config.safety.dryRun) {
@@ -2701,26 +2702,26 @@ bot.action('addok', async (ctx) => {
   store.beginMoneyOp();
   try {
     await ctx.editMessageText(msg.msgOpeningLp(), html);
-    // Rencana di kartu PREVIEW dihitung saat kartu dirender. Kalau tombol ditekan
-    // jauh kemudian, tick & harga sudah basi → mint revert (gas hangus) atau posisi
-    // mendarat di rentang yang tak relevan. Hitung ulang tepat sebelum kirim tx.
-    // (Jalur v4 sudah melakukan ini; ini menyamakan v3.)
-    // Pool bisa berasal dari DEX non-bawaan chain (mis. Uniswap v3 di BSC) — kontrak
-    // yang dipakai HARUS milik venue-nya, bukan cc.factory chain.
+    // The plan on the PREVIEW card was computed when the card was rendered. If the button
+    // is tapped much later, the ticks and price are stale, so the mint either reverts
+    // (burning gas) or lands in an irrelevant range. Recompute right before sending the tx.
+    // (The v4 path already did this; this brings v3 into line.)
+    // A pool can come from a non-default DEX on the chain (Uniswap v3 on BSC, say), so the
+    // contracts used MUST belong to its venue rather than the chain's cc.factory.
     const ccAdd = wizardCtx(flow);
-    // Sisi setoran HARUS sama dengan yang dipilih di langkah strategi. Selalu
-    // memakai planAddSingleSided di sini membuat pilihan "sisi token" berubah jadi
-    // setoran base saat dikonfirmasi — nominal token dibaca sbg nominal ETH.
+    // The deposit side MUST match what was chosen at the strategy step. Always calling
+    // planAddSingleSided here turned a "token side" choice into a base deposit on confirm —
+    // the token amount was read as an ETH amount.
     const args = [flow.token, flow.fee, flow.ethAmount, flow.rangePct, baseOf(ccAdd, flow.base ?? 'weth'), ccAdd] as const;
-    // Probe = jumlah NFT posisi. Mint yang sudah mendarat menaikkannya → JANGAN diulang
-    // (posisi dobel = modal dobel). Wrap ETH→WETH tak menaikkannya, jadi kegagalan
-    // sesudah wrap tetap boleh diulang — dan percobaan kedua memakai WETH yang sudah
-    // jadi, tanpa perlu unwrap manual dulu.
+    // The probe is the position NFT count. A mint that already landed raises it, so do NOT
+    // retry (a duplicate position means duplicate capital). An ETH->WETH wrap does not raise
+    // it, so a failure after the wrap can still be retried — and the second attempt uses the
+    // WETH that already exists, with no manual unwrap first.
     const { tokenId, notes, plan } = await retryOnce(
       'add',
       () => ccAdd.positionManager.balanceOf(ccAdd.wallet.address) as Promise<bigint>,
       async () => {
-        // re-plan tiap percobaan: tick & harga dihitung ulang, jangan pakai yang basi.
+        // Re-plan on every attempt: ticks and price are recomputed, never reused stale.
         const p2 = await (flow.strategy === 'token'
           ? planAddTokenSide(...args)
           : planAddSingleSided(...args));
@@ -2736,9 +2737,9 @@ bot.action('addok', async (ctx) => {
       fee: flow.fee,
       symbol: plan.otherSymbol,
       baseKind: plan.baseKind,
-      // Sisi token tak menyetor base sama sekali (baseAmountWei = 0). Modal awal
-      // dicatat sebagai SETARA base pada harga saat buka — tanpa itu PnL tak punya
-      // titik nol dan posisi selamanya tampil "—".
+      // The token side deposits no base at all (baseAmountWei = 0). Its cost basis is
+      // recorded as the BASE EQUIVALENT at the price when it opened — without that, PnL has
+      // no zero point and the position reads "—" forever.
       initialWethWei: (plan.side === 'token'
         ? ethers.parseUnits(
             (Number(flow.ethAmount) * Number(plan.currentPrice)).toFixed(plan.baseDecimals),
@@ -2752,10 +2753,11 @@ bot.action('addok', async (ctx) => {
       rangeLowPct: plan.pctLow,
       rangeHighPct: plan.pctHigh,
       entryPrice: plan.currentPrice, // harga token saat buka → basis alert anjlok
-      // Market cap saat buka — batas mcap kartu dipatok ke sini supaya diam (tak
-      // bergoyang karena mcNow DexScreener & harga on-chain dari sumber berbeda).
+      // The market cap at open. The card's mcap bounds are pinned to this so they stay still
+      // (rather than wobbling because DexScreener's mcNow and the on-chain price come from
+      // different sources).
       entryMcap: (await explore.tokenMarketCap(ccAdd, flow.token!).catch(() => null)) ?? undefined,
-      // Harga base(USD) saat buka → PnL USD ala LP Agent dipatok ke sini. Stable = 1.
+      // The base price (USD) at open, which LP Agent-style USD PnL is pinned to. A stable is 1.
       entryEthUsd: isStableBase(plan.baseKind)
         ? 1
         : (await getEthUsd(ccAdd.wethAddress, ccAdd).catch(() => null)) ?? undefined,
@@ -2764,9 +2766,9 @@ bot.action('addok', async (ctx) => {
       lastInRange: false,
     });
     console.log(`[open] #${tokenId}:`, notes.join(' | ')); // pasangan [cashout] — tanpa ini buka posisi tak berjejak
-    // Ringkas OPENED di bubble yang sama, lalu kartu posisi live.
-    // priceLower/Upper mengikuti urutan TICK; dalam satuan harga bisa terbalik,
-    // dan rentang yang tercetak mundur membuat kartu ini tampak salah hitung.
+    // A short OPENED summary in the same bubble, then the live position card.
+    // priceLower/Upper follow TICK order; in price terms that can be reversed, and a range
+    // printed backwards makes this card look like it miscalculated.
     const [pLo, pHi] =
       Number(plan.priceLower) <= Number(plan.priceUpper)
         ? [plan.priceLower, plan.priceUpper]
@@ -2784,8 +2786,8 @@ bot.action('addok', async (ctx) => {
       }
     }
   } catch (err) {
-    // Add gagal setelah wrap menyisakan WETH — dirapikan di sini supaya tak perlu
-    // /unwrap manual sebelum mencoba /add_lp lagi.
+    // An add that failed after wrapping leaves WETH behind; it is tidied up here so no
+    // manual /unwrap is needed before trying /add_lp again.
     console.error('[open] gagal:', (err as Error).message.slice(0, 200));
     await recoverStrayWeth(getChain(flow.chain), 'add').catch(() => {});
     await ctx.reply(msg.msgError('add', err), html);
@@ -2794,7 +2796,7 @@ bot.action('addok', async (ctx) => {
   }
 });
 
-/** Konfirmasi tutup posisi (kartu). Eksekusi: remove + collect + cash-out ETH via Relay. */
+/** The close-position confirmation card. Execution: remove + collect + cash out to ETH via Relay. */
 async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
   const rec = store.get(tokenId);
   const cc = rec ? ctxOf(rec) : getChain();
