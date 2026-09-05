@@ -14,22 +14,23 @@ const FEE_TIERS = [100, 500, 2500, 3000, 10000]; // gabungan Uniswap + PancakeSw
 type SellStatus = 'ok' | 'blocked' | 'costly' | 'unknown';
 
 /**
- * Simulasi JALUR JUAL (exit-liquidity) sebelum ber-LP: round-trip via Quoter
- * (base → token → base) di pool base terdalam. Menangkap: tak ada jalur jual
- * (sell revert = token tak bisa dijual) & jual sangat boros (likuiditas tipis).
- * Parity dgn pola bot lain ("buy→sell via Quoter, revert = blocked").
- * CATATAN: Quoter menghitung math pool, TIDAK mengeksekusi transfer token —
- * pajak-jual/transfer-block murni tak selalu tertangkap (itu enhancement
- * stateOverride mendatang). Read-only, fail-open (error → 'unknown', tak blokir).
+ * Simulate the SELL PATH (exit liquidity) before providing LP: a Quoter round-trip
+ * (base -> token -> base) through the deepest base pool. Catches a missing sell path
+ * (a sell that reverts means the token cannot be sold) and a ruinously expensive one
+ * (thin liquidity). Same pattern other bots use: buy-then-sell via Quoter, revert
+ * means blocked.
+ * NOTE: the Quoter computes pool maths, it does NOT execute token transfers — pure
+ * sell-tax and transfer-block tokens are not always caught (a stateOverride upgrade
+ * would fix that). Read-only and fails open: an error becomes 'unknown', never a block.
  */
 async function simulateSellPath(
   tokenAddress: string,
   ctx: ChainCtx,
 ): Promise<{ status: SellStatus; flag: Flag | null }> {
   try {
-    // Pool base terdalam untuk token ini.
+    // The deepest base pool for this token.
     type Cand = { baseAddr: string; decimals: number; fee: number; reserve: bigint };
-    // Semua (base × fee) diperiksa serentak — deteksi pool terdalam tanpa loop beruntun.
+    // Every (base x fee) checked at once, so the deepest pool is found without a serial loop.
     const cands = await Promise.all(
       basesFor(ctx).flatMap((base) => {
         const baseC = new ethers.Contract(base.address, BAL_ABI, ctx.provider);
@@ -46,7 +47,7 @@ async function simulateSellPath(
     if (!best || best.reserve === 0n) return { status: 'unknown', flag: null };
 
     const quoter = new ethers.Contract(ctx.quoterAddress, QUOTER_ABI, ctx.provider);
-    // Probe kecil relatif pool (kurangi price-impact palsu).
+    // A probe small relative to the pool, to avoid inventing price impact.
     const probe = best.decimals >= 18 ? '0.01' : '10';
     const baseIn = ethers.parseUnits(probe, best.decimals);
 
@@ -87,9 +88,9 @@ async function simulateSellPath(
 }
 
 /**
- * Screening token anti-anomali sebelum ber-LP.
- * Sumber data: Blockscout (explorer resmi Robinhood Chain) + DexScreener.
- * Semua bersifat heuristik — BUKAN jaminan aman, tapi menangkap pola scam umum.
+ * Anti-anomaly token screening before providing LP.
+ * Data sources: Blockscout (Robinhood Chain's official explorer) plus DexScreener.
+ * All of it is heuristic — NOT a safety guarantee, but it catches common scam shapes.
  */
 
 const DEXSCREENER = 'https://api.dexscreener.com/latest/dex/tokens';
@@ -125,18 +126,19 @@ export type ScreenResult = {
   verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA';
 };
 
-// Cache off-chain read (Blockscout/DexScreener) per-URL. Data screening bersifat
-// advisory & tak berubah detik-ke-detik; /add ulang token sama jadi instan.
-// Sell-path (quoter on-chain) TIDAK lewat sini → tetap live.
+// Per-URL cache for off-chain reads (Blockscout/DexScreener). Screening data is
+// advisory and does not change second to second, so running /add on the same token
+// again is instant. The sell path (on-chain quoter) does NOT go through here and
+// stays live.
 const _jsonCache = new Map<string, { t: number; v: any }>();
 const JSON_TTL = 60_000;
 
 /**
- * Buang cache off-chain untuk satu token — dipakai tombol Refresh kartu audit.
+ * Drop the off-chain cache for one token, used by the audit card's Refresh button.
  *
- * Tanpa ini, menekan Refresh dalam 60 detik mengembalikan angka yang sama persis:
- * cache-nya yang menjawab, bukan jaringannya. Refresh yang tak me-refresh apa pun
- * lebih buruk daripada tak ada tombol.
+ * Without it, tapping Refresh within 60 seconds returns exactly the same figures:
+ * the cache answered, not the network. A Refresh that refreshes nothing is worse
+ * than no button at all.
  */
 export function bustScreenCache(addr: string): void {
   const a = addr.toLowerCase();
@@ -168,9 +170,9 @@ function worst(flags: Flag[]): ScreenResult['verdict'] {
 }
 
 /**
- * Apakah kepemilikan kontrak sudah dilepas? Dibaca dari owner()/getOwner().
- * null = TAK BISA DITENTUKAN (fungsinya tak ada, atau RPC gagal) — jangan pernah
- * dianggap aman: kartu menampilkannya sebagai '?', bukan centang.
+ * Has contract ownership been renounced? Read from owner()/getOwner().
+ * null means it CANNOT BE DETERMINED (the function is absent, or the RPC failed) and
+ * must never be read as safe: the card shows it as '?', not a tick.
  */
 async function readRenounced(addr: string, ctx: ChainCtx): Promise<boolean | null> {
   const DEAD = new Set(['0x0000000000000000000000000000000000000000', '0x000000000000000000000000000000000000dead']);
@@ -180,7 +182,7 @@ async function readRenounced(addr: string, ctx: ChainCtx): Promise<boolean | nul
       const o: string = await c[fn]();
       return DEAD.has(o.toLowerCase());
     } catch {
-      /* coba nama berikutnya */
+      /* try the next name */
     }
   }
   return null; // tak ada owner() yang bisa dibaca
@@ -194,7 +196,7 @@ export async function screenToken(
   const flags: Flag[] = [];
   const bs = ctx.blockscout; // null = explorer tak tersedia (mis. BSC)
 
-  // Jalankan semua permintaan sekaligus (termasuk simulasi jalur jual on-chain).
+  // Fire every request at once, including the on-chain sell-path simulation.
   const [tokenInfo, holders, contract, dex, sell, renounced, gmgn, insightx, goplus, counters] = await Promise.all([
     bs ? fetchJson(`${bs}/tokens/${addr}`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/tokens/${addr}/holders`) : Promise.resolve(null),
@@ -214,28 +216,28 @@ export async function screenToken(
   )?.baseToken;
   const name = tokenInfo?.name ?? dexBase?.name ?? 'Tidak diketahui';
   const symbol = tokenInfo?.symbol ?? dexBase?.symbol ?? '???';
-  // Total holder: /counters lebih mutakhir daripada payload token (terukur 5311
-  // vs 5223 pada CA yang sama); GoPlus menambal BSC yang tak punya explorer.
+  // Total holders: /counters is fresher than the token payload (5311 against 5223
+  // measured on the same CA); GoPlus fills in for BSC, which has no explorer.
   const holdersCount =
     (counters?.token_holders_count ? Number(counters.token_holders_count) : null) ??
     (tokenInfo?.holders_count ? Number(tokenInfo.holders_count) : null) ??
     goplus?.holderCount ??
     null;
-  // transfers_count dari /counters SENGAJA tidak dipakai: ia melaporkan 44.604
-  // transfer seumur hidup untuk token berumur 20 jam yang pada periode sama
-  // mencatat ~80 ribu swap — angka yang dikuatkan DexScreener DAN GeckoTerminal
-  // secara terpisah. Indeksnya tertinggal; memajangnya = memajang angka salah.
-  // Explorer menandai kontrak yang dilaporkan scam. Field ini sudah ikut dalam
-  // payload yang memang kita tarik — nol panggilan tambahan, tapi selama ini dibuang.
+  // transfers_count from /counters is DELIBERATELY unused: it reported 44,604
+  // lifetime transfers for a 20-hour-old token that logged ~80,000 swaps over the
+  // same period — a figure corroborated independently by DexScreener AND
+  // GeckoTerminal. Its index lags; showing it means showing a wrong number.
+  // The explorer also flags contracts reported as scams. That field already rides
+  // along in the payload we fetch — no extra call, and it had simply been discarded.
   const scamFlag = tokenInfo?.reputation === 'scam' || tokenInfo?.is_scam === true;
   if (scamFlag) flags.push({ level: 'BAHAYA', msg: 'Explorer flags this contract as a SCAM' });
   const totalSupply = tokenInfo?.total_supply ? BigInt(tokenInfo.total_supply) : null;
 
-  // --- Verifikasi kontrak ---
+  // --- Contract verification ---
   let verified: boolean | null = null;
-  // null = TAK BISA DITENTUKAN. Dulu di-default `false` lalu dibiarkan begitu di
-  // chain tanpa explorer, sehingga BSC selalu mencetak 'Proxy: ✅ No' tanpa satu
-  // pun bukti — persis jenis kebohongan-ke-arah-aman yang dilarang kartu ini.
+  // null means CANNOT BE DETERMINED. It used to default to `false` and stay that way
+  // on chains without an explorer, so BSC always printed 'Proxy: ✅ No' with no
+  // evidence behind it — exactly the lie-in-the-safe-direction this card forbids.
   let isProxy: boolean | null = null;
   if (contract) {
     verified = Boolean(contract.source_code || contract.is_verified || contract.is_fully_verified);
@@ -245,14 +247,14 @@ export async function screenToken(
         /proxy/i.test(contract.name ?? ''),
     );
   } else {
-    // Tanpa explorer (BSC) jawabannya datang dari GoPlus; kalau itu pun kosong → null.
+    // With no explorer (BSC) the answer comes from GoPlus; if that is empty too, null.
     verified = bs ? false : (goplus?.verified ?? null);
     isProxy = goplus?.isProxy ?? null;
   }
   if (verified === false) flags.push({ level: 'HATI-HATI', msg: 'Contract is NOT verified (source code unavailable)' });
   if (isProxy) flags.push({ level: 'INFO', msg: 'Upgradeable contract (proxy) — the dev can change its logic' });
 
-  // --- Konsentrasi holder ---
+  // --- Holder concentration ---
   let top1Pct: number | null = null;
   let top10Pct: number | null = null;
   let top1IsContract = false;
@@ -270,15 +272,15 @@ export async function screenToken(
     const sum10 = items.slice(0, 10).reduce((a, h) => a + val(h), 0n);
     top10Pct = Number((sum10 * 10000n) / totalSupply) / 100;
 
-    // Konsentrasi 10 teratas ditangani di bawah (butuh angka GMGN yang lebih
-    // bersih); di sini hanya dompet TUNGGAL yang menguasai mayoritas.
+    // Top-10 concentration is handled below, where GMGN's cleaner figure is
+    // available; this only catches a SINGLE wallet holding the majority.
     if (top1Pct > 50 && !top1IsContract)
       flags.push({ level: 'BAHAYA', msg: `One wallet holds ${top1Pct.toFixed(1)}% of supply` });
   }
   if (holdersCount !== null && holdersCount < 30)
     flags.push({ level: 'HATI-HATI', msg: `Very few holders (${holdersCount})` });
 
-  // --- Data pasar (DexScreener) ---
+  // --- Market data (DexScreener) ---
   let liquidityUsd: number | null = null;
   let volume24h: number | null = null;
   let buys24h: number | null = null;
@@ -288,22 +290,22 @@ export async function screenToken(
   let pairAgeHours: number | null = null;
   let dexName: string | null = null; // venue pair terlikuid — baris Liquidity menyebutnya
 
-  // Hanya pair di chain yang sama (alamat token bisa eksis di banyak chain).
+  // Same-chain pairs only (a token address can exist on several chains).
   const pairs: any[] = (dex?.pairs ?? []).filter((p: any) => p.chainId === ctx.dexKey);
   if (pairs.length > 0) {
-    // Ambil pair paling likuid.
+    // Take the most liquid pair.
     const p = pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
     liquidityUsd = p.liquidity?.usd ?? null;
     dexName = p.dexId ?? null;
-    // Volume & trade 24j DIJUMLAHKAN dari SELURUH pair token ini di chain-nya.
-    // Dulu diambil dari pair terlikuid saja: UBIK punya 30 pair, pair teratas
-    // $3,0jt sementara totalnya $24,1jt — meleset 8x. Lebih buruk, angkanya
-    // melompat tiap kali peringkat likuiditas bertukar (kartu yang sama sempat
-    // menulis $15,4jt sejam sebelumnya). Volume adalah metrik ALIRAN: totalnya
-    // milik token, bukan milik satu pool.
+    // 24h volume and trades are SUMMED across EVERY pair for this token on its
+    // chain. They used to come from the most liquid pair alone: UBIK has 30 pairs,
+    // its top pair showed $3.0M against a $24.1M total — off by 8x. Worse, the
+    // figure jumped whenever the liquidity ranking swapped (the same card had read
+    // $15.4M an hour earlier). Volume is a FLOW metric: the total belongs to the
+    // token, not to one pool.
     //
-    // Liquidity SENGAJA tetap pair terdalam — itu kolam yang benar-benar akan
-    // dimasuki /add, dan baris kartunya menyebut nama venue-nya.
+    // Liquidity DELIBERATELY stays the deepest pair — that is the pool /add will
+    // actually enter, and the card's row names its venue.
     const sum = (f: (x: any) => number | null | undefined): number | null => {
       const vals = pairs.map(f).filter((v): v is number => typeof v === 'number');
       return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
@@ -332,12 +334,12 @@ export async function screenToken(
     flags.push({ level: 'HATI-HATI', msg: 'No market or liquidity data on DexScreener' });
   }
 
-  // Konsentrasi 10 dompet teratas. Diperiksa DI SINI (bukan di blok holders
-  // Blockscout) karena angka GMGN baru tersedia setelah await di atas — dan
-  // angka GMGN-lah yang dipakai kartu: Blockscout menghitung kontrak pool
-  // sebagai 'holder' sehingga persennya melambung (41,27% vs 16,72% pada CA
-  // yang sama). Ambang 50% = HATI-HATI: LP tetap boleh, vonis turun jadi
-  // "SAFE TO LP (Moderate Risk)" supaya keputusannya tetap di tangan user.
+  // Top-10 wallet concentration. Checked HERE rather than in the Blockscout holders
+  // block because GMGN's number only exists after the await above — and GMGN's is the
+  // one the card uses: Blockscout counts the pool contract as a 'holder', which sends
+  // the percentage soaring (41.27% against 16.72% on the same CA). The 50% threshold
+  // means CAUTION: LP is still allowed, the verdict just drops to "SAFE TO LP
+  // (Moderate Risk)" so the decision stays with the user.
   const top10Concentration = gmgn?.top10Pct ?? top10Pct;
   if (top10Concentration !== null && top10Concentration >= 50) {
     flags.push({
@@ -346,11 +348,11 @@ export async function screenToken(
     });
   }
 
-  // Buta BUKAN berarti aman. Flag hanya ditambahkan saat data ADA dan buruk;
-  // kalau sumbernya diam (Blockscout tak tersedia di BSC, GMGN kena rate-limit),
-  // semua pemeriksaan itu lewat tanpa suara dan vonisnya jadi "SAFE TO LP" —
-  // padahal justru tak ada yang diperiksa. Turunkan vonisnya dan sebutkan apa
-  // yang tak terbaca, supaya user memutuskan dengan tahu ia sedang buta.
+  // Being blind is NOT the same as being safe. Flags are only added when data EXISTS
+  // and looks bad; if the sources go quiet (no Blockscout on BSC, GMGN rate-limited),
+  // every one of those checks passes without a sound and the verdict reads "SAFE TO
+  // LP" — when in fact nothing was checked. Downgrade the verdict and name what could
+  // not be read, so the user decides knowing they are blind.
   const takTerbaca = [
     top10Concentration === null && 'holder concentration',
     verified === null && 'contract verification',
@@ -393,13 +395,13 @@ export async function screenToken(
   };
 }
 
-/** Susun laporan screening jadi teks siap kirim ke Telegram. */
+/** Format a screening report into text ready to send to Telegram. */
 const ethUsdCache = new Map<string, { v: number | null; t: number }>();
 
 /**
- * Harga PASAR token dalam native (ETH per token) dari pair DexScreener ber-liq
- * TERDALAM di chain ini. Dipakai buat cek apakah pool v4 sebuah posisi
- * "sekarat" (harga on-chain-nya melenceng jauh dari pasar). null = tak terbaca.
+ * The token's MARKET price in native terms (ETH per token) from the DEEPEST
+ * DexScreener pair on this chain. Used to check whether a position's v4 pool is
+ * "dying" (its on-chain price drifting far from the market). null when unreadable.
  */
 const tokenEthCache = new Map<string, { v: number | null; t: number }>();
 export async function getTokenEthPrice(tokenAddress: string, ctx: ChainCtx = getChain()): Promise<number | null> {
@@ -416,7 +418,7 @@ export async function getTokenEthPrice(tokenAddress: string, ctx: ChainCtx = get
     if (p.chainId !== ctx.dexKey) continue;
     const liq = p.liquidity?.usd ?? 0;
     let ethPerTok: number | null = null;
-    // base=token, quote=ETH → priceNative = ETH per token (langsung).
+    // base=token, quote=ETH means priceNative is already ETH per token.
     if ((p.baseToken?.address || '').toLowerCase() === t && isEthQuote(p.quoteToken?.address || '')) {
       const pn = Number(p.priceNative);
       if (pn > 0) ethPerTok = pn;
@@ -430,9 +432,9 @@ export async function getTokenEthPrice(tokenAddress: string, ctx: ChainCtx = get
   return best;
 }
 
-/** Harga native (ETH/BNB) dalam USD. DexScreener UTAMA (HTTP ~60ms), GMGN FALLBACK
- *  (subprocess ~470ms — cuma dipakai kalau DexScreener gagal, biar command gak molor).
- *  Cache 60 dtk. */
+/** Native asset price (ETH/BNB) in USD. DexScreener is PRIMARY (HTTP, ~60ms), GMGN
+ *  the FALLBACK (a subprocess at ~470ms, used only when DexScreener fails, so the
+ *  command does not drag). Cached for 60s. */
 export async function getEthUsd(
   wethAddress: string,
   ctx: ChainCtx = getChain(),
@@ -440,7 +442,7 @@ export async function getEthUsd(
   const cached = ethUsdCache.get(ctx.key);
   if (cached && Date.now() - cached.t < 60_000) return cached.v;
   const w = wethAddress.toLowerCase();
-  // Harga WETH dari pool ter-likuid: base=WETH → priceUsd; quote=WETH → priceUsd/priceNative.
+  // WETH price from the most liquid pool: base=WETH gives priceUsd; quote=WETH gives priceUsd/priceNative.
   const pick = (pairs: any[]): number | null => {
     let best: number | null = null;
     let bestLiq = -1;
@@ -461,18 +463,19 @@ export async function getEthUsd(
     }
     return best;
   };
-  // 1) Endpoint CHAIN-SCOPED: cuma pair chain ini → anti-tabrakan alamat. WETH OP-stack
-  //    (0x4200..0006) sama di Base/Ink/Soneium; endpoint tokens/ lintas-chain bikin
-  //    pair chain kecil (Ink) kegencet keluar → harga null. Chain-scoped menghindarinya.
+  // 1) The CHAIN-SCOPED endpoint returns only this chain's pairs, which avoids
+  //    address collisions. OP-stack WETH (0x4200..0006) is identical on Base, Ink and
+  //    Soneium, and the cross-chain tokens/ endpoint squeezes a small chain's pair
+  //    (Ink) out of the list, leaving a null price. Chain-scoped avoids that.
   const scoped = await fetchJson(`https://api.dexscreener.com/token-pairs/v1/${ctx.dexKey}/${wethAddress}`);
   let best = pick(Array.isArray(scoped) ? scoped : (scoped?.pairs ?? []));
-  // 2) Fallback: endpoint tokens/ lama, difilter dexKey (mis. Robinhood yg tak ada di
-  //    token-pairs/v1). Menjaga chain yang sebelumnya sudah benar tetap benar.
+  // 2) Fallback: the older tokens/ endpoint, filtered by dexKey (Robinhood, say,
+  //    which is absent from token-pairs/v1). Keeps chains that already worked working.
   if (best === null) {
     const dex = await fetchJson(`${DEXSCREENER}/${wethAddress}`);
     best = pick((dex?.pairs ?? []).filter((p: any) => p.chainId === ctx.dexKey));
   }
-  // FALLBACK: DexScreener kosong/down → GMGN (chain didukung: robinhood/bsc/base).
+  // FALLBACK: DexScreener empty or down -> GMGN (supported chains: robinhood/bsc/base).
   if (best === null) {
     const g = await gmgnPrice(wethAddress, ctx.key).catch(() => null);
     if (g && g.priceUsd > 0) best = g.priceUsd;
@@ -482,16 +485,16 @@ export async function getEthUsd(
 }
 
 /**
- * Kartu DETAIL TOKEN setelah screening.
+ * The TOKEN DETAIL card shown after screening.
  *
- * ATURAN YANG TAK BOLEH DILANGGAR: field yang TIDAK PUNYA sumber data ditulis '?',
- * bukan centang. Menampilkan "Renounced ✓" untuk sesuatu yang tak pernah diperiksa
- * adalah klaim keamanan palsu — itu justru jenis kebohongan yang membuat orang
- * masuk ke token yang salah.
+ * THE RULE THAT CANNOT BE BROKEN: a field with NO data source is written as '?',
+ * never as a tick. Showing "Renounced ✓" for something never checked is a false
+ * safety claim — precisely the kind of lie that walks people into the wrong token.
  *
- * Sumber nyata saat ini: DexScreener (harga, MC, Liq, Vol, umur pool), Blockscout
- * (holders, konsentrasi, verifikasi), on-chain (owner() untuk renounced, simulasi
- * jalur jual untuk honeypot). Sisanya belum punya sumber di chain ini.
+ * Real sources today: DexScreener (price, MC, liquidity, volume, pool age),
+ * Blockscout (holders, concentration, verification), and on-chain reads (owner() for
+ * renounced, the sell-path simulation for honeypots). The rest has no source on this
+ * chain yet.
  */
 export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?: string; heldLabel?: string | null; lpCount?: number }): string {
   const UNK = '?';
@@ -500,13 +503,13 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     const a = Math.abs(n);
     if (a >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
     if (a >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-    // Satu desimal di rentang K: $452.5K vs $453K — token mikro-cap justru hidup
-    // di rentang ini, jadi pembulatan penuh menghapus angka yang paling dibaca.
+    // One decimal in the K range: $452.5K against $453K. Micro-cap tokens live in
+    // exactly this band, so rounding whole erases the digit people read most.
     if (a >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
     return `$${n.toFixed(0)}`;
   };
   const pct = (n: number | null | undefined): string => (n == null ? UNK : `${Number(n.toFixed(2))}%`);
-  // Jawaban ya/tidak: '?' bila datanya memang tak terbaca — JANGAN mengarang '✅'.
+  // Yes/no answers: '?' when the data really is unreadable — NEVER invent a '✅'.
   const yes = (v: boolean | null): string => (v === null ? `${UNK} unreadable` : v ? '✅ Yes' : '❌ No');
   const no = (v: boolean | null): string => (v === null ? `${UNK} unreadable` : v ? '⚠️ Yes' : '✅ No');
 
@@ -514,8 +517,8 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   const gp = s.goplus; // penambal BSC
   const symUp = s.symbol.toUpperCase().replace(/^\$+/, '');
 
-  // NoHoneypot: simulasi jalur jual PHILIPS lebih dipercaya (on-chain, live) —
-  // GMGN dipakai hanya bila simulasi tak memberi jawaban.
+  // NoHoneypot: PHILIPS's own sell-path simulation is trusted more (on-chain, live);
+  // GMGN is used only when the simulation gives no answer.
   const sellable =
     s.sellPath === 'ok'
       ? true
@@ -527,8 +530,8 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
             ? null
             : !gp.honeypot;
 
-  // Top 10: UTAMAKAN GMGN. Angka Blockscout menghitung kontrak pool sebagai
-  // 'holder' sehingga melambung (terukur 41.27% vs 16.72% pada CA yang sama).
+  // Top 10: PREFER GMGN. Blockscout's figure counts the pool contract as a 'holder'
+  // and runs high (41.27% measured against 16.72% on the same CA).
   const top10 = g?.top10Pct != null ? g.top10Pct : s.top10Pct;
   const top10Line =
     top10 === null ? UNK : `${pct(top10)} ${top10 >= 50 ? '🔴 (high whale risk)' : top10 >= 20 ? '⚠️ (moderate whale risk)' : '✅'}`;
@@ -540,11 +543,11 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
 
   const num = (n: number | null | undefined): string => (n == null ? UNK : n.toLocaleString('en-US'));
 
-  // Pausable / cooldown: GMGN mengirim daftar privilege owner. Daftar KOSONG =
-  // jawaban 'tak ada', bukan 'tak tahu'; payload tak terbaca (null) tetap '?'.
+  // Pausable / cooldown: GMGN sends the owner's privilege list. An EMPTY list is an
+  // answer of 'none', not 'unknown'; an unreadable payload (null) stays '?'.
   const privHas = (re: RegExp): boolean | null => {
     if (g?.privileges != null) return g.privileges.some((p) => re.test(p));
-    // BSC tak punya payload privilege GMGN; GoPlus menjawab dua yang paling penting.
+    // BSC has no GMGN privilege payload; GoPlus answers the two that matter most.
     if (gp) {
       if (/mint/i.test(re.source)) return gp.mintable;
       if (/paus|freeze|blacklist/i.test(re.source)) return gp.pausable;
@@ -552,8 +555,8 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     return null;
   };
 
-  // Umur pool dibaca manusia: "1h 45m", bukan "2 hours" yang membulatkan pool
-  // berumur 1,5 jam jadi terdengar dua kali lebih matang.
+  // Pool age written for humans: "1h 45m", not "2 hours", which rounds a 90-minute
+  // pool into sounding twice as mature as it is.
   const age = (h: number | null): string => {
     if (h === null) return UNK;
     const menit = Math.round(h * 60);
@@ -564,16 +567,16 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   };
   const venue = s.dexName ? ` (${esc(s.dexName.replace(/^\w/, (c) => c.toUpperCase()))})` : '';
 
-  // "Authority" adalah istilah Solana; di EVM padanannya adalah privilege owner
-  // yang masih hidup di kontrak. Dibaca dari daftar privilege GMGN: daftar KOSONG
-  // = benar-benar tak ada (Disabled), payload tak terbaca = '?', BUKAN 'Disabled'.
-  // Menyebut "Disabled" tanpa data persis kebohongan yang paling mahal di kartu ini.
+  // "Authority" is Solana's term; the EVM equivalent is an owner privilege still live
+  // in the contract. Read from GMGN's privilege list: an EMPTY list genuinely means
+  // none (Disabled), an unreadable payload means '?', NOT 'Disabled'. Saying
+  // "Disabled" without data is the most expensive lie this card can tell.
   const authority = (re: RegExp): string => {
     const v = privHas(re);
     return v === null ? UNK : v ? 'Enabled ⚠️' : 'Disabled ✅';
   };
 
-  // LP: burn didahulukan (permanen) atas lock (bisa kedaluwarsa).
+  // LP: burn takes precedence (permanent) over lock (which can expire).
   const lpStatus =
     burnt !== null && burnt >= 50
       ? `${pct(burnt)} Burned ✅`
@@ -589,19 +592,19 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
 
   const dev = g?.devPct ?? gp?.creatorPct ?? null;
   const snipers = g?.sniperCount ?? null;
-  // InsightX menghitung dari SELURUH holder; angka tag GMGN hanya dari 100
-  // terbesar (tagsFromTop100). Kalau keduanya ada, yang lebih lengkap menang.
+  // InsightX counts across EVERY holder, while GMGN's tag figure covers only the top
+  // 100 (tagsFromTop100). When both exist, the more complete one wins.
   const ix = s.insightx;
   const bundle = ix?.bundlersPct ?? g?.bundlerPct ?? null;
   const insiders = ix?.insidersPct ?? g?.insidersPct ?? null;
   const cluster = ix?.clusterPct ?? null;
 
-  // Ambang sama untuk ketiganya: >=20% merah, >=5% kuning. Bukan angka ajaib —
-  // sekadar konsisten dengan baris Sniper Bundles yang sudah ada sejak awal.
+  // The same thresholds for all three: >=20% red, >=5% amber. Not magic numbers,
+  // just consistent with the Sniper Bundles row that has been here from the start.
   const risky = (n: number | null): string =>
     n === null ? UNK : `${pct(n)} ${n >= 20 ? '\u{1F534}' : n >= 5 ? '\u26A0\uFE0F' : '\u2705'}`;
 
-  // Pohon: tiap bagian dipisah supaya baris terakhirnya memakai └.
+  // Tree layout: each section is separated so its last row uses the └ elbow.
   const tree = (rows: Array<[string, string]>): string[] =>
     rows.map(([k, v], i) => `${i === rows.length - 1 ? '└' : '├'}  ${esc(k)}: ${v}`);
 
@@ -625,9 +628,9 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
       ['LP Status', lpStatus],
       ['Honeypot', sellable === null ? UNK : sellable ? 'PASS ✅' : 'FAIL 🚫 cannot sell'],
       ['Tax (Buy/Sell)', taxPair],
-      // Verified & Proxy tak ada di naskah tapi tetap ditahan di sini: kontrak
-      // proxy bisa DIGANTI isinya sesudah audit ini, jadi menghapusnya berarti
-      // kartu "aman" untuk token yang logikanya masih bisa ditukar kapan saja.
+      // Verified and Proxy are not in the brief but are kept here anyway: a proxy
+      // contract can be SWAPPED OUT after this audit runs, so removing them would
+      // mean an "all clear" card for a token whose logic can change at any moment.
       ['Verified', yes(verified)],
       ['Proxy', no(s.isProxy)],
       ['Ownership', renounced === null ? UNK : renounced ? 'Renounced ✅' : 'Owned ⚠️'],
@@ -655,14 +658,14 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     ]),
   ];
 
-  // Baris vonis DIHAPUS atas permintaan pemilik (28 Agu 2026): kartunya kini hanya
-  // menyajikan angka, penilaiannya diserahkan ke pembaca. `s.verdict` sendiri TETAP
-  // dihitung dan tetap dipakai alur /add untuk MEMBLOKIR token bervonis BAHAYA —
-  // yang hilang cuma tampilannya, bukan penjaganya.
+  // The verdict line was REMOVED at the owner's request (28 Aug 2026): the card now
+  // presents figures and leaves the judgement to the reader. `s.verdict` itself is
+  // STILL computed and still used by the /add flow to BLOCK tokens judged dangerous —
+  // what went away is the display, not the guard.
 
   if (opts?.ca) out.push('', `CA : ${code(opts.ca)}`);
 
-  // Konteks kepemilikan hanya relevan bila pemanggil mengirimnya (kartu hub CA).
+  // Ownership context is only relevant when the caller passes it (the CA hub card).
   if (opts?.heldLabel || opts?.lpCount)
     out.push(
       '',

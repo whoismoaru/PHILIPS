@@ -9,58 +9,58 @@ import { allV4 } from './v4store.js';
 
 const Q96 = 2n ** 96n;
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
-// PoolManager singleton v4 per chain.
+// The v4 PoolManager singleton, per chain.
 const V4_POOL_MANAGER: Record<string, string> = {
   robinhood: '0x8366a39CC670B4001A1121B8F6A443A643e40951',
   bsc: '0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF',
 };
-// v4 Actions tambahan (add).
+// Extra v4 actions (add).
 const MINT_POSITION = 0x02;
 const SETTLE_PAIR = 0x0d;
 const SWEEP = 0x14;
 
 /**
- * Baca-saja posisi Uniswap **v4** (arsitektur beda dari v3: PoolManager singleton
- * + PositionManager NFT). PHILIPS mengelola v3; modul ini hanya MENAMPILKAN posisi
- * v4 yang dipegang wallet (mis. dibuka via UI/CLI) agar /positions cermin on-chain.
- * Enumerasi tokenId lewat Blockscout (v4 PM bukan ERC721Enumerable → tak ada
- * tokenOfOwnerByIndex); detail dibaca via RPC.
+ * Read-only access to Uniswap **v4** positions (a different architecture from v3: a
+ * singleton PoolManager plus a PositionManager NFT). PHILIPS manages v3; this module
+ * only DISPLAYS the v4 positions a wallet holds (opened through the UI or CLI, say)
+ * so /positions mirrors what is on-chain. tokenIds are enumerated through Blockscout
+ * (the v4 PM is not ERC721Enumerable, so there is no tokenOfOwnerByIndex); details
+ * come from RPC.
  */
 
-// PositionManager Uniswap v4 per chain. Kosong = v4 tak didukung di chain itu.
+// The Uniswap v4 PositionManager per chain. Absent means v4 is unsupported there.
 const V4_PM: Record<string, string> = {
   robinhood: '0x58daec3116aae6D93017bAAea7749052E8a04fA7',
   bsc: '0x7A4a5c919aE2541AeD11041A1AEeE68f1287f95b',
 };
 
 /**
- * Alamat kontrak dinormalkan SAAT MODUL DIMUAT.
+ * Contract addresses are normalised AT MODULE LOAD.
  *
- * ethers menolak alamat yang checksum-nya salah, dan pembacaan pool dibungkus
- * `.catch(() => 0n)` — jadi satu huruf besar/kecil yang keliru tidak memunculkan
- * error, melainkan "likuiditas 0" yang membuat SETIAP pool di chain itu terbuang
- * diam-diam. Menormalkan di sini membuat salah ketik gagal keras saat start,
- * bukan menyamar sebagai pool mati.
+ * ethers rejects an address whose checksum is wrong, and pool reads are wrapped in
+ * `.catch(() => 0n)` — so one wrong capital letter surfaces not as an error but as
+ * "zero liquidity", quietly discarding EVERY pool on that chain. Normalising here
+ * makes a typo fail loudly at startup instead of masquerading as a dead pool.
  */
 for (const table of [V4_PM, V4_POOL_MANAGER]) {
   for (const [k, v] of Object.entries(table)) table[k] = ethers.getAddress(v.toLowerCase());
 }
 
 /**
- * Base stablecoin chain ini. Modul ini dulu mematok USDG (satu-satunya chain v4
- * saat itu), jadi menyalakan v4 di BSC membuat pool USDT tak dikenali sebagai
- * pasangan yang bisa dibuka satu sisi. Diambil dari daftar base chain-nya sendiri.
+ * This chain's stablecoin base. The module used to hardcode USDG (the only v4 chain
+ * at the time), so enabling v4 on BSC left USDT pools unrecognised as single-sided
+ * candidates. Now it comes from the chain's own base list.
  */
 function stableOf(cc: ChainCtx): { addr: string; symbol: string; decimals: number } | null {
   const b = cc.bases.find((x) => isStableBase(x.kind));
   return b ? { addr: b.address, symbol: b.symbol, decimals: b.decimals } : null;
 }
-/** Simbol base yang BENAR untuk chain ini — dipakai kartu & label. */
+/** The CORRECT base symbol for this chain, used by cards and labels. */
 export function v4BaseSymbol(cc: ChainCtx, base: 'ETH' | 'USDG' | null): string {
   if (base === 'ETH') return cc.nativeSymbol;
   return base === 'USDG' ? (stableOf(cc)?.symbol ?? 'USD') : '';
 }
-/** Desimal base v4 di chain ini (stable BSC 18, Robinhood 6 — jangan dipatok). */
+/** v4 base decimals on this chain (stable is 18 on BSC, 6 on Robinhood — never hardcode). */
 export function v4BaseDecimals(cc: ChainCtx, base: 'ETH' | 'USDG' | null): number {
   return base === 'USDG' ? (stableOf(cc)?.decimals ?? 6) : 18;
 }
@@ -68,9 +68,9 @@ export function v4BaseDecimals(cc: ChainCtx, base: 'ETH' | 'USDG' | null): numbe
 const DYNAMIC_FEE_FLAG = 0x800000; // v4: fee bertanda dynamic
 
 /**
- * Probe untuk retry otomatis: apakah sebuah operasi SUDAH mendarat di chain?
- * -1n = tak bisa dipastikan (v4 tak didukung / RPC gagal) → pemanggil WAJIB
- * memperlakukannya sebagai "mungkin sudah mendarat" dan tidak mengulang.
+ * Probe for the automatic retry: has an operation ALREADY landed on chain?
+ * -1n means it cannot be determined (v4 unsupported, or the RPC failed), and the
+ * caller MUST treat that as "it may have landed" and not retry.
  */
 export async function v4PositionCount(cc: ChainCtx): Promise<bigint> {
   const addr = V4_PM[cc.key];
@@ -79,7 +79,7 @@ export async function v4PositionCount(cc: ChainCtx): Promise<bigint> {
   return (await c.balanceOf(cc.wallet.address)) as bigint;
 }
 
-/** Likuiditas posisi v4. Berubah = decreaseLiquidity sudah mendarat. */
+/** A v4 position's liquidity. A change means decreaseLiquidity has landed. */
 export async function v4Liquidity(cc: ChainCtx, tokenId: string): Promise<bigint> {
   const addr = V4_PM[cc.key];
   if (!addr) return -1n;
@@ -113,17 +113,17 @@ export type V4Position = {
   currentTick: number | null; // tick pool saat ini — kartu memakainya utk mcap "now"
   converted: boolean; // out-of-range & 100% token seberang (target tercapai)
   impliedTokenEthPrice: number | null; // harga token dlm ETH menurut slot0 pool INI (buat cek pool sekarat)
-  // Jumlah token SEBERANG yang dipegang posisi ini. `valueBaseWei` menilainya pada
-  // harga pool sekarang (mark-to-market) — dan itu BUKAN yang akan kamu terima:
-  // menjualnya menggerakkan harga. Kartu memakai angka ini untuk meminta quote
-  // nyata sebelum menyebutnya "nilai".
+  // How much of the OTHER token this position holds. `valueBaseWei` marks it at the
+  // current pool price, and that is NOT what you would receive: selling it moves the
+  // price. The card uses this figure to request a real quote before calling anything
+  // a "value".
   otherAmountWei: bigint | null;
   otherAddress: string | null;
   otherDecimals: number | null;
   baseAmountWei: bigint | null; // sisi base yang dipegang — ini tak perlu dijual
 };
 
-/** Tentukan aset dasar pasangan + apakah base = currency0. */
+/** Work out the pair's base asset, and whether the base is currency0. */
 function pairBase(cc: ChainCtx, cur0: string, cur1: string): { base: 'ETH' | 'USDG' | null; baseIsCurrency0: boolean } {
   const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
   const st = stableOf(cc);
@@ -136,15 +136,15 @@ function pairBase(cc: ChainCtx, cur0: string, cur1: string): { base: 'ETH' | 'US
 }
 
 export function v4Supported(cc: ChainCtx): boolean {
-  // Blockscout TAK lagi jadi syarat: enumerasi punya jalur tanpa indexer
-  // (nextTokenId + ownerOf), dan posisi yang dibuka bot selalu tercatat lokal.
-  // Tanpa indexer, yang hilang cuma posisi v4 yang dibuka DI LUAR bot — dan
-  // /positions sudah menyebut daftarnya mungkin tak lengkap.
+  // Blockscout is no longer a requirement: enumeration has an indexer-free path
+  // (nextTokenId + ownerOf), and positions the bot opens are always recorded
+  // locally. Without an indexer the only thing missing is a v4 position opened
+  // OUTSIDE the bot — and /positions already says the list may be incomplete.
   return !!V4_PM[cc.key];
 }
 
-// Symbol & desimal token TAK PERNAH berubah → cache permanen. Tanpa ini, /positions
-// dgn 69 leg satu pool memicu ~207 RPC berulang utk metadata yang sama → lambat.
+// Token symbols and decimals NEVER change, so the cache is permanent. Without it,
+// /positions on a 69-leg pool fired ~207 repeat RPCs for identical metadata.
 const symCache = new Map<string, string>();
 const decCache = new Map<string, number>();
 
@@ -178,8 +178,8 @@ async function tokenDecimals(addr: string, cc: ChainCtx): Promise<number> {
   return v;
 }
 
-/** tokenId NFT v4 yang dipegang wallet (via Blockscout). */
-/** true bila enumerasi indexer gagal di pemanggilan terakhir → daftar bisa tak lengkap. */
+/** v4 NFT tokenIds held by the wallet (via Blockscout). */
+/** true when indexer enumeration failed on the last call, so the list may be incomplete. */
 let enumDegraded = false;
 export function v4ListDegraded(): boolean {
   return enumDegraded;
@@ -188,19 +188,21 @@ export function v4ListDegraded(): boolean {
 async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
   const pm = V4_PM[cc.key];
   if (!pm) return [];
-  // Posisi yang bot kelola SELALU disertakan: kalau Blockscout down/lag, posisi
-  // v4-mu tak boleh lenyap dari /positions (dulu catch→[] bikin kedip "tak sinkron").
+  // Positions the bot manages are ALWAYS included: if Blockscout is down or lagging,
+  // your v4 positions must not vanish from /positions (catch->[] used to make them
+  // flicker as "out of sync").
   const ids = new Set(allV4().filter((r) => r.chain === cc.key).map((r) => r.tokenId));
   if (!cc.blockscout) return [...ids];
   enumDegraded = false;
-  // Dua percobaan: Blockscout Robinhood sering gagal SESAAT (abort 3 dtk, 500, 503)
-  // lalu berhasil di detik berikutnya. Sekali gagal langsung dianggap rusak membuat
-  // peringatan "indexer bermasalah" muncul hampir tiap /positions — dan peringatan
-  // yang selalu menyala berhenti dibaca. Percobaan kedua diberi waktu lebih panjang.
+  // Two attempts: Robinhood's Blockscout often fails BRIEFLY (a 3s abort, a 500, a
+  // 503) and succeeds a second later. Treating one failure as broken put an "indexer
+  // trouble" warning on nearly every /positions — and a warning that is always lit
+  // stops being read. The second attempt gets a longer timeout.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      // Blockscout memberi ~50 item per halaman; wallet menimbun NFT v4 KOSONG tiap
-      // tutup posisi, jadi tanpa paginasi posisi hidup bisa jatuh dari halaman 1.
+        // Blockscout returns ~50 items per page, and the wallet accumulates an EMPTY
+        // v4 NFT on every close, so without pagination a live position can fall off
+        // page 1.
       let url: string | null = `${cc.blockscout}/addresses/${cc.wallet.address}/nft?type=ERC-721`;
       for (let page = 0; url && page < 10; page++) {
         const ctrl = new AbortController();
@@ -219,9 +221,10 @@ async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
       enumDegraded = false;
       break;
     } catch (e) {
-      // Jangan diam-diam: kegagalan indexer yang "tertolong" v4store harus terlihat.
-      // Jangan cuma di log server: user yang melihat /positions harus tahu daftarnya
-      // mungkin tak lengkap — inilah yang dulu membuat posisi "hilang" tanpa sebab.
+      // Do not swallow this: an indexer failure that v4store happened to cover has to
+      // be visible. And not only in the server log — whoever is looking at /positions
+      // needs to know the list may be incomplete. This is what used to make positions
+      // "disappear" for no apparent reason.
       enumDegraded = true;
       console.log(
         `[v4] enumerasi Blockscout gagal (percobaan ${attempt + 1}/2), pakai v4store saja:`,
@@ -244,43 +247,33 @@ const V4_WRITE_ABI = [
   'function modifyLiquidities(bytes unlockData, uint256 deadline) payable',
 ];
 
-/** Catatan yang ikut ke kartu close saat burn v4 terpaksa tanpa lantai harga. */
+/** Note attached to the close card when a v4 burn had to run without a price floor. */
 export const V4_UNPROTECTED_NOTE = (ids: string) =>
   `⚠️ #${ids} withdrawn WITHOUT a price floor — the pool could not be priced, so sandwich protection was off for this close.`;
 
 /**
- * amount0Min/amount1Min untuk BURN_POSITION.
+ * amount0Min/amount1Min for BURN_POSITION.
  *
- * Dulu keduanya 0 dengan alasan "burn = tarik dana sendiri, bukan swap". Alasan itu
- * TIDAK berlaku untuk likuiditas terkonsentrasi: harga bisa didorong ke tepi rentang,
- * posisi keluar ~100% sebagai aset yang sedang ditekan, lalu harga dikembalikan — dan
- * tx-nya tetap "sukses" sehingga tak ada yang menandai. v3 sudah dijaga sejak lama
- * (withdrawMins); ini menutup lubang yang sama di v4.
+ * Both were once 0, on the reasoning that "a burn withdraws your own funds, it is not
+ * a swap". That reasoning does NOT hold for concentrated liquidity: price can be
+ * pushed to a range edge, the position exits ~100% as the asset being suppressed,
+ * and price is then restored — with the tx still reporting success, so nothing flags
+ * it. v3 has been guarded for a long time (withdrawMins); this closes the same hole
+ * in v4.
  *
- * Lantainya dihitung dari PRINSIPAL saja (harga pool sekarang), sedangkan cek
- * slippage on-chain mengukur prinsipal + fee. Fee hanya menambah, jadi lantai ini
- * konservatif — tak akan menolak burn yang sehat.
+ * The floor is computed from PRINCIPAL alone (at the current pool price), while the
+ * on-chain slippage check measures principal plus fees. Fees only add, so this floor
+ * is conservative and will not reject a healthy burn.
  *
- * CARA MENGHITUNGNYA — dan kenapa cara lama gagal.
+ * The maths lives in `withdrawFloors` (lpmath.ts), shared with v3: floors come from
+ * a PRICE BAND rather than a per-side percentage. Per-side floors pinned composition
+ * — which is meant to move — instead of value, and in a narrow range an ordinary
+ * 0.2% price move was enough to trigger `MinimumAmountInsufficient` (0x12816f22) and
+ * fail a close over and over with no attacker anywhere near it.
  *
- * Dulu: `min0 = amount0 × 99,5%` dan `min1 = amount1 × 99,5%`, dua-duanya sekaligus.
- * Untuk likuiditas terkonsentrasi itu salah. Saat harga mendekati tepi rentang,
- * posisi hampir seluruhnya jadi satu aset dan sisi minornya tinggal remah — lalu
- * remah itu berubah PERSENTASE-nya sangat cepat. Gerak harga 0,2% yang sepenuhnya
- * wajar bisa memangkas sisi minor jauh lebih dari 0,5%, `MinimumAmountInsufficient`
- * (0x12816f22) terpicu, dan close gagal berulang kali padahal tak ada serangan.
- * Yang lebih buruk: lantai per-sisi tak benar-benar menjaga NILAI — ia menjaga
- * KOMPOSISI, hal yang memang bergerak sendiri.
- *
- * Sekarang: jumlah token adalah fungsi deterministik dari harga (likuiditas tetap).
- * Jadi lantainya diambil dari PITA HARGA ±0,5%: hitung amounts di kedua tepi pita,
- * ambil yang terkecil per sisi. Karena amount0 turun saat harga naik dan amount1
- * naik saat harga naik, hasilnya = amount0 di tepi atas dan amount1 di tepi bawah.
- * Gerak wajar di dalam pita lolos; dorongan harga di luar pita — yang justru
- * dipakai penyerang — tetap ditolak.
- *
- * Tak bisa dihitung → {0,0} + tanda `unprotected` (dana user > risiko MEV), dan
- * tandanya DIBAWA KE ATAS supaya muncul di kartu, bukan cuma di log server.
+ * If it cannot be computed: {0,0} plus an `unprotected` flag (the user's funds
+ * outrank the MEV risk), and that flag is CARRIED UP so it appears on the card, not
+ * just in the server log.
  */
 async function burnMinsV4(
   cc: ChainCtx,
@@ -291,7 +284,7 @@ async function burnMinsV4(
   try {
     const [, info] = await pm.getPoolAndPositionInfo(tokenId);
     const liquidity: bigint = await pm.getPositionLiquidity(tokenId);
-    // Likuiditas 0 → tak ada prinsipal yang bisa dicuri lewat harga; bukan celah.
+    // Zero liquidity means no principal that price can steal; not a hole.
     if (liquidity === 0n) return { min0: 0n, min1: 0n, unprotected: false };
     const tickLower = signExt24((BigInt(info) >> 8n) & 0xffffffn);
     const tickUpper = signExt24((BigInt(info) >> 32n) & 0xffffffn);
@@ -304,10 +297,10 @@ async function burnMinsV4(
 }
 
 /**
- * Tutup (burn) posisi v4: tarik SELURUH likuiditas + fee, terima kedua token ke
- * wallet, burn NFT — dalam satu modifyLiquidities (BURN_POSITION + TAKE_PAIR).
- * WAJIB simulasi (staticCall) dulu; revert → batal (tak kirim). Tidak meng-swap
- * (v4 close mengembalikan kedua token apa adanya). dryRun → hanya simulasi.
+ * Close (burn) a v4 position: withdraw ALL liquidity plus fees, take both tokens to
+ * the wallet, and burn the NFT — in a single modifyLiquidities (BURN_POSITION +
+ * TAKE_PAIR). A staticCall simulation is MANDATORY first; a revert aborts before
+ * anything is sent. dryRun simulates only.
  */
 export async function closePositionV4(
   tokenId: string,
@@ -341,7 +334,7 @@ export async function closePositionV4(
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const [sym0, sym1] = await Promise.all([tokenSymbol(pk.currency0, cc), tokenSymbol(pk.currency1, cc)]);
 
-  // Tentukan aset dasar (cash-out): pair ber-ETH → ETH; ber-USDG → USDG; lainnya → tak ada.
+  // Pick the cash-out asset: an ETH pair gives ETH, a USDG pair gives USDG, anything else none.
   const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
   const st = stableOf(cc);
   const isUsdg = (a: string) => !!st && a.toLowerCase() === st.addr.toLowerCase();
@@ -355,7 +348,7 @@ export async function closePositionV4(
     other = isUsdg(pk.currency0) ? pk.currency1 : pk.currency0;
   }
 
-  // Simulasi WAJIB (burn+take) — revert di sini = batalkan sebelum kirim tx.
+  // Simulation is MANDATORY (burn+take): a revert here cancels before a tx goes out.
   await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
   if (opts.dryRun) return { dryRun: true, sym0, sym1, base, other: other ?? undefined, unprotected: mins.unprotected };
 
@@ -379,7 +372,7 @@ export async function closePositionV4(
     unprotected: mins.unprotected,
   };
 
-  // Cash-out: swap token "receh" → base (best-effort; gagal → biarkan sbg leftover, tak hilang).
+  // Cash out: swap the leftover token to base. Best-effort; on failure it stays as a leftover, not lost.
   if (base && other && other !== ethers.ZeroAddress) {
     try {
       const erc = new ethers.Contract(other, ['function balanceOf(address) view returns (uint256)'], cc.provider);
@@ -395,8 +388,8 @@ export async function closePositionV4(
     }
   }
 
-  // Base ETH: jalur fallback Uniswap menghasilkan WETH (wrapped) → unwrap ke ETH
-  // native supaya benar-benar "semua ke ETH" (samakan dgn v3 stopAndCashOut).
+  // ETH base: Uniswap's fallback route yields WETH, so unwrap to native ETH and make
+  // "everything to ETH" actually true (matching v3's stopAndCashOut).
   if (base === 'ETH') {
     try {
       const wbal: bigint = await cc.weth.balanceOf(cc.wallet.address);
@@ -405,16 +398,17 @@ export async function closePositionV4(
         out.cashedOut = out.cashedOut ? `${out.cashedOut} + unwrap WETH` : 'ETH (unwrap WETH)';
       }
     } catch {
-      /* WETH tetap di wallet — tak fatal, bisa unwrap manual */
+      /* WETH stays in the wallet — not fatal, it can be unwrapped manually */
     }
   }
   return out;
 }
 
 /**
- * BATCH close ladder v4: burn SEMUA leg + take (N×BURN_POSITION + 1×TAKE_PAIR)
- * dalam satu modifyLiquidities, lalu SATU swap token→base + unwrap. Mengembalikan
- * total baseOut terukur (delta saldo base) untuk dibagi ke tiap leg di pemanggil.
+ * BATCH close of a v4 ladder: burn EVERY leg plus take (N x BURN_POSITION + 1 x
+ * TAKE_PAIR) in one modifyLiquidities, then a SINGLE token->base swap and unwrap.
+ * Returns the measured total baseOut (the base balance delta) for the caller to
+ * split across legs.
  */
 export async function closeLadderV4(
   tokenIds: string[],
@@ -435,18 +429,19 @@ export async function closeLadderV4(
   if (isEth(pk.currency0) || isEth(pk.currency1)) { base = 'ETH'; other = isEth(pk.currency0) ? pk.currency1 : pk.currency0; }
   else if (isUsdg(pk.currency0) || isUsdg(pk.currency1)) { base = 'USDG'; other = isUsdg(pk.currency0) ? pk.currency1 : pk.currency0; }
 
-  // Ukur saldo base SEBELUM (delta = hasil). ETH → native; USDG → token.
+  // Measure the base balance BEFORE (the delta is the result). ETH means native; USDG means the token.
   const readBase = async (): Promise<bigint> =>
     base === 'USDG' && stableOf(cc)
       ? ((await new ethers.Contract(stableOf(cc)!.addr, ['function balanceOf(address) view returns (uint256)'], cc.provider).balanceOf(cc.wallet.address).catch(() => 0n)) as bigint)
       : ((await cc.provider.getBalance(cc.wallet.address).catch(() => 0n)) as bigint);
   const beforeWei = await readBase();
 
-  // Leg yang SUDAH TAK ADA harus disaring dulu. BURN_POSITION pada id yang tak
-  // pernah/tak lagi ter-mint me-revert 'NOT_MINTED', dan karena ini SATU multicall
-  // seluruh batch ikut gagal — delapan leg tak bisa ditutup gara-gara satu id hantu.
-  // Hanya revert kepemilikan yang dianggap "hilang"; gagal baca lain dilempar,
-  // supaya RPC yang rewel tak pernah lagi terbaca sebagai "posisi tak ada".
+  // Legs that ALREADY vanished have to be filtered out first. BURN_POSITION on an id
+  // that was never minted, or no longer is, reverts with 'NOT_MINTED', and since this
+  // is ONE multicall the whole batch fails with it — eight legs left unclosable
+  // because of a single ghost id. Only an ownership revert counts as "gone"; any
+  // other read failure is rethrown, so a flaky RPC is never again read as "the
+  // position does not exist".
   const alive: string[] = [];
   const gone: string[] = [];
   for (const id of tokenIds) {
@@ -468,7 +463,7 @@ export async function closeLadderV4(
   tokenIds = alive;
 
   const actionBytes = [...tokenIds.map(() => BURN_POSITION), TAKE_PAIR];
-  // Tiap leg punya rentangnya sendiri → lantainya dihitung per leg, bukan sekali.
+  // Each leg has its own range, so floors are computed per leg rather than once.
   const legMins = await Promise.all(tokenIds.map((id) => burnMinsV4(cc, pm, id, pk)));
   const unprotectedIds = tokenIds.filter((_, i) => legMins[i].unprotected);
   const params = [
@@ -483,7 +478,7 @@ export async function closeLadderV4(
   const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline));
   const rc = await tx.wait();
   let cashedOut: string | undefined;
-  // Swap seluruh token hasil (agregat semua leg) → base sekali.
+  // Swap the whole token proceeds (aggregated across legs) to base in one go.
   if (base && other && other !== ethers.ZeroAddress) {
     try {
       const erc = new ethers.Contract(other, ['function balanceOf(address) view returns (uint256)'], cc.provider);
@@ -505,12 +500,13 @@ export async function closeLadderV4(
   return { txHash: rc?.hash ?? tx.hash, base, other: other ?? undefined, sym0, sym1, baseOutWei, cashedOut, unprotected: unprotectedIds, gone };
 }
 
-// Cache hasil list v4 per chain (TTL pendek): banyak command (/status, /positions,
-// dll) memanggilnya beruntun; tanpa cache tiap kali fetch ULANG semua leg → lambat.
+// Per-chain cache of the v4 list (short TTL): several commands (/status,
+// /positions and others) call it back to back, and without a cache each one
+// re-fetches every leg.
 const listCache = new Map<string, { t: number; v: V4Position[] }>();
 const LIST_TTL_MS = 45_000;
 
-/** Daftar posisi v4 wallet. onlyLive=true → hanya yang liquidity > 0. */
+/** The wallet's v4 positions. onlyLive=true returns only those with liquidity > 0. */
 export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyLive?: boolean } = {}): Promise<V4Position[]> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) return [];
@@ -520,8 +516,8 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
   const ids = await walletV4TokenIds(cc);
   if (ids.length === 0) return [];
   const pm = new ethers.Contract(pmAddr, V4_ABI, cc.provider);
-  // Konkurensi DIBATASI: 69 leg × ~5 RPC via Promise.all = ~300 RPC serentak →
-  // Alchemy throttle → lambat/error. mapLimit menahan di ~8 serentak.
+  // Concurrency is CAPPED: 69 legs x ~5 RPCs through Promise.all is ~300 concurrent
+  // requests, which Alchemy throttles. mapLimit holds it at about 8 at a time.
   const rows = await mapLimit(ids, 8,
     async (id): Promise<V4Position | null> => {
       try {
@@ -539,15 +535,16 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
           tickSpacing: Number(pk.tickSpacing),
           hooks: pk.hooks,
         };
-        // Valuasi (nilai + range %); gagal baca harga → null (kartu tetap tampil).
+        // Valuation (value plus range %); if the price read fails, null — the card still renders.
         let val: Awaited<ReturnType<typeof valuePositionV4>> | null = null;
         try {
           val = await valuePositionV4(cc, poolKey, tickLower, tickUpper, liquidity, id);
         } catch {
-          /* biarkan null */
+          /* leave it null */
         }
-        // Harga token dlm ETH menurut slot0 pool INI (untuk deteksi pool sekarat:
-        // dibandingkan harga pasar DexScreener di kartu). Hanya untuk pasangan ETH.
+        // The token's price in ETH according to THIS pool's slot0, used to spot a
+        // dying pool by comparing it with DexScreener's market price on the card.
+        // ETH pairs only.
         let impliedTokenEthPrice: number | null = null;
         const pb = pairBase(cc, pk.currency0, pk.currency1);
         if (val && pb.base === 'ETH') {
@@ -559,7 +556,7 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
             const px = factor * Math.pow(10, tokDec - 18);
             if (isFinite(px) && px > 0) impliedTokenEthPrice = px;
           } catch {
-            /* biarkan null */
+          /* leave it null */
           }
         }
         return {
@@ -597,12 +594,12 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
   return out;
 }
 
-/** Buang cache list v4 (dipanggil setelah buka/tutup posisi supaya /positions segar). */
+/** Drop the v4 list cache (called after opening or closing so /positions stays fresh). */
 export function invalidateV4ListCache(): void {
   listCache.clear();
 }
 
-// ── Add (mint) posisi v4 single-sided ──────────────────────────────────────
+// ── Add (mint) a single-sided v4 position ──────────────────────────────────
 export const sqrtAtTick = (tick: number): bigint => BigInt(TickMath.getSqrtRatioAtTick(tick).toString());
 function liqForAmount0(a: bigint, b: bigint, amt0: bigint): bigint {
   if (a > b) [a, b] = [b, a];
@@ -616,10 +613,11 @@ function liqForAmount1(a: bigint, b: bigint, amt1: bigint): bigint {
 export type PoolKeyV4 = { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string };
 
 /**
- * PoolKey gateway sering meleset: currency belum terurut, dan pool ETH-native
- * dilaporkan memakai alamat WETH. poolId keccak → salah → modifyLiquidities
- * revert PoolNotInitialized di langkah terakhir (dead-end 4 tap). Coba varian
- * yang masuk akal, kembalikan yang slot0-nya HIDUP; null = pool tak ada.
+ * The gateway's PoolKey is often wrong: currencies come back unsorted, and a
+ * native-ETH pool is reported using the WETH address. The keccak poolId then does not
+ * match, and modifyLiquidities reverts with PoolNotInitialized at the very last step
+ * — a dead end four taps in. This tries the plausible variants and returns whichever
+ * has a LIVE slot0; null means the pool does not exist.
  */
 export async function resolvePoolKeyV4(
   cc: ChainCtx,
@@ -631,9 +629,9 @@ export async function resolvePoolKeyV4(
   const otherAddr = baseIsCurrency0 ? pk.currency1 : pk.currency0;
   const isWeth = baseAddr.toLowerCase() === cc.wethAddress.toLowerCase();
   const bases = isWeth ? [baseAddr, ethers.ZeroAddress] : [baseAddr];
-  // Jangan ambil pool PERTAMA yang terinisialisasi: varian native-ETH vs WETH bisa
-  // dua-duanya hidup, dan yang satu bisa pool sekarat (liq ~$0) yang harganya
-  // nyangkut jauh dari pasar. Pilih yang LIKUIDITASNYA paling dalam.
+  // Do not take the FIRST initialised pool: the native-ETH and WETH variants can both
+  // be live, and one of them may be a dying pool (liquidity near $0) whose price is
+  // stuck far from the market. Pick the one with the DEEPEST liquidity.
   let best: { poolKey: PoolKeyV4; baseIsCurrency0: boolean; liq: bigint } | null = null;
   for (const b of bases) {
     const [c0, c1] = b.toLowerCase() < otherAddr.toLowerCase() ? [b, otherAddr] : [otherAddr, b];
@@ -647,10 +645,10 @@ export async function resolvePoolKeyV4(
 }
 
 /**
- * Kesehatan pool v4 utk keputusan BUKA: likuiditas aktif on-chain + harga token
- * (dlm ETH) menurut slot0 pool ini. Dipakai wizard buat menyaring pool sekarat /
- * harga melenceng dari pasar sebelum menawarkannya. impliedTokenEthPrice hanya
- * untuk pasangan ETH (null selain itu / gagal baca).
+ * v4 pool health for an OPEN decision: on-chain active liquidity plus the token's
+ * price (in ETH) according to this pool's slot0. The wizard uses it to filter out
+ * dying pools and prices that have drifted from the market before offering them.
+ * impliedTokenEthPrice is for ETH pairs only (null otherwise, or on a read failure).
  */
 export async function poolHealthV4(
   cc: ChainCtx,
@@ -669,7 +667,7 @@ export async function poolHealthV4(
       const px = factor * Math.pow(10, tokDec - 18);
       if (isFinite(px) && px > 0) impliedTokenEthPrice = px;
     } catch {
-      /* biarkan null */
+      /* leave it null */
     }
   }
   return { liquidity, impliedTokenEthPrice };
@@ -689,9 +687,10 @@ async function ensurePermit2(cc: ChainCtx, token: string, spender: string, amoun
 }
 
 /**
- * Buka posisi v4 single-sided: deposit HANYA base ke range di satu sisi harga
- * (base=currency0 → range di atas; base=currency1 → range di bawah), sehingga
- * cuma base yang ditarik. Simulasi WAJIB sebelum kirim. ERC20 base → Permit2.
+ * Open a single-sided v4 position: deposit ONLY the base into a range on one side of
+ * the price (base=currency0 puts the range above; base=currency1 puts it below), so
+ * only the base is drawn down. Simulation is MANDATORY before sending. An ERC20 base
+ * goes through Permit2.
  */
 export async function openPositionV4(
   cc: ChainCtx,
@@ -704,25 +703,27 @@ export async function openPositionV4(
   if (!pmAddr || !V4_POOL_MANAGER[cc.key]) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
   const spacing = poolKey.tickSpacing;
   const width = (opts.widthSpacings ?? 50) * spacing;
-  // gap default 0 → tepi-dekat MENEMPEL harga sekarang supaya posisi mulai terisi
-  // sejak pergerakan pertama ke arah kita (bukan menunggu turun berspasi dulu).
+  // A default gap of 0 puts the near edge FLUSH against the current price, so the
+  // position starts filling on the first move our way rather than waiting out a gap.
   const gap = (opts.gapSpacings ?? 0) * spacing;
   const state = await readPoolState(cc, poolKey);
-  // slot0 kosong = poolKey tak cocok pool mana pun. Tanpa cek ini, revert-nya baru
-  // muncul sebagai 'unknown custom error' (PoolNotInitialized) di preview rencana.
+  // An empty slot0 means the poolKey matches no pool. Without this check the revert
+  // only surfaces as an 'unknown custom error' (PoolNotInitialized) in the plan preview.
   if (state.sqrtPriceX96 === 0n) throw new Error('This v4 pool is not initialised — pick another pool.');
   const current = state.tick;
   const aligned = nearestUsableTick(current, spacing);
   let tickLower: number;
   let tickUpper: number;
   if (baseIsCurrency0) {
-    // Deposit currency0 → range di ATAS harga. Tick naik = harga token turun → terisi.
-    // Tepi-dekat = tick usable TERKECIL yang strictly > current (nempel), lalu +gap opsional.
+    // Depositing currency0 puts the range ABOVE the price. A rising tick means a
+    // falling token price, which fills it. The near edge is the SMALLEST usable tick
+    // strictly above current (flush), plus an optional gap.
     tickLower = (aligned > current ? aligned : aligned + spacing) + gap;
     tickUpper = tickLower + width;
   } else {
-    // Deposit currency1 → range di BAWAH harga. Tick turun = harga token turun → terisi.
-    // Tepi-dekat = tick usable TERBESAR yang strictly < current (nempel), lalu -gap opsional.
+    // Depositing currency1 puts the range BELOW the price. A falling tick means a
+    // falling token price, which fills it. The near edge is the LARGEST usable tick
+    // strictly below current (flush), minus an optional gap.
     tickUpper = (aligned < current ? aligned : aligned - spacing) - gap;
     tickLower = tickUpper - width;
   }
@@ -730,8 +731,9 @@ export async function openPositionV4(
   const sqrtU = sqrtAtTick(tickUpper);
   const liquidity = baseIsCurrency0 ? liqForAmount0(sqrtL, sqrtU, baseAmountWei) : liqForAmount1(sqrtL, sqrtU, baseAmountWei);
   if (liquidity <= 0n) {
-    // Buta tanpa angka: catat pool, jumlah, spacing & lebar tick supaya jelas apakah
-    // ini deposit kekecilan (wei USDG 6-dec) atau range kelewat lebar (spacing besar).
+    // Blind without numbers: log the pool, amount, spacing and tick width so it is
+    // clear whether this is too small a deposit (USDG wei at 6 decimals) or too wide
+    // a range (large spacing).
     console.log(
       `[v4] liquidity 0 — pool=${poolKey.currency0}/${poolKey.currency1} fee=${poolKey.fee} spacing=${spacing}` +
         ` baseIsC0=${baseIsCurrency0} amountWei=${baseAmountWei} widthTicks=${tickUpper - tickLower} [${tickLower},${tickUpper}]`,
@@ -768,16 +770,17 @@ export async function openPositionV4(
 
   if (!isNative && !opts.dryRun) await ensurePermit2(cc, baseCurrency, pmAddr, baseAmountWei);
 
-  // staticCall memvalidasi mint sebelum kirim. Utk base non-native saat DRY-RUN,
-  // Permit2 belum diset → staticCall pasti revert; lewati (validasi tetap jalan di
-  // jalur live: ensurePermit2 dulu, lalu staticCall di bawah, baru tx).
+  // staticCall validates the mint before sending. For a non-native base during a
+  // DRY RUN, Permit2 is not set up yet so staticCall is certain to revert; skip it.
+  // The live path still validates: ensurePermit2 first, then the staticCall below,
+  // then the tx.
   if (isNative || !opts.dryRun) {
     await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address, value });
   }
   if (opts.dryRun) return { dryRun: true, tickLower, tickUpper, liquidity, baseIsCurrency0 };
   const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline, { value }));
   const rc = await tx.wait();
-  // tokenId NFT baru = event Transfer(from=0x0, to=wallet) dari PositionManager.
+  // The new NFT tokenId comes from the PositionManager's Transfer(from=0x0, to=wallet) event.
   let tokenId: string | undefined;
   const transferTopic = ethers.id('Transfer(address,address,uint256)');
   const toPadded = ethers.zeroPadValue(cc.wallet.address, 32).toLowerCase();
@@ -795,10 +798,10 @@ export async function openPositionV4(
   return { txHash: rc?.hash ?? tx.hash, tokenId, tickLower, tickUpper, liquidity, baseIsCurrency0 };
 }
 
-// ── Ladder Bid-Ask v4 (batch native: N MINT + 1 SETTLE dalam satu tx) ────────
+// ── v4 Bid-Ask ladder (native batch: N MINT + 1 SETTLE in one tx) ───────────
 export type V4LadderLeg = { tickLower: number; tickUpper: number; baseAmountWei: bigint; liquidity: bigint; pctHigh: number; pctLow: number };
 
-/** Bobot per-leg (index 0 = terdekat harga, N-1 = terjauh). spot=rata, bidask=∝(i+1). */
+/** Per-leg weights (index 0 is nearest the price, N-1 the furthest). spot is even, bidask scales with (i+1). */
 function ladderWeightsV4(n: number, shape: 'spot' | 'bidask'): number[] {
   if (n <= 1) return [1];
   const raw = shape === 'bidask' ? Array.from({ length: n }, (_, i) => i + 1) : Array.from({ length: n }, () => 1);
@@ -807,9 +810,10 @@ function ladderWeightsV4(n: number, shape: 'spot' | 'bidask'): number[] {
 }
 
 /**
- * Rencana ladder v4 single-sided (sisi base, buy-dip): pecah rentang [sekarang …
- * −X%] jadi N leg berbobot. Mirror planLadderSingleSided v3 tapi pakai tick-math
- * v4 (readPoolState + liqForAmount). Auto-cap N ke kapasitas spacing.
+ * Plan a single-sided v4 ladder (base side, buy-the-dip): split the range [now ...
+ * -X%] into N weighted legs. Mirrors v3's planLadderSingleSided but uses v4 tick
+ * maths (readPoolState + liqForAmount). N is auto-capped to the spacing's capacity.
+ */
  */
 export async function planLadderV4(
   cc: ChainCtx,
@@ -861,8 +865,10 @@ export async function planLadderV4(
 }
 
 /**
- * BATCH mint ladder v4: N leg dalam SATU modifyLiquidities atomik (N×MINT_POSITION
- * + 1×SETTLE_PAIR, +SWEEP bila native). Paling irit — settle base sekali di akhir.
+ * BATCH mint a v4 ladder: N legs in ONE atomic modifyLiquidities (N x MINT_POSITION
+ * + 1 x SETTLE_PAIR, plus SWEEP when native). The cheapest route, settling the base
+ * once at the end.
+ */
  */
 export async function openLadderV4(
   cc: ChainCtx,
@@ -920,9 +926,10 @@ export async function openLadderV4(
 }
 
 /**
- * Id NFT posisi berikutnya di PositionManager. Dipakai untuk MENGURUNG rentang
- * id yang mungkin lahir dari satu percobaan open: baca sebelum kirim, baca lagi
- * sesudahnya. Otoritatif (langsung dari kontrak), tak bergantung indexer.
+ * The PositionManager's next position NFT id. Used to BRACKET the range of ids one
+ * open attempt might produce: read before sending, read again afterwards.
+ * Authoritative (straight from the contract) and independent of any indexer.
+ */
  */
 export async function v4NextTokenId(cc: ChainCtx): Promise<bigint> {
   const pmAddr = V4_PM[cc.key];
@@ -930,7 +937,7 @@ export async function v4NextTokenId(cc: ChainCtx): Promise<bigint> {
   return await new ethers.Contract(pmAddr, ['function nextTokenId() view returns (uint256)'], cc.provider).nextTokenId();
 }
 
-/** Pemilik NFT posisi v4 — revert 'NOT_MINTED' berarti posisinya sudah tak ada. */
+/** Owner of a v4 position NFT — a 'NOT_MINTED' revert means the position is gone. */
 export async function v4OwnerOf(cc: ChainCtx, tokenId: string): Promise<string> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
@@ -938,11 +945,11 @@ export async function v4OwnerOf(cc: ChainCtx, tokenId: string): Promise<string> 
 }
 
 /**
- * Id dalam [from, to) yang dimiliki wallet kita. Untuk memungut posisi yang
- * TERLANJUR ter-mint padahal alur open-nya gagal di tengah — tanpa ini posisi
- * itu ada di chain tapi tak punya catatan, jadi tak pernah muncul di /positions
- * saat indexer sedang down.
- * ponytail: dibatasi `cap` id — rentang satu percobaan open selalu kecil.
+ * Ids in [from, to) owned by our wallet. For recovering a position that DID get
+ * minted while its open flow failed part-way through — without this the position
+ * exists on chain but has no record, so it never appears in /positions while the
+ * indexer is down.
+ * ponytail: capped at `cap` ids, since one open attempt always spans a small range.
  */
 export async function v4OwnedIdsInRange(cc: ChainCtx, from: bigint, to: bigint, cap = 64): Promise<string[]> {
   const pmAddr = V4_PM[cc.key];
@@ -957,7 +964,7 @@ export async function v4OwnedIdsInRange(cc: ChainCtx, from: bigint, to: bigint, 
   return out;
 }
 
-/** PoolKey + info base sebuah posisi v4 (untuk add ke pool yg sama). */
+/** A v4 position's PoolKey plus base info (for adding to the same pool). */
 export async function getPoolKeyV4(cc: ChainCtx, tokenId: string): Promise<{ poolKey: PoolKeyV4; baseIsCurrency0: boolean; base: 'ETH' | 'USDG' | null }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
@@ -968,13 +975,13 @@ export async function getPoolKeyV4(cc: ChainCtx, tokenId: string): Promise<{ poo
   return { poolKey, baseIsCurrency0, base };
 }
 
-// ── Valuasi posisi v4 (nilai dalam base + range %) ──────────────────────────
-/** Tick pool v4 sekarang — dipakai buat patok entryTick saat open. */
+// ── v4 position valuation (value in base + range %) ─────────────────────────
+/** The v4 pool's current tick, used to stamp entryTick when opening. */
 export async function currentTickV4(cc: ChainCtx, pk: PoolKeyV4): Promise<number> {
   return (await readPoolState(cc, pk)).tick;
 }
 
-/** Baca slot0 pool v4: tick + sqrtPriceX96 sekarang. */
+/** Read a v4 pool's slot0: current tick and sqrtPriceX96. */
 async function readPoolState(cc: ChainCtx, pk: PoolKeyV4): Promise<{ tick: number; sqrtPriceX96: bigint }> {
   const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
   const coder = ethers.AbiCoder.defaultAbiCoder();
@@ -988,9 +995,9 @@ async function readPoolState(cc: ChainCtx, pk: PoolKeyV4): Promise<{ tick: numbe
 }
 
 /**
- * Likuiditas TOTAL pool v4 (bukan posisi). Layout Pool.State: base slot =
- * keccak256(poolId, POOLS_SLOT=6); slot0 di offset 0, liquidity (uint128) di
- * offset 3. Dipakai untuk deteksi pool sekarat (harga tak andal).
+ * TOTAL pool liquidity (the pool, not a position). Pool.State layout: base slot =
+ * keccak256(poolId, POOLS_SLOT=6); slot0 at offset 0, liquidity (uint128) at offset
+ * 3. Used to detect a dying pool, where the price is unreliable.
  */
 async function readPoolLiquidity(cc: ChainCtx, pk: PoolKeyV4): Promise<bigint> {
   const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
@@ -1003,10 +1010,10 @@ async function readPoolLiquidity(cc: ChainCtx, pk: PoolKeyV4): Promise<bigint> {
 }
 
 /**
- * Slot0 + fee posisi dalam SATU extsload(bytes32[]). Menggantikan readPoolState
- * di valuePositionV4 supaya jumlah RPC tak bertambah walau fee ikut dihitung.
- * tokenId = salt posisi v4 (owner = PositionManager).
- * Layout Pool.State: slot0@0, feeGrowthGlobal0/1@1,2, ticks@4, positions@6.
+ * slot0 plus a position's fees in a SINGLE extsload(bytes32[]). Replaces
+ * readPoolState inside valuePositionV4 so the RPC count does not grow even though
+ * fees are now computed too. tokenId is the v4 position's salt (owner = PositionManager).
+ * Pool.State layout: slot0@0, feeGrowthGlobal0/1@1,2, ticks@4, positions@6.
  */
 async function readPoolAndFees(
   cc: ChainCtx, pk: PoolKeyV4, tickLower: number, tickUpper: number, tokenId: string,
@@ -1037,7 +1044,7 @@ async function readPoolAndFees(
   let tick = Number((s0 >> 160n) & 0xffffffn);
   if (tick >= 2 ** 23) tick -= 2 ** 24;
 
-  // feeGrowthInside = global - below - above (wrap-around uint256 disengaja).
+  // feeGrowthInside = global - below - above (the uint256 wrap-around is intentional).
   const M = 1n << 256n;
   const wrap = (x: bigint) => ((x % M) + M) % M;
   const below0 = tick >= tickLower ? lo0 : wrap(fg0 - lo0);
@@ -1064,10 +1071,10 @@ export type V4Valuation = {
   converted: boolean; // out-of-range & sisi base kosong → 100% token seberang (target tercapai)
 };
 
-/** Nilai posisi v4 (token amounts, nilai dalam base, range %). */
+/** Value a v4 position (token amounts, value in base, range %). */
 export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: number, tickUpper: number, liquidity: bigint, tokenId?: string): Promise<V4Valuation> {
-  // tokenId ada → sekalian ambil fee (RPC sama banyak). Tanpa tokenId (pratinjau
-  // posisi yang belum dibuka) → slot0 saja, fee 0.
+  // With a tokenId, fetch fees at the same time (same RPC count). Without one (a
+  // preview of a position not yet opened), read slot0 only and treat fees as 0.
   const { tick, sqrtPriceX96, fee0, fee1 } = tokenId
     ? await readPoolAndFees(cc, pk, tickLower, tickUpper, tokenId)
     : { ...(await readPoolState(cc, pk)), fee0: 0n, fee1: 0n };
@@ -1075,7 +1082,7 @@ export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: nu
   const sqrtU = sqrtAtTick(tickUpper);
   const { amount0, amount1 } = amountsForLiquidity(sqrtPriceX96, sqrtL, sqrtU, liquidity);
   const { base, baseIsCurrency0 } = pairBase(cc, pk.currency0, pk.currency1);
-  // sqrtPriceX96 = sqrt(token1/token0)*Q96 (rasio raw). Nilai dlm base:
+  // sqrtPriceX96 = sqrt(token1/token0)*Q96 (a raw ratio). Value in base terms:
   const p2 = sqrtPriceX96 * sqrtPriceX96; // (token1/token0)*Q96^2
   const inBase = (a0: bigint, a1: bigint) => baseIsCurrency0
     ? a0 + (p2 === 0n ? 0n : (a1 * Q96 * Q96) / p2)
@@ -1086,8 +1093,8 @@ export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: nu
   const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - tick)) - 1) * 100;
   const pcts = [pctOf(tickUpper), pctOf(tickLower)].sort((a, b) => b - a);
   const inRange = tick >= tickLower && tick < tickUpper;
-  // Sisi base kosong saat out-of-range = harga sudah menembus SELURUH rentang →
-  // 100% token seberang (buy-dip: sudah jadi token; target leg tercapai).
+  // An empty base side while out of range means price has crossed the WHOLE range,
+  // leaving 100% of the other token (buy-the-dip: already converted, leg target met).
   const baseAmt = baseIsCurrency0 ? amount0 : amount1;
   return {
     amount0,
@@ -1104,13 +1111,13 @@ export async function valuePositionV4(cc: ChainCtx, pk: PoolKeyV4, tickLower: nu
   };
 }
 
-/** Status ringkas posisi v4 untuk monitor: masih ada? dalam range? */
+/** A compact v4 position status for the monitor: does it still exist, is it in range? */
 export async function checkV4Status(
   cc: ChainCtx,
   tokenId: string,
 ): Promise<{ exists: boolean; inRange: boolean | null; tick: number | null; val: V4Valuation | null }> {
-  // inRange null = TAK TAHU (RPC gagal / chain tanpa PM). Jangan dipetakan ke false:
-  // itu memicu alert "OUT OF RANGE" palsu yang mendorong keputusan uang.
+  // inRange null means UNKNOWN (RPC failed, or a chain with no PM). Do not map it to
+  // false: that fires a bogus "OUT OF RANGE" alert that drives a money decision.
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) return { exists: true, inRange: null, tick: null, val: null };
   const pm = new ethers.Contract(pmAddr, V4_ABI, cc.provider);
@@ -1123,8 +1130,8 @@ export async function checkV4Status(
     const tickLower = signExt24((info >> 8n) & 0xffffffn);
     const tickUpper = signExt24((info >> 32n) & 0xffffffn);
     const poolKey: PoolKeyV4 = { currency0: pk.currency0, currency1: pk.currency1, fee: Number(pk.fee), tickSpacing: Number(pk.tickSpacing), hooks: pk.hooks };
-    // valuePositionV4 memakai SATU extsload yang juga berisi slot0 → tick, nilai,
-    // dan fee didapat dengan RPC yang sama banyaknya seperti readPoolState dulu.
+    // valuePositionV4 uses ONE extsload that also carries slot0, so tick, value and
+    // fees all arrive on the same RPC budget readPoolState used to need.
     const val = await valuePositionV4(cc, poolKey, tickLower, tickUpper, liquidity, tokenId);
     return { exists: true, inRange: val.inRange, tick: val.currentTick, val };
   } catch {
