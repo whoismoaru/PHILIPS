@@ -499,7 +499,16 @@ async function renderStatus(ctx: any, edit: boolean) {
     const ethUsdP = getEthUsd(ccLp0.wethAddress, ccLp0).catch(() => null);
     // Daftar v4 & detail tiap posisi v3 juga tak bergantung pada saldo chain —
     // dulu ketiganya berantai (harga → saldo → LP → v4) dan waktunya dijumlahkan.
-    const v4P = v4Supported(ccLp0) ? listPositionsV4(ccLp0).catch(() => [] as V4Position[]) : Promise.resolve([]);
+    // SEMUA chain ber-v4, bukan chain aktif saja — sama seperti /positions. Posisi
+    // v4 BSC dulu tak pernah ikut dihitung, jadi total LP kartu ini diam-diam
+    // kekurangan seluruh nilainya tanpa satu pun tanda.
+    const v4P = Promise.all(
+      Object.values(CHAINS)
+        .filter((c) => v4Supported(c))
+        .map(async (c) =>
+          (await listPositionsV4(c).catch(() => [] as V4Position[])).map((p) => ({ cc: c, p })),
+        ),
+    ).then((x) => x.flat());
     const v3ValsP = mapLimit(store.active(), POS_CARD_CONCURRENCY, async (rec) => {
       try {
         const rcc = ctxOf(rec);
@@ -551,12 +560,16 @@ async function renderStatus(ctx: any, edit: boolean) {
     let lpFailed = 0;
     const ethUsd = await ethUsdP;
     try {
-      const ccLp = ccLp0;
       const [vals, v4] = await Promise.all([v3ValsP, v4P]);
-      const v4Vals = v4.map((p) => {
+      // Harga native CHAIN POSISI ITU, bukan harga chain aktif.
+      const pxOf = new Map<string, number | null>();
+      for (const { cc: pcc } of v4)
+        if (!pxOf.has(pcc.key)) pxOf.set(pcc.key, await getEthUsd(pcc.wethAddress, pcc).catch(() => null));
+      const v4Vals = v4.map(({ cc: pcc, p }) => {
         if (p.valueBaseWei === null || !p.base) return undefined;
-        const v = Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), v4BaseDecimals(ccLp, p.base)));
-        return p.base === 'USDG' ? v : ethUsd !== null ? v * ethUsd : null;
+        const v = Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), v4BaseDecimals(pcc, p.base)));
+        const px = pxOf.get(pcc.key) ?? null;
+        return p.base === 'USDG' ? v : px !== null ? v * px : null;
       });
       const all = [...vals, ...v4Vals];
       lpFailed = all.filter((v) => v === undefined).length;
@@ -1319,7 +1332,19 @@ async function cmdPositions(ctx: any, edit = false) {
   // tak disentuh. Sebelumnya sync hanya di /start → posisi baru tak pernah muncul.
   await syncOnChainPositions(cc).catch(() => {});
   const active = store.active();
-  const v4 = v4Supported(cc) ? await listPositionsV4(cc).catch(() => []) : [];
+  // v4 dari SEMUA chain yang mendukungnya, bukan chain aktif saja.
+  //
+  // Sisi v3 sudah lintas-chain sejak awal (`store.active()` + `ctxOf(rec)`), tapi
+  // v4 hanya pernah membaca `cc` — chain default. Akibatnya tiga posisi v4 BSC
+  // yang tercatat rapi di v4store tak pernah muncul di /positions selama chain
+  // aktif masih Robinhood: bukan hilang, cuma tak pernah ditanyakan.
+  const v4 = (
+    await Promise.all(
+      Object.values(CHAINS)
+        .filter((c) => v4Supported(c))
+        .map(async (c) => (await listPositionsV4(c).catch(() => [])).map((p) => ({ cc: c, p }))),
+    )
+  ).flat();
   if (active.length === 0 && v4.length === 0) {
     const t = msg.msgNoPositions();
     return edit ? ctx.editMessageText(t, html).catch(() => {}) : ctx.reply(t, html);
@@ -1413,9 +1438,17 @@ async function cmdPositions(ctx: any, edit = false) {
 
   const rows: PosRow[] = v3rows.filter((r): r is PosRow => r !== null);
 
+  // Harga native tiap chain, dibaca sekali. Memakai harga chain aktif untuk semua
+  // pernah membuat nilai LP HyperEVM 30x lipat (lihat catatan yang sama di /pnl).
+  const usdPerChain = new Map<string, number | null>();
+  for (const { cc: pcc } of v4)
+    if (!usdPerChain.has(pcc.key))
+      usdPerChain.set(pcc.key, await getEthUsd(pcc.wethAddress, pcc).catch(() => null));
+
   // v4 (baca-saja + PnL bila dikelola bot).
-  for (const p of v4) {
-    const dec = v4BaseDecimals(cc, p.base);
+  for (const { cc: pcc, p } of v4) {
+    const ethUsd = usdPerChain.get(pcc.key) ?? null;
+    const dec = v4BaseDecimals(pcc, p.base);
     const tracked = v4store.getV4(p.tokenId);
     const curF = p.valueBaseWei !== null ? Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), dec)) : null;
     let investNum = curF ?? 0;
@@ -1437,7 +1470,7 @@ async function cmdPositions(ctx: any, edit = false) {
         }
       }
     }
-    const sym = v4BaseSymbol(cc, p.base);
+    const sym = v4BaseSymbol(pcc, p.base);
     rows.push({
       id: p.tokenId,
       groupId: tracked?.groupId ?? null,
@@ -1451,7 +1484,7 @@ async function cmdPositions(ctx: any, edit = false) {
       baseSymbol: sym,
       inRange: p.inRange ?? false, // null (tak diketahui) → dianggap out (konservatif)
       wethEq: p.base === 'USDG' ? (ethUsd ? investNum / ethUsd : 0) : investNum,
-      natSym: getChain().nativeSymbol,
+      natSym: pcc.nativeSymbol,
       // Fee v4 DULU tak pernah diisi di baris daftar, jadi posisi v4 yang sudah
       // lama in-range tetap terbaca "Uncollected Fees: —" seolah tak panen apa pun.
       // Datanya sudah ada di p.feesBaseWei — cuma tak pernah diteruskan ke sini.
