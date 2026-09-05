@@ -3616,7 +3616,7 @@ function sellListKb(list: SellHolding[], showChain = false) {
 function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   flow.awaitingAmount = true;
   flow.previewBack = 'sellback:amount'; // Kembali dari Preview → step %/jumlah
-  // Masuk dari hub = tak ada daftar holdings untuk dituju; pulangkan ke kartu token.
+  // Arriving from the hub means there is no holdings list to return to; go back to the token card.
   const back = flow.sellList ? 'sellback:list' : flow.fromHub ? 'hub:back' : 'cancel';
   const rows = [
     ...pctPresets.chunkButtons(pctPresets.get('sell').map((p) => Markup.button.callback(`${p}%`, `sellpct:${p}`))),
@@ -3631,22 +3631,22 @@ function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
 /**
  * Kartu Preview jual. Hasil akhir SELALU ETH — permintaan pemilik 2 Agu 2026.
  *
- * Dulu di sini ada pemilihan base otomatis: ETH/USDG/USDT dibandingkan nilai USD-nya
- * lalu yang tertinggi dipakai. Akibatnya /sell kadang mendarat di stablecoin tanpa
- * diminta, dan PnL jadi tercampur dua denominasi. Sekarang tak ada pilihan sama sekali.
+ * There used to be automatic base selection here: ETH/USDG/USDT were compared by USD
+ * value and the highest won. That made /sell sometimes land in a stablecoin unasked, and
+ * mixed PnL across two denominations. Now there is no choice at all.
  *
- * Token yang likuiditasnya hanya di pool USDG tetap terlayani: swapTokenToEthRobust
- * punya rute 2-hop token→USDG→ETH di dalamnya. Jadi "selalu ETH" tak mempersempit
- * apa yang bisa dijual, hanya memastikan di mana berakhirnya.
+ * A token whose liquidity is only in a USDG pool is still served: swapTokenToEthRobust
+ * carries a 2-hop token->USDG->ETH route internally. So "always ETH" does not narrow what
+ * can be sold, it only fixes where it ends up.
  */
 async function sellPreview(ctx: any, flow: TSwapFlow, amountWei: bigint, amtLabel: string) {
   const cc = CHAINS[flow.chainKey]!;
   const prog = await ctx.reply(msg.msgProgress('finding the best sell route…'), html);
-  // Saldo NATIVE ikut daftar jual, dan dicatat memakai alamat wrapped-native. Kalau
-  // tujuannya juga native, from == to — swap ke dirinya sendiri, yang selalu balik
-  // sebagai "No route (thin pool/liquidity)". Menjual native berarti menjualnya ke
-  // STABLECOIN; itu pula yang dimaksud addNativeHolding ("tak ada tujuan jual" bila
-  // chain-nya tak punya stablecoin base).
+  // The NATIVE balance is in the sell list too, recorded under the wrapped-native address.
+  // If the destination were also native, from would equal to — a swap into itself, which
+  // always comes straight back. So selling native goes to the STABLECOIN instead; that is
+  // also what addNativeHolding means by "no sell destination" when a chain has no
+  // stablecoin base.
   const sellingNative = flow.token!.toLowerCase() === cc.wethAddress.toLowerCase();
   const dest = sellingNative
     ? basesFor(cc).find((b) => isStableBase(b.kind))
@@ -3668,8 +3668,8 @@ async function sellPreview(ctx: any, flow: TSwapFlow, amountWei: bigint, amtLabe
 async function cmdSell(ctx: any) {
   resetFlows(ctx.from.id);
   const prog = await ctx.reply(msg.msgProgress('reading your holdings…'), html);
-  // /buy menerima beberapa chain, jadi /sell harus melihat semuanya — kalau tidak,
-  // token yang dibeli di chain Stable tak punya jalan keluar lewat bot.
+  // /buy accepts several chains, so /sell has to look at all of them — otherwise a token
+  // bought on the Stable chain has no way out through the bot.
   const chains = swapTokenChains();
   const lists = await Promise.all(
     chains.map(async (c) => (await sellHoldings(c).catch(() => [])).map((h) => ({ ...h, chainKey: c.key }))),
@@ -3754,9 +3754,9 @@ async function tswapQuoteConfirm(
 ) {
   const base = tflow.base!;
   const prog = prog0 ?? (await ctx.reply(msg.msgProgress('requesting the best-route quote…'), html));
-  // Batas per-tx dulu hanya ditegakkan di wizard /add — preset & ketik-nominal
-  // /buy lolos begitu saja. Sekarang KEDUA denominasi dijaga, masing-masing
-  // dengan batasnya sendiri (konsisten dengan amountCtx).
+  // The per-tx limit used to be enforced only in the /add wizard, so presets and typed
+  // amounts elsewhere went unchecked. Each denomination carries its own limit (consistent
+  // with amountCtx).
   {
     const stable = isStableBase(base.kind);
     const cap = stable ? maxStable : maxEth;
@@ -3786,8 +3786,8 @@ async function tswapQuoteConfirm(
   tflow.quotedOutWei = q.out;
   tflow.awaitingAmount = false;
 
-  // Saldo yang DIPERTARUHKAN ikut di kartu. Untuk beli dengan base wrappable,
-  // yang membiayai adalah ETH native (jalur eksekusi mem-wrap), bukan saldo WETH —
+  // The balance AT STAKE goes on the card. For a buy with a wrappable base, what funds it
+  // is native ETH (the execution path wraps), not the WETH balance.
   // memakai saldo WETH di sini melahirkan false-green.
   let balanceLabel: string | undefined;
   let shortLabel: string | null = null;
@@ -3803,7 +3803,7 @@ async function tswapQuoteConfirm(
       balanceLabel = `${msg.cleanUnits(tflow.tokenBalWei ?? 0n, tflow.tokenDec ?? 18)} ${tflow.tokenSym}`;
     }
   } catch {
-    /* saldo tak terbaca → baris saldo disembunyikan, jangan blokir */
+    /* an unreadable balance hides the balance line rather than blocking */
   }
   const kb = shortLabel
     ? [[Markup.button.callback('⬅️ Back', tflow.previewBack ?? 'buyback:size'), Markup.button.callback('❌ Cancel', 'cancel')]]
@@ -3834,15 +3834,16 @@ async function tswapQuoteConfirm(
 /**
  * Wrap native → wrapped, TAPI sisakan gas.
  *
- * Tanpa sisa ini: ketik nominal mepet saldo → deposit sukses, lalu approve & swap
- * gagal "insufficient funds for gas". Dananya kini WETH, dan /unwrap pun butuh gas
- * yang sudah habis — nyangkut sampai dompet diisi ulang. Lebih baik ditolak di sini.
+ * Without this reserve: type an amount right up against the balance and the deposit
+ * succeeds, then approve and swap fail with "insufficient funds for gas". The money is
+ * now WETH, and even /unwrap needs the gas that is already gone — stuck until the wallet
+ * is topped up. Better to refuse here.
  */
 /** Umur maksimum angka di kartu Preview /buy & /sell (sama dgn /bridge). */
 /**
- * Unwrap WETH nyasar → native. Dipanggil setelah add/close gagal separuh jalan, supaya
- * tak perlu /unwrap manual atau menunggu sweep monitor (siklus 1 menit).
- * Aman diulang: saldo 0 → tak ada transaksi sama sekali.
+ * Unwrap stray WETH back to native. Called after an add or close fails part-way, so no
+ * manual /unwrap is needed and there is no waiting for the monitor's sweep (a 1-minute
+ * cycle). Safe to repeat: a zero balance sends no transaction at all.
  */
 async function recoverStrayWeth(cc: ChainCtx, why: string): Promise<void> {
   if (config.safety.dryRun || !cc.hasWethBase) return;
@@ -3854,8 +3855,8 @@ async function recoverStrayWeth(cc: ChainCtx, why: string): Promise<void> {
 }
 
 const TSWAP_QUOTE_TTL_MS = 120_000;
-/** Slippage maksimum untuk /buy & /sell — TAK PERNAH dilampaui, tak ada eskalasi.
- *  Jalur close/sweep sengaja TIDAK memakai ini: di sana gagal = token nyangkut. */
+/** Maximum slippage for /buy and /sell — NEVER exceeded, with no escalation.
+ *  The close and sweep paths deliberately do NOT use this: there, failing means a stuck token. */
 const MAX_SLIP_PCT = 3;
 
 async function wrapWithGasReserve(cc: ChainCtx, wrapWei: bigint): Promise<void> {
@@ -3879,8 +3880,8 @@ bot.action('tswapok', async (ctx) => {
   if (!flow || flow.amountWei === undefined || !flow.base || !flow.token) {
     return ctx.answerCbQuery('Expired — start again with /buy or /sell.');
   }
-  // Angka di kartu Preview punya umur. Tanpa batas ini, konfirmasi yang ditekan
-  // sejam kemudian dieksekusi di harga saat itu — user menyetujui angka lain.
+  // The numbers on a Preview card have a shelf life. Without this limit, a confirm tapped
+  // an hour later executes at that moment's price — the user agreed to different figures.
   if (Date.now() - (flow.quotedAt ?? 0) > TSWAP_QUOTE_TTL_MS) {
     tswapFlows.delete(uid);
     await ctx.answerCbQuery('Quote expired.');
@@ -3905,9 +3906,9 @@ bot.action('tswapok', async (ctx) => {
       return;
     }
     await ctx.editMessageText(msg.msgProgress('swapping via the best route…'), html);
-    // Lantai harga = angka yang BENAR-BENAR dilihat user di kartu Preview, minus 3%.
-    // Rute eksekusi punya fallback slippage sampai 15% dan me-re-quote sendiri; tanpa
-    // pembanding ini tak ada satu pun yang mengaitkan hasil eksekusi dengan angka yang
+    // The price floor is the number the user ACTUALLY saw on the Preview card, minus 3%.
+    // The execution route has its own slippage fallback up to 15% and re-quotes itself;
+    // without this comparison nothing ties the executed result back to the figure shown.
     // disetujui. Cek dilakukan SEBELUM tx pertama — batal di sini hanya buang 1 RPC.
     if (flow.quotedOutWei && flow.quotedOutWei > 0n) {
       const [qFrom, qTo] = buy ? [base!.address, token!] : [token!, base!.address];
@@ -3923,7 +3924,7 @@ bot.action('tswapok', async (ctx) => {
     }
     const attempt = async (): Promise<{ outLabel: string; route: string }> => {
       if (buy) {
-        // base → token. Base ETH: wrap seperlunya dulu (Uniswap butuh WETH).
+        // base -> token. With an ETH base: wrap what is needed first (Uniswap wants WETH).
         if (base!.wrappable) {
           const have: bigint = await cc.weth.balanceOf(cc.wallet.address);
           if (have < amountWei) await wrapWithGasReserve(cc, amountWei - have);
@@ -3935,10 +3936,10 @@ bot.action('tswapok', async (ctx) => {
         };
       }
       // Menjual SALDO NATIVE: daftar jual mencatatnya memakai alamat wrapped-native,
-      // tapi dananya masih native — belum pernah di-wrap. Tanpa langkah ini setiap
-      // rute mencoba menarik WBNB yang saldonya 0 ("STF", "did not reduce the token
-      // balance") lalu menyerah sebagai "All swap routes failed". Tujuannya pun
-      // stablecoin, bukan native: menjual native ke native adalah swap ke diri sendiri.
+      // but the money is still native and has never been wrapped. Without this step every
+      // route tries to pull WBNB with a zero balance ("STF", "did not reduce the token
+      // balance"). Selling native goes to the stablecoin, not to native: native into native
+      // is a swap into itself.
       if (token!.toLowerCase() === cc.wethAddress.toLowerCase()) {
         const have: bigint = await cc.weth.balanceOf(cc.wallet.address);
         if (have < amountWei) await wrapWithGasReserve(cc, amountWei - have);
@@ -3949,16 +3950,16 @@ bot.action('tswapok', async (ctx) => {
         };
       }
       // JUAL token biasa berakhir di native ETH (permintaan pemilik 2 Agu 2026).
-      // Token yang cuma punya pool USDG tetap terlayani lewat rute 2-hop di dalam
+      // A token with only a USDG pool is still served, through the internal 2-hop route.
       // swapTokenToEthRobust (token→USDG→ETH).
       const r = await swapTokenToEthRobust(token!, amountWei, cc, MAX_SLIP_PCT);
       return { outLabel: `${Number(ethers.formatEther(r.outEthWei)).toFixed(6)} ${cc.nativeSymbol}`, route: r.route };
     };
 
-    // Probe = saldo aset masukan. Berkurang → swap sudah (sebagian) jalan → jangan ulang.
-    // Menjual saldo native: yang berkurang adalah NATIVE. Memakai saldo WBNB di sini
-    // justru NAIK dari 0 setelah wrap, jadi percobaan yang sudah mendarat terbaca
-    // "belum jalan" dan diulang — wrap dobel.
+    // The probe is the input asset's balance. A drop means the swap already ran (at least
+    // partly), so do not retry. When selling native, it is NATIVE that drops. Using the
+    // WBNB balance here would instead RISE from 0 after the wrap, so an attempt that had
+    // landed would read as "not started" and be retried — wrapping twice.
     const sellNative = !buy && token!.toLowerCase() === cc.wethAddress.toLowerCase();
     const inC = new ethers.Contract(buy ? base!.address : token!, ERC20_ABI, cc.provider);
     const probe = sellNative
@@ -3991,8 +3992,8 @@ bot.action(/^stop:(\d+)$/, async (ctx) => {
       finalizeClose(ctx.match[1], { reason: 'gone' });
       await ctx.editMessageText(msg.msgAlreadyClosed(ctx.match[1]), html);
     } else {
-      // Gagal BACA detail (timeout RPC / quoter revert) tak berarti posisi tak bisa
-      // ditutup — executeRemove tak butuh satu pun angka itu. Tetap beri jalan keluar.
+      // Failing to READ the details (an RPC timeout, a quoter revert) does not mean the
+      // position cannot be closed — executeRemove needs none of those numbers. Keep the exit open.
       await ctx.reply(msg.msgError('stop', (e as Error).message), {
         ...html,
         ...Markup.inlineKeyboard([
@@ -4004,11 +4005,10 @@ bot.action(/^stop:(\d+)$/, async (ctx) => {
   }
 });
 
-// tokenId yang sedang ditutup — cegah double-tap "Tutup Posisi" (tx kedua revert
-// di burn & buang gas). Sinkron: has→add sebelum await pertama = atomik thd loop.
-// Di store agar monitor ikut melihatnya (jangan jurnalkan yang sedang ditutup).
-// Nilai = epoch mulai: kunci kedaluwarsa 10 menit supaya tx yang menggantung
-// tak mengunci posisi selamanya (dulu satu-satunya jalan keluar = restart).
+// tokenIds currently closing — this prevents a double-tap on "Close Position" (the second
+// tx reverts and burns gas). Held in the store so the monitor sees it too (never journal
+// something mid-close). The value is the start epoch: the lock expires after 10 minutes so
+// a hung tx cannot lock a position forever (the only way out used to be a restart).
 const closingInFlight = store.closing;
 const CLOSING_LOCK_MS = 10 * 60_000;
 const closeLocked = (tokenId: string): boolean => {
@@ -4017,7 +4017,7 @@ const closeLocked = (tokenId: string): boolean => {
 };
 
 /** Kirim profit card PNG (momen kunci). Presentasi murni — dibungkus penuh,
- *  kegagalan render/kirim TAK boleh mengganggu close yang sudah sukses. */
+ *  a render or send failure must NOT disturb a close that already succeeded. */
 async function sendProfitCard(
   ctx: any,
   tokenId: string,
@@ -4034,11 +4034,11 @@ async function sendProfitCard(
   const pnl = baseOut - baseIn;
   const pnlPct = baseIn > 0 ? (pnl / baseIn) * 100 : 0;
   const positive = pnl >= 0;
-  // PnL SELALU dalam aset yang dipakai DEPOSIT: deposit USDG dilaporkan dalam
-  // USDG, deposit ETH dalam ETH. Dulu semuanya dikali harga hari ini jadi USD —
-  // itu memasukkan gerak harga base ke dalam angka yang seharusnya murni hasil
-  // LP (deposit 1 ETH balik 1 ETH bisa terbaca "-$120" cuma karena ETH turun),
-  // sekaligus tak sebaris dengan baris deposit/received di bawahnya.
+  // PnL is ALWAYS in the asset that was DEPOSITED: a USDG deposit is reported in USDG, an
+  // ETH deposit in ETH. Everything used to be multiplied by today's price into USD, which
+  // folded base-price movement into a number that should be pure LP result (depositing 1
+  // ETH and getting 1 ETH back could read "-$120" simply because ETH fell), and left it out
+  // of line with the deposit and received lines below it.
   const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
   const pnlBig = `${positive ? '+' : ''}${fmt(pnl)} ${baseSym}`;
   const buf = await renderProfitCard({
@@ -4050,27 +4050,27 @@ async function sendProfitCard(
       { label: 'deposit', value: `${fmt(baseIn)} ${baseSym}` },
       { label: 'received', value: `${fmt(baseOut)} ${baseSym}` },
       { label: 'held', value: msg.fmtAge(Date.now() - rec.openedAt) },
-      // Fee dibaca SEBELUM burn (lihat pemanggil). Tak terbaca → kotak keempat
-      // dikosongkan, bukan diisi 0 yang terbaca seperti "tak dapat fee sama sekali".
+      // Fees are read BEFORE the burn (see the caller). Unreadable leaves the fourth box
+      // empty rather than showing a 0, which reads as "earned no fees at all".
       ...(feesBaseWei !== undefined && feesBaseWei > 0n
         ? [{ label: 'fees', value: `${fmt(Number(ethers.formatUnits(feesBaseWei, dec)))} ${baseSym}` }]
         : []),
     ],
     footerLeft: `#${tokenId} · ${new Date().toISOString().slice(0, 10)} ${msg.nowWib()}`,
-    // Bentuk posisi ikut dari catatan; posisi lama tanpa penanda dianggap SPOT
-    // (itu memang perilaku sebelum ladder ada).
+    // The position's shape follows its record; an older position with no marker is treated
+    // as SPOT (which is exactly how things behaved before ladders existed).
     shape: shape ?? rec.shape ?? 'spot',
   });
-  // sendDocument, BUKAN sendPhoto: Telegram me-render ulang foto jadi JPEG
-  // (terukur 1130 KB -> 185 KB) dan artefaknya paling terlihat pada teks tajam
-  // di latar gelap — persis isi kartu ini. Sebagai dokumen, PNG-nya utuh (HD).
+  // sendDocument, NOT sendPhoto: Telegram re-encodes photos as JPEG (measured at 1130 KB
+  // -> 185 KB) and the artefacts show worst on crisp text over a dark background, which is
+  // exactly this card. As a document the PNG arrives intact.
   await ctx.replyWithDocument(Input.fromBuffer(buf, `philips-${tokenId}.png`));
 }
 
 /**
  * Tutup seluruh leg satu grup ladder secara BATCH: remove+collect+burn semua leg
  * via multicall (~1 tx/chunk), lalu SATU swap token→base agregat. Hasil dibagi
- * proporsional ke tiap leg (sesuai modal) supaya jurnal PnL per-leg tetap benar.
+ * proportionally to each leg (by capital) so the per-leg PnL journal stays correct.
  */
 async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
   await ctx.answerCbQuery('Closing ladder…');
@@ -4080,8 +4080,8 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
   for (const l of legs) closingInFlight.set(l.tokenId, Date.now());
   store.beginMoneyOp();
   try {
-    // Semua leg satu pool → base & token sama. Baca dari leg pertama yang MASIH ada
-    // (leg 0 bisa sudah ke-burn duluan → positions() throw; jangan gagalkan close).
+    // Every leg shares a pool, so base and token are the same. Read from the first leg that
+    // STILL exists (leg 0 may already be burned, making positions() throw; do not fail the close).
     let p: { token0: string; token1: string } | null = null;
     for (const id of tokenIds) {
       try {
@@ -4103,16 +4103,16 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
 
     await ctx.editMessageText(msg.msgProgress(`closing ${legs.length}-leg ladder (batched)…`), html);
     const notes: string[] = [];
-    // Fee dibaca SEBELUM burn: sesudahnya ia sudah melebur ke hasil cash-out.
+    // Fees are read BEFORE the burn: afterwards they have merged into the cash-out proceeds.
     const feesWei = (
       await Promise.all(
         tokenIds.map((id) => getPositionDetail(id, cc).then((dd) => dd.feesBaseWei).catch(() => 0n)),
       )
     ).reduce((a, b) => a + b, 0n);
     notes.push(...(await executeRemoveBatch(tokenIds, cc)).notes);
-    // Tak ada tx penarikan yang terkirim = tak ada yang ditutup. Melanjutkan ke
-    // finalisasi akan menandai posisi HIDUP sebagai tertutup lalu menghapusnya dari
-    // catatan — persis yang terjadi 28 Agu 2026.
+    // No withdrawal tx sent means nothing was closed. Carrying on to finalisation would
+    // mark LIVE positions as closed and then delete their records — exactly what happened
+    // on 28 Aug 2026.
     if (!notes.some((n) => n.startsWith('Batch close ') && n.includes('tx '))) {
       throw new Error(
         'No withdrawal transaction was sent, so nothing was closed. Your positions are untouched — try again.',
@@ -4150,9 +4150,9 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       const share = i === legs.length - 1 ? totalOut - attributed : totalInit > 0n ? (totalOut * BigInt(l.initialWethWei || '0')) / totalInit : 0n;
       attributed += share;
       finalizeClose(l.tokenId, {
-        // Cap ladder: 8 leg ini SATU posisi. Tanpa cap, /pnl menghitungnya 8 trade
-        // dan membagi PnL-nya jadi ~1/8 — cukup kecil untuk dianggap debu lalu
-        // hilang dari W/L. Lihat `groupOf` di journal.ts.
+        // Stamp the ladder: these 8 legs are ONE position. Without the stamp /pnl counts
+        // them as 8 trades and splits the PnL into eighths — small enough to be treated as
+        // dust and vanish from W/L. See `groupOf` in journal.ts.
         groupId,
         ...(share > 0n ? { resultEthWei: share } : {}),
         reason: 'cashed',
@@ -4163,9 +4163,9 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
 
     const baseSym = base.wrappable ? cc.nativeSymbol : base.symbol;
     const outLabel = base.wrappable ? `${msg.fmtEth(totalOut)} ${baseSym}` : `${msg.cleanUnits(totalOut, base.decimals)} ${baseSym}`;
-    // Kartu yang SAMA dengan close posisi tunggal: langkah, hash, dan kalimat
-    // penutupnya. Dulu ladder cuma dapat satu baris tanpa jejak transaksi —
-    // padahal justru di sinilah tx-nya paling banyak.
+    // The SAME card as a single-position close: steps, hashes and closing sentence. A
+    // ladder used to get one line with no transaction trail — and this is precisely where
+    // there are the most transactions.
     await ctx.reply(
       msg.msgCashOut({
         tokenId: legs[0].tokenId,
@@ -4179,9 +4179,9 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       }),
       { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
     );
-    // Kartu PnL untuk SELURUH ladder (lihat catatan yang sama di jalur v4).
-    // Hasil 0 = delta saldo tak terukur, BUKAN rugi total: kartunya akan menulis
-    // −100% padahal dananya utuh. Lebih baik tak ada kartu daripada kartu bohong.
+    // A PnL card for the WHOLE ladder (see the matching note on the v4 path). A result of 0
+    // means the balance delta could not be measured, NOT a total loss: the card would print
+    // -100% while the money is intact. Better no card than a lying one.
     if (totalOut > 0n) {
       await sendProfitCard(
       ctx,
@@ -4213,8 +4213,9 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
   store.beginMoneyOp();
   try {
     await ctx.editMessageText(msg.msgProgress(`closing ${legs.length}-leg v4 ladder (batched)…`), html);
-    // Fee dibaca SEBELUM burn: sesudahnya ia sudah melebur ke hasil cash-out dan tak
-    // bisa dipisah lagi. Gagal baca ≠ gagal close — kartu cuma kehilangan satu kotak.
+    // Fees are read BEFORE the burn: afterwards they have merged into the cash-out proceeds
+    // and cannot be separated again. A failed read is not a failed close — the card simply
+    // loses one box.
     const feesWei = (
       await Promise.all(
         tokenIds.map((id) => checkV4Status(cc, id).then((st) => st.val?.feesBaseWei ?? 0n).catch(() => 0n)),
@@ -4244,9 +4245,9 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
     invalidateV4ListCache();
     const dec = v4BaseDecimals(cc, r.base);
     const sym = v4BaseSymbol(cc, r.base);
-    // Kartu close yang sama dengan jalur v3. v4 tak mengembalikan daftar langkah,
-    // jadi disusun di sini dari apa yang benar-benar terjadi — tanpa ini kartunya
-    // kehilangan bagian "Steps performed" yang membuat close bisa ditelusuri.
+    // The same close card as the v3 path. v4 returns no list of steps, so one is assembled
+    // here from what actually happened — without it the card loses the "Steps performed"
+    // section that makes a close traceable.
     await ctx.reply(
       msg.msgCashOut({
         tokenId: legs[0].tokenId,
@@ -4263,10 +4264,10 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
       }),
       { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('📊 View Other Positions', 'positions')]]) },
     );
-    // Leg yang terpaksa di-burn tanpa lantai harga harus terlihat, bukan cuma di log.
+    // A leg forced to burn without a price floor has to be visible, not just in the log.
     if (r.unprotected?.length) await ctx.reply(msg.esc(V4_UNPROTECTED_NOTE(r.unprotected.join(', #'))), html);
-    // Leg hantu (tak ada di chain) dibuang dari catatan — kalau dibiarkan, ia akan
-    // menggagalkan SETIAP percobaan tutup berikutnya dengan NOT_MINTED.
+    // Ghost legs (absent from the chain) are dropped from the records — left in place they
+    // would fail EVERY subsequent close attempt with NOT_MINTED.
     if (r.gone?.length) {
       for (const id of r.gone) v4store.removeV4(id);
       await ctx.reply(
@@ -4274,9 +4275,9 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
         html,
       );
     }
-    // Kartu PnL untuk SELURUH ladder — yang disetor user memang satu ladder, bukan
-    // 8 posisi terpisah. Dulu jalur ladder (v3 & v4) tak pernah mengirim kartu sama
-    // sekali; hanya close posisi tunggal yang punya.
+    // A PnL card for the WHOLE ladder — what the user deposited is one ladder, not 8
+    // separate positions. The ladder paths (v3 and v4) used to send no card at all; only a
+    // single-position close had one.
     if (r.baseOutWei > 0n) {
       await sendProfitCard(
       ctx,
@@ -4298,8 +4299,8 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
     }
   } catch (err) {
     await recoverStrayWeth(cc, 'close v4 ladder').catch(() => {});
-    // Seluruh grup ternyata tak ada di chain → buang catatannya. Membiarkannya
-    // membuat tiap percobaan tutup berikutnya gagal dengan alasan yang sama.
+    // The entire group turns out to be absent from the chain, so drop its records. Leaving
+    // them makes every later close attempt fail for the same reason.
     if (/no longer exist on-chain/i.test((err as Error).message)) {
       for (const l of legs) v4store.removeV4(l.tokenId);
       invalidateV4ListCache();
@@ -4323,8 +4324,8 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
   if (closeLocked(tokenId)) return ctx.answerCbQuery('Processing…');
   closingInFlight.set(tokenId, Date.now());
   const closingRec = store.get(tokenId); // tangkap SEBELUM finalizeClose menghapus
-  // Close = remove + collect + swap + unwrap, bisa 1–2 menit. Tanpa penanda ini
-  // sweep monitor (tiap 1 menit) boleh jalan di tengahnya dari dompet yang sama:
+  // A close is remove + collect + swap + unwrap and can take 1-2 minutes. Without this
+  // marker the monitor's sweep (every minute) could run in the middle of it from the same
   // tabrakan nonce, atau WETH milik close ini ikut disapu.
   store.beginMoneyOp();
   try {
