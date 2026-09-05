@@ -1,10 +1,10 @@
 /**
- * /positions & /portfolio harus melihat v4 di SEMUA chain, bukan chain default.
+ * /positions and /portfolio must see v4 on EVERY chain, not just the default one.
  *
- * Tiga posisi v4 BSC pernah tercatat rapi di v4store tapi tak pernah muncul di
- * kartu mana pun, karena kedua jalur hanya bertanya ke `getChain()` — Robinhood.
- * Cek ini membaca chain sungguhan dan menuntut tiap record v4store yang masih
- * hidup on-chain ikut terenumerasi.
+ * Three BSC v4 positions sat recorded in v4store yet never showed up on any card,
+ * because both paths only ever asked `getChain()` — Robinhood. This reads the
+ * real chains and demands that every v4store record still alive on-chain gets
+ * enumerated.
  */
 import assert from 'node:assert/strict';
 import { CHAINS, DEFAULT_CHAIN } from '../src/chains.js';
@@ -20,7 +20,7 @@ for (const c of chains) {
 }
 console.log(`chain v4: ${chains.map((c) => c.key).join(', ')} · terenumerasi: ${terlihat.size} posisi`);
 
-// Yang penting: record di luar chain default TIDAK boleh hilang.
+// The point of the test: records off the default chain must NOT go missing.
 const luar = allV4().filter((r) => (r.chain ?? DEFAULT_CHAIN) !== DEFAULT_CHAIN);
 console.log(`v4store di luar ${DEFAULT_CHAIN}: ${luar.length} record`);
 for (const r of luar) {
@@ -32,8 +32,8 @@ for (const r of luar) {
   assert.equal(dimana, r.chain, `posisi ${r.tokenId} terbaca di chain ${dimana}, seharusnya ${r.chain}`);
 }
 
-// Penjaga sumber: sekali salah satu jalur kembali memakai satu chain, tes di atas
-// baru gagal kalau kebetulan ada posisi lintas-chain yang hidup. Ini gagal segera.
+// Source guard: if either path reverts to a single chain, the test above only
+// fails when a cross-chain position happens to be live. This fails right away.
 const src = (await import('node:fs')).readFileSync('src/index.ts', 'utf8');
 for (const [nama, pola] of [
   ['/positions', /const v4 = \(\s*\n\s*await Promise\.all\(\s*\n\s*Object\.values\(CHAINS\)/],

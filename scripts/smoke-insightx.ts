@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { insightxMetrics } from '../src/insightx.js';
 
 /**
- * Penjaga kegagalan-senyap InsightX.
+ * Guard against InsightX failing silently.
  *
- * Chain yang belum diindeks TIDAK dijawab error — dijawab 200 dengan semua field
- * 0. Dibaca apa adanya, kartu audit menulis "Cluster 0% ✅" untuk token yang tak
- * pernah diperiksa siapa pun. Itu bohong ke arah aman, kesalahan termahal di
- * kartu ini. Tesnya: payload nol WAJIB jadi null ('?'), bukan nol.
+ * An unindexed chain does NOT come back as an error — it comes back 200 with
+ * every field 0. Taken at face value, the audit card prints "Cluster 0% ✅" for a
+ * token nobody ever checked. That is a lie in the safe direction, the most
+ * expensive kind this card can tell. So: an all-zero payload MUST become null
+ * ('?'), never zero.
  */
 const asli = globalThis.fetch;
 const jawab = (body: unknown) =>
@@ -16,14 +17,15 @@ const jawab = (body: unknown) =>
 process.env.INSIGHTX_API_KEY = 'test-key';
 
 try {
-  // 1. Payload nol (chain tak terindeks) -> null, BUKAN nol.
+  // 1. All-zero payload (unindexed chain) -> null, NOT zero.
   globalThis.fetch = jawab({
     cluster_pct: 0, snipers_pct: 0, bundlers_pct: 0, dev_pct: 0, insiders_pct: 0, top10_pct: 0,
   });
   assert.equal(await insightxMetrics('0x1111111111111111111111111111111111111111', 'bsc'), null,
     'payload semua-nol harus dibaca sebagai TAK ADA DATA');
 
-  // 2. Payload nyata -> terbaca. cluster_pct 0 di sini sah, karena top10_pct terisi.
+  // 2. Real payload -> parsed. cluster_pct 0 is legitimate here because
+  //    top10_pct is populated.
   globalThis.fetch = jawab({
     cluster_pct: 0, snipers_pct: 0.19, bundlers_pct: 45.9, dev_pct: 0, insiders_pct: 40.7, top10_pct: 33.5,
   });
@@ -32,11 +34,11 @@ try {
   assert.equal(v.clusterPct, 0, 'cluster 0% yang SAH tak boleh ikut dibuang');
   assert.equal(v.bundlersPct, 45.9);
 
-  // 3. Robinhood tak dipetakan -> tak ada panggilan sama sekali (kuota tak terbakar).
+  // 3. Robinhood is unmapped -> no call at all, so no quota burned.
   globalThis.fetch = (() => assert.fail('robinhood tak boleh memanggil InsightX')) as unknown as typeof fetch;
   assert.equal(await insightxMetrics('0x3333333333333333333333333333333333333333', 'robinhood'), null);
 
-  // 4. Tanpa API key -> diam, tak memanggil.
+  // 4. No API key -> stays quiet, makes no call.
   delete process.env.INSIGHTX_API_KEY;
   assert.equal(await insightxMetrics('0x4444444444444444444444444444444444444444', 'bsc'), null);
 } finally {

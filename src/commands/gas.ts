@@ -6,36 +6,38 @@ import { getEthUsd } from '../screening.js';
 import { bold, esc, italic } from '../messages.js';
 
 /**
- * /gas — ongkos transaksi SAAT INI di tiap chain, dalam USD dan Rupiah.
+ * /gas — what a transaction costs RIGHT NOW on each chain, in USD and Rupiah.
  *
- * Harga gas diambil dari RPC chain itu sendiri (`getFeeData`) — sumber paling
- * resmi yang ada, dan yang persis dipakai bot saat mengirim tx. Tak ada oracle
- * pihak ketiga di jalur ini: angka yang ditampilkan = angka yang akan dibayar.
+ * The gas price comes from each chain's own RPC (`getFeeData`), the most
+ * authoritative source there is and exactly what the bot uses when it sends a tx.
+ * No third-party oracle sits in this path: the number shown is the number paid.
  *
- * Jumlah GAS-nya (bukan harganya) memakai median tx nyata wallet ini selama 14
- * hari — bukan tebakan. Estimasi teoretis (21k untuk semua) meleset jauh: satu
- * modifyLiquidities v4 makan >260k, dan itu operasi yang paling sering dipakai.
+ * The gas UNITS (not the price) come from the median of this wallet's real
+ * transactions over 14 days, not a guess. Textbook estimates (21k for everything)
+ * are wildly off: a single v4 modifyLiquidities burns >260k, and that happens to
+ * be the operation used most.
  */
 
-/** Median gas terpakai per operasi, diukur dari 704 tx sukses wallet ini (14 hari).
- *  Kirim native tetap 21.000 — itu konstanta protokol, bukan hasil ukur. */
+/** Median gas per operation, measured across 704 successful transactions from
+ *  this wallet (14 days). A native send stays at 21,000: that is a protocol
+ *  constant, not a measurement. */
 const OPS: Array<[string, bigint]> = [
   ['Swap', 280_000n],
   ['Open LP', 447_000n],
   ['Close LP', 267_000n],
 ];
 
-/** Operasi murah di semua chain: tak layak satu seksi peringkat sendiri-sendiri,
- *  tapi tetap ditampilkan penuh — meringkasnya jadi "di bawah RpX" berarti memasang
- *  klaim yang diam-diam jadi bohong begitu gas bergerak. */
+/** Cheap on every chain: not worth a ranked section each, but still shown in
+ *  full. Collapsing them into "under RpX" would be a claim that quietly turns
+ *  false the moment gas moves. */
 const MINOR: Array<[string, bigint]> = [
   ['Send', 21_000n],
   ['Approve', 46_000n],
 ];
 
-/** Kurs USD→IDR. Indodax UTAMA (pasar kripto lokal, live) — itu kurs yang benar-benar
- *  dihadapi user saat menjual kripto ke rupiah, dan bergerak tiap detik. Bank rate
- *  jadi cadangan; ia cuma diperbarui sekali sehari. */
+/** USD -> IDR rate. Indodax is PRIMARY (local crypto market, live): that is the
+ *  rate you actually face when selling crypto for rupiah, and it moves by the
+ *  second. The bank rate is the fallback; it only updates once a day. */
 let idrCache: { v: number | null; t: number } = { v: null, t: 0 };
 
 async function usdToIdr(): Promise<number | null> {
@@ -60,7 +62,7 @@ async function usdToIdr(): Promise<number | null> {
   return v;
 }
 
-/** Harga gas efektif yang akan dibayar. EIP-1559 → maxFee; legacy → gasPrice. */
+/** The effective gas price that will be paid. EIP-1559 -> maxFee; legacy -> gasPrice. */
 async function gasPriceOf(cc: ChainCtx): Promise<bigint | null> {
   try {
     const f = await cc.provider.getFeeData();
@@ -76,11 +78,11 @@ const gwei = (wei: bigint): string => {
 };
 
 /**
- * Ongkos dalam dolar, selalu dengan angka berarti.
+ * A cost in dollars, always with meaningful digits.
  *
- * Pembulatan tetap (5 desimal) mencetak "$0" untuk operasi termurah — dan "$0"
- * itu bohong: gasnya tetap dibayar, cuma terlalu kecil untuk formatnya. Di bawah
- * satu sen dipakai 3 angka penting, jadi $0,0000045 tetap terbaca apa adanya.
+ * Fixed rounding (5 decimals) prints "$0" for the cheapest operations, and "$0"
+ * is a lie: the gas is still paid, it is just too small for the format. Below a
+ * cent this switches to 3 significant figures, so $0.0000045 reads as itself.
  */
 const usd = (v: number): string => {
   if (v >= 1) return `$${v.toFixed(2)}`;
@@ -94,7 +96,7 @@ const idr = (v: number): string =>
 
 type Row = { label: string; usd: number | null; native: number; sym: string };
 
-/** Ongkos tiap operasi di satu chain. `null` = RPC chain itu tak menjawab. */
+/** Every operation's cost on one chain. `null` means that chain's RPC did not answer. */
 async function costsOf(cc: ChainCtx): Promise<{ label: string; gwei: string; nativeUsd: number | null; rows: Map<string, Row> } | null> {
   const [price, nativeUsd] = await Promise.all([gasPriceOf(cc), getEthUsd(cc.wethAddress, cc).catch(() => null)]);
   if (price === null) return null;
@@ -108,9 +110,10 @@ async function costsOf(cc: ChainCtx): Promise<{ label: string; gwei: string; nat
 
 type Chain = NonNullable<Awaited<ReturnType<typeof costsOf>>>;
 
-/** Satu seksi: chain diurut dari termurah untuk operasi ini.
- *  Chain tanpa harga native TIDAK ikut diperingkat — mengurutkannya butuh angka USD
- *  yang justru tak kita punya; ia ditaruh di bawah dengan ongkos dalam satuan native. */
+/** One section: chains ranked cheapest first for this operation.
+ *  A chain with no native price is left OUT of the ranking — ordering it would
+ *  need the very USD figure we lack — and listed below with its cost in native
+ *  units instead. */
 function section(op: string, chains: Chain[], rate: number | null): string[] {
   const withUsd = chains.filter((c) => c.rows.get(op)!.usd !== null).sort((a, b) => a.rows.get(op)!.usd! - b.rows.get(op)!.usd!);
   const noUsd = chains.filter((c) => c.rows.get(op)!.usd === null);
@@ -125,7 +128,7 @@ function section(op: string, chains: Chain[], rate: number | null): string[] {
   return [bold(op.toUpperCase()), ...lines];
 }
 
-/** Kartu penuh. Diekspor supaya bisa diuji tanpa Telegram (scripts/smoke-gas.ts). */
+/** The whole card. Exported so it can be tested without Telegram (scripts/smoke-gas.ts). */
 export async function gasCard(): Promise<string> {
   const rate = await usdToIdr();
   const all = await Promise.all(Object.values(CHAINS).map(async (cc) => [cc.label, await costsOf(cc)] as const));
@@ -139,31 +142,33 @@ export async function gasCard(): Promise<string> {
     bold('⛽️ GAS FEE'),
     '',
     ...OPS.flatMap(([op]) => [...section(op, chains, rate), '']),
-    // SEND & APPROVE dipatok pada APPROVE, angka yang lebih MAHAL dari keduanya.
-    // Memakai Send (21k) di seksi bernama "Send & Approve" akan memasang angka
-    // yang meleset 55% ke bawah untuk separuh operasi yang dijanjikannya.
+    // SEND & APPROVE is pinned to APPROVE, the dearer of the two. Using Send
+    // (21k) in a section called "Send & Approve" would understate half of what it
+    // promises by 55%.
     ...section('Approve', chains, rate).map((l, i) => (i === 0 ? bold('SEND & APPROVE') : l)),
     '',
     ...(down.length ? [italic(`Unreachable: ${down.join(', ')}`), ''] : []),
-    // Kaki kartu = JAM & ZONA saja (permintaan pemilik). Kurs dan catatan approve
-    // pernah ikut nebeng di sini dan membuatnya jadi baris serba-guna.
+    // The footer carries the date, time and zone, nothing else (owner's call).
+    // The rate and an approve note once hitched a ride here and turned it into a
+    // catch-all line.
     italic(clock()),
   ].join('\n');
 }
 
-/** Jam baca + zona server. Membuat Refresh JUJUR: tanpanya, menekan tombol saat gas
- *  tak bergerak menghasilkan pesan identik, Telegram menolaknya ("not modified"),
- *  dan kartunya diam seolah tombolnya rusak. */
+/** Read time plus server zone. This is what makes Refresh HONEST: without it,
+ *  tapping the button while gas has not moved produces an identical message,
+ *  Telegram rejects the edit ("not modified"), and the card sits there looking
+ *  like a broken button. */
 function clock(): string {
   const d = new Date();
   const tanggal = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   return `${tanggal} · ${d.toLocaleTimeString('en-GB', { hour12: false })} ${offsetLabel()}`;
 }
 
-/** Tombol tunggal: baca ulang semua chain. */
+/** One button: re-read every chain. */
 export const gasKeyboard = () => Markup.inlineKeyboard([[Markup.button.callback('🔄 Refresh', 'gas:refresh')]]);
 
-/** Label zona waktu server, supaya jam di kartu tak ambigu. */
+/** Server timezone label, so the time on the card is not ambiguous. */
 function offsetLabel(): string {
   const m = -new Date().getTimezoneOffset();
   if (m === 0) return 'UTC';
@@ -185,7 +190,7 @@ bot.action('gas:refresh', async (ctx) => {
   try {
     await ctx.editMessageText(await gasCard(), { ...html, ...gasKeyboard() });
   } catch (e) {
-    // "message is not modified" = angkanya belum bergerak — bukan kegagalan.
+    // "message is not modified" just means the numbers have not moved. Not a failure.
     if (!/not modified/i.test((e as Error).message)) throw e;
   }
 });

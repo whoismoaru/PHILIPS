@@ -1,25 +1,26 @@
 /**
- * Lantai burn v4 harus SELAMAT dari gerak harga wajar, dan tetap MENOLAK dorongan
- * harga besar. Cek ini menguji matematikanya langsung — tanpa RPC, tanpa posisi.
+ * A withdrawal floor has to SURVIVE ordinary price movement while still REJECTING
+ * a real shove. This exercises the maths directly — no RPC, no live position.
  *
- * Kasus yang dulu gagal: posisi dekat TEPI rentang. Sisi minornya tinggal remah,
- * dan lantai per-sisi 0,5% membuat gerak 0,2% pun memicu MinimumAmountInsufficient.
+ * What used to break: narrow ranges. Each side's amount moves much faster than
+ * price, so the old per-side 0.5% floor turned a 0.2% move into
+ * MinimumAmountInsufficient.
  */
 import assert from 'node:assert/strict';
 import { withdrawFloors, amountsForLiquidity, isqrt } from '../src/lpmath.js';
 import { sqrtAtTick } from '../src/uniswapV4.js';
 
 const Q96 = 1n << 96n;
-/** sqrtPriceX96 pada harga `p` (rasio token1/token0), lewat tick terdekat. */
+/** sqrtPriceX96 at a given tick. */
 const sqrtAt = (tick: number) => sqrtAtTick(tick);
-/** Geser harga sebesar `bps` (bisa negatif) → sqrtPriceX96 baru. */
+/** Move price by `bps` (may be negative) and return the new sqrtPriceX96. */
 const geser = (sqrtP: bigint, bps: number) => (sqrtP * isqrt((BigInt(10_000 + bps) * 10n ** 12n) / 10_000n)) / 10n ** 6n;
 
 const L = 10n ** 18n;
 let diuji = 0;
 
-// Rentang sempit (tipikal LP terkonsentrasi) diuji di banyak posisi harga: jauh di
-// bawah, tepat di tepi bawah, tengah, tepi atas, jauh di atas.
+// Narrow ranges, the concentrated-LP norm, tested across many price positions:
+// far below, right on the lower edge, mid-range, upper edge, far above.
 for (const [lo, hi] of [[-60000, -30000], [-6000, -3000], [-600, 600], [0, 60], [3000, 9000]] as const) {
   const sqrtA = sqrtAt(lo);
   const sqrtB = sqrtAt(hi);
@@ -27,7 +28,8 @@ for (const [lo, hi] of [[-60000, -30000], [-6000, -3000], [-600, 600], [0, 60], 
     const sqrtP = sqrtAt(tick);
     const { min0, min1 } = withdrawFloors(sqrtP, sqrtA, sqrtB, L);
 
-    // 1) Gerak WAJAR (±0,4%, di dalam pita) harus LOLOS — inilah yang dulu gagal.
+    // 1) Ordinary movement (+/-0.4%, inside the band) must PASS. This is exactly
+    //    what used to fail.
     for (const bps of [-40, -20, -5, 0, 5, 20, 40]) {
       const a = amountsForLiquidity(geser(sqrtP, bps), sqrtA, sqrtB, L);
       assert.ok(
@@ -37,10 +39,11 @@ for (const [lo, hi] of [[-60000, -30000], [-6000, -3000], [-600, 600], [0, 60], 
       diuji++;
     }
 
-    // 2) Dorongan BESAR (±5%) harus DITOLAK di sisi yang dirugikan — itu proteksinya.
-    //    Hanya berlaku saat sisi itu MEMANG punya lantai (> 0). Persis di tepi rentang
-    //    sisi minornya sudah nol — tak ada yang bisa dicuri di sana, jadi lantai nol
-    //    bukan kebocoran, dan menuntut penolakan di situ hanya menguji nol lawan nol.
+    // 2) A big shove (+/-5%) must be REJECTED on the side it hurts. That is the
+    //    protection. Only applies where that side actually has a floor (> 0). Right
+    //    at a range edge the minor side is already zero, so nothing there can be
+    //    stolen; a zero floor is not a leak, and demanding rejection would only be
+    //    testing zero against zero.
     if (sqrtP > sqrtA && sqrtP < sqrtB) {
       const naik = amountsForLiquidity(geser(sqrtP, 500), sqrtA, sqrtB, L);
       const turun = amountsForLiquidity(geser(sqrtP, -500), sqrtA, sqrtB, L);
@@ -56,7 +59,7 @@ for (const [lo, hi] of [[-60000, -30000], [-6000, -3000], [-600, 600], [0, 60], 
   }
 }
 
-// Lantai tak boleh melebihi jumlah pada harga sekarang — kalau ya, SETIAP burn gagal.
+// A floor must never exceed the amount at the current price, or EVERY burn fails.
 for (const tick of [-1200, 0, 1200]) {
   const sqrtP = sqrtAt(tick), sqrtA = sqrtAt(-1800), sqrtB = sqrtAt(1800);
   const now = amountsForLiquidity(sqrtP, sqrtA, sqrtB, L);
@@ -64,13 +67,13 @@ for (const tick of [-1200, 0, 1200]) {
   assert.ok(f.min0 <= now.amount0 && f.min1 <= now.amount1, `lantai di atas jumlah saat ini (tick ${tick})`);
 }
 
-// Likuiditas 0 → lantai 0, bukan pembagian nol.
+// Zero liquidity gives a zero floor, not a division by zero.
 const nol = withdrawFloors(sqrtAt(0), sqrtAt(-600), sqrtAt(600), 0n);
 assert.equal(nol.min0, 0n);
 assert.equal(nol.min1, 0n);
 
-// Kedua protokol WAJIB memakai lantai yang sama. Kalau salah satu kembali memotong
-// persen per sisi, bug lamanya hidup lagi di sana tanpa satu tes pun jadi merah.
+// Both protocols MUST share one floor. If either drifts back to a per-side
+// percentage, the old bug returns there with no test turning red.
 const fs = await import('node:fs');
 for (const [nama, berkas] of [
   ['v4 (burnMinsV4)', 'src/uniswapV4.ts'],
