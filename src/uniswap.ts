@@ -11,13 +11,13 @@ import {
 } from '@uniswap/v3-sdk';
 import type { Token as TToken } from '@uniswap/sdk-core';
 import type { Pool as TPool, Position as TPosition } from '@uniswap/v3-sdk';
-// SDK Uniswap masih CommonJS → impor default lalu ambil isinya.
+// The Uniswap SDK is still CommonJS, so import the default and unpack it.
 const { Token, Percent, CurrencyAmount } = sdkCore;
 
-// SDK Uniswap tak mengenal fee tier 2500 (khas PancakeSwap v3): Pool.tickSpacing
-// mengembalikan undefined, lalu invariant Position gagal / lebar rentang jadi NaN.
-// Daftarkan spacing-nya sekali di sini — angkanya diverifikasi on-chain lewat
-// factory.feeAmountTickSpacing(2500) = 50.
+// The Uniswap SDK does not know fee tier 2500 (a PancakeSwap v3 speciality):
+// Pool.tickSpacing returns undefined, and the Position invariant then fails or the
+// range width comes out NaN. Register the spacing once here — the number is verified
+// on-chain via factory.feeAmountTickSpacing(2500) = 50.
 (TICK_SPACINGS as Record<number, number>)[2500] = 50;
 import { ERC20_ABI, approveExact } from './chain.js';
 import { sendTxNonceSafe, isGoneErr } from './core.js';
@@ -27,30 +27,32 @@ import { getChain, baseOf, basesFor, detectBase, type ChainCtx, type BaseAsset, 
 const MAX_UINT128 = (1n << 128n) - 1n;
 const SLIPPAGE = new Percent(50, 10_000); // 0.5%
 
-/** Fee tier yang valid di Uniswap v3. */
-/** Tick-spacing fee tier di chain ini. Melempar bila tier tak terdaftar — lebih baik
- *  berhenti daripada menghitung lebar rentang dengan spacing `undefined` (NaN → tick sampah). */
+/** Valid Uniswap v3 fee tiers. */
+/** A fee tier's tick spacing on this chain. Throws when the tier is unregistered:
+ *  better to stop than to compute a range width with `undefined` spacing (NaN gives
+ *  garbage ticks). */
 function spacingOf(fee: number, ctx: ChainCtx): number {
   const s = ctx.tickSpacing[fee] ?? TICK_SPACINGS[fee as FeeAmount];
   if (!s) throw new Error(`Fee tier ${fee} is not available on ${ctx.label}.`);
   return s;
 }
 
-/** Fee untuk objek SDK Uniswap. Slipstream memakai tickSpacing arbitrer yang tak ada
- *  di TICK_SPACINGS SDK → paksa 100 (spacing 1). Math jumlah token TIDAK memakai
- *  tickSpacing, dan tick kita (kelipatan spacing asli) tetap kelipatan 1, jadi
- *  invariant Position (tick % spacing === 0) lolos & jumlahnya tetap benar. */
+/** The fee value for Uniswap SDK objects. Slipstream uses arbitrary tick spacings
+ *  absent from the SDK's TICK_SPACINGS, so force 100 (spacing 1). Token-amount maths
+ *  does NOT use tickSpacing, and our ticks (multiples of the real spacing) are still
+ *  multiples of 1, so the Position invariant (tick % spacing === 0) holds and the
+ *  amounts stay correct. */
 const sdkFee = (fee: number, ctx: ChainCtx): FeeAmount => (ctx.slipstream ? 100 : fee) as FeeAmount;
 
-/** Fragmen slot0(). CLPool Velodrome Slipstream mengembalikan 6 field (tanpa
- *  `feeProtocol uint8` milik Uniswap v3) → decode 7-field gagal. Keduanya menaruh
- *  sqrtPriceX96 di [0] & tick di [1], jadi kode pembaca tak berubah. */
+/** The slot0() fragment. Velodrome Slipstream's CLPool returns 6 fields (without
+ *  Uniswap v3's `feeProtocol uint8`), so a 7-field decode fails. Both put
+ *  sqrtPriceX96 at [0] and tick at [1], so the reading code is unchanged. */
 const slot0Abi = (ctx: ChainCtx): string =>
   ctx.slipstream
     ? 'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, bool)'
     : 'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)';
 
-// Cache metadata token per chain (alamat sama bisa ada di banyak chain).
+// Per-chain token metadata cache (the same address can exist on several chains).
 const tokenMetaCache = new Map<string, { symbol: string; decimals: number }>();
 
 export async function getTokenMeta(
@@ -67,7 +69,7 @@ export async function getTokenMeta(
   return meta;
 }
 
-/** Ubah alamat token jadi objek Token milik SDK (butuh decimals & symbol). */
+/** Turn a token address into an SDK Token object (needs decimals and symbol). */
 async function toSdkToken(address: string, ctx: ChainCtx): Promise<TToken> {
   const meta = await getTokenMeta(address, ctx);
   return new Token(ctx.chainId, ethers.getAddress(address), meta.decimals, meta.symbol);
@@ -84,15 +86,15 @@ type PoolState = {
   currentTick: number;
 };
 
-/** Baca kondisi pool base/token dari on-chain lalu bangun objek Pool milik SDK. */
+/** Read the base/token pool's on-chain state and build an SDK Pool object. */
 export async function loadPool(
   tokenAddress: string,
   fee: number,
   base: BaseAsset,
   ctx: ChainCtx = getChain(),
 ): Promise<PoolState> {
-  // Fee tier & tick-spacing milik CHAIN: PancakeSwap memakai 2500 (spacing 50) dan
-  // sama sekali tak punya 3000. Memakai tabel Uniswap di sana = lebar rentang NaN.
+  // The fee tier and tick spacing belong to the CHAIN: PancakeSwap uses 2500
+  // (spacing 50) and has no 3000 at all. Using Uniswap's table there gives a NaN width.
   if (!ctx.feeTiers.includes(fee)) {
     throw new Error(`Invalid fee tier ${fee}. Options: ${ctx.feeTiers.join(', ')}`);
   }
@@ -144,17 +146,17 @@ export async function loadPool(
   };
 }
 
-/** Ubah lebar rentang (persen PENURUNAN harga token) menjadi jumlah tick.
- *  Target: ujung terjauh = harga turun tepat X%. faktor = 1 - X/100 →
- *  width = |ln(1-X/100)| / ln(1.0001). Dibulatkan KELUAR (ceil) ke kelipatan
- *  spacing supaya rentang minimal menutup X% yang diminta. */
+/** Convert a range width (a percentage FALL in token price) into ticks.
+ *  Target: the far edge is exactly X% down. factor = 1 - X/100, so
+ *  width = |ln(1-X/100)| / ln(1.0001). Rounded OUTWARD (ceil) to a multiple of the
+ *  spacing, so the range covers at least the X% asked for. */
 function widthInTicks(rangePercent: number, spacing: number): number {
   const frac = Math.min(Math.max(rangePercent, 0.1), 95) / 100;
   const raw = Math.abs(Math.log(1 - frac)) / Math.log(1.0001);
   return Math.max(spacing, Math.ceil(raw / spacing) * spacing);
 }
 
-/** Lebar rentang untuk KENAIKAN harga X%: width = ln(1+X/100)/ln(1.0001). */
+/** Range width for an X% price RISE: width = ln(1+X/100)/ln(1.0001). */
 function widthInTicksUp(rangePercent: number, spacing: number): number {
   const frac = Math.min(Math.max(rangePercent, 0.1), 1000) / 100;
   const raw = Math.log(1 + frac) / Math.log(1.0001);
@@ -183,11 +185,11 @@ export type AddPlan = {
 };
 
 /**
- * Hitung rencana posisi SINGLE-SIDED (hanya base = WETH atau USDG):
- *  - Kalau base = token0 → rentang harus DI ATAS harga sekarang.
- *  - Kalau base = token1 → rentang harus DI BAWAH harga sekarang.
- * Dengan begitu token yang lain dibutuhkan ~0. Jumlah base memakai
- * parseUnits(base.decimals) — WAJIB (USDG 6-dec ≠ WETH 18-dec).
+ * Plan a SINGLE-SIDED position (base only: WETH or USDG):
+ *  - base = token0 means the range must sit ABOVE the current price;
+ *  - base = token1 means it must sit BELOW.
+ * Either way the other token is needed in ~zero quantity. The base amount uses
+ * parseUnits(base.decimals), which is MANDATORY (USDG has 6, WETH has 18).
  */
 export async function planAddSingleSided(
   tokenAddress: string,
@@ -207,8 +209,8 @@ export async function planAddSingleSided(
   let position: TPosition;
 
   if (st.baseIsToken0) {
-    // Rentang di ATAS tick sekarang → butuh hanya token0 (base).
-    // Ambil kelipatan spacing TERDEKAT di atas current (ceil) biar mepet harga.
+    // A range ABOVE the current tick needs only token0 (the base). Take the nearest
+    // spacing multiple above current (ceil) to sit tight against the price.
     let lower = Math.ceil(st.currentTick / spacing) * spacing;
     if (lower <= st.currentTick) lower += spacing;
     tickLower = lower;
@@ -221,7 +223,7 @@ export async function planAddSingleSided(
       useFullPrecision: true,
     });
   } else {
-    // Rentang di BAWAH tick sekarang → butuh hanya token1 (base).
+    // A range BELOW the current tick needs only token1 (the base).
     let upper = Math.floor(st.currentTick / spacing) * spacing;
     if (upper >= st.currentTick) upper -= spacing;
     tickUpper = upper;
@@ -240,13 +242,13 @@ export async function planAddSingleSided(
   const baseAmountWei = st.baseIsToken0 ? amount0 : amount1;
   const otherAmountWei = st.baseIsToken0 ? amount1 : amount0;
 
-  // Harga token (dalam base) di kedua ujung rentang, untuk ditampilkan.
+  // The token price (in base terms) at both range edges, for display.
   const pLower = tickToPrice(st.tokenOther, st.sdkBase, tickLower).toSignificant(6);
   const pUpper = tickToPrice(st.tokenOther, st.sdkBase, tickUpper).toSignificant(6);
   const [priceLower, priceUpper] =
     Number(pLower) <= Number(pUpper) ? [pLower, pUpper] : [pUpper, pLower];
 
-  // Rentang dalam persen relatif terhadap harga token sekarang.
+  // The range as a percentage relative to the token's current price.
   const currentPrice = st.sdkPool.priceOf(st.tokenOther).toSignificant(8);
   const cur = Number(currentPrice);
   const pctLow = cur > 0 ? (Number(priceLower) / cur - 1) * 100 : 0;
@@ -274,25 +276,25 @@ export async function planAddSingleSided(
   };
 }
 
-/** Bentuk distribusi modal ladder. spot = rata; bidask = numpuk di harga terjauh (paling turun). */
+/** Ladder capital distribution. spot spreads evenly; bidask concentrates at the furthest (lowest) price. */
 export type LadderShape = 'spot' | 'bidask';
 
-/** Bobot per-leg (index 0 = terdekat harga, N-1 = terjauh/paling turun). Jumlah = 1. */
+/** Per-leg weights (index 0 nearest the price, N-1 furthest down). They sum to 1. */
 export function ladderWeights(n: number, shape: LadderShape): number[] {
   if (n <= 1) return [1];
-  // bidask linear: bobot ∝ (index+1) → leg terjauh paling berat. spot: rata.
+  // bidask is linear: weight scales with (index+1), so the furthest leg is heaviest. spot is even.
   const raw = shape === 'bidask' ? Array.from({ length: n }, (_, i) => i + 1) : Array.from({ length: n }, () => 1);
   const sum = raw.reduce((a, b) => a + b, 0);
   return raw.map((w) => w / sum);
 }
 
 /**
- * Rencana LADDER single-sided sisi BASE (buy-the-dip): pecah rentang [sekarang …
- * −X%] jadi N leg bersebelahan, tiap leg posisi terkonsentrasi sendiri dengan
- * modal berbobot. spot = modal rata; bidask = modal makin besar di harga makin
- * rendah. Tiap leg = AddPlan utuh → di-mint lewat executeAdd biasa (satu tokenId
- * per leg, dikelompokkan oleh groupId di store). Hanya sisi base — sisi token
- * tetap SPOT tunggal.
+ * Plan a single-sided LADDER on the BASE side (buy-the-dip): split the range [now
+ * ... -X%] into N adjacent legs, each its own concentrated position with weighted
+ * capital. spot spreads capital evenly; bidask puts more of it at lower prices. Each
+ * leg is a full AddPlan, minted through the ordinary executeAdd (one tokenId per leg,
+ * tied together by groupId in the store). Base side only — the token side stays a
+ * single SPOT position.
  */
 export async function planLadderSingleSided(
   tokenAddress: string,
@@ -307,18 +309,19 @@ export async function planLadderSingleSided(
   const st = await loadPool(tokenAddress, fee, base, ctx);
   const spacing = spacingOf(fee, ctx);
   const fullWidth = widthInTicks(rangePercent, spacing);
-  // Auto-cap: tiap leg butuh ≥1 tick-spacing. Pool kasar (spacing besar) tak muat
-  // banyak leg dalam rentang → potong N ke jumlah spacing yang tersedia (maks 69).
+  // Auto-cap: every leg needs at least one tick spacing. A coarse pool (large
+  // spacing) cannot fit many legs in the range, so N is cut to the spacings
+  // available (max 69).
   const maxLegs = Math.max(1, Math.floor(fullWidth / spacing));
   const n = Math.max(1, Math.min(legs, 69, maxLegs));
-  // Lebar tiap leg = porsi spacing dari total, minimal 1 spacing.
+  // Each leg's width is its share of the spacings, at least one spacing.
   const legWidth = Math.max(spacing, Math.round(fullWidth / n / spacing) * spacing);
   const weights = ladderWeights(n, shape);
   const totalWei = ethers.parseUnits(totalAmount, base.decimals);
   const currentPrice = st.sdkPool.priceOf(st.tokenOther).toSignificant(8);
   const cur = Number(currentPrice);
 
-  // Tick pangkal (mepet harga sekarang), sama seperti planAddSingleSided.
+  // The anchor tick (flush against the current price), same as planAddSingleSided.
   let anchor: number;
   if (st.baseIsToken0) {
     anchor = Math.ceil(st.currentTick / spacing) * spacing;
@@ -331,7 +334,7 @@ export async function planLadderSingleSided(
   const plans: AddPlan[] = [];
   let allocated = 0n;
   for (let k = 0; k < n; k++) {
-    // Modal leg: bobot × total; leg terakhir menyapu sisa (hindari debu pembulatan).
+  // Leg capital is weight x total; the last leg sweeps the remainder to avoid rounding dust.
     const legWei = k === n - 1 ? totalWei - allocated : (totalWei * BigInt(Math.round(weights[k] * 1e9))) / 1_000_000_000n;
     allocated += legWei;
 
@@ -339,12 +342,12 @@ export async function planLadderSingleSided(
     let tickUpper: number;
     let position: TPosition;
     if (st.baseIsToken0) {
-      // Rentang DI ATAS: leg k makin jauh ke atas = harga token makin turun.
+      // Range ABOVE: the further leg k goes up, the further the token price falls.
       tickLower = anchor + k * legWidth;
       tickUpper = tickLower + legWidth;
       position = Position.fromAmount0({ pool: st.sdkPool, tickLower, tickUpper, amount0: legWei.toString(), useFullPrecision: true });
     } else {
-      // Rentang DI BAWAH: leg k makin jauh ke bawah = harga token makin turun.
+      // Range BELOW: the further leg k goes down, the further the token price falls.
       tickUpper = anchor - k * legWidth;
       tickLower = tickUpper - legWidth;
       position = Position.fromAmount1({ pool: st.sdkPool, tickLower, tickUpper, amount1: legWei.toString() });
@@ -382,13 +385,14 @@ export async function planLadderSingleSided(
 }
 
 /**
- * Rencana SINGLE-SIDED sisi TOKEN: setor tokennya saja, rentang DI ATAS harga
- * sekarang. Posisi bekerja seperti limit-sell pasif — token perlahan berubah
- * jadi base saat harga naik melewati rentang, sambil memanen fee.
+ * Plan a SINGLE-SIDED position on the TOKEN side: deposit the token alone into a
+ * range ABOVE the current price. It behaves like a passive limit sell — the token
+ * converts gradually into base as price rises through the range, harvesting fees on
+ * the way.
  *
- * Cermin dari planAddSingleSided: sisi tick yang dipakai kebalikannya, karena
- * posisi berisi 100% token0 saat harga DI BAWAH rentang, dan 100% token1 saat
- * harga DI ATAS rentang.
+ * A mirror of planAddSingleSided with the tick side reversed, because a position
+ * holds 100% token0 when price is BELOW its range and 100% token1 when price is
+ * ABOVE it.
  */
 export async function planAddTokenSide(
   tokenAddress: string,
@@ -408,14 +412,14 @@ export async function planAddTokenSide(
   let position: TPosition;
 
   if (st.baseIsToken0) {
-    // Token = token1 → posisi harus berisi token1 saja → rentang DI BAWAH tick.
+    // Token is token1, so the position must hold only token1: range BELOW the tick.
     let upper = Math.floor(st.currentTick / spacing) * spacing;
     if (upper >= st.currentTick) upper -= spacing;
     tickUpper = upper;
     tickLower = upper - width;
     position = Position.fromAmount1({ pool: st.sdkPool, tickLower, tickUpper, amount1: tokenWei.toString() });
   } else {
-    // Token = token0 → posisi harus berisi token0 saja → rentang DI ATAS tick.
+    // Token is token0, so the position must hold only token0: range ABOVE the tick.
     let lower = Math.ceil(st.currentTick / spacing) * spacing;
     if (lower <= st.currentTick) lower += spacing;
     tickLower = lower;
@@ -467,16 +471,17 @@ export async function planAddTokenSide(
   };
 }
 
-/** Pastikan saldo BASE cukup & izin (approve) ke Position Manager.
- *  WETH (wrappable): bungkus ETH native seperlunya. USDG (non-wrappable):
- *  wajib sudah dipegang — tak bisa di-wrap. Semua format pakai base.decimals. */
-/** Estimasi unit gas buka LP (wrap + approve + mint). Dipakai juga oleh preview biaya. */
+/** Make sure the BASE balance and the Position Manager allowance are both in place.
+ *  WETH (wrappable): wrap native ETH as needed. USDG (non-wrappable): must already be
+ *  held, since it cannot be wrapped. Every amount is formatted with base.decimals. */
+/** Estimated gas units to open an LP (wrap + approve + mint). Also used by the cost preview. */
 export const ADD_GAS_UNITS = 700_000n;
 
 /**
- * Cadangan gas saat wrap: dulu datar 0.0005 ETH — di chain gas mahal itu 10× terlalu
- * kecil, ETH habis ke wrap lalu mint gagal "insufficient funds" & dana terjebak
- * sebagai WETH. Hitung dari harga gas nyata (+20% headroom), dengan lantai lama.
+ * Gas reserve when wrapping. This used to be a flat 0.0005 ETH, which on an
+ * expensive chain is 10x too small: ETH went entirely into the wrap, the mint then
+ * failed with "insufficient funds", and the money sat trapped as WETH. It is now
+ * derived from the real gas price (+20% headroom), keeping the old value as a floor.
  */
 export async function gasBuffer(ctx: ChainCtx): Promise<bigint> {
   try {
@@ -487,7 +492,7 @@ export async function gasBuffer(ctx: ChainCtx): Promise<bigint> {
       return est > MIN_GAS_BUFFER ? est : MIN_GAS_BUFFER;
     }
   } catch {
-    /* pakai lantai */
+    /* fall back to the floor */
   }
   return MIN_GAS_BUFFER;
 }
@@ -501,14 +506,14 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
 
   if (bal < amountWei) {
     if (!base.wrappable) {
-      // USDG dsb: ERC20 biasa, harus SUDAH ada di wallet.
+      // USDG and friends: ordinary ERC20s that must ALREADY be in the wallet.
       throw new Error(
         `Not enough ${base.symbol} on ${ctx.label}: need ${ethers.formatUnits(amountWei, base.decimals)}, ` +
           `available ${ethers.formatUnits(bal, base.decimals)}. ${base.symbol} cannot be wrapped from ETH — ` +
           `top up with ${base.symbol} first, or lower the amount.`,
       );
     }
-    // WETH: wrap ETH native seperlunya, jaga cadangan gas.
+    // WETH: wrap native ETH as needed, keeping the gas reserve intact.
     const native = ctx.nativeSymbol;
     const need = amountWei - bal;
     const ethBal = await provider.getBalance(wallet.address);
@@ -522,17 +527,17 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
     const tx = await ctx.weth.deposit({ value: need });
     await tx.wait();
     notes.push(`Wrap ${ethers.formatEther(need)} ${native} (tx ${tx.hash})`);
-    // RPC kerap belum memperbarui saldo tepat setelah tx mendarat. Baca ulang
-    // beberapa kali SEBELUM menyimpulkan kurang: dulu pembacaan basi (0) langsung
-    // memicu wrap KEDUA sebesar amountWei PENUH — padahal ETH sudah terpakai di
-    // wrap pertama, jadi node menolak "insufficient funds" dan seluruh hasil wrap
-    // tertinggal sebagai WETH. Terjadi 2 Agu 2026: 0.12 WETH nyangkut.
+    // RPCs often have not refreshed the balance right after a tx lands. Re-read a few
+    // times BEFORE concluding there is a shortfall: a stale read of 0 used to trigger
+    // a SECOND wrap of the FULL amountWei — but the ETH had already gone into the
+    // first wrap, so the node refused with "insufficient funds" and the entire wrapped
+    // amount was left behind as WETH. It happened on 2 Aug 2026: 0.12 WETH stranded.
     for (let i = 0; i < 5 && bal < amountWei; i++) {
       await new Promise((r) => setTimeout(r, 1500));
       bal = await baseC.balanceOf(wallet.address);
     }
     if (bal < amountWei) {
-      // Yang kurang saja, dan hanya bila ETH yang tersisa memang menutupi.
+      // Only the shortfall, and only when the remaining ETH actually covers it.
       const short = amountWei - bal;
       const nativeNow = await provider.getBalance(wallet.address);
       if (nativeNow < short + buffer) {
@@ -555,8 +560,8 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
   return notes;
 }
 
-/** Pastikan saldo ERC20 (token biasa) cukup & sudah di-approve ke Position Manager.
- *  Tak ada wrap di sini: token biasa harus memang sudah dipegang. */
+/** Make sure an ERC20 (an ordinary token) balance and Position Manager approval are
+ *  in place. No wrapping here: an ordinary token has to be held already. */
 async function ensureErc20Ready(
   address: string,
   amountWei: bigint,
@@ -580,7 +585,7 @@ async function ensureErc20Ready(
   return notes;
 }
 
-/** Eksekusi penambahan LP single-sided. Mengembalikan tokenId posisi baru + catatan. */
+/** Execute a single-sided LP add. Returns the new position's tokenId plus notes. */
 export async function executeAdd(
   plan: AddPlan,
   tokenAddress: string,
@@ -589,7 +594,7 @@ export async function executeAdd(
 ): Promise<{ tokenId: string; notes: string[] }> {
   const { positionManager, wallet } = ctx;
   const base = baseOf(ctx, plan.baseKind);
-  // Sisi token: yang perlu disiapkan tokennya, bukan base (tak ada yang di-wrap).
+  // Token side: it is the token that needs preparing, not the base (nothing is wrapped).
   const notes =
     plan.side === 'token'
       ? await ensureErc20Ready(tokenAddress, plan.tokenAmountWei, plan.otherSymbol, plan.tokenDecimals, ctx)
@@ -608,9 +613,9 @@ export async function executeAdd(
     amount1Min: BigInt(withSlip.amount1.toString()),
     recipient: wallet.address,
     deadline: Math.floor(Date.now() / 1000) + 600,
-    // Slipstream: mint butuh sqrtPriceX96 (0 = pool sudah ada, jangan buat baru).
-    // Field `fee` di params ini = tickSpacing (ABI Slipstream menamainya `fee`).
-    // ABI Uniswap v3 mengabaikan key ekstra ini, jadi aman diisi selalu.
+    // Slipstream: mint needs a sqrtPriceX96 (0 means the pool exists, do not create
+    // one). The `fee` field in these params is the tickSpacing (Slipstream's ABI calls
+    // it `fee`). Uniswap v3's ABI ignores the extra key, so it is safe to always set.
     ...(ctx.slipstream ? { sqrtPriceX96: 0n } : {}),
   };
 
@@ -619,7 +624,7 @@ export async function executeAdd(
     const tx = await positionManager.mint(params);
     receipt = await tx.wait();
   } catch (e) {
-    // STF = transfer base gagal (saldo/allowance). Pulihkan sekali lalu retry.
+    // STF means the base transfer failed (balance or allowance). Recover once, then retry.
     if (/STF/i.test((e as Error).message)) {
       notes.push(`Mint hit STF — re-verifying assets and retrying...`);
       notes.push(
@@ -635,9 +640,9 @@ export async function executeAdd(
   }
   notes.push(`Mint Position (tx ${receipt.hash})`);
 
-  // tokenId dibaca dari event Transfer(0x0 -> wallet) di receipt mint sendiri.
-  // JANGAN pakai tokenOfOwnerByIndex(bal-1): urutan index ERC721 berubah-ubah
-  // saat ada NFT lain di-burn — pernah menyebabkan record menunjuk NFT lama.
+  // The tokenId is read from the Transfer(0x0 -> wallet) event in the mint's own
+  // receipt. Do NOT use tokenOfOwnerByIndex(bal-1): ERC721 index order shifts when
+  // another NFT is burned, which once left a record pointing at an older NFT.
   const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
   const pmAddr = String(positionManager.target).toLowerCase();
   let tokenId: bigint | null = null;
@@ -654,7 +659,7 @@ export async function executeAdd(
     }
   }
   if (tokenId === null) {
-    // Fallback terakhir (seharusnya tak pernah terjadi).
+    // Last-ditch fallback (should never happen).
     notes.push('⚠️ Mint event not found in receipt — falling back to last index.');
     const bal: bigint = await positionManager.balanceOf(wallet.address);
     tokenId = BigInt(await positionManager.tokenOfOwnerByIndex(wallet.address, bal - 1n));
@@ -662,14 +667,15 @@ export async function executeAdd(
   return { tokenId: tokenId!.toString(), notes };
 }
 
-/** Batas leg per multicall — jaga di bawah block gas limit (~400k gas/mint). */
+/** Legs per multicall, kept under the block gas limit (~400k gas per mint). */
 export const MAX_LEGS_PER_MULTICALL = 25;
 
 /**
- * BATCH mint ladder via multicall: N leg (sisi base) dalam SATU tx atomik per
- * chunk. Approve+wrap base SEKALI untuk total, lalu multicall([mint,mint,…]).
- * Tutup kelemahan "N tx" v3 — 69 leg jadi ~3 tx (chunk 25), bukan 69. tokenId
- * tiap leg dibaca dari event Transfer(0x0→wallet) berurutan di receipt.
+ * BATCH mint a ladder through multicall: N legs (base side) in ONE atomic tx per
+ * chunk. Approve and wrap the base ONCE for the total, then multicall([mint,mint,...]).
+ * This closes v3's "N transactions" weakness — 69 legs become ~3 txs at a chunk size
+ * of 25, not 69. Each leg's tokenId is read from the consecutive
+ * Transfer(0x0 -> wallet) events in the receipt.
  */
 export async function executeAddBatch(
   plans: AddPlan[],
@@ -707,9 +713,10 @@ export async function executeAddBatch(
       };
       return iface.encodeFunctionData('mint', [params]);
     });
-    // PRE-FLIGHT: simulasi multicall dulu (saldo & approval sudah siap dari
-    // ensureBaseReady di atas). Kalau ada leg yang bakal revert, gagal DI SINI dengan
-    // alasan asli (bukan 'require(false)' opaque saat kirim), dan SEBELUM tx dikirim.
+    // PRE-FLIGHT: simulate the multicall first (balance and approval are already in
+    // place from ensureBaseReady above). If any leg is going to revert, it fails HERE
+    // with the real reason — not an opaque 'require(false)' on send — and BEFORE any
+    // tx goes out.
     try {
       await positionManager.multicall.staticCall(calls);
     } catch (e) {
@@ -718,7 +725,7 @@ export async function executeAddBatch(
     const tx = await sendTxNonceSafe(wallet as ethers.Wallet, await positionManager.multicall.populateTransaction(calls));
     const receipt = await tx.wait();
     if (!receipt) throw new Error('batch mint tx has no receipt');
-    // Semua Transfer(0x0→wallet) di receipt = tokenId tiap leg, urut eksekusi.
+    // Every Transfer(0x0 -> wallet) in the receipt is one leg's tokenId, in execution order.
     for (const log of receipt.logs ?? []) {
       if (
         log.address.toLowerCase() === pmAddr &&
@@ -736,9 +743,9 @@ export async function executeAddBatch(
 }
 
 /**
- * BATCH remove+collect+burn ladder via multicall: seluruh leg dikosongkan &
- * di-burn dalam ~1 tx per chunk. Aset (base + token) mendarat di wallet; swap
- * token→base dilakukan pemanggil SEKALI (agregat), bukan per-leg.
+ * BATCH remove+collect+burn a ladder through multicall: every leg is emptied and
+ * burned in roughly one tx per chunk. The assets (base plus token) land in the
+ * wallet; the caller does the token->base swap ONCE in aggregate, not per leg.
  */
 export async function executeRemoveBatch(
   tokenIds: string[],
@@ -751,23 +758,25 @@ export async function executeRemoveBatch(
     const chunk = tokenIds.slice(off, off + MAX_LEGS_PER_MULTICALL);
 
     /**
-     * Susun panggilan multicall dengan lantai harga yang BARU DIHITUNG.
+     * Build the multicall with FRESHLY COMPUTED price floors.
      *
-     * Dipisah jadi fungsi supaya bisa diulang: lantai 0.5% dihitung dari harga
-     * saat itu, dan untuk token yang bergerak cepat harga bisa sudah lewat sebelum
-     * simulasi selesai. Menyusun ulang = memakai harga terbaru, BUKAN melonggarkan
-     * lantainya.
+     * Split into its own function so it can be repeated: the floor is derived from
+     * the price at that moment, and on a fast-moving token the price can have moved
+     * on before the simulation finishes. Rebuilding uses the newest price; it does
+     * NOT loosen the floor.
      */
     const build = async () => {
       const deadline = Math.floor(Date.now() / 1000) + 600;
-      // Tiap leg dihitung PARALEL. Dulu berurutan: 8 leg × (staticCall + retry) bisa
-      // memakan detik, dan seluruh jeda itu jadi jarak antara harga yang dipakai
-      // lantai dengan harga saat simulasi — persis yang memicu "Price slippage check".
+      // Legs are computed in PARALLEL. They used to run in series: 8 legs x
+      // (staticCall + retry) could take seconds, and every bit of that delay widened
+      // the gap between the price the floor used and the price at simulation time —
+      // exactly what triggered "Price slippage check".
       const parts = await Promise.all(
         chunk.map(async (tokenId) => {
-          // Leg yang sudah hangus (revert 'Invalid token ID') → LEWATI. Hanya revert itu:
-          // gagal baca karena RPC putus pernah membuat bot melapor "closed" tanpa
-          // mengirim satu tx pun (28 Agu 2026), jadi kegagalan lain WAJIB dilempar.
+          // A leg already gone (reverting 'Invalid token ID') is SKIPPED. Only that
+          // revert: a read failing on a dropped RPC once had the bot report "closed"
+          // without sending a single tx (28 Aug 2026), so every other failure MUST
+          // be rethrown.
           let liquidity: bigint;
           try {
             liquidity = BigInt((await positionManager.positions(tokenId)).liquidity);
@@ -804,15 +813,15 @@ export async function executeRemoveBatch(
 
     let built = await build();
     if (built.calls.length === 0) {
-      // Sampai di sini artinya SETIAP leg benar-benar revert 'Invalid token ID' —
-      // kegagalan baca sudah dilempar di atas, jadi ini memang sudah tertutup.
+      // Reaching here means EVERY leg genuinely reverted with 'Invalid token ID'.
+      // Read failures were rethrown above, so these really are already closed.
       notes.push('Batch close: all legs already closed on-chain.');
       continue;
     }
 
-    // PRE-FLIGHT: simulasi dulu → gagal dengan alasan asli sebelum kirim tx.
-    // Revert karena lantai harga BUKAN alasan menyerah: harganya bergerak, bukan
-    // salah. Susun ulang dengan harga terbaru dan coba lagi, maksimal 3 kali.
+    // PRE-FLIGHT: simulate first, so a failure comes with its real reason before any
+    // tx is sent. A revert on the price floor is NOT a reason to give up: the price
+    // moved, nothing is wrong. Rebuild with the newest price and retry, up to 3 times.
     const MAX_REBUILD = 3;
     for (let attempt = 1; ; attempt++) {
       try {
@@ -855,7 +864,7 @@ export type PositionInfo = {
   inRange: boolean;
 };
 
-/** Daftar semua posisi LP milik dompet bot (per chain). */
+/** Every LP position the bot's wallet holds (per chain). */
 export async function listPositions(ctx: ChainCtx = getChain()): Promise<PositionInfo[]> {
   const { positionManager, wallet } = ctx;
   const n: bigint = await positionManager.balanceOf(wallet.address);
@@ -876,7 +885,7 @@ export async function listPositions(ctx: ChainCtx = getChain()): Promise<Positio
       const cur = Number(slot0[1]);
       inRange = cur >= Number(p.tickLower) && cur < Number(p.tickUpper);
     } catch {
-      /* biarkan inRange = false kalau pool tak terbaca */
+      /* leave inRange false when the pool cannot be read */
     }
     out.push({
       tokenId: tokenId.toString(),
@@ -895,9 +904,9 @@ export async function listPositions(ctx: ChainCtx = getChain()): Promise<Positio
 }
 
 /**
- * Panen fee TANPA menutup posisi: `collect` saja, tanpa decreaseLiquidity dan
- * tanpa burn. Nilai yang tertarik = fee yang belum diklaim (pokok tetap di pool).
- * Kembalian dalam satuan token0/token1 mentah + hash tx.
+ * Harvest fees WITHOUT closing the position: `collect` alone, no decreaseLiquidity
+ * and no burn. What comes out is the unclaimed fees; the principal stays in the pool.
+ * Returns raw token0/token1 amounts plus the tx hash.
  */
 export async function collectFeesOnly(
   tokenId: string,
@@ -910,8 +919,8 @@ export async function collectFeesOnly(
     amount0Max: MAX_UINT128,
     amount1Max: MAX_UINT128,
   };
-  // staticCall dulu: angka yang dilaporkan ke user harus angka yang benar-benar
-  // akan tertarik, bukan tebakan dari kartu sebelumnya.
+  // staticCall first: the number reported to the user has to be the number that will
+  // actually be withdrawn, not a guess carried over from an earlier card.
   const owed = await positionManager.collect.staticCall(params);
   const tx = await positionManager.collect(params);
   const receipt = await tx.wait();
@@ -919,34 +928,35 @@ export async function collectFeesOnly(
 }
 
 /**
- * Tarik SEBAGIAN likuiditas (1–99%) lalu collect. Posisi TIDAK di-burn dan tetap
- * hidup — dipakai penarikan sebagian 25/50/75%. Untuk 100% pakai executeRemove (burn +
- * jurnal + cashout), supaya tak ada dua jalur penutupan yang bisa menyimpang.
+ * Withdraw PART of the liquidity (1-99%) and collect. The position is NOT burned and
+ * stays alive — used by the 25/50/75% partial withdrawals. For 100% use executeRemove
+ * (burn + journal + cash-out), so there are never two closing paths that can diverge.
  */
 /**
- * Lantai slippage untuk decreaseLiquidity.
+ * Slippage floor for decreaseLiquidity.
  *
- * amount0Min/amount1Min adalah SATU-SATUNYA proteksi harga yang dimiliki
- * decreaseLiquidity. Dengan 0, penarikan bisa disandwich: harga didorong ke tepi
- * rentang, posisi keluar ~100% sebagai aset yang sedang ditekan, lalu harga
- * dikembalikan — dan tx-nya tetap "sukses" sehingga tak ada yang menandai.
+ * amount0Min/amount1Min are the ONLY price protection decreaseLiquidity has. At 0 a
+ * withdrawal can be sandwiched: price is pushed to a range edge, the position exits
+ * ~100% as the asset being suppressed, and price is then restored — with the tx still
+ * reporting success, so nothing flags it.
  *
- * Angka harapannya dibaca lewat staticCall (harga saat ini), lantainya 99.5% dari
- * situ. Kalau harga digeser antara pembacaan dan eksekusi, tx REVERT — itu hasil
- * yang benar: gas hangus jauh lebih murah daripada ditutup di harga sembarang.
+ * The expected amounts come from the pool price, and the floor from a price band
+ * around it. If price is shoved between the read and execution, the tx REVERTS —
+ * which is the right outcome: burnt gas is far cheaper than closing at an arbitrary
+ * price.
  */
-/** Lantai jalur CADANGAN (potongan per sisi), dipakai hanya saat harga pool tak
- *  terbaca. Sengaja longgar: di jalur ini kita tak punya tick posisi, jadi ambang
- *  ketat justru menggagalkan penarikan yang sehat — persis bug yang baru diperbaiki. */
+/** The FALLBACK floor (a per-side percentage), used only when the pool price cannot
+ *  be read. Deliberately loose: this path has no position ticks, so a tight threshold
+ *  would fail healthy withdrawals — exactly the bug just fixed. */
 const WITHDRAW_FALLBACK_BPS = 200n; // 2%
 
-/** Catatan yang ikut ke kartu hasil close saat penarikan terpaksa tanpa lantai harga. */
+/** Note attached to the close card when a withdrawal had to run without a price floor. */
 const WITHDRAW_UNPROTECTED_NOTE = (tokenId: string) =>
   `⚠️ #${tokenId} withdrawn WITHOUT a price floor — the pool could not be priced, so sandwich protection was off for this close.`;
 
-/** Ekspektasi jumlah token0/token1 dari burn `liquidity`, dihitung dari HARGA POOL
- *  saat ini via SDK (tanpa simulasi decreaseLiquidity). Dipakai sebagai lantai
- *  slippage cadangan bila staticCall PM tak tersedia. */
+/** Expected token0/token1 out of burning `liquidity`, computed from the CURRENT POOL
+ *  PRICE via the SDK (no decreaseLiquidity simulation). Also supplies the price band
+ *  its floors are built from. */
 async function expectedBurnAmounts(
   tokenId: string,
   liquidity: bigint,
@@ -969,7 +979,7 @@ async function expectedBurnAmounts(
   return {
     amount0: BigInt(pos.amount0.quotient.toString()),
     amount1: BigInt(pos.amount1.quotient.toString()),
-    // Bahan lantai pita harga: harga pool sekarang + kedua tepi rentang posisi.
+    // Ingredients for the price-band floor: the current pool price plus both range edges.
     sqrtPriceX96: BigInt(slot0[0].toString()),
     sqrtLower: BigInt(TickMath.getSqrtRatioAtTick(Number(p.tickLower)).toString()),
     sqrtUpper: BigInt(TickMath.getSqrtRatioAtTick(Number(p.tickUpper)).toString()),
@@ -983,12 +993,13 @@ async function withdrawMins(
   deadline: number,
   ctx: ChainCtx,
 ): Promise<{ amount0Min: bigint; amount1Min: bigint; unprotected: boolean }> {
-  // Retry: kegagalan baca paling lazim TRANSIEN (RPC rewel sesaat) — bukan alasan
-  // menarik tanpa proteksi. Coba 3x sebelum menyerah.
+  // Retry: the most common read failure is TRANSIENT (a momentarily grumpy RPC), and
+  // not a reason to withdraw unprotected. Try 3 times before giving up.
   //
-  // Lantainya dari PITA HARGA, bukan potongan persen pada jumlah saat ini — lihat
-  // `withdrawFloors`. Cara lama gagal di rentang sempit untuk gerak harga sewajarnya
-  // (0,2% sudah cukup), dan v4 pernah kena persis itu sampai close gagal berulang.
+  // The floor comes from a PRICE BAND rather than a percentage off the current
+  // amounts — see `withdrawFloors`. The old way failed in narrow ranges on entirely
+  // ordinary price movement (0.2% was enough), and v4 hit exactly that until closes
+  // failed over and over.
   for (let i = 0; i < 3; i++) {
     try {
       const exp = await expectedBurnAmounts(tokenId, liquidity, ctx);
@@ -999,19 +1010,20 @@ async function withdrawMins(
     }
   }
   try {
-    // Cadangan: PM sendiri yang memberi jumlahnya. Tanpa tick posisi, pita harga tak
-    // bisa dihitung di sini — jadi potongan persen dipakai, dan sengaja LEBIH LONGGAR
-    // (2%) supaya jalur cadangan tidak menggagalkan penarikan seperti dulu. Ia cuma
-    // dipakai saat pembacaan pool gagal tiga kali berturut-turut.
+    // Fallback: let the PM itself supply the amounts. Without the position's ticks a
+    // price band cannot be computed here, so a percentage is used — and deliberately
+    // a LOOSER one (2%), so the fallback path does not fail withdrawals the way the
+    // old floor did. It only runs when the pool read has failed three times running.
     const [a0, a1] = await positionManager.decreaseLiquidity.staticCall({ tokenId, liquidity, amount0Min: 0n, amount1Min: 0n, deadline });
     const longgar = (v: bigint) => (BigInt(v) * (10_000n - WITHDRAW_FALLBACK_BPS)) / 10_000n;
     console.log(`[withdraw] harga pool tak terbaca, pakai lantai longgar dari staticCall (#${tokenId})`);
     return { amount0Min: longgar(a0), amount1Min: longgar(a1), unprotected: false };
   } catch {
-    // Benar-benar tak bisa hitung → jangan blokir penarikan (dana user > risiko MEV).
-    // Ini SATU-SATUNYA jalur yang menarik tanpa lantai harga. Dulu hanya masuk log
-    // server, jadi user menutup posisi tanpa pernah tahu ronde itu tak terlindungi.
-    // `unprotected` dibawa ke atas supaya muncul di kartu hasil close.
+    // Genuinely uncomputable: do not block the withdrawal (the user's funds outrank
+    // the MEV risk). This is the ONLY path that withdraws without a price floor. It
+    // used to go to the server log alone, so positions were closed without anyone
+    // knowing that round was unprotected. `unprotected` is carried up so it lands on
+    // the close card.
     console.log(`[withdraw] ⚠️ lantai slippage TAK tersedia (#${tokenId}) — tarik tanpa proteksi harga`);
     return { amount0Min: 0n, amount1Min: 0n, unprotected: true };
   }
@@ -1028,7 +1040,7 @@ export async function removeLiquidityPct(
   const liquidity: bigint = BigInt(p.liquidity);
   if (liquidity === 0n) throw new Error('position has no liquidity to withdraw');
 
-  // Pembagian bilangan bulat: sisa pembagian tertinggal di pool (bukan hilang).
+  // Integer division: the remainder stays in the pool, it is not lost.
   const part = (liquidity * BigInt(Math.round(pct))) / 100n;
   if (part === 0n) throw new Error('withdraw amount rounds to 0 — use 100% instead');
 
@@ -1054,8 +1066,9 @@ export async function removeLiquidityPct(
   };
 }
 
-/** Tarik SELURUH likuiditas, kumpulkan token, lalu burn NFT-nya.
- *  Menangani posisi kosong (likuiditas 0): skip decrease, langsung collect+burn. */
+/** Withdraw ALL liquidity, collect the tokens, then burn the NFT.
+ *  Handles an empty position (zero liquidity): skip the decrease, go straight to
+ *  collect and burn. */
 export async function executeRemove(
   tokenId: string,
   ctx: ChainCtx = getChain(),
@@ -1103,20 +1116,20 @@ export type PoolOption = {
   baseReserve: bigint; // base tersimpan di pool (proksi kedalaman likuiditas)
 };
 
-/** Pool base/token di seluruh fee tier, urut kedalaman (base reserve) terbesar. */
+/** base/token pools across every fee tier, deepest (by base reserve) first. */
 async function poolsForBase(
   tokenAddress: string,
   base: BaseAsset,
   ctx: ChainCtx,
 ): Promise<PoolOption[]> {
   const baseC = base.wrappable ? ctx.weth : new ethers.Contract(base.address, ERC20_ABI, ctx.provider);
-  // Semua fee tier diperiksa serentak (round-trip RPC diparalel + auto-batch ethers).
+  // Every fee tier checked at once (RPC round-trips run in parallel, plus ethers auto-batching).
   const perFee = await Promise.all(
     ctx.feeTiers.map(async (fee): Promise<PoolOption | null> => {
       const poolAddress: string = await ctx.factory.getPool(base.address, tokenAddress, fee);
       if (!poolAddress || poolAddress === ethers.ZeroAddress) return null;
-      // Dulu ikut memanggil priceInfo (= loadPool penuh) per fee tier hanya untuk
-      // mengisi field yang tak pernah dibaca siapa pun: ~55 RPC terbuang tiap discovery.
+      // This used to call priceInfo (a full loadPool) per fee tier just to fill
+      // fields nobody ever read: ~55 RPCs wasted on every discovery.
       const baseReserve: bigint = await baseC.balanceOf(poolAddress);
       return {
         fee,
@@ -1133,7 +1146,7 @@ async function poolsForBase(
   return out;
 }
 
-/** Pool WETH/token — dipakai jalur uang (swap fallback & valuasi USD holdings). */
+/** The WETH/token pool — used on money paths (swap fallback, USD holdings valuation). */
 export async function discoverPools(
   tokenAddress: string,
   ctx: ChainCtx = getChain(),
@@ -1141,7 +1154,7 @@ export async function discoverPools(
   return poolsForBase(tokenAddress, baseOf(ctx, 'weth'), ctx);
 }
 
-/** Pool untuk SEMUA base (WETH + USDG bila tersedia) — dipakai wizard /add. */
+/** Pools for EVERY base (WETH plus USDG when available) — used by the /add wizard. */
 export async function discoverAllPools(
   tokenAddress: string,
   ctx: ChainCtx = getChain(),
@@ -1151,7 +1164,7 @@ export async function discoverAllPools(
 }
 
 
-/** Info harga & sisi base untuk sebuah pool. */
+/** Price and base-side info for a pool. */
 export async function priceInfo(tokenAddress: string, fee: number, base: BaseAsset, ctx: ChainCtx = getChain()) {
   const st = await loadPool(tokenAddress, fee, base, ctx);
   const priceTokenInBase = st.sdkPool.priceOf(st.tokenOther).toSignificant(6);
@@ -1189,8 +1202,9 @@ export type PositionDetail = {
   tickUpper: number;
 };
 
-/** Hitung nilai pokok + fee belum diklaim sebuah posisi, dalam base-nya (auto-deteksi
- *  WETH/USDG dari token pool). Posisi lama (token pasangan = WETH) → base = WETH. */
+/** A position's principal plus unclaimed fees, in its own base (WETH/USDG detected
+ *  automatically from the pool's tokens). An older position paired with WETH gets
+ *  base = WETH. */
 export async function getPositionDetail(
   tokenId: string,
   ctx: ChainCtx = getChain(),
@@ -1226,7 +1240,7 @@ export async function getPositionDetail(
   const tokenOther = baseIsToken0 ? sdkToken1 : sdkToken0;
   const priceOther = sdkPool.priceOf(tokenOther);
 
-  // Nilai pokok dalam base.
+  // Principal value in base terms.
   const amt0 = position.amount0;
   const amt1 = position.amount1;
   const baseAmt = baseIsToken0 ? amt0 : amt1;
@@ -1235,7 +1249,7 @@ export async function getPositionDetail(
   const otherAmountWei = BigInt(otherAmt.quotient.toString());
   const valueBaseWei = baseAmountWei + BigInt(priceOther.quote(otherAmt).quotient.toString());
 
-  // Fee belum diklaim: collect.staticCall memicu update fee lalu mengembalikan jumlahnya.
+  // Unclaimed fees: collect.staticCall triggers a fee update and returns the amounts.
   let feesBaseWei = 0n;
   try {
     const owed = await positionManager.collect.staticCall({
@@ -1252,10 +1266,10 @@ export async function getPositionDetail(
       feesBaseWei += BigInt(priceOther.quote(oa).quotient.toString());
     }
   } catch {
-    /* biarkan fee 0 kalau simulasi gagal */
+    /* leave fees at 0 when the simulation fails */
   }
 
-  // Arah dalam istilah HARGA TOKEN: tergantung sisi base di pool.
+  // Direction in TOKEN PRICE terms, which depends on which side the base sits on.
   const inR = currentTick >= tickLower && currentTick < tickUpper;
   let side: 'above' | 'in' | 'below' = 'in';
   if (!inR) {
@@ -1274,7 +1288,7 @@ export async function getPositionDetail(
     baseSymbol: base.symbol,
     baseDecimals: base.decimals,
     currentPrice: priceOther.toSignificant(8),
-    // Batas rentang dalam harga token (kartu /positions menampilkan target range).
+    // Range bounds in token price (the /positions card shows the target range).
     priceLower: tickToPrice(tokenOther, baseIsToken0 ? sdkToken0 : sdkToken1, tickLower).toSignificant(6),
     priceUpper: tickToPrice(tokenOther, baseIsToken0 ? sdkToken0 : sdkToken1, tickUpper).toSignificant(6),
     valueBaseWei,
