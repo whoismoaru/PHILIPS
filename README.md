@@ -1,7 +1,5 @@
 # PHILIPS
 
-![A closed position, as the bot reports it](assets/pnl-card.jpg)
-
 **A Telegram bot that opens single-sided liquidity positions for you.**
 
 You deposit one token. The position sits there like a limit order, earning trading
