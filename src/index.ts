@@ -43,7 +43,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
+import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnerOf, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import * as pctPresets from './pctPresets.js';
 import { screenToken, formatScreen, bustScreenCache, getEthUsd, getTokenEthPrice } from './screening.js';
@@ -4529,9 +4529,27 @@ async function stopAndCashOut(
 
 // ── Close a Uniswap v4 position (read-only for viewing; closing is supported) ──
 // Refresh a single v4 card (replacing the removed ➕ button).
+/**
+ * The chain a v4 tokenId actually lives on.
+ *
+ * v4 ids are per-chain, so reaching for getChain() means asking the DEFAULT chain about
+ * someone else's id — Robinhood's PositionManager answers NOT_MINTED for a BSC position
+ * and the close reports a revert for a position that was never touched. The local record
+ * answers instantly; an untracked position is found by asking each v4 chain who owns it.
+ */
+async function v4ChainOf(tokenId: string): Promise<ReturnType<typeof getChain> | undefined> {
+  const tracked = v4store.getV4(tokenId);
+  if (tracked?.chain && CHAINS[tracked.chain]) return getChain(tracked.chain);
+  for (const c of Object.values(CHAINS).filter((x) => v4Supported(x))) {
+    const owner = await v4OwnerOf(c, tokenId).catch(() => null);
+    if (owner && owner.toLowerCase() === c.wallet.address.toLowerCase()) return c;
+  }
+  return undefined;
+}
+
 bot.action(/^posv4:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
-  const cc = getChain();
+  const cc = (await v4ChainOf(ctx.match[1])) ?? getChain();
   try {
     const list = await listPositionsV4(cc);
     const p = list.find((x) => x.tokenId === ctx.match[1]);
@@ -4568,8 +4586,11 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
   const key = `v4:${tokenId}`;
   if (closeLocked(key)) return ctx.answerCbQuery('Processing…');
   closingInFlight.set(key, Date.now());
-  const cc = getChain();
-  const tracked = v4store.getV4(tokenId); // tangkap SEBELUM removeV4
+  // The POSITION's chain, never the default one. With getChain() a BSC position was
+  // closed against Robinhood's PositionManager, which answers NOT_MINTED — reported as a
+  // failed close for a position that had not been touched at all.
+  const cc = (await v4ChainOf(tokenId)) ?? getChain();
+  const tracked = v4store.getV4(tokenId); // captured BEFORE removeV4
   // The base is read from the poolKey BEFORE the close (after the burn, pool info is gone).
   const trackedBase = await getPoolKeyV4(cc, tokenId)
     .then((x) => v4Kind(cc, x.base))

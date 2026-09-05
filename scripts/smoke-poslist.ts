@@ -41,4 +41,14 @@ for (const [nama, pola] of [
 ] as const)
   assert.match(src, pola, `${nama} tak lagi menyapu semua chain v4`);
 
-console.log('ok — v4 terbaca lintas chain di /positions & /portfolio');
+// Every path that acts on a single v4 tokenId must resolve the POSITION's chain. Using
+// getChain() there asks the default chain about another chain's id: ownerOf reverts
+// NOT_MINTED and a close reports failure for a position it never touched.
+for (const [nama, pola] of [
+  ['close v4', /closev4go:\(\\d\+\)\$\/[\s\S]{0,900}?v4ChainOf\(tokenId\)/],
+  ['refresh kartu v4', /posv4:\(\\d\+\)\$\/[\s\S]{0,200}?v4ChainOf\(ctx\.match\[1\]\)/],
+  ['detail v4', /Object\.values\(CHAINS\)\.filter\(\(x\) => v4Supported\(x\)\)/],
+] as const)
+  assert.match(src, pola, `${nama} tak lagi menyelesaikan chain posisinya sendiri`);
+
+console.log('ok — v4 terbaca lintas chain di /positions, /portfolio, detail, refresh & close');
