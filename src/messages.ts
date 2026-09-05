@@ -1072,15 +1072,15 @@ export function msgError(where: string, err: unknown): string {
   // owner opens a second position with the same capital.
   const landed = typeof err === 'object' && err !== null && (err as { landed?: boolean }).landed === true;
   // An ethers revert is a multi-line block (reason/code/transaction) that buries the
-  // line that matters.
-  // "lakukan ini". Ambil baris pertama saja; detail lengkap tetap ada di log service.
-  // Pemanggil boleh mengirim string ATAU objek Error (perlu utk `landed`).
-  // `String(err)` pada Error menghasilkan "Error: pesan" — awalannya dibuang.
+  // "do this" line. Take the first line only; the full detail stays in the service log.
+  // Callers may pass a string OR an Error object (the latter is needed for `landed`).
+  // `String(err)` on an Error yields "Error: message", so the prefix is stripped.
   const raw = err instanceof Error ? err.message : String(err);
   const first = raw.split('\n')[0].trim().slice(0, 200) || 'unknown error';
-  // Kartu berjanji "details are in the service log" — dan janji itu dulu BOHONG:
-  // 156 dari 177 catch tak menulis apa pun, jadi bagian yang dipotong hilang total
-  // dan error tak bisa diaudit sesudahnya. Satu baris di sini menutup ke-42 pemanggil.
+  // The card promises "details are in the service log" — and that promise used to be
+  // a LIE: 156 of 177 catch blocks wrote nothing, so the truncated part vanished
+  // entirely and errors could not be audited afterwards. One line here covers all 42
+  // callers.
   console.error(`[error:${where}] ${raw.replace(/\s+/g, ' ').slice(0, 500)}`);
   return [
     hdr('❌ TRANSACTION ERROR'),
@@ -1128,8 +1128,8 @@ export function msgPositionCard(opts: {
   feeIsTickSpacing?: boolean; // Velodrome Slipstream: `fee` = tickSpacing (fee-nya dinamis)
   ladder?: {
     legIndex: number; legCount: number; shape: string; groupInvest?: string;
-    // Ringkasan SELURUH ladder — inti fitur bid-ask. Tanpa ini kartu leg cuma
-    // memperlihatkan satu anak tangga padahal yang disetor user adalah ladder.
+    // A summary of the WHOLE ladder, which is the point of the bid-ask feature.
+    // Without it a leg card shows a single rung when what the user deposited was a ladder.
     ladderValue?: string; ladderFees?: string; ladderMcRange?: string; ladderPnl?: string;
     sharePct?: number; legValue?: string; legFees?: string;
     filled?: number; active?: number; waiting?: number; unread?: number;
@@ -1138,8 +1138,8 @@ export function msgPositionCard(opts: {
   const base = esc(opts.baseSymbol ?? 'WETH');
   const sym = esc(opts.symbol);
   const tokenSide = opts.side === 'token';
-  // Status HANYA di barisnya sendiri, tidak juga di judul: satu fakta satu tempat,
-  // jadi tak ada peluang keduanya berbeda saat ada perubahan.
+  // The status appears ONLY on its own line, not in the title too: one fact in one
+  // place, so there is no chance of the two disagreeing after a change.
   const status = opts.inRange
     ? bold('IN RANGE')
     : opts.converted
@@ -1149,8 +1149,8 @@ export function msgPositionCard(opts: {
   const investUnit = tokenSide ? sym : base;
   const range = esc(opts.range);
 
-  // Kalimat penutup menjelaskan APA yang sedang terjadi pada uangnya — beda
-  // untuk tiap status & sisi, jadi jangan disatukan jadi satu kalimat generik.
+  // The closing sentence explains WHAT is happening to the money, and that differs by
+  // status and by side — so do not collapse it into one generic sentence.
   const isLeg = opts.ladder && opts.ladder.legCount > 1;
   const explain = opts.converted && isLeg
     ? `This rung has done its job: leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount} is now ${bold(`100% ${tokenSide ? (opts.baseSymbol ?? 'WETH') : opts.symbol}`)}. The remaining rungs are still waiting further down.`
@@ -1167,9 +1167,9 @@ export function msgPositionCard(opts: {
     '',
     `🔗 ${bold('Pair:')} ${base} / ${sym} ${italic(opts.feeIsTickSpacing ? `(ts ${opts.fee} · dynamic fee)` : `(${feeLabel(opts.fee)} Fee)`)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
     `🎯 ${bold('Strategy:')} ${strategy}${isLeg ? ` · ${bold(`◣ ${opts.ladder!.shape === 'bidask' ? 'Bid-Ask' : 'Spot'} ladder`)}` : ''}`,
-    // ── Blok LADDER dulu (yang disetor user adalah ladder), baru blok leg. ──
-    // Bentuknya disamakan dengan kartu v4 supaya posisi bid-ask terbaca sama di
-    // kedua protokol: dulu v3 memampatkan ladder & leg jadi satu daftar campur.
+    // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
+    // Shaped to match the v4 card so a bid-ask position reads the same across both
+    // protocols: v3 used to compress ladder and leg into one mixed list.
     ...(isLeg
       ? [
           '',
@@ -1200,20 +1200,20 @@ export function msgPositionCard(opts: {
         ]
       : [`💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`]),
     `${tokenSide ? '📈' : '📉'} ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${range} ${italic('from current price')}`,
-    // "now" cukup sekali, di baris Ladder Range.
+    // "now" only needs saying once, on the Ladder Range line.
     ...(opts.mcRange ? [italic(`↳ market cap ${esc(isLeg ? opts.mcRange.replace(/ · now .*$/, '') : opts.mcRange)}`)] : []),
     `📈 ${bold(isLeg ? 'Leg PnL:' : 'Current PnL:')} ${esc(opts.pnlText)}`,
     `${opts.inRange ? '🟢' : opts.converted && isLeg ? '🟡' : '🔴'} ${bold('Status:')} ${
       opts.converted && isLeg ? `${bold('LEG FILLED')} — bought, ladder still running` : status
     }`,
     '',
-    // explain sudah berisi tag <b> & teks ter-escape → JANGAN lewat italic()
-    // (yang meng-escape lagi dan menampilkan "&lt;b&gt;" mentah ke user).
+    // explain already contains <b> tags and escaped text, so do NOT run it through
+    // italic() (which escapes again and shows the user a raw "&lt;b&gt;").
     `<i>${explain}</i>`,
     '',
     `⏱️ <i>Age ${esc(opts.age)} · updated ${nowWib()}</i>`,
-    // Baris LIVE dibuang: waktunya sudah di baris atas dan "LIVE" tak menambah
-    // keputusan apa pun. DRY RUN tetap disebut — itu mengubah arti seluruh kartu.
+    // The LIVE line was dropped: the time is already on the line above and "LIVE"
+    // supports no decision. DRY RUN is still named — that changes what the whole card means.
     ...(opts.dryRun ? ['', modeLabel(true)] : []),
   ].join('\n');
 }
@@ -1271,7 +1271,7 @@ export function msgPositionDetail(opts: {
   ].join('\n');
 }
 
-/** Daftar posisi konsolidasi: ringkasan + pohon per-posisi (satu pesan). */
+/** Consolidated position list: a summary plus a per-position tree, in one message. */
 export function msgPositionsList(opts: {
   dryRun: boolean;
   activeCount: number;
@@ -1301,21 +1301,21 @@ export function msgPositionsList(opts: {
   const MAX_ROWS = 12;
   const shown = opts.rows.slice(0, MAX_ROWS);
   const blocks = shown.map((r) => {
-    // Sisi ditulis dari sudut pandang aset yang DISETOR: "ETH Side" = setor base.
+    // The side is written from the perspective of the asset DEPOSITED: "ETH Side" means the base went in.
     const tokenSide = r.strategy === 'token';
-    // Simbolnya IKUT posisi: "ETH Side" pada posisi USDT menyebut aset yang tak
-    // pernah disetor. Tanpa data → 'Base Side', bukan menebak ETH.
+    // The symbol FOLLOWS the position: "ETH Side" on a USDT position names an asset
+    // that was never deposited. With no data it reads 'Base Side' rather than guessing ETH.
     const side = tokenSide ? 'Token Side (Sell the rip)' : `${r.baseSymbol ?? 'Base'} Side (Buy the dip)`;
-    // Tiga keadaan, bukan dua: belum sampai rentang, sedang di dalam rentang, dan
-    // sudah menembus SELURUH rentang (modal 100% jadi aset seberang, berhenti panen
-    // fee). Tanpa yang ketiga, posisi yang belinya sudah SELESAI terbaca sama persis
-    // dengan yang belum mulai sama sekali.
+    // Three states, not two: not yet reached the range, inside the range, and already
+    // through the WHOLE range (capital fully converted to the other asset, no longer
+    // earning fees). Without the third, a position whose buy is FINISHED reads exactly
+    // like one that has not started.
     const status = r.inRange
       ? bold('Active (In Range)')
       : r.converted
         ? `${bold('Fully Converted (Out of Range)')} → ${esc(r.convertedInto ?? 'token')}`
         : bold('Waiting (Out of Range)');
-    // Persen saja, seperti naskah — angka dolarnya ada di kartu detail posisi.
+    // Percentages only, as briefed — the dollar figures live on the position detail card.
     const pnl = r.pnlPct === null ? `— ${italic('(entry unknown)')}` : fmtPct(r.pnlPct);
     return [
       `${r.inRange ? '🟢' : '🔴'} ${bold(`${r.pair}${r.protocol ? ` (${r.protocol})` : ''}`)}`,
@@ -1333,17 +1333,18 @@ export function msgPositionsList(opts: {
     '',
     blocks.join('\n\n'),
   ];
-  // Daftar v4 = catatan bot ∪ enumerasi indexer. Kalau indexer gagal, posisi yang
-  // TAK tercatat bot lenyap dari daftar tanpa jejak — dulu ini diam di log server.
+  // The v4 list is the bot's records combined with the indexer's enumeration. If the
+  // indexer fails, positions the bot did NOT record vanish without a trace — this used
+  // to be silent, server-log only.
   if (opts.listDegraded) {
     out.push('', `⚠️ ${italic('The indexer is lagging — positions opened outside the bot may be missing from this list.')}`);
   }
   if (opts.rows.length > MAX_ROWS)
     out.push('', note(`+${opts.rows.length - MAX_ROWS} more positions — close some to see them`));
-  // Catatan penutup mengikuti keadaan yang SEBENARNYA. Kalimat "liquidity is
-  // currently inactive" hanya benar bila semua posisi memang menunggu; menuliskannya
-  // saat ada posisi yang sedang panen fee (atau sudah terkonversi penuh) membuat
-  // kartu ini berbohong tentang hal yang justru dipakai user untuk memutuskan.
+  // The closing note follows what is ACTUALLY true. "Liquidity is currently inactive"
+  // only holds when every position really is waiting; printing it while one is earning
+  // fees (or has fully converted) makes this card lie about the very thing the user
+  // reads it to decide.
   const anyIn = shown.some((r) => r.inRange);
   const anyConverted = shown.some((r) => !r.inRange && r.converted);
   const anyWaiting = shown.some((r) => !r.inRange && !r.converted);
@@ -1372,7 +1373,7 @@ export function msgNoPositions(): string {
   );
 }
 
-/** Riwayat trade — satu tabel sejajar; jumlah di header = yang benar-benar tampil. */
+/** Trade history — one aligned table; the count in the header is what is actually shown. */
 export function msgJournal(
   items: Array<{
     tokenId: string;
@@ -1404,15 +1405,15 @@ export function msgJournal(
     r.reason === 'cashed' ? fmtPct(r.pnlPct) : '—',
     r.closedAt ? fmtAge(Date.now() - r.closedAt) : '—',
   ]);
-  // pnlEth entri USDG/USDT adalah DOLAR, dan entri BSC adalah BNB — menjumlahkan
-  // semuanya lalu menulis "ETH" menghasilkan angka yang salah 3–4 orde besaran.
-  // Yang dijumlahkan hanya entri base-native; sisanya dihitung, tidak dicampur.
+  // pnlEth on a USDG/USDT entry is DOLLARS, and on a BSC entry it is BNB — summing
+  // them all and labelling it "ETH" produces a number wrong by 3-4 orders of
+  // magnitude. Only base-native entries are summed; the rest are counted, not mixed in.
   const cashed = items.filter((r) => r.reason === 'cashed');
   const sameBase = cashed.filter((r) => (r.baseKind ?? 'weth') === 'weth' && (r.chain ?? 'robinhood') === 'robinhood');
   const net = sameBase.reduce((a, r) => a + r.pnlEth, 0);
   const otherCount = cashed.length - sameBase.length;
-  // Tabel tetap monospace (kolom angka harus sejajar); status pakai emoji dinamis
-  // di baris ringkasan, bukan di dalam tabel — emoji merusak lebar kolom mono.
+  // The table stays monospace (number columns have to line up); status uses a dynamic
+  // emoji on the summary line rather than inside the table, where emoji break column width.
   const out = [
     `🧾 ${bold('Trade History')}`,
     '',
@@ -1441,14 +1442,14 @@ export function msgPoolStep(
   if (pools?.length) {
     out.push(`📊 ${bold('AVAILABLE POOLS :')}`);
     for (const p of pools) {
-      // Pasangan sengaja TIDAK diulang di sini: tombol pilihannya tepat di bawah
-      // dan sudah memuat `TOKEN / BASE (fee)`, jadi barisnya cuma menggandakan
-      // teks yang sama dan mendorong angka — yang sebenarnya membedakan pool —
-      // ke baris kedua. Urutan baris = urutan tombol.
+      // The pair is deliberately NOT repeated here: its button sits right below and
+      // already carries `TOKEN / BASE (fee)`, so the line would only duplicate the
+      // same text while pushing the numbers — the thing that actually distinguishes
+      // one pool from another — onto a second line. Row order matches button order.
       out.push(`- ${italic(`(${p.ver}, ${p.feeLabel} Fee)`)}`);
-      // 'fills≤' dipindah dari tombol ke sini: itu jarak harga sebelum posisi
-      // single-side MULAI terisi — angka yang menentukan pool mana yang benar-benar
-      // bekerja, dan tombol Telegram terlalu sempit untuk memuatnya.
+      // 'fills<=' moved here from the button: it is the price distance before a
+      // single-sided position STARTS filling — the number that decides which pool
+      // really works — and a Telegram button is too narrow to hold it.
       out.push(`  TVL: ${esc(p.tvl)} | Vol 24h: ${esc(p.vol ?? '?')} | APR: ${esc(p.apr)} | fills≤${esc(p.tight)}`);
     }
   } else {
@@ -1457,7 +1458,7 @@ export function msgPoolStep(
   return out.join('\n');
 }
 
-/** Langkah 2/5 — pilih sisi setoran. */
+/** Step 2/5 — choose the deposit side. */
 export function msgStrategyStep(pair: string, baseSym: string, tokenSym: string, price: string | null): string {
   return [
     bold('OPEN LP · Step [2/5] Select Strategy'),
@@ -1473,7 +1474,7 @@ export function msgStrategyStep(pair: string, baseSym: string, tokenSym: string,
     `🔵 ${bold('Token Side (Sell the Rip)')}`,
     `• You deposit ${bold(tokenSym)}. It converts to ${esc(baseSym)} and earns fees when the price ${bold('rises')} into your range.`,
     '',
-    // Syarat yang menentukan apakah tombol kedua bisa dipakai sama sekali.
+    // The condition that decides whether the second button is usable at all.
     note(`Token Side requires you to already hold ${tokenSym} — buy it with /buy first if you do not.`),
   ].join('\n');
 }
@@ -1482,9 +1483,9 @@ export function msgRangeStep(tokenSide = false): string {
   return [
     bold('OPEN LP · Step [4/5] Set Price Range'),
     '',
-    // Arah rentang menentukan seluruh arti langkah ini: sisi base menunggu harga
-    // TURUN jadi token, sisi token menunggu harga NAIK jadi base. Satu kalimat
-    // untuk keduanya pasti salah pada salah satunya.
+    // The range's direction defines what this whole step means: the base side waits
+    // for price to FALL into the token, the token side waits for it to RISE into base.
+    // One sentence covering both is guaranteed to be wrong about one of them.
     tokenSide
       ? 'A wider range means slower conversion back to the base asset, but a longer duration to earn trading fees.'
       : 'A wider range means slower conversion to the token, but a longer duration to earn trading fees.',
@@ -1538,8 +1539,8 @@ export function msgAmountStep(
     bold('OPEN LP · Step [3/5] Deposit Amount'),
     '',
     `💼 ${bold('Your Wallet :')}`,
-    // Saldo ikut ditampilkan: dulu user memilih buta lalu baru ditolak "KURANG"
-    // di kartu rencana (satu langkah + satu round-trip terbuang).
+    // The balance is shown too: users used to choose blind and only then be told
+    // "INSUFFICIENT" on the plan card, wasting a step and a round-trip.
     `• Balance -> ${bold(balanceLabel ?? '?')}`,
     `• Max Tx Limit -> ${bold(maxLabel)}`,
     '',
@@ -1577,8 +1578,8 @@ export function msgPlanStep(opts: {
   if (opts.screenDanger) body.push(`⚠️ ${bold('AUDIT: HIGH RISK')} — consider cancelling.`, '');
   else if (opts.screenFailed) body.push(`🟡 ${bold('AUDIT: FAILED')} — token could not be verified.`, '');
   const tokenSide = opts.side === 'token';
-  // tickLower/Upper itu urutan TICK; dalam satuan HARGA bisa terbalik tergantung
-  // sisi base di pool — urutkan menaik supaya "a - b" tak pernah tampil mundur.
+  // tickLower/Upper is TICK order; in PRICE terms it can be reversed depending on
+  // which side the base sits on — sort ascending so "a - b" never displays backwards.
   let bounds: string | null = null;
   if (opts.priceLower && opts.priceUpper) {
     const [lo, hi] =
@@ -1596,8 +1597,8 @@ export function msgPlanStep(opts: {
     ...(bounds ? [`• Estimated Bounds: ${esc(bounds)}`] : []),
     `• Market Price: 1 ${esc(opts.symbol)} = ${esc(opts.currentPrice)} ${esc(opts.baseSymbol)}`,
     `• Status: ${italic(`Out of Range (Will activate on price ${tokenSide ? 'rise' : 'drop'})`)}`,
-    // Angka gas & saldo TETAP ditampilkan: ini kartu terakhir sebelum uang bergerak,
-    // dan "pastikan ETH-mu cukup" tanpa angka bukan informasi yang bisa dipakai.
+    // Gas and balance figures STAY on this card: it is the last one before money
+    // moves, and "make sure you have enough ETH" without a number is not usable information.
     `• Est. Gas: ~${esc(opts.gasEth)} ETH`,
     `• Total Needed: ${esc(String(opts.needLabel))} ${italic(`(balance: ${String(opts.balanceLabel)})`)}`,
     '',
@@ -1644,8 +1645,8 @@ export function msgPlanStepV4(opts: {
     `• Depositing: ${bold(`${opts.depositAmount} ${opts.baseSymbol}`)}${opts.depositUsd != null ? ` ${italic(`(≈ $${opts.depositUsd.toFixed(2)})`)}` : ''}`,
     `• Target Range: ${fmtPct(opts.rangePctLow)} → ${fmtPct(opts.rangePctHigh)} from market price`,
     `• Status: ${italic('Out of Range (Will activate on price drop)')}`,
-    // Dry-run staticCall sudah dijalankan sebelum kartu ini dirender — sebut hasilnya,
-    // karena itu satu-satunya jaminan mint v4-nya tidak akan revert.
+    // The dry-run staticCall already ran before this card was rendered, so report its
+    // result — it is the only assurance the v4 mint will not revert.
     `• Simulation: ${italic('mint simulated successfully')}`,
     '',
     italic(
@@ -1657,7 +1658,7 @@ export function msgPlanStepV4(opts: {
   return body.join('\n');
 }
 
-/** Pool v4 dipilih tapi base-nya bukan ETH-native (belum didukung utk buka). */
+/** A v4 pool was picked but its base is not native ETH (not supported for opening yet). */
 export function msgV4BaseUnsupported(): string {
   return card(`ℹ️ ${title('V4 POOL USES WRAPPED WETH')}`, [
     note('this v4 pool pairs wrapped WETH (not native ETH) — not supported yet.'),
@@ -1724,12 +1725,12 @@ export function msgOpeningLp(): string {
 }
 
 /**
- * Kartu OPENED POSITION.
+ * The OPENED POSITION card.
  *
- * `notes` datang dari executeAdd berbentuk "Bungkus 0.06 ETH (tx 0x…)". Hash
- * dipisah ke barisnya sendiri di dalam <code> supaya bisa disentuh-copy di HP —
- * di tengah kalimat, hash 66 karakter mustahil diseleksi dengan jempol.
- * Catatan tanpa hash tetap tampil apa adanya (mis. peringatan retry).
+ * `notes` arrive from executeAdd shaped like "Wrap 0.06 ETH (tx 0x...)". The hash is
+ * split onto its own line inside <code> so it can be tap-copied on a phone — mid
+ * sentence, a 66-character hash is impossible to select with a thumb.
+ * Notes without a hash are shown as they are (a retry warning, say).
  */
 export function msgLpOpened(tokenId: string, notes: string[], pair?: string, rangeLabel?: string | null): string {
   const out = [
@@ -1741,8 +1742,8 @@ export function msgLpOpened(tokenId: string, notes: string[], pair?: string, ran
     `🔗 ${bold('Transaction Steps :')}`,
   ];
 
-  // Langkah + hash-nya rapat (tanpa baris kosong di antaranya); baris kosong hanya
-  // memisahkan judul dan footer.
+  // A step and its hash sit tight together (no blank line between); blank lines only
+  // separate the title and the footer.
   for (const n of notes) {
     const m = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
     out.push(`• ${esc(m ? m[1] : n)}:`);
@@ -1758,7 +1759,7 @@ export function msgLpOpened(tokenId: string, notes: string[], pair?: string, ran
   return out.join('\n');
 }
 
-// ─── dompet: /settings (connect & disconnect lewat tombol) ─────────
+// ─── wallet: /settings (connect and disconnect via buttons) ────────
 
 export function msgAlerts(a: { rangeNotify: boolean; dropPct: number | null; ilPct: number | null }): string {
   return [
@@ -1796,9 +1797,9 @@ export function msgConnectPrompt(): string {
     `1. PHILIPS will ${bold('NEVER')} ask for your seed phrase outside of this secure connection process.`,
     '2. Ensure you are in a private chat. Do not use this bot in group chats.',
     '3. Only connect a wallet with funds you are willing to risk in DeFi.',
-    // Dua fakta yang tak boleh hilang dari kartu ini: kunci melewati server Telegram
-    // (tak bisa ditarik kembali), dan di sisi kita ia terenkripsi. Keduanya mengubah
-    // keputusan "dompet mana yang saya pakai" — bukan sekadar basa-basi keamanan.
+    // Two facts that must not fall off this card: the key passes through Telegram's
+    // servers (and cannot be recalled), and on our side it is encrypted. Both change
+    // the "which wallet do I use here" decision — this is not security boilerplate.
     '4. Your message passes through Telegram servers. PHILIPS deletes it the moment it arrives, but anything already sent cannot be unsent.',
     '5. On this server the key is stored encrypted (keystore JSON, scrypt+AES) — never as plain text.',
     '',
@@ -1828,8 +1829,8 @@ export function msgConnected(addr: string): string {
     '',
     `🛡️ ${bold('Security Action :')}`,
     '• For your safety, the message containing your Private Key / Seed Phrase has been automatically deleted from this chat.',
-    // Enkripsi at-rest disebut karena kartu ini satu-satunya tempat user melihat
-    // ke mana kuncinya pergi; "linked" saja menyisakan tebakan tersimpan sebagai apa.
+    // Encryption at rest is named because this card is the only place the user sees
+    // where their key goes; "linked" alone leaves them guessing how it is stored.
     '• Your wallet is now securely linked to PHILIPS — the key is stored encrypted on this server.',
     '',
     note(nowWib()),
@@ -1874,8 +1875,8 @@ export function msgSettings(
       ? [`• Quick %: buy ${esc(pcts.buy.join('/'))} · sell ${esc(pcts.sell.join('/'))} · add ${esc(pcts.add.join('/'))} · withdraw ${esc(pcts.stop.join('/'))} · bridge ${esc(pcts.bridge.join('/'))} · send ${esc(pcts.send.join('/'))}`]
       : []),
     `• Gas Fee: Auto-fetched from L2${gasCeiling ? ` · ceiling ${esc(gasCeiling)}/tx` : ''}`,
-    // Angka slippage ditulis sesuai yang BENAR-BENAR dipakai kode: swap coba 5%
-    // dulu, naik ke 15% kalau tertolak; mint LP terpisah & jauh lebih ketat (0.5%).
+    // The slippage figures match what the code ACTUALLY uses: a swap tries 5% first
+    // and rises to 15% if rejected; an LP mint is separate and far tighter (0.5%).
     '• Swap Slippage: 5%, retried at 15% if rejected',
     '• LP Mint Slippage: 0.5%',
     '',
@@ -1914,7 +1915,7 @@ export function msgDisconnected(): string {
   ].join('\n');
 }
 
-// ─── /claim_fees & tarik sebagian ──────────────────────────────────────
+// ─── /claim_fees and partial withdrawals ───────────────────────────────
 
 export function msgNoFees(): string {
   return [
@@ -1964,8 +1965,8 @@ export function msgRemoveConfirm(id: string, symbol: string, pct: number, est: s
     `Estimated out: ${bold(est)} plus any unclaimed fees.`,
     '',
     `The position ${bold('stays open')} with the remaining ${100 - pct}% of its liquidity.`,
-    // Basis modal ikut diperkecil saat penarikan parsial — tanpa catatan ini, PnL
-    // yang mengecil setelahnya terbaca seperti kerugian mendadak.
+    // The cost basis shrinks along with a partial withdrawal — without this note, the
+    // smaller PnL afterwards reads like a sudden loss.
     note('your recorded cost basis is scaled down by the same share, so PnL stays comparable.'),
     '',
     note(dryRun ? 'DRY RUN — no transaction will be sent' : 'LIVE · confirming sends a transaction and costs gas'),
@@ -2058,9 +2059,8 @@ export function msgCashOut(opts: {
     `💰 ${bold('Received:')} ${bold(opts.ethOut)}`,
   ];
 
-  // Langkah yang BENAR-BENAR dijalankan, apa adanya dari executor. Hash-nya
-  // dipisah ke barisnya sendiri: di tengah kalimat, 66 karakter mustahil
-  // diseleksi dengan jempol.
+  // The steps that were ACTUALLY executed, straight from the executor. Each hash goes
+  // on its own line: mid sentence, 66 characters are impossible to select with a thumb.
   if (opts.notes.length) {
     out.push('', `📝 ${bold('Steps performed :')}`);
     for (const n of opts.notes) {
@@ -2070,7 +2070,7 @@ export function msgCashOut(opts: {
     }
   }
 
-  // Hash yang belum sempat tercantum di notes (mis. swap tanpa catatan).
+  // Hashes that did not make it into the notes (a swap with no note, say).
   const inNotes = opts.notes.join(' ');
   const extraTx = opts.txHashes.filter((h) => !inNotes.includes(h));
   if (extraTx.length) {
@@ -2078,9 +2078,9 @@ export function msgCashOut(opts: {
     for (const h of extraTx) out.push(code(h));
   }
 
-  // Kalimat penutup dulu SELALU berbunyi "unwrapped back into native ETH" —
-  // termasuk pada close yang hasilnya USDT/USDG, yang tak pernah di-unwrap dan
-  // bukan ETH. Kalimatnya kini mengikuti aset yang benar-benar diterima.
+  // The closing sentence used to ALWAYS read "unwrapped back into native ETH" —
+  // including on closes that returned USDT or USDG, which are never unwrapped and are
+  // not ETH. It now follows the asset actually received.
   const sym = opts.baseSymbol ?? 'ETH';
   const akhir = opts.native
     ? `The paired token was swapped and unwrapped back into ${bold(`native ${esc(sym)}`)}, now sitting safely in your wallet.`
@@ -2098,7 +2098,7 @@ export function msgCashOut(opts: {
 
 // ─── monitor ───────────────────────────────────────────────────────
 
-/** Masuk rentang: fee mulai mengalir. `tokenSide` membalik arah konversinya. */
+/** Entering range: fees start flowing. `tokenSide` flips the conversion's direction. */
 export function msgRangeEnter(
   tokenId: string,
   symbol: string,
@@ -2148,8 +2148,9 @@ export function msgRangeExit(
 }
 
 export function msgCrash(kind: string, err: string): string {
-  // Hanya baris pertama (pesan), BUKAN stack — hindari bocor internal/RPC & bikin
-  // panik. Reassure: restart otomatis, dana/posisi aman on-chain.
+  // The first line (the message) only, NOT the stack — that avoids leaking internals
+  // or RPC detail and causing panic. Reassure: it restarts automatically, and funds
+  // and positions are safe on-chain.
   const firstLine = String(err).split('\n')[0].trim().slice(0, 160) || 'unknown error';
   return card(
     `⚠️ ${title('BRIEF OUTAGE')}`,
@@ -2167,7 +2168,7 @@ export function msgInvalidAmount(): string {
   return card(title('INVALID'), [note('enter a valid amount, e.g. 0.02')]);
 }
 
-/** Sesi wizard/swap kedaluwarsa (ditinggalkan terlalu lama). */
+/** A wizard or swap session expired (left too long). */
 export function msgSessionExpired(): string {
   return card(`⌛ ${title('SESSION EXPIRED')}`, [note('the old session was closed — start again from the menu.')]);
 }
@@ -2176,13 +2177,13 @@ export function msgOverLimit(maxLabel: string): string {
   return card(title('LIMIT'), [note(`above the ${maxLabel} limit.`)]);
 }
 
-// ─── /unwrap — WETH nyangkut → ETH ─────────────────────────────────
+// ─── /unwrap — stuck WETH back to ETH ──────────────────────────────
 
-// wrapped/native ikut chain: WETH→ETH di Robinhood, WBNB→BNB di BSC.
+// The wrapped/native pair follows the chain: WETH->ETH on Robinhood, WBNB->BNB on BSC.
 export function msgUnwrapNone(dust: string, wrapped = 'WETH', native = 'ETH', chains?: string[]): string {
-  // Pemeriksaannya melintasi SEMUA chain, jadi kalimatnya harus menyebut itu —
-  // "No stuck WETH" saja terbaca seolah cuma chain aktif yang dilihat, dan user
-  // tak punya cara tahu WBNB di BSC sudah ikut diperiksa atau belum.
+  // The check spans EVERY chain, so the wording has to say so — "No stuck WETH" alone
+  // reads as though only the active chain was looked at, and the user has no way to
+  // know whether WBNB on BSC was covered.
   const scope = chains?.length ? `on any chain (${esc(chains.join(', '))})` : 'in your wallet';
   return [
     `🔄 ${bold(chains?.length ? 'Unwrap wrapped native → native' : `Unwrap ${wrapped} → ${native}`)}`,
@@ -2199,9 +2200,9 @@ export function msgUnwrapConfirm(
   dryRun: boolean,
   wrapped = 'WETH',
   native = 'ETH',
-  // Wrapped-native nyangkut bisa ada di BEBERAPA chain sekaligus (WETH di Base,
-  // WBNB di BSC, WHYPE di HyperEVM). Bila diisi, kartu menyebut satu per satu —
-  // dulu perintah ini cuma melihat chain yang sedang aktif.
+  // Stuck wrapped-native can sit on SEVERAL chains at once (WETH on Base, WBNB on
+  // BSC, WHYPE on HyperEVM). When populated, the card names them one by one — this
+  // command used to look only at the active chain.
   perChain?: Array<{ label: string; amount: string }>,
 ): string {
   const multi = perChain && perChain.length > 1;
@@ -2230,7 +2231,7 @@ export function msgUnwrapDone(amount: string, txHash: string | null, wrapped = '
   ].join('\n');
 }
 
-// ─── /bridge — pindah dana antar chain (Relay) ─────────────────────
+// ─── /bridge — move funds between chains (Relay) ───────────────────
 
 export function msgBridgePick(routes: Array<{ from: string; to: string }>): string {
   return [
@@ -2262,7 +2263,7 @@ export function msgBridgeAmount(fromLabel: string, toLabel: string, balanceLabel
     `💼 ${bold('Balance:')} ${bold(balanceLabel)}`,
     '',
     `Please type the amount of ${bold(symbol)} to bridge.`,
-    // Gas dibayar di chain ASAL: mengirim seluruh saldo membuat tx-nya sendiri gagal.
+    // Gas is paid on the SOURCE chain: sending the entire balance makes the tx itself fail.
     note('leave some for gas on the origin chain — sending your whole balance will fail.'),
   ].join('\n');
 }
@@ -2288,7 +2289,7 @@ export function msgBridgeConfirm(o: {
     ...(o.feeUsd !== null ? [`- Relayer Fee: ${usdPlain(o.feeUsd)}`] : []),
     ...(o.etaSec !== null ? [`- Estimated Time: ~${Math.max(1, Math.round(o.etaSec))}s`] : []),
     '',
-    // Quote di-refresh saat konfirmasi; angka di atas jadi lantai minimumnya.
+    // The quote is refreshed at confirmation; the figure above becomes its floor.
     italic(
       o.dryRun
         ? '*DRY RUN, no transaction will be sent.'
@@ -2334,7 +2335,7 @@ export function msgBridgeUnavailable(): string {
   ].join('\n');
 }
 
-// ─── /send: kirim ke alamat lain ────────────────────────────────────────────
+// ─── /send: transfer to another address ─────────────────────────────────────
 
 export function msgSendAskAddress(): string {
   return [
