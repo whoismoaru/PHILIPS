@@ -63,7 +63,29 @@ const EMPTY: GmgnExtra = {
 };
 
 const cache = new Map<string, { t: number; v: GmgnExtra }>();
-const TTL = 60_000;
+/**
+ * How long a GMGN answer is reused.
+ *
+ * This was 60s, which is far shorter than the data changes. Taxes, privileges, LP
+ * lock, top-10 share and holder tags move over hours, not minutes, so a one-minute
+ * TTL mostly bought re-fetches of identical numbers.
+ *
+ * That matters beyond speed: GMGN rate-limits per IP, and REXONA runs on this same
+ * box against the same key. Every avoidable call here is quota taken from its alert
+ * lane — measured, 45% of REXONA's rate-limit hits landed within 90s of activity on
+ * this bot. The audit card's Refresh button clears this cache explicitly (see
+ * `bustGmgnCache`), so a longer TTL never blocks a deliberate re-read.
+ */
+const TTL = 15 * 60_000;
+
+/** Drop one token's cached answer, so Refresh really re-reads. */
+export function bustGmgnCache(addr: string): void {
+  const a = addr.toLowerCase();
+  for (const k of [...cache.keys()]) if (k.toLowerCase().includes(a)) cache.delete(k);
+}
+
+/** Real (uncached) CLI calls made this process. Logged so the quota has a witness. */
+let calls = 0;
 
 function run(args: string[]): Promise<any | null> {
   if (!process.env.GMGN_API_KEY) return Promise.resolve(null);
@@ -140,10 +162,14 @@ export async function gmgnExtra(ca: string, chainKey: string): Promise<GmgnExtra
   if (hit && Date.now() - hit.t < TTL) return hit.v;
 
   const base = ['--chain', chain, '--address', addr];
-  const [sec, hold] = await Promise.all([
-    run(['token', 'security', ...base]),
-    run(['token', 'holders', ...base, '--limit', '100']),
-  ]);
+  // SEQUENTIAL, not Promise.all. These are two heavy endpoints, and firing them
+  // together is a burst against a leaky bucket that REXONA is already drawing from
+  // steadily. Back to back they cost the same quota but never spike, at the price of
+  // roughly half a second on a card the user is already waiting on.
+  const sec = await run(['token', 'security', ...base]);
+  const hold = await run(['token', 'holders', ...base, '--limit', '100']);
+  calls += 2;
+  console.log(`[gmgn] ${chain}/${addr.slice(0, 10)} security+holders · ${calls} calls this run`);
 
   const out: GmgnExtra = { ...EMPTY };
 
