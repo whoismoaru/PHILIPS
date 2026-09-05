@@ -1559,7 +1559,7 @@ async function cmdPositions(ctx: any, edit = false) {
 }
 bot.command('positions', (ctx) => cmdPositions(ctx, false));
 
-// Kembali dari daftar posisi → kartu menu, EDIT pesan yang sama (tak menumpuk bubble baru).
+// Back from the position list to the menu card, EDITING the same message (no new bubble).
 bot.action('positions_back', async (ctx) => {
   await ctx.answerCbQuery();
   const extra = { ...html, ...helpKeyboard() };
@@ -1570,7 +1570,7 @@ bot.action('positions_back', async (ctx) => {
   }
 });
 
-// Refresh daftar posisi (edit pesan yang sama).
+// Refresh the position list (edits the same message).
 bot.action('positions_refresh', async (ctx) => {
   await ctx.answerCbQuery('Refreshing…');
   try {
@@ -1581,7 +1581,7 @@ bot.action('positions_refresh', async (ctx) => {
   }
 });
 
-// Detail satu posisi (dari tombol #id di daftar) — kartu penuh v3 atau v4.
+// One position's detail (from an #id button in the list) — the full v3 or v4 card.
 bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
   const id = ctx.match[1];
   await ctx.answerCbQuery('Loading…');
@@ -1606,21 +1606,21 @@ bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
   }
 });
 
-// /history — riwayat trade tertutup, dari file jurnal khusus (tak muncul di /positions).
-// Tombol pool → wizard /add penuh (screening & preview tetap jalan).
+// /history — closed trades, from the dedicated journal file (never shown in /positions).
+// A pool button opens the full /add wizard (screening and preview still run).
 bot.action(/^x:([a-z0-9_-]+):(0x[0-9a-fA-F]{40})$/i, async (ctx: any) => {
   await ctx.answerCbQuery();
   resetFlows(ctx.from!.id);
   return continueAddlp(ctx, ctx.match[2], ctx.match[1], null);
 });
-// Bentuk lama tanpa chain — tombol di pesan yang sudah terkirim sebelum ini.
+// The old chainless shape, for buttons in messages already sent.
 bot.action(/^x:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   await ctx.answerCbQuery();
   resetFlows(ctx.from!.id);
   return continueAddlp(ctx, ctx.match[1], getChain().key, null);
 });
 
-/** Langkah 1 /add_lp tanpa CA — pair dari pool ber-APR teratas + opsi cari sendiri. */
+/** Step 1 of /add_lp with no CA: pairs from the top-APR pools, plus a search option. */
 async function pairPicker(ctx: any) {
   const prog = await ctx.reply(msg.msgProgress('loading top pools…'), html);
   const pools = await explore.fetchTopPools(getChain(), 5).catch(() => []);
@@ -1638,13 +1638,14 @@ bot.action('pair:custom', async (ctx) => {
   await ctx.editMessageText(msg.msgPairCustom(), html);
 });
 
-// /pools DIHAPUS sementara (permintaan pemilik). Modul src/explore.ts TETAP dipakai
-// wizard /add_lp (poolsForToken, fetchTopPools), jadi jangan ikut dibuang. Untuk
-// menghidupkan lagi: kembalikan cmdExplore + exploreKb + loadExplore, daftarkan
-// bot.command('pools') & action 'explore'/'explore:refresh', dan entri menu.
+// /pools is REMOVED for now (owner's request). The src/explore.ts module is STILL used
+// by the /add_lp wizard (poolsForToken, fetchTopPools), so do not remove it too. To
+// bring it back: restore cmdExplore + exploreKb + loadExplore, register
+// bot.command('pools') and the 'explore'/'explore:refresh' actions, and the menu entry.
 
-// Audit keamanan token: tempel CA telanjang di chat → startTokenHub. Command
-// /token_info dihapus — jalurnya sama persis, jadi cuma pintu kedua ke kartu yang sama.
+// Token security audit: paste a bare CA in the chat and it goes to startTokenHub. The
+// /token_info command was removed — identical path, so it was only a second door to the
+// same card.
 
 bot.action(/^detail:(\d+)$/, async (ctx) => {
   const rec = store.get(ctx.match[1]);
@@ -1670,41 +1671,40 @@ bot.action(/^back:card:(\d+)$/, async (ctx) => {
   }
 });
 
-// ---------- Fase 3: tulis (wizard /add bertahap) ----------
+// ---------- Phase 3: writes (the step-by-step /add wizard) ----------
 
-/** Keyboard pilih pool: pasangan (WETH/USDG) · fee · kedalaman. Callback bawa base. */
+/** Pool picker keyboard: pair (WETH/USDG) · fee · depth. The callback carries the base. */
 const POOL_PICK_MAX = 3; // TOP 3 by skor kedalaman (lihat poolSize) — sisanya tak ditawarkan
 
-// tickSpacing pool: v4 langsung; v3 dipetakan dari fee tier standar.
+// A pool's tickSpacing: direct on v4; mapped from the standard fee tier on v3.
 function poolSpacing(p: explore.TokenPool, cc: ChainCtx = getChain()): number {
   if (p.poolKey?.tickSpacing) return p.poolKey.tickSpacing;
   return cc.tickSpacing[p.fee] ?? 60;
 }
-// Seberapa dekat harga harus bergerak sebelum single-side MULAI terisi — tepi
-// range wajib kelipatan tickSpacing, worst-case ≈ 1 spacing. Makin kecil, makin cepat isi.
+// How close price has to move before a single-sided position STARTS filling. A range
+// edge must be a multiple of tickSpacing, so worst case is about one spacing. Smaller
+// spacing fills sooner.
 function fillTightnessPct(p: explore.TokenPool): number {
   return (Math.pow(1.0001, poolSpacing(p)) - 1) * 100;
 }
-// Pool teratas bisa punya spacing kasar (isi single-side lebih lambat) — karena itu
-// angka 'fills≤x%' tetap dicetak di kartunya supaya kompromi itu terlihat sebelum
-// ditekan.
+// A top pool can have coarse spacing (slower single-sided fill), which is why the
+// 'fills<=x%' figure is printed on its card: the trade-off is visible before you tap.
 //
-// Ambang kedalaman: pool di bawah ini tak layak jadi tempat menaruh modal, berapa
-// pun volumenya. Volume BUKAN pengganti kedalaman — ia gampang dipalsukan.
+// Depth threshold: a pool below this is not worth putting capital into, whatever its
+// volume. Volume is NOT a substitute for depth — it is easy to fake.
 export const MIN_POOL_TVL_USD = 1_000;
-// Bobot volume dalam peringkat. TVL & volume beda satuan (stok vs aliran) dan
-// volume 24 jam rutin 10–30× TVL, jadi menjumlahkannya mentah-mentah membuat
-// peringkat efektif = volume saja: pernah terjadi di produksi, pool TVL $429k
-// (vol $12,8M) mengalahkan pool TVL $654k (vol $6,7M). Untuk LP yang menentukan
-// risiko eksekusi & slippage adalah kedalaman, jadi TVL yang memimpin dan volume
-// hanya menambah nilai — bukan mengambil alih.
-// Bobot saja tak cukup: dengan volume rutin 30× TVL, bahkan 0,25× masih mengambil
-// alih peringkat. Kontribusi volume karena itu DIBATASI setinggi-tingginya sebesar
-// TVL pool itu sendiri — volume boleh menggandakan skor, tak boleh lebih. Efeknya:
-// pool yang lebih dalam tak akan pernah kalah oleh pool yang >2× lebih dangkal,
-// seberapa pun ramai volumenya (yang gampang dipalsukan).
+// Volume's weight in the ranking. TVL and volume are different units (a stock against a
+// flow) and 24h volume routinely runs 10-30x TVL, so adding them raw makes the ranking
+// effectively volume-only: it happened in production, where a $429k-TVL pool (with
+// $12.8M volume) beat a $654k-TVL pool (with $6.7M). For an LP it is depth that sets
+// execution risk and slippage, so TVL leads and volume only adds to the score rather
+// than taking it over.
+// Weighting alone is not enough: with volume routinely 30x TVL, even 0.25x still takes
+// over the ranking. Volume's contribution is therefore CAPPED at the pool's own TVL —
+// volume may double a score, never more. The effect: a deeper pool can never lose to one
+// more than 2x shallower, however busy its (easily faked) volume.
 const VOL_WEIGHT = 0.25;
-// Peringkat pool = kedalaman + bonus aktivitas fee (dibatasi). Seri → spacing halus.
+// Pool ranking = depth plus a capped fee-activity bonus. Ties go to finer spacing.
 const poolSize = (p: explore.TokenPool): number => {
   const tvl = p.tvlUsd;
   return tvl + Math.min(VOL_WEIGHT * (p.vol24hUsd ?? 0), tvl);
@@ -1718,7 +1718,7 @@ const tightLabel = (p: explore.TokenPool): string => {
   return `${t < 1 ? t.toFixed(1) : Math.round(t)}%`;
 };
 
-/** Ringkasan pool untuk kartu langkah 1 (maks POOL_PICK_MAX, urut TVL). */
+/** Pool summaries for the step-1 card (at most POOL_PICK_MAX, ordered by TVL). */
 const poolSummaries = (pools: explore.TokenPool[]) =>
   pools.slice(0, POOL_PICK_MAX).map((p) => ({
     pair: `${p.otherSymbol} / ${p.baseSymbol}`,
@@ -1726,7 +1726,7 @@ const poolSummaries = (pools: explore.TokenPool[]) =>
     feeLabel: msg.feeLabel(p.fee),
     tvl: msg.usdCompact(p.tvlUsd),
     vol: p.vol24hUsd != null && p.vol24hUsd > 0 ? msg.usdCompact(p.vol24hUsd) : '?',
-    // APR null = volume tak terbaca. '~0.0%' akan mengarang pool mati.
+    // A null APR means volume could not be read. '~0.0%' would invent a dead pool.
     apr: p.aprPct == null ? '?' : `~${p.aprPct >= 100 ? Math.round(p.aprPct) : p.aprPct.toFixed(1)}%`,
     tight: tightLabel(p),
   }));
@@ -1741,8 +1741,9 @@ function poolKeyboard(pools: explore.TokenPool[]) {
 }
 
 /**
- * Fallback discovery: gateway Uniswap down → pakai factory v3 on-chain (aman,
- * tetap bisa buka posisi). Petakan PoolOption v3 → TokenPool (TVL≈baseReserve USD).
+ * Discovery fallback: when the Uniswap gateway is down, use the on-chain v3 factory
+ * (safe, and positions can still be opened). Maps a v3 PoolOption to a TokenPool
+ * (TVL is approximated by baseReserve in USD).
  */
 async function discoverAllPoolsFallback(token: string, cc: ChainCtx): Promise<explore.TokenPool[]> {
   const [raw, eu, otherSymbol] = await Promise.all([
@@ -1759,7 +1760,7 @@ async function discoverAllPoolsFallback(token: string, cc: ChainCtx): Promise<ex
   return mapped;
 }
 
-/** Langkah 1/4 — pilih pool (pasangan + fee tier). */
+/** Step 1/4 — pick a pool (pair plus fee tier). */
 async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
   const text = msg.msgPoolStep(
     `$${flow.pools[0]?.otherSymbol ?? '?'} (${getChain(flow.chain).label})`,
@@ -1769,7 +1770,7 @@ async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-/** Langkah 2/5 — pilih sisi setoran (strategi). */
+/** Step 2/5 — pick the deposit side (the strategy). */
 async function renderStrategyStep(ctx: any, flow: AddFlow, edit: boolean) {
   const sel = flow.selected;
   const base = wizardBase(flow);
@@ -1790,7 +1791,7 @@ async function renderStrategyStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-/** Langkah 4/5 — pilih lebar rentang (%). */
+/** Step 4/5 — pick the range width (%). */
 async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
   const up = flow.strategy === 'token';
   const rows = RANGE_OPTIONS.map((o) => [
@@ -1805,19 +1806,19 @@ async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-/** Langkah 3/4 — pilih nominal ETH. */
-/** Base asset yang dipilih di wizard (weth/usdg/usdt). */
+/** Step 3/4 — pick the ETH amount. */
+/** The base asset chosen in the wizard (weth/usdg/usdt). */
 const wizardBase = (flow: AddFlow): BaseAsset => baseOf(getChain(flow.chain), flow.base ?? 'weth');
-/** ctx wizard = chain + venue pool yang DIPILIH (Uniswap v3 di BSC punya factory sendiri). */
+/** The wizard's ctx is the CHOSEN pool's chain and venue (Uniswap v3 on BSC has its own factory). */
 const wizardCtx = (flow: AddFlow): ChainCtx => venueCtx(getChain(flow.chain), flow.selected?.venue);
 
-/** Konteks nominal base-aware: preset (dari /size per-aset), simbol, batas, contoh. */
+/** Base-aware amount context: presets (from per-asset /size), symbol, limits, examples. */
 function amountCtx(flow: AddFlow) {
   const base = wizardBase(flow);
   const stable = isStableBase(base.kind);
-  // Sisi token: satuannya token itu sendiri, jadi angka tetap tak bermakna —
-  // MAX_ETH_PER_TX tak berlaku di sini. Tapi batasnya TETAP ADA: saldo token yang
-  // benar-benar dipegang, dibaca saat nominal diketik (lihat penegakan di bawah).
+  // Token side: the unit is the token itself, so a fixed figure would be meaningless —
+  // MAX_ETH_PER_TX does not apply here. But a limit STILL EXISTS: the token balance
+  // actually held, read when the amount is typed (see the enforcement below).
   if (flow.strategy === 'token') {
     return {
       symbol: flow.selected?.otherSymbol ?? 'TOKEN',
@@ -1826,8 +1827,8 @@ function amountCtx(flow: AddFlow) {
       example: '1000',
     };
   }
-  // Tiap denominasi punya batasnya sendiri: ETH/BNB pakai MAX_ETH_PER_TX,
-  // USDT/USDG pakai MAX_STABLE_PER_TX (satuan dolar, tak bisa disamakan).
+  // Each denomination has its own limit: ETH/BNB use MAX_ETH_PER_TX, USDT/USDG use
+  // MAX_STABLE_PER_TX (a dollar figure, and not interchangeable).
   const cap = stable ? maxStable : maxEth;
   return {
     symbol: base.symbol,
@@ -1838,14 +1839,14 @@ function amountCtx(flow: AddFlow) {
 }
 
 async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
-  // Nominal boleh diketik ATAU dipilih sebagai persentase saldo. Persentase
-  // dihitung dari saldo YANG BISA DIPAKAI, bukan saldo mentah — lihat usableFor().
+  // The amount can be typed OR picked as a percentage of the balance. The percentage is
+  // computed from the USABLE balance, not the raw one — see usableFor().
   flow.awaitingAmount = true;
   const a = amountCtx(flow);
   const rows: any[] = [];
   rows.push(...pctPresets.chunkButtons(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `amt:${p}`))));
   rows.push([Markup.button.callback('⬅️ Back', 'back:strategy')], [Markup.button.callback('❌ Cancel', 'cancel')]);
-  // Saldo (1 RPC, gagal → '?': jangan pernah memblokir langkah ini).
+  // Balance (1 RPC; on failure '?' — never block this step).
   const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
   const raw = await rawBalanceFor(flow).catch(() => null);
   const balLabel = raw === null ? '?' : `${msg.cleanUnits(raw, dec)} ${a.symbol}`;
@@ -1854,9 +1855,9 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-/** Persentase saldo yang ditawarkan di langkah nominal. */
+/** Balance percentages offered at the amount step. */
 
-/** Saldo mentah sisi yang sedang dipilih (token / native / stablecoin). */
+/** The raw balance of whichever side is being chosen (token / native / stablecoin). */
 async function rawBalanceFor(flow: AddFlow): Promise<bigint> {
   const cc = wizardCtx(flow);
   if (flow.strategy === 'token') {
@@ -1869,10 +1870,10 @@ async function rawBalanceFor(flow: AddFlow): Promise<bigint> {
 }
 
 /**
- * Saldo yang BENAR-BENAR bisa disetor. Untuk aset native, ongkos gas dipotong
- * lebih dulu: 90% dari saldo mentah akan menghabiskan gas, wrap berhasil lalu
- * mint gagal, dan dana terjebak sebagai WETH. Sisi token & stablecoin tak
- * membayar gas dari dirinya sendiri, jadi dipakai utuh.
+ * The balance that can ACTUALLY be deposited. For a native asset, gas is deducted
+ * first: 90% of the raw balance would consume the gas, the wrap would succeed, the mint
+ * would fail, and the money would be trapped as WETH. The token and stablecoin sides do
+ * not pay gas out of themselves, so they are used in full.
  */
 async function usableFor(flow: AddFlow): Promise<bigint> {
   const raw = await rawBalanceFor(flow);
@@ -1904,7 +1905,7 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
 
   let wei = (usable * BigInt(pct)) / 100n;
 
-  // Batas per-tx tetap berlaku pada tombol, persis seperti pada nominal ketikan.
+  // The per-tx limit still applies to the buttons, exactly as it does to a typed amount.
   const a = amountCtx(flow);
   const capWei = a.cap === Infinity ? null : ethers.parseUnits(String(a.cap), dec);
   if (capWei !== null && wei > capWei) wei = capWei;
@@ -1915,13 +1916,13 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
   await renderRangeStep(ctx, flow, false);
 });
 
-/** Langkah 4/4 — hitung & tampilkan rencana + konfirmasi. */
+/** Step 4/4 — compute and show the plan, then confirm. */
 async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   if (flow.selected?.protocol === 'v4') return renderPlanStepV4(ctx, flow, edit);
   const cc = wizardCtx(flow);
   const base = baseOf(cc, flow.base ?? 'weth');
   const isLadder = flow.strategy === 'base' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1;
-  // plan + estimasi biaya paralel (saling independen).
+  // The plan and the cost estimate run in parallel (they are independent).
   const tokenSide = flow.strategy === 'token';
   const [planSettled, costSettled] = await Promise.allSettled([
     tokenSide
@@ -1929,14 +1930,14 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
       : isLadder
         ? planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc).then((legs) => legs[0])
         : planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc),
-    // Sisi token tak menyetor base: yang perlu dicek cuma gas, bukan saldo base.
+    // The token side deposits no base, so only gas needs checking, not the base balance.
     estimateAddCost(cc, base, tokenSide ? '0' : flow.ethAmount!),
   ]);
   if (planSettled.status === 'rejected') throw planSettled.reason;
   const plan = planSettled.value;
   flow.plan = plan;
-  // Ladder: hitung SEMUA leg untuk preview & simpan buat confirm. pctHigh = leg
-  // terdekat, pctLow = leg terjauh → preview menampilkan rentang gabungan.
+  // Ladder: compute EVERY leg for the preview and keep them for the confirm. pctHigh is
+  // the nearest leg, pctLow the furthest, so the preview shows the combined range.
   let ladderNote: string | undefined;
   if (isLadder) {
     const legPlans = await planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc);
@@ -1992,21 +1993,21 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(fullText, extra) : ctx.reply(fullText, extra));
 }
 
-// Petakan lebar rentang (persen PENURUNAN harga token) → jumlah tick-spacing utk
-// posisi v4 single-sided. Ujung terjauh = harga turun tepat X% → faktor 1-X/100 →
-// widthTicks = |ln(1-X/100)|/ln(1.0001). Sama dgn widthInTicks v3 (konsisten).
-// Dibulatkan KELUAR (ceil) supaya rentang minimal menutup X% yang diminta.
+// Map a range width (a percentage FALL in token price) to a number of tick spacings for
+// a single-sided v4 position. The far edge is exactly X% down, so the factor is 1-X/100
+// and widthTicks = |ln(1-X/100)|/ln(1.0001) — the same as v3's widthInTicks, for
+// consistency. Rounded OUTWARD (ceil) so the range covers at least the X% requested.
 function rangePctToSpacings(pct: number, tickSpacing: number): number {
   const frac = Math.min(Math.max(pct, 0.1), 95) / 100;
   const widthTicks = Math.abs(Math.log(1 - frac)) / Math.log(1.0001);
   return Math.max(1, Math.ceil(widthTicks / tickSpacing));
 }
 
-/** Nominal base v4 dalam wei sesuai desimal base (ETH 18-dec / USDG 6-dec). */
+/** A v4 base amount in wei, at the base's own decimals (ETH 18, USDG 6). */
 const v4AmountWei = (flow: AddFlow): bigint =>
   ethers.parseUnits(flow.ethAmount!, wizardBase(flow).decimals);
 
-/** Langkah 4/4 versi v4 — dry-run staticCall utk validasi + preview rentang. */
+/** Step 4/4, the v4 version — a dry-run staticCall to validate, plus a range preview. */
 async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
   const cc = getChain(flow.chain);
   const pool = flow.selected!;
@@ -2017,7 +2018,7 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
   let rangePctLow: number;
   let ladderNote: string | undefined;
   if (isLadder) {
-    // Ladder v4: hitung leg (batch modifyLiquidities) untuk preview + simpan.
+    // A v4 ladder: compute the legs (a batched modifyLiquidities) for the preview and keep them.
     const legs = await planLadderV4(cc, pk, pool.baseIsCurrency0!, amountWei, flow.rangePct!, flow.legs!, 'bidask');
     flow.v4LadderLegs = legs;
     const total = legs.reduce((s, l) => s + l.baseAmountWei, 0n);
@@ -2063,8 +2064,8 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
 }
 
 /**
- * Lanjutan /add setelah chain diketahui: screening → pool → wizard.
- * `prog` = bubble progress yang di-edit (kurangi spam chat).
+ * The rest of /add once the chain is known: screening -> pool -> wizard.
+ * `prog` is the progress bubble being edited, to keep chat spam down.
  */
 async function continueAddlp(
   ctx: any,
@@ -2075,9 +2076,9 @@ async function continueAddlp(
 ) {
   const cc = getChain(chainKey);
 
-  // 1+2) Screening & pencarian pool saling independen → jalankan PARALEL
-  // (dulu serial: 4 HTTP + ~18 RPC, lalu GraphQL — worst case ~30 dtk sebelum kartu 1/4).
-  // Urutan tampilan dipertahankan: kartu SCREEN dulu, baru kartu 1/4.
+  // 1+2) Screening and pool discovery are independent, so they run in PARALLEL (they
+  // used to be serial: 4 HTTP calls plus ~18 RPCs, then GraphQL — worst case ~30s before
+  // card 1/4 appeared). The display order is preserved: the SCREEN card first, then 1/4.
   prog = await editProgress(
     ctx,
     prog,
@@ -2103,8 +2104,8 @@ async function continueAddlp(
     }
   }
 
-  // Item 20 — token ber-vonis BAHAYA: LP diblokir, bukan sekadar diperingatkan.
-  // Peringatan di langkah 4 gampang dilewati satu tap; di sini alurnya berhenti.
+  // Item 20 — a token judged DANGEROUS: LP is blocked, not merely flagged. A warning at
+  // step 4 is one tap away from being ignored; here the flow stops.
   if (screenBahaya) {
     await editProgress(ctx, prog, msg.msgHighRiskBlocked(bahayaReasons));
     return;
@@ -2117,9 +2118,9 @@ async function continueAddlp(
     console.log('[poolsForToken] gateway gagal, fallback v3 on-chain:', String(found.reason).slice(0, 120));
     gwPools = await discoverAllPoolsFallback(token, cc).catch(() => []);
   }
-  // Krystal = sumber pool yang lengkap (gateway sering melewatkan pool ETH/token
-  // ber-TVL besar & melaporkan TVL ngawur). poolKey-nya sudah DIVERIFIKASI on-chain
-  // (event Initialize), jadi tak perlu resolve ulang & fee-nya fee poolKey asli.
+  // Krystal is the complete pool source (the gateway often misses large-TVL ETH/token
+  // pools and reports nonsense TVL). Its poolKey is already VERIFIED on-chain (the
+  // Initialize event), so no re-resolution is needed and its fee is the real poolKey's.
   const kPools = krystalFound.status === 'fulfilled' ? krystalFound.value : [];
   if (krystalFound.status === 'rejected')
     console.log('[krystal] gagal:', String(krystalFound.reason).slice(0, 120));
@@ -2133,21 +2134,21 @@ async function continueAddlp(
         )
       : null;
   const kIds = new Set(kPools.map(poolIdOf).filter(Boolean) as string[]);
-  // v3 tak punya poolId; dedup-nya per (venue+base+fee) — satu token+DEX+base+fee =
-  // satu pool v3. Venue WAJIB ikut: Uniswap v3 & PancakeSwap v3 di BSC bisa punya
-  // base+fee sama tapi itu dua pool berbeda di dua factory berbeda.
+  // v3 has no poolId, so it is deduplicated per (venue+base+fee) — one token+DEX+base+fee
+  // is one v3 pool. The venue MUST be part of it: Uniswap v3 and PancakeSwap v3 on BSC can
+  // share a base and fee yet be two different pools in two different factories.
   const v3Key = (p: explore.TokenPool) => `v3:${p.venue ?? ''}:${p.base}:${p.fee}`;
   const kV3 = new Set(kPools.filter((p) => p.protocol === 'v3').map(v3Key));
 
-  // Gateway: v3 tetap disaring fee-tier standar; v4 poolKey-nya divalidasi/di-resolve
-  // on-chain (urutan currency & ETH-native sering salah). Pool yang sudah ada di
-  // Krystal (by poolId) dibuang di sini supaya tak dobel. TIDAK ada lagi cap fee:
-  // pool asli Robinhood justru ber-fee tinggi (5%+); yang membedakan asli vs jebakan
-  // adalah TVL/likuiditas, bukan fee.
+  // Gateway: v3 is still filtered to standard fee tiers, while a v4 poolKey is validated
+  // and resolved on-chain (currency order and native-ETH handling are often wrong). Pools
+  // already present from Krystal (by poolId) are dropped here to avoid duplicates. There
+  // is NO fee cap any more: genuine Robinhood pools tend to carry high fees (5%+), and
+  // what separates a real pool from a trap is TVL and liquidity, not the fee.
   const gwFixed = (
     await Promise.all(
       gwPools
-        // feeTiers diuji terhadap VENUE pool itu (Uniswap 3000 vs PancakeSwap 2500).
+        // feeTiers is tested against THAT pool's VENUE (Uniswap 3000 against PancakeSwap 2500).
         .filter((p) => (p.protocol === 'v4' ? true : venueCtx(cc, p.venue).feeTiers.includes(p.fee)))
         .map(async (p) => {
           if (p.protocol !== 'v4' || !p.poolKey) {
