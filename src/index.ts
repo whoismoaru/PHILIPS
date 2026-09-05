@@ -3029,8 +3029,8 @@ function buyBaseStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
-// Langkah 4: pilih size (preset /size aset terpilih + ketik nominal). Preview back → size.
-/**
+// Step 4: pick a size (the chosen asset's /size presets, or type an amount). Back from
+// the preview returns here.
 /**
  * The base balance that can ACTUALLY be spent in /buy.
  *
@@ -3038,7 +3038,6 @@ function buyBaseStep(ctx: any, flow: TSwapFlow, edit: boolean) {
  * raw balance would leave nothing for the transaction itself.
  * The gas reserve is deducted first, exactly as it is for the percentage buttons in the
  * /add wizard.
- */
  */
 async function buyUsableWei(flow: TSwapFlow): Promise<bigint> {
   const cc = CHAINS[flow.chainKey]!;
@@ -3101,9 +3100,9 @@ async function lpForToken(ca: string, cc: ChainCtx): Promise<{ v3: store.PosReco
 }
 
 /**
- * Render HUB TOKEN. Satu screening + satu baca saldo melayani 4 aksi.
-/** The exit buttons (Close LP / Sell) are only rendered when there is something to exit — */
- * tombol mati = tap sia-sia + afordans palsu.
+ * Render the TOKEN HUB. One screening plus one balance read serves all four actions.
+ * The exit buttons (Close LP / Sell) are only rendered when there is something to
+ * exit — a dead button is a wasted tap and a false affordance.
  */
 async function renderTokenHub(
   ctx: any,
@@ -3192,11 +3191,9 @@ async function renderTokenHub(
 }
 
 /**
-/**
  * A 4-button router from the hub into flows that ALREADY EXIST. No new money path:
  * screening is handed over (never re-scanned), and every confirmation and guard still
  * belongs to the original flow.
- */
  */
 bot.action(/^ca:refresh:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const ca = ethers.getAddress(ctx.match[1]);
@@ -3558,12 +3555,10 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
 const NATIVE_SELL_RESERVE = ethers.parseEther('0.0005');
 
 /**
-/**
  * The NATIVE balance (ETH/BNB) as a sell candidate into a stablecoin. It is recorded
  * under the wrapped-native address: the execution path wraps as needed before swapping,
  * and the receiving side falls to the stablecoin automatically (the same base the sold
  * token is dropped for).
- */
  */
 async function addNativeHolding(cc: ChainCtx, out: SellHolding[]): Promise<void> {
   if (!cc.hasWethBase) return;
