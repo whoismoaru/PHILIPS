@@ -21,10 +21,10 @@ assert.ok(/if \(r\.baseOutWei > 0n\) \{/.test(src), 'jalur ladder v4 tak menjaga
 const skips = src.split('Result could not be measured').length - 1;
 assert.ok(skips >= 3, `hanya ${skips} jalur yang menjelaskan kartu yang dilewati`);
 
-// Fee dipotret SEBELUM burn di kedua jalur ladder — sesudahnya angkanya lenyap.
+// Fees are snapshotted BEFORE the burn on both ladder paths — afterwards the figure is gone.
 assert.ok(
-  (src.split('Fee dibaca SEBELUM burn').length - 1) >= 3,
-  'ada jalur close yang membaca fee setelah burn (angkanya sudah melebur)',
+  (src.split('Fees are read BEFORE the burn').length - 1) >= 3,
+  'a close path reads fees after the burn (by then they have merged into the proceeds)',
 );
 
 console.log('OK — close cards: keempat jalur mengirim kartu PnL, hasil tak terukur dijelaskan.');
