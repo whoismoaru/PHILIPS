@@ -2,7 +2,7 @@ import { ethers } from 'ethers';
 import { bold, code, esc, italic, nowWib } from './messages.js';
 import { getChain, basesFor, type ChainCtx } from './chains.js';
 import { EXPLORER_HEADERS } from './chain.js';
-import { gmgnExtra, gmgnPrice, type GmgnExtra } from './gmgn.js';
+import { gmgnExtra, gmgnPrice, bustGmgnCache, type GmgnExtra } from './gmgn.js';
 import { insightxMetrics, type InsightXMetrics } from './insightx.js';
 import { goplusInfo, type GoPlusInfo } from './goplus.js';
 
@@ -143,6 +143,9 @@ const JSON_TTL = 60_000;
 export function bustScreenCache(addr: string): void {
   const a = addr.toLowerCase();
   for (const k of [..._jsonCache.keys()]) if (k.toLowerCase().includes(a)) _jsonCache.delete(k);
+  // The GMGN answer is cached separately and for far longer, so clearing only the
+  // HTTP cache would leave Refresh redrawing the same GMGN figures.
+  bustGmgnCache(a);
 }
 
 async function fetchJson(url: string): Promise<any | null> {
