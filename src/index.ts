@@ -764,10 +764,10 @@ async function buildPositionCard(
         if (legs.length < 2) return undefined;
         const dec = baseDecimalsOf(rec.chain, rec.baseKind);
         const groupWei = legs.reduce((s, l) => s + BigInt(l.initialWethWei || '0'), 0n);
-        // Ringkasan SELURUH ladder. Tanpa ini kartu memasang modal SEGRUP tepat di
-        // atas PnL yang cuma milik SATU leg: "+4.5%" terbaca terhadap 175 USDT
-        // (≈$7.9) padahal untungnya $0.22 — dua baris bersebelahan dengan penyebut
-        // berbeda. Sekarang kedua cakupan disebut terang-terangan.
+        // A summary of the WHOLE ladder. Without it the card puts the GROUP's capital
+        // directly above a PnL belonging to ONE leg: "+4.5%" reads against 175 USDT
+        // (~$7.9) when the actual gain is $0.22 — two adjacent lines with different
+        // denominators. Now both scopes are stated outright.
         const seen = await mapLimit(legs, POS_CARD_CONCURRENCY, async (l) => {
           try {
             const dd = await getPositionDetail(l.tokenId, cc);
@@ -793,8 +793,8 @@ async function buildPositionCard(
           const pct = inF > 0 ? ((valF - inF) / inF) * 100 : 0;
           ladderPnl = `${usd !== null ? msg.usdSigned(usd) : `${valF - inF >= 0 ? '+' : ''}${(valF - inF).toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`} (${msg.fmtPct(pct)})`;
         }
-        // Nilai & fee SELURUH ladder, plus rentang mcap dari ujung terluar semua leg
-        // — supaya kartu leg memakai bentuk yang sama dengan kartu v4.
+        // The value and fees of the WHOLE ladder, plus an mcap range spanning the
+        // outermost edges of every leg, so a leg card takes the same shape as a v4 card.
         const complete = ok.length === legs.length;
         const fmtBase = (n: number) => `${n.toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`;
         const ladderValue = complete
@@ -849,8 +849,8 @@ async function buildPositionCard(
     feeIsTickSpacing: cc.slipstream,
     ladder,
   });
-  // Tautan explorer menunjuk NFT posisinya (Blockscout: /token/<pm>/instance/<id>),
-  // bukan sekadar alamat dompet — itu yang benar-benar dimaksud "lihat posisi ini".
+  // The explorer link points at the position NFT (Blockscout: /token/<pm>/instance/<id>)
+  // rather than just the wallet address — that is what "view this position" really means.
   const explorer = cc.blockscout?.replace(/\/api\/v2\/?$/, '') ?? null;
   const rowTop = [
     Markup.button.callback('📄 Full Details', `detail:${rec.tokenId}`),
@@ -874,21 +874,21 @@ async function buildPositionCard(
   return { text, extra };
 }
 
-/** Kartu ringkas satu posisi + tombol Tutup/Detail. */
+/** A compact card for one position, with Close and Detail buttons. */
 async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean) {
   const { text, extra } = await buildPositionCard(rec);
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
 /**
- * Kartu detail posisi v4 yang BARU dibuka. Jalur v3 selalu mengirim dua keluaran
- * setelah sukses — "LP Created" lalu kartu posisinya — sementara v4 (tunggal &
- * ladder) berhenti di kartu pertama, jadi posisi v4 baru tak pernah langsung
- * memperlihatkan rentang, strategi, dan status range-nya.
+ * The detail card for a NEWLY opened v4 position. The v3 path always sends two things
+ * after success — "LP Created", then the position card — while v4 (single and ladder)
+ * stopped at the first, so a new v4 position never immediately showed its range,
+ * strategy or range status.
  *
- * Cache daftar v4 sudah di-invalidate pemanggil, jadi pembacaan di sini segar.
- * Gagal baca tak boleh menggagalkan open yang SUDAH sukses — posisinya nyata,
- * kartunya cuma tampilan: /positions tetap memperlihatkannya.
+ * The caller has already invalidated the v4 list cache, so the read here is fresh.
+ * A failed read must not fail an open that ALREADY succeeded — the position is real
+ * and this card is only a view: /positions will still show it.
  */
 async function replyV4Card(ctx: any, cc: ChainCtx, tokenId: string | null | undefined): Promise<void> {
   if (!tokenId) return;
@@ -904,7 +904,7 @@ async function replyV4Card(ctx: any, cc: ChainCtx, tokenId: string | null | unde
   }
 }
 
-/** Tampilan detail (komposisi, nilai, fee). */
+/** The detail view (composition, value, fees). */
 async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolean) {
   const cc = ctxOf(rec);
   const d = await getPositionDetail(rec.tokenId, cc);
@@ -944,23 +944,22 @@ async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolea
 }
 
 /**
- * Tutup posisi: tulis history ke JURNAL (file khusus), lalu keluarkan dari
- * store live. Pengecualian: bila masih ada token sisa yang gagal ter-swap
- * (`keep`), record ditahan sebagai STOPPED agar sweep di monitor bisa
- * memulihkannya. Dengan begitu /positions bersih (hanya live) & history ada di
- * /history.
+ * Close a position: write its history to the JOURNAL (a separate file), then remove it
+ * from the live store. The exception: when leftover tokens failed to swap (`keep`), the
+ * record is held as STOPPED so the monitor's sweep can recover them. That keeps
+ * /positions clean (live only) while the history lives in /history.
  */
 function finalizeClose(
   tokenId: string,
   opts: { resultEthWei?: bigint; reason: journal.JournalEntry['reason']; keep?: boolean; leftoverWei?: bigint; groupId?: string },
 ) {
-  // Posisi yang sedang ditutup jalur manual: hanya jalur itu ('cashed') yang boleh
-  // menjurnalkan — dia yang memegang angka hasil. Render/sync yang kebetulan
-  // melihat NFT sudah hilang ('gone') tak boleh mendahuluinya (PnL jadi 0 permanen).
+  // A position being closed through the manual path: only that path ('cashed') may
+  // journal it, because it holds the result figure. A render or sync that happens to
+  // see the NFT gone ('gone') must not get there first, or PnL is permanently 0.
   if (opts.reason !== 'cashed' && closingInFlight.has(tokenId)) return;
   const rec = store.get(tokenId);
-  // Jurnalkan sekali saja (saat transisi dari ACTIVE) — hindari duplikat bila
-  // tombol tutup ditekan ulang pada posisi yang sudah tertutup.
+  // Journal exactly once, on the transition out of ACTIVE, to avoid a duplicate when
+  // the close button is tapped again on an already-closed position.
   if (rec && rec.status === 'ACTIVE') journal.recordClose(rec, opts);
   if (opts.keep) {
     store.update(tokenId, {
@@ -975,42 +974,42 @@ function finalizeClose(
 }
 
 /**
- * Id posisi v4 milik kita yang lahir sejak `from` — dipakai memungut NFT yang
- * terlanjur ter-mint saat alur open gagal di tengah jalan. Mengembalikan daftar
- * id terurut (urutan mint = urutan leg).
+ * Ids of our v4 positions born since `from` — used to recover NFTs that did get minted
+ * while the open flow failed part-way through. Returns the ids in order (mint order is
+ * leg order).
  */
 async function adoptStrayV4(
   cc: ReturnType<typeof getChain>,
   from: bigint | null,
   legs = 8,
 ): Promise<string[]> {
-  // Pembacaan id DICOBA ULANG: 29 Agu 2026 RPC balas 503 tepat saat open ladder,
-  // sehingga `from` gagal dibaca DAN pemungutannya ikut menyerah — delapan posisi
-  // lahir di chain tanpa satu pun catatan, lalu lenyap dari /positions.
+  // The id read is RETRIED: on 29 Aug 2026 an RPC answered 503 at the exact moment a
+  // ladder was opening, so `from` could not be read AND the recovery gave up with it —
+  // eight positions were born on chain with no record at all, then vanished from /positions.
   let to: bigint | null = null;
   for (let i = 0; i < 3 && to === null; i++) {
     to = await v4NextTokenId(cc).catch(() => null);
     if (to === null) await sleep(700);
   }
   if (to === null) return [];
-  // Tanpa `from` (pembacaan awal gagal), mundur satu jendela dari id terkini.
-  // Lebih longgar dari jumlah leg karena wallet lain ikut memakai counter yang sama.
+  // Without `from` (the initial read failed), step back one window from the latest id.
+  // Wider than the leg count, because other wallets share the same counter.
   const window = BigInt(legs * 4 + 32);
   const start = from ?? (to > window ? to - window : 0n);
   const ids = await v4OwnedIdsInRange(cc, start, to, 160).catch(() => []);
-  // Yang SUDAH tercatat bukan "stray" — memungutnya lagi akan menyeret posisi
-  // grup lain ke dalam grup baru.
+  // Anything ALREADY recorded is not a "stray" — recovering it again would drag another
+  // group's positions into the new group.
   return ids.filter((id) => !v4store.getV4(id));
 }
 
-/** Kartu detail satu posisi v4 (nilai + range% + PnL bila dikelola bot) + tombol. */
+/** The detail card for one v4 position (value + range% + PnL when bot-managed), plus buttons. */
 /**
- * BaseKind untuk posisi v4 di chain ini. `'USDG'` di modul v4 berarti "base
- * stablecoin chain ini", bukan token USDG secara harfiah — di BSC itu USDT.
- * Memetakannya mati ke 'usdg' membuat desimal & simbolnya salah begitu v4
- * dinyalakan di chain lain.
+ * The BaseKind for a v4 position on this chain. `'USDG'` inside the v4 module means
+ * "this chain's stablecoin base", not the USDG token literally — on BSC it is USDT.
+ * Mapping it rigidly to 'usdg' gets the decimals and symbol wrong the moment v4 is
+ * enabled on another chain.
  */
-/** Alamat aset base v4 di chain ini — dipakai meminta quote sisi token. */
+/** The v4 base asset's address on this chain, used to quote the token side. */
 function baseAddrOf(cc: ChainCtx, base: 'ETH' | 'USDG' | null): string | null {
   if (base === 'ETH') return cc.wethAddress;
   if (base !== 'USDG') return null;
@@ -1028,8 +1027,8 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   const dec = v4BaseDecimals(cc, p.base);
   let valueLabel = '—';
   let feesLabel: string | undefined;
-  // Value = prinsipal + fee. Tanpa rincian, kartu bisa tampak "cuma -3.6%"
-  // padahal prinsipal -19% dan yang menambal adalah fee — sengaja dipisah.
+  // Value = principal + fees. Without the breakdown the card can look like "only -3.6%"
+  // when the principal is -19% and fees are covering the difference — split on purpose.
   if (p.feesBaseWei !== null && p.feesBaseWei > 0n && p.valueBaseWei !== null) {
     const fd = v4BaseDecimals(cc, p.base);
     const f = Number(ethers.formatUnits(p.feesBaseWei, fd));
@@ -1044,11 +1043,12 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     valueLabel = `${Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), 6)).toFixed(2)} USDG`;
   }
   const tracked = tracked0;
-  // Range % DIPATOK ke tick ENTRY (bila tersimpan) → angkanya diam, tak goyang tiap
-  // refresh. Fallback ke live (relatif harga sekarang) untuk posisi tanpa entryTick.
-  // Batas rentang DAN harga sekarang dihitung di SATU ruang: tick pool, dipatok
-  // ke entryTick. Dulu "now" diambil dari DexScreener sementara batasnya dari
-  // tick → kartu bisa bilang IN RANGE padahal "now" tampak di luar batas.
+  // Range % is PINNED to the ENTRY tick when one is stored, so the number stays still
+  // rather than wobbling on every refresh. It falls back to live (relative to the
+  // current price) for positions without an entryTick. Both the range bounds AND the
+  // current price are computed in ONE space: the pool tick, pinned to entryTick. "now"
+  // used to come from DexScreener while the bounds came from the tick, so the card
+  // could say IN RANGE while "now" appeared to sit outside them.
   const anchored = ((): { pcts: [number, number]; nowPct: number | null } | null => {
     if (tracked?.entryTick === undefined) return null;
     const sgn = tracked.baseIsCurrency0 ? -1 : 1;
@@ -1059,10 +1059,10 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     };
   })();
   const anchoredPcts = anchored?.pcts ?? null;
-  // Persen rentang diukur dari harga SEKARANG, jadi ikut bergerak saat token
-  // turun: "berapa jauh lagi ke tiap ujung dari sini". Batas absolutnya tetap
-  // diam dan ditunjukkan baris mcap di bawahnya (dipatok ke entry). Dulu persen
-  // ini juga dipatok ke entry → angkanya beku dan terbaca seolah range mati.
+  // The range percentages are measured from the CURRENT price, so they move as the
+  // token falls: "how much further to either end from here". The absolute bounds stay
+  // still and are shown by the mcap line below (pinned to entry). These percentages
+  // used to be pinned to entry too, which froze them and made the range look dead.
   const rangeLabel =
     p.rangePctHigh !== null && p.rangePctLow !== null
       ? `${msg.fmtPct(p.rangePctHigh)} / ${msg.fmtPct(p.rangePctLow)}`
@@ -1073,7 +1073,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   if (tracked && p.valueBaseWei !== null && p.base) {
     const curF = Number(ethers.formatUnits(p.valueBaseWei + (p.feesBaseWei ?? 0n), dec));
     const entF = Number(ethers.formatUnits(BigInt(tracked.entryBaseWei), dec));
-    // PnL USD ala LP Agent bila entryEthUsd tersimpan (gerak harga base ikut kehitung).
+    // LP Agent-style USD PnL when entryEthUsd is stored (movement in the base price is counted).
     const nowUsdPer = p.base === 'USDG' ? 1 : ethUsdV4;
     if (tracked.entryEthUsd && tracked.entryEthUsd > 0 && nowUsdPer !== null) {
       const entryUsd = entF * tracked.entryEthUsd;
@@ -1089,14 +1089,15 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
           : `${pnlF >= 0 ? '+' : ''}${pnlF.toFixed(dec >= 18 ? 5 : 2)} ${p.base} (${msg.fmtPct(pct)})`;
     }
   }
-  // Guard pool sekarat: bandingkan harga token menurut slot0 pool INI dengan
-  // harga PASAR (DexScreener pool terdalam). Selisih besar = pool tipis, harga &
-  // range di kartu tak bisa dipercaya (persis kasus PEPE di pool liq $25).
+  // Dying-pool guard: compare the token price according to THIS pool's slot0 with the
+  // MARKET price (DexScreener's deepest pool). A wide gap means a thin pool, and the
+  // price and range on the card cannot be trusted (exactly the PEPE case in a $25 pool).
   let priceWarn: string | null = null;
   const baseSymbol = p.base ? v4BaseSymbol(cc, p.base) : undefined;
   const tokenSymbol = baseSymbol ? [p.sym0, p.sym1].find((s) => s !== baseSymbol) : undefined;
-  // Market cap: kapitalisasi sekarang + di batas rentang (MC ∝ harga, jadi
-  // MC@batas = MC_now × (1 + pct/100)). Samakan dengan sub-baris mcap kartu V3.
+  // Market cap: the current capitalisation plus the value at each range bound (MC is
+  // proportional to price, so MC@bound = MC_now x (1 + pct/100)). Matches the V3 card's
+  // mcap sub-line.
   let mcRange: string | undefined;
   let mcPool: number | null = null;
   let mcMarket: number | null = null;
@@ -1106,8 +1107,9 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     const tokenAddr = [p.poolKey.currency0, p.poolKey.currency1].find((a) => !isEth(a) && !isUsdg(a));
     const mcNow = tokenAddr ? await explore.tokenMarketCap(cc, tokenAddr).catch(() => null) : null;
     mcMarket = mcNow;
-    // Batas mcap DIPATOK ke entryMcap + range% dari entry → diam. mcNow ditampilkan
-    // sebagai "now" (referensi hidup). Fallback ke live bila entry tak tersimpan.
+    // The mcap bounds are PINNED to entryMcap plus the range % from entry, so they stay
+    // still. mcNow is shown as "now" (a live reference). Falls back to live when no
+    // entry value is stored.
     if (anchoredPcts && tracked?.entryMcap) {
       const at = (pct: number) => explore.usdShort(tracked.entryMcap! * (1 + pct / 100));
       // "now" dari tick pool → sebaris dengan batas rentang, status IN RANGE, dan PnL.
