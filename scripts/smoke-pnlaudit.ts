@@ -96,7 +96,13 @@ assert.deepEqual(usd.books.map((b) => b.unit), ['USD'], 'mode USD harus menghasi
 // bercap memakai kurs saat ditutup, bukan kurs uji, jadi kedua angka memang beda.
 const dariAsli = journal
   .readMine(Number.MAX_SAFE_INTEGER)
-  .filter((e) => e.resultEthWei !== undefined && BigInt(e.resultEthWei) !== 0n)
+  .filter(
+    (e) =>
+      e.resultEthWei !== undefined &&
+      BigInt(e.resultEthWei) !== 0n &&
+      // Modal tak terekam → hasilnya tak boleh dibaca sebagai laba penuh.
+      (e.reason === 'recovery' || BigInt(e.initialWethWei || '0') !== 0n),
+  )
   .reduce((a, e) => a + e.pnlEth * (e.usdRate ?? kurs.get(journal.unitOf(e.chain, e.baseKind)) ?? 0), 0);
 assert.ok(Math.abs(usd.books[0].net - dariAsli) < 1e-6, `USD ${usd.books[0].net} ≠ jumlah entri ${dariAsli}`);
 
@@ -126,12 +132,18 @@ assert.match(readFileSync('src/journal.ts', 'utf8'), /RATE_TTL_MS/, 'cap tanpa b
 const buta = journal.statsFor(0, undefined, () => null);
 const bercap = journal
   .readMine(Number.MAX_SAFE_INTEGER)
-  .filter((e) => e.resultEthWei !== undefined && BigInt(e.resultEthWei) !== 0n && e.usdRate !== undefined).length;
+  .filter(
+    (e) =>
+      e.resultEthWei !== undefined &&
+      BigInt(e.resultEthWei) !== 0n &&
+      (e.reason === 'recovery' || BigInt(e.initialWethWei || '0') !== 0n) &&
+      e.usdRate !== undefined,
+  ).length;
 assert.equal(buta.books.length, bercap > 0 ? 1 : 0, 'hanya entri bercap yang boleh bertahan tanpa kurs hidup');
 assert.ok(buta.unconverted > 0, 'entri tanpa kurs wajib dihitung');
 assert.equal(buta.estimated, 0, 'tanpa kurs hidup tak ada yang boleh ditaksir');
 assert.equal(
-  buta.unconverted + buta.untracked + buta.excluded + bercap,
+  buta.unconverted + buta.untracked + buta.excluded + buta.noCapital + bercap,
   buta.count,
   'entri hilang tanpa jejak',
 );
@@ -164,7 +176,7 @@ const st0 = journal.statsFor(0);
 const berskor = st0.books.reduce((a, b) => a + b.known, 0);
 const impas = st0.books.reduce((a, b) => a + b.flats, 0);
 assert.equal(
-  st0.legs + st0.untracked + st0.excluded + st0.recovered + st0.unconverted,
+  st0.legs + st0.untracked + st0.excluded + st0.noCapital + st0.recovered + st0.unconverted,
   st0.count,
   'entri jurnal tak bisa direkonsiliasi — ada kategori yang tak terhitung',
 );

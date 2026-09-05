@@ -202,6 +202,9 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
   // Tanpa baris ini jumlah di caption berhenti berjumlah begitu ada placeholder
   // backfill — kartu teks sudah menyebutnya sejak awal, caption gambar belum.
   if (s.excluded) tail.push(`${s.excluded} legacy, no result data`);
+  // Wajib disebut: entri ini punya hasil NYATA yang sengaja tidak dibukukan,
+  // jadi net-nya lebih kecil dari uang yang benar-benar mendarat di dompet.
+  if (s.noCapital) tail.push(`${s.noCapital} entry cost unknown, excluded`);
   if (s.recovered) tail.push(`${s.recovered} sweep credited`);
   if (s.unconverted) tail.push(`${s.unconverted} no USD rate`);
   if (s.estimated) tail.push(`${s.estimated} at today's rate`);

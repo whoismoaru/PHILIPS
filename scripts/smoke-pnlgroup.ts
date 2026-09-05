@@ -55,4 +55,27 @@ writeFileSync(join(dir, 'data', 'journal.jsonl'), pairs.map((e) => JSON.stringif
 const g = journal.statsFor(0, undefined, () => 1);
 assert.equal(g.known + g.books[0]!.flats, 2, 'groupId harus memisahkan dua ladder yang tutup di detik yang sama');
 
-console.log('OK smoke-pnlgroup: skor per posisi, net utuh, groupId menang atas tebakan waktu');
+/**
+ * Hasil terukur + modal tak terekam = PnL TAK TERHITUNG, bukan laba sebesar
+ * seluruh cash-out. Tiga entri semacam ini pernah menyumbang $662 laba palsu.
+ */
+const hantu = {
+  tokenId: '777', symbol: 'GHOST', ca: '0xccc', chain: 'bsc', baseKind: 'usdt' as const,
+  openedAt: t0, closedAt: t0 + 50_000, initialWethWei: '0', resultEthWei: '5000',
+  pnlEth: 5, pnlPct: 0, reason: 'cashed' as const, wallet: me, usdRate: 1,
+};
+writeFileSync(join(dir, 'data', 'journal.jsonl'), [solo, hantu].map((e) => JSON.stringify(e)).join('\n') + '\n');
+const h = journal.statsFor(0, undefined, () => 1);
+assert.equal(h.noCapital, 1, 'entri bermodal nol harus dihitung terpisah');
+assert.equal(h.known, 1, 'hanya solo yang boleh berskor');
+assert.ok(Math.abs(h.books[0]!.net - 5) < 1e-9, `net harus 5 (solo saja), dapat ${h.books[0]!.net} — hantu ikut terhitung`);
+
+/** 'recovery' memang bermodal nol dan itu SAH: modalnya sudah dibukukan di close aslinya. */
+const sweep = { ...hantu, tokenId: '778', reason: 'recovery' as const };
+writeFileSync(join(dir, 'data', 'journal.jsonl'), [solo, sweep].map((e) => JSON.stringify(e)).join('\n') + '\n');
+const rc = journal.statsFor(0, undefined, () => 1);
+assert.equal(rc.noCapital, 0, 'sweep tak boleh ikut tersaring');
+assert.equal(rc.recovered, 1, 'sweep harus tetap dikreditkan');
+assert.ok(Math.abs(rc.books[0]!.net - 10) < 1e-9, 'sweep harus menambah net');
+
+console.log('OK smoke-pnlgroup: skor per posisi, net utuh, groupId menang atas tebakan waktu, modal-nol dilewati');
