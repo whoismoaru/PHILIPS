@@ -15,6 +15,8 @@ console.log(card.replace(/<[^>]+>/g, ''));
 assert.ok(card.includes('GAS FEE'), 'judul hilang');
 for (const cc of Object.values(CHAINS)) assert.ok(card.includes(cc.label), `chain ${cc.label} tak muncul`);
 assert.ok(/Rp[\d.]{3,}/.test(card), 'tak ada nominal Rupiah — kurs gagal & tak ada kabarnya');
+// Kaki kartu cuma jam & zona. Apa pun yang menyelinap ke sana melanggar desainnya.
+assert.match(card.trim().split('\n').pop()!, /^<i>\d\d:\d\d:\d\d UTC[+\-\d:]*<\/i>$/, 'kaki kartu bukan sekadar jam & zona');
 assert.ok(!/\$0\.00\b/.test(card), 'ada ongkos $0.00 — RPC/harga gagal tapi kartu mengaku tahu');
 for (const op of ['SWAP', 'OPEN LP', 'CLOSE LP', 'SEND &amp; APPROVE'])
   assert.ok(card.includes(`<b>${op}</b>`), `seksi ${op} hilang`);

@@ -145,10 +145,9 @@ export async function gasCard(): Promise<string> {
     ...section('Approve', chains, rate).map((l, i) => (i === 0 ? bold('SEND & APPROVE') : l)),
     '',
     ...(down.length ? [italic(`Unreachable: ${down.join(', ')}`), ''] : []),
-    italic(
-      `${rate ? `${idr(rate)}/$ · ` : 'IDR rate unavailable · '}${clock()}` +
-        ` · approve shown; send is ~55% less`,
-    ),
+    // Kaki kartu = JAM & ZONA saja (permintaan pemilik). Kurs dan catatan approve
+    // pernah ikut nebeng di sini dan membuatnya jadi baris serba-guna.
+    italic(clock()),
   ].join('\n');
 }
 
