@@ -1,9 +1,9 @@
 /**
  * PHILIPS — Telegram message cards (HTML only).
  *
- * Design: teks biasa — judul tebal + bullet 'label · value'.
- * TIDAK ada <pre>, box-drawing, atau alignment padEnd: font Telegram
- * proporsional, jadi tampilan "terminal" selalu berantakan di HP.
+ * Design: plain text — a bold title plus 'label · value' bullets.
+ * NO <pre>, no box drawing, no padEnd alignment: Telegram's font is
+ * proportional, so a "terminal" look always falls apart on a phone.
  *
  *  <b>POSITION · #178449</b>
  *  • Pair · WETH / TENDIES (1.00%)
@@ -35,24 +35,24 @@ export function title(...parts: string[]): string {
   return bold(parts.filter(Boolean).join(' · '));
 }
 
-/** Satu baris "label · value" (teks biasa, bukan monospace). */
+/** One "label · value" line (plain text, not monospace). */
 export function field(label: string, value: string, _width = 0): string {
   return `${label} · ${value}`;
 }
 
-/** Beberapa baris label·value; nilai kosong dibuang. */
+/** Several label/value lines; empty values are dropped. */
 export function fieldBlock(rows: Array<[string, string]>, _minWidth = 6): string {
   const clean = rows.filter(([, v]) => v !== undefined && v !== null && v !== '');
   if (clean.length === 0) return '';
   return clean.map(([l, v]) => `${esc(l)} · ${bold(String(v))}`).join('\n');
 }
 
-/** Baris label · value (value ditebalkan, bukan monospace). */
+/** A label · value line with the value bolded, not monospaced. */
 export function hrow(label: string, value: string | number): string {
   return `${esc(label)} · ${bold(value)}`;
 }
 
-/** Beberapa baris hybrid; skip value kosong. */
+/** Several hybrid lines; empty values are skipped. */
 export function hrows(rows: Array<[string, string | number | null | undefined]>): string[] {
   return rows
     .filter(([, v]) => v !== undefined && v !== null && String(v) !== '')
@@ -72,31 +72,31 @@ export function quoteHtml(innerHtml: string): string {
   return `<blockquote>${innerHtml}</blockquote>`;
 }
 
-/** Blok 'label · value' (teks biasa). */
-/** Daftar baris; tiap baris = sel-sel digabung ' · '. Header dibuang (tak ada kolom). */
+/** A 'label · value' block (plain text). */
+/** A list of rows, each row joining its cells with ' · '. Headers are dropped (there are no columns). */
 export function alignTable(header: string[], rows: string[][], _right: boolean[] = []): string {
   return rows.map((cells) => cells.filter((c) => c !== '' && c != null).join(' · ')).join('\n');
 }
 
 // ─── header ────────────────────────────────────────────────────────
 
-/** Judul kartu — teks tebal biasa (tanpa box/monospace). */
+/** Card title — plain bold text, no box or monospace. */
 export function hdr(text: string): string {
   return `<b>${esc(text)}</b>`;
 }
 
-/** Emoji dinamis untuk angka PnL: hijau/merah/netral (perbaikan.md §1.2). */
+/** Dynamic emoji for a PnL figure: green, red or neutral. */
 export function dot(n: number | null | undefined): string {
   if (n === null || n === undefined) return '⚪';
   return n > 0 ? '🟢' : n < 0 ? '🔴' : '⚪';
 }
 
-/** Daftar bullet 'label · value' (tanpa garis pohon). */
+/** A bullet list of 'label · value' (no tree lines). */
 export function tree(rows: Array<[string, string]>, _width = 12): string[] {
   return rows.map(([k, v]) => `• ${esc(k)} · ${v}`);
 }
 
-/** Teks polos (dulu blok <pre>). */
+/** Plain text (this used to be a <pre> block). */
 export function pre(text: string): string {
   return esc(text);
 }
@@ -132,7 +132,7 @@ export function usdPlain(n: number): string {
   return '$' + n.toFixed(2);
 }
 
-/** USD ringkas: $1.5M / $50.9K / $79. Untuk daftar pool & kedalaman. */
+/** Compact USD: $1.5M / $50.9K / $79. For pool lists and depth. */
 export function usdCompact(n: number): string {
   const a = Math.abs(n);
   if (a >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
@@ -141,7 +141,7 @@ export function usdCompact(n: number): string {
   return '$' + Math.round(n);
 }
 
-/** Persen bertanda, SATU format untuk seluruh bot: '+13.3%' / '-0.7%'. */
+/** Signed percentage, ONE format across the whole bot: '+13.3%' / '-0.7%'. */
 export function fmtPct(n: number): string {
   return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
 }
@@ -170,7 +170,7 @@ export function modeLabel(dryRun: boolean): string {
   return dryRun ? 'DRY RUN' : 'LIVE';
 }
 
-/** Jam lokal pemilik bot (WIB, UTC+7) — bukan UTC: kartu dibaca dari HP di Jakarta. */
+/** The owner's local time (WIB, UTC+7), not UTC: these cards are read on a phone in Jakarta. */
 export function nowWib(): string {
   const d = new Date(Date.now() + 7 * 3_600_000);
   const hh = String(d.getUTCHours()).padStart(2, '0');
@@ -197,7 +197,7 @@ function balanceFields(gasEth: string): Array<[string, string]> {
     return [['balance', parts[0]]];
   }
 
-  // "Robinhood 0.0376 ETH" → label chain, value amount
+  // "Robinhood 0.0376 ETH" -> chain as the label, amount as the value
   return parts.map((p) => {
     const m = p.match(/^(\S+)\s+(.+)$/);
     return m ? ([m[1].toLowerCase(), m[2]] as [string, string]) : (['balance', p] as [string, string]);
@@ -206,7 +206,7 @@ function balanceFields(gasEth: string): Array<[string, string]> {
 
 // ─── cards ─────────────────────────────────────────────────────────
 
-// Badan cockpit bersama /start & /help: VIEW/EXECUTION/EMERGENCY dalam pohon.
+// The cockpit body shared by /start and /help: VIEW/EXECUTION/EMERGENCY in a tree.
 function cockpitLines(dryRun: boolean): string[] {
   const grp = (rows: Array<[string, string]>) => rows.map(([c, d]) => `• ${c} — ${esc(d)}`);
   return [
@@ -230,23 +230,24 @@ function cockpitLines(dryRun: boolean): string[] {
     '',
     `⚠️ ${bold('Notice :')}`,
     `Commands under ${bold('Execution & Trade')} will move funds on-chain. Always double-check details before signing.`,
-    // Jalur masuk yang tak punya command sendiri — satu-satunya tempat ia disebut.
+    // Entry points with no command of their own — the only place they are named.
     '',
     note('Tip: paste a token CA straight into this chat to open its audit card.'),
-    // Mode simulasi mengubah arti SELURUH daftar di atas (tak ada uang bergerak).
+    // Simulation mode changes what EVERY line above means (no money moves).
     ...(dryRun ? ['', note('mode: DRY RUN — no transaction is ever sent.')] : []),
   ];
 }
 
-/** Kartu daftar perintah (/help). */
+/** The command list card (/help). */
 export function msgHelp(dryRun: boolean): string {
   return [bold('PHILIPS · LP Cockpit'), '', ...cockpitLines(dryRun)].join('\n');
 }
 
 /**
- * Kartu /start — PENANDA BOT HIDUP saja (Telegram mengirim /start otomatis saat
- * chat dibuka & tombol Start ditekan). Daftar perintah ada di /help; di sini cukup
- * satu keadaan + hasil sinkron, supaya tak jadi dua bubble.
+ * The /start card — a PROOF-OF-LIFE marker and nothing more (Telegram sends /start
+ * automatically when a chat opens and when Start is tapped). The command list lives
+ * in /help; here one state line plus the sync result is enough, so it does not become
+ * two bubbles.
  */
 export function msgStarted(o: {
   dryRun: boolean;
@@ -275,27 +276,28 @@ export function msgStarted(o: {
     '- Track active LP positions, APR, and earned fees',
     '',
     `⚠️ ${bold('Security Notice :')}`,
-    // Pintu resminya kini tombol Connect Wallet di /settings — /connect sudah dihapus,
-    // dan menyuruh user mengetik perintah yang tak ada persis membuka celah yang
-    // peringatan ini coba tutup (dia mencari "alur resmi" lalu percaya yang palsu).
+    // The official door is now the Connect Wallet button in /settings — /connect was
+    // removed, and telling the user to type a command that does not exist opens
+    // exactly the hole this warning is trying to close (they go looking for the
+    // "official flow" and trust a fake one).
     `PHILIPS will ${bold('never')} ask for your Seed Phrase outside of the official Connect Wallet flow in ${code('/settings')}. DeFi involves risks, including Impermanent Loss (IL). ${bold('Always DYOR.')}`,
     '',
-    // Blok "Bot Status" dibuang atas permintaan. Dua hal tetap disebut karena
-    // mengubah arti kartu ini: mode simulasi (tak ada uang bergerak) dan hasil
-    // sinkronisasi posisi (bot menemukan/menutup posisi tanpa kamu minta).
+    // The "Bot Status" block was dropped on request. Two things stay because they
+    // change what this card means: simulation mode (no money moves) and the position
+    // sync result (the bot found or closed positions without being asked).
     ...(o.dryRun ? [`⚪ ${bold('DRY RUN')} — simulation mode, no funds will move.`, ''] : []),
     ...(sync ? [`🔄 ${bold('Sync:')} ${esc(sync)}`, ''] : []),
     `👉 ${bold('Get Started :')}`,
-    // Saat dompet sudah terhubung tak ada lagi tombol utama di kartu ini, jadi
-    // kalimatnya harus menunjuk tindakan yang benar-benar bisa dilakukan:
-    // menempel CA. "Tap the button below" akan menunjuk tombol yang tak ada.
+    // With a wallet connected there is no primary button left on this card, so the
+    // sentence has to point at something actually doable: pasting a CA. "Tap the
+    // button below" would point at a button that is not there.
     o.walletShort
       ? `Paste a token contract address into the chat, or send ${code('/add_lp')}, to open a new Single-Side LP and start earning trading fees.`
       : 'Tap the button below to Connect your Robinhood Wallet and start earning trading fees.',
   ].join('\n');
 }
 
-/** Cara memulai LP — dipakai tombol "Buka LP" di /start (belum ada wizard tanpa CA). */
+/** How to start an LP — used by the "Open LP" button on /start (there is no CA-less wizard yet). */
 export function msgAddHowTo(): string {
   return [
     `💧 ${bold('Open a Single-Side LP')}`,
@@ -305,15 +307,15 @@ export function msgAddHowTo(): string {
     `📝 ${bold('How to Start :')}`,
     `• ${bold('Quick Method ->')} Paste a token Contract Address (CA) directly in this chat.`,
     `• ${bold('Wizard Method ->')} Type ${code('/add_lp [CA]')} to enter the step-by-step setup.`,
-    // Jalur ketiga yang benar-benar ada: /add_lp tanpa CA membuka pemilih pair.
-    // Tanpa disebut, satu-satunya cara menemukannya adalah tak sengaja.
+    // The third path that genuinely exists: /add_lp with no CA opens the pair picker.
+    // Unmentioned, the only way to find it is by accident.
     `• ${bold('No CA? ->')} Type ${code('/add_lp')} on its own to pick from the top pools.`,
     '',
     note(nowWib()),
   ].join('\n');
 }
 
-/** Kartu "How it Works" — penjelasan statis, dipanggil dari tombol di /start. */
+/** The "How it Works" card — static explanation, opened from a button on /start. */
 export function msgHighRiskBlocked(reasons: string[]): string {
   const out = [
     `🚫 ${bold('Blocked: High-Risk Token')}`,
@@ -380,21 +382,22 @@ export function msgV4Position(p: {
   mcRange?: string; // rentang yang sama dibaca sebagai kapitalisasi pasar
   converted?: boolean; // out-of-range & 100% token seberang (target tercapai)
   ladder?: { legIndex: number; legCount: number; shape: string; groupDeposit?: string; sharePct?: number; progress?: string;
-    // Ringkasan SELURUH ladder — inti fitur bid-ask. Tanpa ini kartu leg hanya
-    // memperlihatkan satu anak tangga, padahal yang disetor user adalah ladder.
+    // A summary of the WHOLE ladder, which is the point of the bid-ask feature.
+    // Without it a leg card shows a single rung, when what the user deposited was a
+    // ladder.
     valueLabel?: string; feesLabel?: string; pnlText?: string; mcRange?: string;
-    // Kenapa "Value now" bukan sekadar harga pasar — lihat catatan di index.ts.
+    // Why "Value now" is not simply the market price — see the note in index.ts.
     exitNote?: string;
     filled?: number; active?: number; waiting?: number }; // leg dari grup ladder
 }): string {
-  // Samakan layout dengan kartu V3 (msgPositionCard): satu fakta satu baris,
-  // status di barisnya sendiri, ada strategi + penjelasan uang.
+  // Match the V3 card's layout (msgPositionCard): one fact per line, status on its
+  // own line, with a strategy and an explanation of the money.
   const base = esc(p.baseSymbol ?? 'ETH');
   const sym = esc(p.tokenSymbol ?? p.pair.split('/').map((s) => s.trim()).find((s) => s !== p.baseSymbol) ?? 'token');
   const isLadderLeg = !!p.ladder && p.ladder.legCount > 1;
-  // Leg ladder yang terserap BUKAN kegagalan — itu tugasnya. "OUT OF RANGE"
-  // merah pada satu anak tangga terbaca seperti seluruh posisi bermasalah,
-  // padahal ladder-nya masih jalan. Leg terisi dapat kata & warnanya sendiri.
+  // A ladder leg being absorbed is NOT a failure — it is the job. A red "OUT OF
+  // RANGE" on one rung reads as though the whole position is in trouble when the
+  // ladder is working fine. A filled leg gets its own wording and colour.
   const statusEmoji =
     p.inRange === null ? '🔷' : p.inRange ? '🟢' : p.converted && isLadderLeg ? '🟡' : '🔴';
   const status =
@@ -414,10 +417,10 @@ export function msgV4Position(p: {
         ? `Your liquidity is ${bold('active')} and earning fees. Fees keep accruing as long as ${sym} stays inside this range.`
         : p.converted
           ? p.ladder && p.ladder.legCount > 1
-            // Leg ladder yang habis terserap itu NORMAL, bukan tanda ladder-nya
-            // gagal — anak tangga terisi satu per satu dari atas. Sebut porsi
-            // modalnya supaya "OUT OF RANGE" pada kartu SATU leg tak terbaca
-            // seolah seluruh modal ladder sudah berubah jadi token.
+            // A fully absorbed ladder leg is NORMAL, not a sign the ladder failed —
+            // the rungs fill one at a time from the top. Name its share of the
+            // capital so "OUT OF RANGE" on ONE leg's card does not read as though
+            // the entire ladder has turned into tokens.
             ? `This rung bought its ${bold(`${p.ladder.sharePct !== undefined ? `${p.ladder.sharePct.toFixed(1)}%` : 'share'}`)} of the ladder. The rungs below still hold ${base}, waiting lower.`
             : `Fully converted to ${bold(`100% ${sym}`)} — the buy-dip target is done. Hold for a bounce, or close.`
           : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${esc(p.rangeLabel)}).`;
@@ -428,7 +431,7 @@ export function msgV4Position(p: {
     '',
     `🔗 ${bold('Pair:')} ${esc(p.pair)} ${italic(`(${esc(p.feeLabel)} Fee)`)}${p.chain ? ` · ${esc(p.chain)}` : ''}`,
     `🎯 ${bold('Strategy:')} ${base} Side (Buy the dip)${isLeg ? ` · ${bold(`◣ ${p.ladder!.shape === 'bidask' ? 'Bid-Ask' : 'Spot'} ladder`)}` : ''}`,
-    // ── Blok LADDER dulu (yang disetor user adalah ladder), baru blok leg. ──
+    // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
     ...(isLeg
       ? [
           '',
@@ -458,9 +461,10 @@ export function msgV4Position(p: {
     `${statusEmoji} ${bold('Status:')} ${status}`,
   ];
   if (p.priceWarn) lines.push('', `⚠️ ${bold('Thin pool')} — ${esc(p.priceWarn)}`);
-  // Kalimat penjelas menutup isi kartu, baris waktu jadi jejak paling bawah.
-  // Baris "Uniswap v4 · managed by the bot" dibuang: protokolnya sudah tersirat
-  // dari isi kartu, dan barisnya cuma menambah panjang tanpa memberi keputusan.
+  // The explanatory sentence closes the card's content, leaving the timestamp as the
+  // last trace. The "Uniswap v4 · managed by the bot" line was dropped: the protocol
+  // is already implied by the card's contents, and the line only added length without
+  // supporting a decision.
   lines.push(
     '',
     `<i>${explain}</i>`,
@@ -471,7 +475,7 @@ export function msgV4Position(p: {
   return lines.join('\n');
 }
 
-/** Hasil tutup posisi v4 (atau simulasi dry-run). */
+/** The result of closing a v4 position (or a dry-run simulation). */
 export function msgV4Closed(o: {
   tokenId: string;
   base: 'ETH' | 'USDG' | null;
@@ -495,7 +499,7 @@ export function msgV4Closed(o: {
   return card(`✅ ${title('CLOSED v4', `#${o.tokenId}`)}`, body, nowWib());
 }
 
-/** Hasil tambah likuiditas v4 (atau simulasi dry-run). */
+/** The result of adding v4 liquidity (or a dry-run simulation). */
 export function msgV4Added(o: {
   tokenId?: string;
   sizeEth: string;
@@ -525,7 +529,7 @@ export function msgV4Added(o: {
   return card(`✅ ${title('ADDED v4', o.tokenId ? `#${o.tokenId}` : '')}`, body, nowWib());
 }
 
-/** Konfirmasi tutup posisi Uniswap v4. */
+/** Confirmation for closing a Uniswap v4 position. */
 export function msgV4CloseConfirm(tokenId: string): string {
   return [
     `🔴 ${bold('Confirm Close (v4)')}`,
@@ -538,7 +542,7 @@ export function msgV4CloseConfirm(tokenId: string): string {
   ].join('\n');
 }
 
-/** Alert monitor: posisi v4 (dikelola bot) masuk/keluar range. */
+/** Monitor alert: a v4 position (bot-managed) entering or leaving range. */
 export function msgV4Range(tokenId: string, inRange: boolean): string {
   return inRange
     ? [
@@ -574,7 +578,7 @@ export function msgUnknown(txt: string): string {
 export function msgStatus(opts: {
   dryRun: boolean;
   positions: number;
-  /** Per chain: saldo native + stablecoin base yang dipegang di chain itu. */
+  /** Per chain: the native balance plus any stablecoin bases held there. */
   chains: Array<{
     label: string;
     amount: string;
@@ -586,7 +590,7 @@ export function msgStatus(opts: {
   lpUsd?: number | null; // nilai posisi LP aktif
   lpFailed?: number; // posisi yang gagal dibaca → total belum lengkap
 }): string {
-  // USD tak terbaca → '—' (netral), JANGAN '$0.00' yang terbaca sebagai fakta.
+  // An unreadable USD figure becomes '—' (neutral). NEVER '$0.00', which reads as a fact.
   const usdCol = (u: number | null | undefined) => (u === null || u === undefined ? '—' : usdPlain(u));
   const equity = opts.totalUsd === null ? '—' : usdPlain(opts.totalUsd + (opts.lpUsd ?? 0));
 
@@ -600,8 +604,8 @@ export function msgStatus(opts: {
     ),
   ];
 
-  // Nama pendek khusus kartu ini: baris chain-nya sempit dan yang penting justru
-  // angkanya. Hanya presentasi — chain yang tak terdaftar memakai labelnya apa adanya.
+  // Short names specific to this card: the chain row is narrow and it is the numbers
+  // that matter. Presentation only — an unlisted chain keeps its label as-is.
   const SHORT: Record<string, string> = { Robinhood: 'RH', Base: 'BASE' };
 
   const tree = (rows: string[]): string[] =>
@@ -620,8 +624,8 @@ export function msgStatus(opts: {
     ]),
   ];
 
-  // Rincian per CHAIN, bukan per aset lepas: stablecoin ikut baris chain tempat ia
-  // benar-benar berada. Baris "USDG" berdiri sendiri dulu menyamarkan chain-nya.
+  // Broken down per CHAIN rather than per loose asset, so a stablecoin sits on the
+  // row of the chain it is actually on. A standalone "USDG" row used to hide its chain.
   if (held.length) {
     parts.push(
       '',
@@ -631,9 +635,9 @@ export function msgStatus(opts: {
           const aset: string[] = [];
           if (Number(c.amount) > 0) aset.push(`${esc(c.amount)} ${esc(c.symbol)}`);
           for (const t of c.stables ?? []) aset.push(`${esc(t.amount)} ${esc(t.symbol)}`);
-          // Nilai chain = native + seluruh stablecoin di chain itu. Satu USD yang
-          // tak terbaca membuat SELURUH baris '—': menjumlahkan sisanya diam-diam
-          // akan menampilkan angka yang lebih kecil dari isi dompet sebenarnya.
+          // A chain's value is native plus every stablecoin on it. One unreadable USD
+          // figure makes the WHOLE row '—': quietly summing the rest would show a
+          // number smaller than what the wallet really holds.
           const bagian: Array<number | null | undefined> = [c.usd, ...(c.stables ?? []).map((t) => t.usd)];
           const nilai = bagian.some((u) => u === null || u === undefined)
             ? '—'
@@ -646,20 +650,20 @@ export function msgStatus(opts: {
 
   if (opts.lpFailed) parts.push('', `⚠️ ${note(`${opts.lpFailed} position(s) failed to read — total is incomplete`)}`);
 
-  // Alamat wallet, batas per-tx, dan ajakan /sell dibuang dari kartu ini:
-  // dua yang pertama sudah ada di /settings, yang ketiga bukan keadaan
-  // portofolio melainkan saran. Peringatan di atas TETAP ada karena ia hanya
-  // muncul saat ada sumber yang gagal dibaca — tanpa itu angkanya terbaca
-  // sebagai fakta padahal sebagian datanya hilang.
+  // The wallet address, the per-tx limits and the /sell prompt were all dropped from
+  // this card: the first two already live in /settings, and the third is advice rather
+  // than a portfolio state. The warning above STAYS, because it only appears when a
+  // source failed to read — without it the numbers read as fact while part of the data
+  // is missing.
   //
-  // Mode LIVE tak lagi diberi label: itu keadaan normal, dan menuliskannya di
-  // tiap kartu membuat kata "DRY RUN" jadi tak menonjol justru saat ia penting.
+  // LIVE mode is no longer labelled: that is the normal state, and printing it on
+  // every card is what stops "DRY RUN" standing out when it matters.
   parts.push('', opts.dryRun ? `⚪ ${bold('DRY RUN')} · ${nowWib()}` : nowWib());
 
   return parts.join('\n');
 }
 
-/** Nilai ETH bertanda: '+0.14811 ETH' / '-0.02 ETH'. */
+/** A signed ETH amount: '+0.14811 ETH' / '-0.02 ETH'. */
 function sgEth(n: number): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(5)} ETH`;
 }
@@ -671,9 +675,9 @@ export function msgPnlPicker(chains: Array<{ label: string; trades: number; scor
       ...tree(
         chains.map((c) => [
           c.label,
-          // Dua angka. Kartu rekap hanya menghitung yang BERSKOR, jadi menyebut
-          // total saja di sini membuat selisihnya (impas / hasil tak terbaca)
-          // tampak seperti trade yang hilang di antara dua layar.
+          // Two figures. The recap card only counts what is SCORED, so naming the
+          // total alone here makes the difference (break-even, unreadable results)
+          // look like trades lost between two screens.
           c.scored === undefined || c.scored === c.trades
             ? `${c.trades} positions`
             : `${c.trades} positions · ${c.scored} scored`,
@@ -690,10 +694,10 @@ export function msgPnlPicker(chains: Array<{ label: string; trades: number; scor
 }
 
 /**
- * Kartu rekap PnL untuk satu periode. SATU BUKU PER DENOMINASI: ETH, BNB, USDG,
- * USDT punya baris sendiri. Menjumlahkannya jadi satu angka "net ETH" itu salah —
- * dan versi lama menghindarinya dengan MEMBUANG buku non-ETH, sehingga seluruh
- * riwayat BSC tak pernah kelihatan sama sekali.
+ * The PnL recap card for one period. ONE BOOK PER DENOMINATION: ETH, BNB, USDG and
+ * USDT each get their own row. Adding them into a single "net ETH" figure is plainly
+ * wrong — and the old version avoided that by DISCARDING the non-ETH books, so the
+ * entire BSC history was never visible at all.
  */
 export function msgPnl(opts: {
   dryRun: boolean;
@@ -728,7 +732,7 @@ export function msgPnl(opts: {
     out.push('', note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
     return out.join('\n');
   }
-  // Satuan asli (ETH/BNB/HYPE) butuh 5 desimal; USD & stablecoin cukup 2.
+  // Native units (ETH/BNB/HYPE) need 5 decimals; USD and stablecoins need 2.
   const num = (v: number, unit: string): string => {
     const d = unit === 'ETH' || unit === 'BNB' || unit === 'HYPE' ? 5 : 2;
     return unit === 'USD'
@@ -736,13 +740,13 @@ export function msgPnl(opts: {
       : `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
   };
   const out = [head, ''];
-  // Jumlah entri vs yang berskor: satu-satunya tempat selisihnya dijelaskan.
+  // Entry count against scored count: the only place the difference is explained.
   if (opts.count !== undefined) {
     const scored = opts.books.reduce((a, b) => a + b.known, 0);
     const flats = opts.books.reduce((a, b) => a + (b.flats ?? 0), 0);
-    // note() meng-escape isinya, jadi penekanan dipasang DI LUAR. Sweep & hasil
-    // tak terbaca sudah punya barisnya sendiri di kaki kartu — di sini cukup
-    // selisih yang selama ini tak dijelaskan di mana pun: impas.
+    // note() escapes its contents, so the emphasis goes OUTSIDE. Sweeps and
+    // unreadable results already have their own lines in the card's footer; what
+    // belongs here is the difference nothing else explained: break-even.
     if (opts.count !== scored)
       out.push(
         `${note(`${opts.count} closed →`)} ${bold(String(scored))} ${note(
@@ -754,10 +758,10 @@ export function msgPnl(opts: {
       );
   }
   for (const b of opts.books) {
-    // Impas (PnL tepat 0) tak masuk penyebut winrate — kalau ikut, winrate naik
-    // tanpa satu pun trade tambahan yang benar-benar menang.
+    // Break-even (PnL exactly 0) stays out of the winrate denominator — counted in,
+    // the winrate climbs without a single extra trade actually winning.
     const winrate = b.wins + b.losses > 0 ? (b.wins / (b.wins + b.losses)) * 100 : 0;
-    // b.known SUDAH hanya menang+kalah (impas tak dihitung), jadi tak perlu dikurangi.
+    // b.known is ALREADY wins+losses (break-even is excluded), so nothing to subtract.
     const pf = b.grossLoss < 0 ? b.grossWin / Math.abs(b.grossLoss) : null;
     const avgWin = b.wins > 0 ? b.grossWin / b.wins : 0;
     const avgLoss = b.losses > 0 ? b.grossLoss / b.losses : 0;
@@ -767,11 +771,11 @@ export function msgPnl(opts: {
         [
           ['Trades', `${b.known} (${b.wins}W / ${b.losses}L)`],
           ['Winrate', `🎯 ${bold(`${winrate.toFixed(1)}%`)}`],
-          // Impas dipisah supaya jelas ia TAK ikut menghitung winrate/PF.
+          // Break-even is listed separately to make clear it does NOT feed winrate or PF.
           ...((b.flats
             ? [['Flat', `${b.flats} trade${b.flats === 1 ? '' : 's'} (under ~$0.1 — not scored)`]]
             : []) as Array<[string, string]>),
-          // Profit factor <1 = rugi, seberapa pun tingginya winrate.
+          // A profit factor below 1 means a loss, however high the winrate.
           ['Profit factor', pf === null ? '—' : `${pf < 1 ? '🔴' : '🟢'} ${bold(pf.toFixed(2))}`],
           ['Avg win', `🟢 ${num(avgWin, b.unit)}`],
           ['Avg loss', `🔴 ${num(avgLoss, b.unit)}`],
@@ -798,9 +802,9 @@ export function msgPnl(opts: {
 }
 
 /**
- * Posisi terkonversi penuh. `tokenSide` menentukan arah: sisi base berubah jadi
- * token saat harga JATUH, sisi token berubah jadi base saat harga NAIK — jadi
- * saran pemulihannya juga berlawanan.
+ * A fully converted position. `tokenSide` sets the direction: the base side turns
+ * into the token as price FALLS, the token side turns into base as price RISES — so
+ * the recovery advice is inverted too.
  */
 export function msgConverted(tokenId: string, baseSym: string, tokenSym: string, tokenSide: boolean): string {
   const from = tokenSide ? tokenSym : baseSym;
@@ -839,8 +843,8 @@ export function msgPriceDrop(
   baseSymbol = 'WETH',
   tier?: number, // anak tangga yang baru dilewati — menandai ini alert LANJUTAN
 ): string {
-  // Alert kedua & seterusnya harus terbaca beda dari yang pertama; kalau tampilannya
-  // identik, penurunan yang makin dalam gampang dikira notifikasi lama yang terulang.
+  // A second and subsequent alert has to read differently from the first; if they look
+  // identical, a deepening drop is easily mistaken for an old notification repeating.
   const deep = tier !== undefined && tier >= 50;
   return [
     `${deep ? '🚨' : '🔴'} ${bold(`Alert: Price Drop${tier !== undefined ? ` · past −${tier}%` : ''}`)}`,
@@ -850,8 +854,8 @@ export function msgPriceDrop(
     '',
     `📉 ${bold(`${esc(symbol)} is down ${fmtPct(-dropPct)} from your entry price.`)}`,
     '',
-    // Tombol '⛔ Close Now' menyertai pesan ini (monitor.ts) — microcopy menunjuk ke
-    // tombol itu, bukan menyuruh mengetik command saat harga jatuh.
+    // The '⛔ Close Now' button ships with this message (monitor.ts), so the microcopy
+    // points at that button rather than asking the user to type a command as price falls.
     note('close it now with the button below, or hold if you still believe in it.'),
   ].join('\n');
 }
@@ -868,7 +872,7 @@ export function msgCloseAllPick(countV3: number, countV4 = 0): string {
   ].join('\n');
 }
 
-// ─── /buy /sell token (base↔token, rute terbaik) ───────────────────────
+// ─── /buy /sell token (base<->token, best route) ────────────────────────
 export function msgBuyAskCA(
   dryRun: boolean,
   quick: Array<{ symbol: string; chain: string; ca: string }> = [],
@@ -888,8 +892,8 @@ export function msgBuyAskCA(
 }
 
 export function msgBuySafetyHint(sym: string): string {
-  // note() → italic() → esc(): apa pun HTML di dalamnya ikut ter-escape (user melihat
-  // '<b>PONS</b>' mentah). Rakit di sini, jangan bikin primitif baru.
+  // note() -> italic() -> esc(): any HTML inside gets escaped too (the user sees a raw
+  // '<b>PONS</b>'). Assemble it here rather than inventing a new primitive.
   return `${italic('Review the details and safety of ')}${bold(sym)}${italic(' above. Continue to pick the asset and amount.')}`;
 }
 
@@ -921,7 +925,7 @@ export function msgSellAmount(sym: string, balLabel: string): string {
   ].join('\n');
 }
 
-/** Kartu satu alur di /settings: angka yang dipakai sekarang. */
+/** One flow's card in /settings: the value currently in use. */
 export function msgPctPreset(
   label: string,
   values: number[],
@@ -943,7 +947,7 @@ export function msgPctPreset(
   ].join('\n');
 }
 
-/** Prompt ketik daftar nilai. */
+/** Prompt to type a list of values. */
 export function msgPctAsk(label: string, current: number[], o: { unit: string; min: number; max: number }): string {
   const example = o.unit === '%' ? '10 25 50 90' : '4 8 12 20';
   return [
@@ -1009,7 +1013,7 @@ export function msgTSwapConfirm(o: {
     `📤 ${bold('You pay:')} ${bold(o.amountInLabel)}`,
     `📥 ${bold('You receive ≈')} ${bold(o.estOutLabel)}`,
     `🛣️ ${bold('Route:')} ${esc(o.route)}`,
-    // 5%→15% hanya berlaku untuk rute router; rute relay dilindungi quoter penyedia.
+    // 5%->15% applies to router routes only; relay routes are protected by the provider's quoter.
     `🛡️ ${bold('Slippage:')} ${o.route.startsWith('uniswap') ? 'auto 5% → 15%' : `${esc(o.route)} (auto)`}`,
   ];
   if (o.balanceLabel) body.push(`💰 ${bold('Balance:')} ${esc(o.balanceLabel)}`);
@@ -1063,11 +1067,12 @@ export function msgTSwapDone(o: {
 }
 
 export function msgError(where: string, err: unknown): string {
-  // `retryOnce` menandai error yang transaksinya SUDAH mendarat. Tanpa baris
-  // peringatan di bawah, kartu ini bilang "gagal" untuk mint yang sebenarnya
-  // sukses — dan pemilik membuka posisi kedua dengan modal yang sama.
+  // `retryOnce` marks errors whose transaction ALREADY landed. Without the warning
+  // line below, this card says "failed" for a mint that in fact succeeded — and the
+  // owner opens a second position with the same capital.
   const landed = typeof err === 'object' && err !== null && (err as { landed?: boolean }).landed === true;
-  // Revert ethers = blok multi-baris (reason/code/transaction) yang menutupi baris
+  // An ethers revert is a multi-line block (reason/code/transaction) that buries the
+  // line that matters.
   // "lakukan ini". Ambil baris pertama saja; detail lengkap tetap ada di log service.
   // Pemanggil boleh mengirim string ATAU objek Error (perlu utk `landed`).
   // `String(err)` pada Error menghasilkan "Error: pesan" — awalannya dibuang.
