@@ -6,6 +6,7 @@ import { gmgnExtra, gmgnPrice, bustGmgnCache, type GmgnExtra } from './gmgn.js';
 import { insightxMetrics, type InsightXMetrics } from './insightx.js';
 import { goplusInfo, type GoPlusInfo } from './goplus.js';
 import { serializedInfo, bustSerializedCache, activeRisks, type SerializedInfo } from './serialized.js';
+import { decodeHookFlags } from './hookflags.js';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
@@ -512,7 +513,10 @@ export async function getEthUsd(
  * renounced, the sell-path simulation for honeypots). The rest has no source on this
  * chain yet.
  */
-export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?: string; heldLabel?: string | null; lpCount?: number }): string {
+export function formatScreen(
+  s: ScreenResult,
+  opts?: { ca?: string; chainLabel?: string; heldLabel?: string | null; lpCount?: number; hookAddress?: string },
+): string {
   const UNK = '?';
   const compact = (n: number | null | undefined): string => {
     if (n == null) return UNK;
@@ -629,6 +633,11 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     return `${esc(r.type)} ${/crit|high/i.test(r.impact) ? '🔴' : '⚠️'} ${esc(d)}`;
   };
   const sa = s.serialized;
+  // Decoded from the hook ADDRESS, so this row outlives the paid audit: it still
+  // answers when the key is gone, the credits are spent, or the hook has never
+  // been audited. Permissions are what the PoolManager enforces; the audit says
+  // what the code does with them. Neither replaces the other.
+  const hf = decodeHookFlags(sa?.hookAddress ?? opts?.hookAddress);
   // The warning count rides along with the verdict. Serialized does NOT flip
   // isSafe for warning-impact findings, so a bare "SAFE ✅" above two ⚠️ lines
   // reads as a contradiction — the card would look like it disagrees with itself.
@@ -671,16 +680,21 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
     '',
     // Only rendered when the audit answered. An empty "AUDIT: unknown" section
     // reads as a verdict of its own; absence should just be absence.
-    ...(sa
+    ...(sa || hf
       ? [
           `🔬 ${bold('AUDIT :')}`,
           ...tree([
-            ['Contract', safeMark(sa.tokenSafe, activeRisks(sa.risks).length)],
-            ...(sa.hookAddress
+            ...(sa ? ([['Contract', safeMark(sa.tokenSafe, activeRisks(sa.risks).length)]] as Array<[string, string]>) : []),
+            ...(sa?.hookAddress
               ? ([['V4 Hook', safeMark(sa.hookSafe, activeRisks(sa.hookRisks).length)]] as Array<[string, string]>)
-              : []),
+              : hf
+                ? ([['V4 Hook', `${hf.powers.length} permission(s) ${hf.severe ? '⚠️' : '✅'}`]] as Array<[string, string]>)
+                : []),
           ]),
-          ...activeRisks([...sa.risks, ...sa.hookRisks]).slice(0, 4).map((r) => `   • ${riskLine(r)}`),
+          ...(sa ? activeRisks([...sa.risks, ...sa.hookRisks]).slice(0, 4).map((r) => `   • ${riskLine(r)}`) : []),
+          // Permissions are listed even when the audit answered: "SAFE" plus "may
+          // block your exit" are both true at once, and an LP needs the second.
+          ...(hf ? hf.powers.slice(0, 3).map((pw) => `   • hook ${pw.severe ? '⚠️' : '·'} ${esc(pw.label)}`) : []),
           '',
         ]
       : []),
