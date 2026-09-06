@@ -5,7 +5,7 @@ import { EXPLORER_HEADERS } from './chain.js';
 import { gmgnExtra, gmgnPrice, bustGmgnCache, type GmgnExtra } from './gmgn.js';
 import { insightxMetrics, type InsightXMetrics } from './insightx.js';
 import { goplusInfo, type GoPlusInfo } from './goplus.js';
-import { serializedInfo, bustSerializedCache, type SerializedInfo } from './serialized.js';
+import { serializedInfo, bustSerializedCache, activeRisks, type SerializedInfo } from './serialized.js';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
@@ -675,12 +675,12 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
       ? [
           `🔬 ${bold('AUDIT :')}`,
           ...tree([
-            ['Contract', safeMark(sa.tokenSafe, sa.risks.length)],
+            ['Contract', safeMark(sa.tokenSafe, activeRisks(sa.risks).length)],
             ...(sa.hookAddress
-              ? ([['V4 Hook', safeMark(sa.hookSafe, sa.hookRisks.length)]] as Array<[string, string]>)
+              ? ([['V4 Hook', safeMark(sa.hookSafe, activeRisks(sa.hookRisks).length)]] as Array<[string, string]>)
               : []),
           ]),
-          ...[...sa.risks, ...sa.hookRisks].slice(0, 4).map((r) => `   • ${riskLine(r)}`),
+          ...activeRisks([...sa.risks, ...sa.hookRisks]).slice(0, 4).map((r) => `   • ${riskLine(r)}`),
           '',
         ]
       : []),

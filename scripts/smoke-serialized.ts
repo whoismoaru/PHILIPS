@@ -23,7 +23,11 @@ const PAYLOAD = {
     hookAudit: {
       isSafe: false,
       description: 'Graduated meme hook.',
-      vulnerabilities: [{ type: 'HiddenFees', impact: 'warning', description: 'Hook skims up to 20%.' }],
+      vulnerabilities: [
+        { type: 'HiddenFees', impact: 'warning', description: 'Hook skims up to 20%.' },
+        { type: 'LiquidityDrain', impact: 'critical', description: 'Owner can rug.', mitigated: true, gateReason: 'Owner renounced' },
+        { type: 'Other', impact: 'info', description: 'Cosmetic.' },
+      ],
     },
   },
   billing: { type: 'fresh_no_decompile', credits: 4 },
@@ -32,14 +36,19 @@ const PAYLOAD = {
 process.env.SERIALIZED_API_KEY = 'sk_live_test';
 globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => PAYLOAD })) as any;
 
-const { serializedInfo } = await import('../src/serialized.js');
+const { serializedInfo, activeRisks } = await import('../src/serialized.js');
 
 const info = await serializedInfo('0xab093dEF657F15dF31b33922A95e047aDd645B29', 'robinhood');
 assert(info, 'audit terurai');
 assert.equal(info.tokenSafe, true);
 assert.equal(info.hookSafe, false, 'hook UNSAFE harus terbaca terpisah dari token');
-assert.equal(info.hookRisks.length, 1);
-assert.equal(info.hookRisks[0].type, 'HiddenFees');
+assert.equal(info.hookRisks.length, 3, 'semua temuan tetap terurai');
+// A renounced-owner rug and an info-level note must NOT reach the card: warning
+// about code that cannot fire is how a card teaches its reader to ignore it.
+const aktif = activeRisks(info.hookRisks);
+assert.equal(aktif.length, 1);
+assert.equal(aktif[0].type, 'HiddenFees');
+assert.equal(info.hookRisks[1].gateReason, 'Owner renounced');
 assert.equal(info.verified, false, "sourceType 'none' = tak terverifikasi");
 
 // An unmapped chain must not call out at all — a wrong chain symbol is a billed 400.
