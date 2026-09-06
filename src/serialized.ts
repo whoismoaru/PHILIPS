@@ -27,9 +27,22 @@ const CHAIN: Record<string, string> = {
 
 export type AuditRisk = {
   type: string; // 'HiddenFees' | 'LiquidityDrain' | …
-  impact: string; // 'warning' | 'critical' | …
+  impact: string; // 'critical' | 'warning' | 'info'
   description: string;
+  mitigated: boolean | null; // true = the risk exists in code but is neutralised
+  gateReason: string | null; // display-ready state, e.g. 'Owner renounced'
 };
+
+/**
+ * What the card should actually show, per the API's own guidance: drop `info`
+ * (surfaced but low risk on its own) and drop anything already neutralised.
+ *
+ * A mitigated risk is real code that CANNOT fire — the owner renounced, the role
+ * has no holders. Printing it as a live warning cries wolf on the majority of
+ * renounced tokens, and a card that warns about everything warns about nothing.
+ */
+export const activeRisks = (rs: AuditRisk[]): AuditRisk[] =>
+  rs.filter((r) => r.impact.toLowerCase() !== 'info' && r.mitigated !== true);
 
 export type SerializedInfo = {
   isSafe: boolean | null; // token AND hook together
@@ -64,6 +77,8 @@ const risksOf = (v: unknown): AuditRisk[] =>
       type: String(r?.type ?? ''),
       impact: String(r?.impact ?? ''),
       description: String(r?.description ?? ''),
+      mitigated: typeof r?.mitigated === 'boolean' ? r.mitigated : null,
+      gateReason: typeof r?.gateReason === 'string' ? r.gateReason : null,
     }))
     .filter((r) => r.type || r.description);
 
