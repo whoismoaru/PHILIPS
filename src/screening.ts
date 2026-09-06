@@ -5,6 +5,7 @@ import { EXPLORER_HEADERS } from './chain.js';
 import { gmgnExtra, gmgnPrice, bustGmgnCache, type GmgnExtra } from './gmgn.js';
 import { insightxMetrics, type InsightXMetrics } from './insightx.js';
 import { goplusInfo, type GoPlusInfo } from './goplus.js';
+import { serializedInfo, bustSerializedCache, type SerializedInfo } from './serialized.js';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
@@ -120,6 +121,7 @@ export type ScreenResult = {
   gmgn: GmgnExtra | null; // pengisi celah dari GMGN; null = tak dipanggil/gagal
   insightx: InsightXMetrics | null; // klaster holder InsightX; null = chain tak didukung/gagal
   goplus: GoPlusInfo | null; // penambal BSC (chain tanpa Blockscout); null = tak dipakai/gagal
+  serialized: SerializedInfo | null; // audit kontrak + hook v4; null = chain tak didukung/gagal
   scamFlag: boolean; // token ditandai scam oleh explorer
   sellPath: SellStatus; // simulasi jalur jual (exit-liquidity)
   flags: Flag[];
@@ -146,6 +148,7 @@ export function bustScreenCache(addr: string): void {
   // The GMGN answer is cached separately and for far longer, so clearing only the
   // HTTP cache would leave Refresh redrawing the same GMGN figures.
   bustGmgnCache(a);
+  bustSerializedCache(a);
 }
 
 async function fetchJson(url: string): Promise<any | null> {
@@ -200,7 +203,7 @@ export async function screenToken(
   const bs = ctx.blockscout; // null = explorer tak tersedia (mis. BSC)
 
   // Fire every request at once, including the on-chain sell-path simulation.
-  const [tokenInfo, holders, contract, dex, sell, renounced, gmgn, insightx, goplus, counters] = await Promise.all([
+  const [tokenInfo, holders, contract, dex, sell, renounced, gmgn, insightx, goplus, counters, serialized] = await Promise.all([
     bs ? fetchJson(`${bs}/tokens/${addr}`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/tokens/${addr}/holders`) : Promise.resolve(null),
     bs ? fetchJson(`${bs}/smart-contracts/${addr}`) : Promise.resolve(null),
@@ -211,8 +214,17 @@ export async function screenToken(
     insightxMetrics(addr, ctx.key).catch(() => null), // fail-open: klaster holder
     goplusInfo(addr, ctx.key).catch(() => null), // fail-open: penambal BSC
     bs ? fetchJson(`${bs}/tokens/${addr}/counters`) : Promise.resolve(null),
+    serializedInfo(addr, ctx.key).catch(() => null), // fail-open: audit kontrak + hook
   ]);
   if (sell.flag) flags.push(sell.flag);
+
+  // A failed audit is a BLOCKING verdict, not a display row: `verdict` feeds the
+  // /add guard. The hook is judged separately and counts the same — a clean token
+  // behind a draining hook is still a position you cannot get out of.
+  if (serialized?.tokenSafe === false)
+    flags.push({ level: 'BAHAYA', msg: 'Audit: token contract is UNSAFE' });
+  if (serialized?.hookSafe === false)
+    flags.push({ level: 'BAHAYA', msg: 'Audit: V4 hook is UNSAFE' });
 
   const dexBase = (dex?.pairs ?? []).find(
     (p: any) => p.chainId === ctx.dexKey && (p.baseToken?.address || '').toLowerCase() === addr.toLowerCase(),
@@ -251,8 +263,8 @@ export async function screenToken(
     );
   } else {
     // With no explorer (BSC) the answer comes from GoPlus; if that is empty too, null.
-    verified = bs ? false : (goplus?.verified ?? null);
-    isProxy = goplus?.isProxy ?? null;
+    verified = bs ? false : (goplus?.verified ?? serialized?.verified ?? null);
+    isProxy = goplus?.isProxy ?? serialized?.isProxy ?? null;
   }
   if (verified === false) flags.push({ level: 'HATI-HATI', msg: 'Contract is NOT verified (source code unavailable)' });
   if (isProxy) flags.push({ level: 'INFO', msg: 'Upgradeable contract (proxy) — the dev can change its logic' });
@@ -391,6 +403,7 @@ export async function screenToken(
     gmgn,
     insightx,
     goplus,
+    serialized,
     scamFlag,
     sellPath: sell.status,
     flags,
@@ -607,6 +620,23 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
   const risky = (n: number | null): string =>
     n === null ? UNK : `${pct(n)} ${n >= 20 ? '\u{1F534}' : n >= 5 ? '\u26A0\uFE0F' : '\u2705'}`;
 
+  // Risk lines from the audit. The description is the only part worth showing —
+  // the payload also carries the offending SOURCE CODE, which would blow past
+  // Telegram's 4096-char limit on a token with three findings.
+  const CAP = 88;
+  const riskLine = (r: { type: string; impact: string; description: string }): string => {
+    const d = r.description.length > CAP ? `${r.description.slice(0, CAP - 1)}…` : r.description;
+    return `${esc(r.type)} ${/crit|high/i.test(r.impact) ? '🔴' : '⚠️'} ${esc(d)}`;
+  };
+  const sa = s.serialized;
+  // The warning count rides along with the verdict. Serialized does NOT flip
+  // isSafe for warning-impact findings, so a bare "SAFE ✅" above two ⚠️ lines
+  // reads as a contradiction — the card would look like it disagrees with itself.
+  const safeMark = (v: boolean | null, risks: number): string => {
+    const n = risks ? ` · ${risks} warning${risks > 1 ? 's' : ''}` : '';
+    return v === null ? UNK : v ? `SAFE ✅${n}` : `UNSAFE 🚫${n}`;
+  };
+
   // Tree layout: each section is separated so its last row uses the └ elbow.
   const tree = (rows: Array<[string, string]>): string[] =>
     rows.map(([k, v], i) => `${i === rows.length - 1 ? '└' : '├'}  ${esc(k)}: ${v}`);
@@ -639,6 +669,21 @@ export function formatScreen(s: ScreenResult, opts?: { ca?: string; chainLabel?:
       ['Ownership', renounced === null ? UNK : renounced ? 'Renounced ✅' : 'Owned ⚠️'],
     ]),
     '',
+    // Only rendered when the audit answered. An empty "AUDIT: unknown" section
+    // reads as a verdict of its own; absence should just be absence.
+    ...(sa
+      ? [
+          `🔬 ${bold('AUDIT :')}`,
+          ...tree([
+            ['Contract', safeMark(sa.tokenSafe, sa.risks.length)],
+            ...(sa.hookAddress
+              ? ([['V4 Hook', safeMark(sa.hookSafe, sa.hookRisks.length)]] as Array<[string, string]>)
+              : []),
+          ]),
+          ...[...sa.risks, ...sa.hookRisks].slice(0, 4).map((r) => `   • ${riskLine(r)}`),
+          '',
+        ]
+      : []),
     `👥 ${bold('HOLDER RISK :')}`,
     ...tree([
       ['Dev Wallet', dev === null ? UNK : `${pct(dev)} ${dev >= 10 ? '🔴' : dev >= 5 ? '⚠️' : '✅'}`],
