@@ -18,6 +18,7 @@ import {
   registeredCommands,
 } from './core.js';
 import { renderProfitCard } from './card.js';
+import { onchainV4Pools } from './onchainPools.js';
 import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
 import { config, EXIT_CONFIG } from './config.js';
@@ -2091,10 +2092,15 @@ async function continueAddlp(
     prog,
     msg.msgProgress(pre ? 'finding pools…' : `auditing token & finding pools on ${cc.label}…`),
   );
-  const [screened, found, krystalFound] = await Promise.allSettled([
+  const [screened, found, krystalFound, onchainFound] = await Promise.allSettled([
     pre ? Promise.resolve(null) : screenToken(token, cc),
     explore.poolsForToken(cc, token),
     krystal.krystalPools(cc, token),
+    // Third source, read from the chain itself. Both indexers can be blind at the
+    // same time — $RSTR was live with $86k of liquidity while each returned zero —
+    // and from the outside that gap is indistinguishable from a token having no
+    // pools at all.
+    onchainV4Pools(cc, token),
   ]);
 
   let screenBahaya = pre?.bahaya ?? false;
@@ -2131,6 +2137,9 @@ async function continueAddlp(
   const kPools = krystalFound.status === 'fulfilled' ? krystalFound.value : [];
   if (krystalFound.status === 'rejected')
     console.log('[krystal] gagal:', String(krystalFound.reason).slice(0, 120));
+  const oPools = onchainFound.status === 'fulfilled' ? onchainFound.value : [];
+  if (onchainFound.status === 'rejected')
+    console.log('[onchain] gagal:', String(onchainFound.reason).slice(0, 120));
   const poolIdOf = (p: explore.TokenPool): string | null =>
     p.poolKey
       ? ethers.keccak256(
@@ -2170,8 +2179,17 @@ async function continueAddlp(
     )
   ).filter((p): p is explore.TokenPool => p !== null);
 
-  // Krystal first (correct TVL and a verified poolKey), then whatever the gateway adds.
-  let pools = [...kPools, ...gwFixed];
+  // On-chain last: it only contributes pools the two indexers never named. Its
+  // poolKey is already re-hashed against the poolId it came from, so it needs no
+  // further resolution — the same guarantee Krystal's path carries.
+  const adaIds = new Set([...kIds, ...(gwFixed.map(poolIdOf).filter(Boolean) as string[])]);
+  const oFixed = oPools.filter((p) => {
+    const id = poolIdOf(p);
+    return id !== null && !adaIds.has(id);
+  });
+
+  // Krystal first (correct TVL and a verified poolKey), then the gateway, then chain.
+  let pools = [...kPools, ...gwFixed, ...oFixed];
   // Drop DYING v4 ETH pools: the gateway's TVL is often zero or wrong for v4, and a pool
   // with ~$0 liquidity has a price stuck far from the market, so a deposit vanishes
   // straight into a fake price (exactly the PEPE case in a $25 pool). Filter on on-chain
@@ -2220,7 +2238,7 @@ async function continueAddlp(
   // The TOP 3 by TVL+volume (rankPoolsForFill) is enough, across every source on this chain.
   pools = rankPoolsForFill(pools).slice(0, POOL_PICK_MAX);
   console.log(
-    `[add] ${token} ${cc.key}: krystal=${kPools.length} gateway=${gwPools.length} → top${pools.length}` +
+    `[add] ${token} ${cc.key}: krystal=${kPools.length} gateway=${gwPools.length} onchain=${oFixed.length} → top${pools.length}` +
       ` | ${pools.map((p) => `${p.baseSymbol}/${p.otherSymbol} ${p.protocol} fee${p.fee} $${Math.round(p.tvlUsd)}+v${Math.round(p.vol24hUsd ?? 0)}`).join(' , ')}`,
   );
 
