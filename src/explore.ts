@@ -191,7 +191,7 @@ const TOKEN_QUERY = `query PoolsForToken($chain: Chain!, $n: Int!, $t: String!) 
 
 /** Sisi base sebuah token dalam pool, dicocokkan ke daftar base CHAIN ini
  *  (WETH/WBNB, USDG, USDT). null = bukan aset base. */
-const baseKindOf = (
+export const baseKindOf = (
   sym: string | null | undefined,
   addr: string | null | undefined,
   ctx: ChainCtx,
