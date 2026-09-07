@@ -149,6 +149,32 @@ const ratioToPct = (v: unknown): number | null => {
 };
 const boolOf = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
 
+/**
+ * Holder tags rolled up into the four figures the audit card shows.
+ *
+ * Exported so it can be tested WITHOUT a network call: the bug it exists to
+ * prevent is a silent one. GMGN's vocabulary does NOT use the names this code
+ * once looked for — a Robinhood payload carries `dev_team` and `creator`, never
+ * a bare `dev` — so Dev Wallet printed a confident 0% for tokens whose developer
+ * was tagged and holding. That is a lie in the safe direction, the one this card
+ * must never tell. Matching a set of aliases keeps a future rename from silently
+ * zeroing a row instead of failing loudly.
+ */
+export function tagStats(list: any[]): Pick<GmgnExtra, 'devPct' | 'insidersPct' | 'bundlerPct' | 'sniperCount'> {
+  const tagged = (h: any, tags: readonly string[]): boolean => {
+    const punya = [...(h.tags ?? []), ...(h.maker_token_tags ?? [])];
+    return tags.some((t) => punya.includes(t));
+  };
+  const sumPct = (tags: readonly string[]): number =>
+    list.filter((h) => tagged(h, tags)).reduce((s, h) => s + (Number(h.amount_percentage) || 0), 0) * 100;
+  return {
+    devPct: sumPct(['dev', 'dev_team', 'creator']),
+    insidersPct: sumPct(['rat_trader', 'insider', 'sandwich_bot']),
+    bundlerPct: sumPct(['bundler']),
+    sniperCount: list.filter((h) => tagged(h, ['sniper'])).length,
+  };
+}
+
 export async function gmgnExtra(ca: string, chainKey: string): Promise<GmgnExtra> {
   const chain = CHAIN[chainKey];
   if (!chain || !process.env.GMGN_API_KEY) return EMPTY;
@@ -204,14 +230,7 @@ export async function gmgnExtra(ca: string, chainKey: string): Promise<GmgnExtra
   const list: any[] = hold?.list ?? hold?.holders ?? (Array.isArray(hold) ? hold : []);
   if (list.length) {
     out.tagsFromTop100 = true;
-    const tagged = (h: any, t: string): boolean =>
-      (h.tags ?? []).includes(t) || (h.maker_token_tags ?? []).includes(t);
-    const sumPct = (t: string): number =>
-      list.filter((h) => tagged(h, t)).reduce((s, h) => s + (Number(h.amount_percentage) || 0), 0) * 100;
-    out.devPct = sumPct('dev');
-    out.insidersPct = sumPct('rat_trader');
-    out.bundlerPct = sumPct('bundler');
-    out.sniperCount = list.filter((h) => tagged(h, 'sniper')).length;
+    Object.assign(out, tagStats(list));
   }
 
   cache.set(key, { t: Date.now(), v: out });
