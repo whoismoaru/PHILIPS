@@ -18,20 +18,34 @@ import { bold, esc, italic } from '../messages.js';
  * be the operation used most.
  */
 
-/** Median gas per operation, measured across 704 successful transactions from
- *  this wallet (14 days). A native send stays at 21,000: that is a protocol
- *  constant, not a measurement. */
+/**
+ * Median gas per operation, measured from this wallet's OWN transaction receipts.
+ *
+ * Re-measured 8 Sep 2026 against 233 receipts labelled by the bot's own log
+ * ([open] / [cashout] carry the tx hash, so an open is never mistaken for a
+ * close — both are `modifyLiquidities` on v4 and the method name cannot tell
+ * them apart), plus 45 swap and 45 approve receipts read across every chain:
+ *
+ *   Swap      327,175  (n=45)    was 280,000 — understated by 17%
+ *   Open LP   444,746  (n=116)   was 447,000 — already right
+ *   Close LP  299,432  (n=117)   was 267,000 — understated by 12%
+ *   Approve    45,985  (n=45)    was  46,000 — already right
+ *
+ * Understating is the dangerous direction: it promises an operation is cheaper
+ * than it is. To re-measure, join the tx hashes in the service log's [open] /
+ * [cashout] lines to their receipts and take the median of `gasUsed`.
+ */
 const OPS: Array<[string, bigint]> = [
-  ['Swap', 280_000n],
-  ['Open LP', 447_000n],
-  ['Close LP', 267_000n],
+  ['Swap', 327_000n],
+  ['Open LP', 445_000n],
+  ['Close LP', 299_000n],
 ];
 
 /** Cheap on every chain: not worth a ranked section each, but still shown in
  *  full. Collapsing them into "under RpX" would be a claim that quietly turns
  *  false the moment gas moves. */
 const MINOR: Array<[string, bigint]> = [
-  ['Send', 21_000n],
+  ['Send', 21_000n], // protocol constant, not a measurement
   ['Approve', 46_000n],
 ];
 
