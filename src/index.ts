@@ -1727,22 +1727,34 @@ const tightLabel = (p: explore.TokenPool): string => {
 };
 
 /** Pool summaries for the step-1 card (at most POOL_PICK_MAX, ordered by TVL). */
+/**
+ * A v4 pool whose fee lives in its HOOK, not in the pool.
+ *
+ * `fee = 0` here does not mean trading is free — the hook charges instead, and
+ * printing "0.00% Fee" invites exactly the wrong conclusion about the best pool
+ * on the card. The same reasoning applies to its APR: the pool fee is not the
+ * fee, so the usual formula has nothing true to say.
+ */
+const hookFee = (p: explore.TokenPool): boolean =>
+  p.protocol === 'v4' && p.fee === 0 && !!p.poolKey?.hooks && p.poolKey.hooks !== ethers.ZeroAddress;
+
 const poolSummaries = (pools: explore.TokenPool[]) =>
   pools.slice(0, POOL_PICK_MAX).map((p) => ({
     pair: `${p.otherSymbol} / ${p.baseSymbol}`,
     ver: p.protocol.toUpperCase(),
-    feeLabel: msg.feeLabel(p.fee),
+    feeLabel: hookFee(p) ? 'dynamic' : msg.feeLabel(p.fee),
     tvl: msg.usdCompact(p.tvlUsd),
     vol: p.vol24hUsd != null && p.vol24hUsd > 0 ? msg.usdCompact(p.vol24hUsd) : '?',
     // A null APR means volume could not be read. '~0.0%' would invent a dead pool.
-    apr: p.aprPct == null ? '?' : `~${p.aprPct >= 100 ? Math.round(p.aprPct) : p.aprPct.toFixed(1)}%`,
+    // 'hook fee' says WHY it is absent, which '?' cannot.
+    apr: hookFee(p) ? 'hook fee' : p.aprPct == null ? '?' : `~${p.aprPct >= 100 ? Math.round(p.aprPct) : p.aprPct.toFixed(1)}%`,
     tight: tightLabel(p),
   }));
 
 function poolKeyboard(pools: explore.TokenPool[]) {
   return Markup.inlineKeyboard([
     ...pools.slice(0, POOL_PICK_MAX).map((p, i) => [
-      Markup.button.callback(`${p.otherSymbol} / ${p.baseSymbol} (${msg.feeLabel(p.fee)})`, `pick:${i}`),
+      Markup.button.callback(`${p.otherSymbol} / ${p.baseSymbol} (${hookFee(p) ? 'dynamic' : msg.feeLabel(p.fee)})`, `pick:${i}`),
     ]),
     [Markup.button.callback('❌ Cancel', 'cancel')],
   ]);
