@@ -66,6 +66,11 @@ const IFACE = new ethers.Interface([
 ]);
 const TOPIC = IFACE.getEvent('Initialize')!.topicHash;
 
+/** Public RPC that accepts a full-range eth_getLogs (the wallet's does not). */
+const LOGS_RPC: Record<string, string> = {
+  robinhood: 'https://rpc.mainnet.chain.robinhood.com',
+};
+
 const poolIdOf = (k: { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string }): string =>
   ethers.keccak256(
     ethers.AbiCoder.defaultAbiCoder().encode(
@@ -73,6 +78,29 @@ const poolIdOf = (k: { currency0: string; currency1: string; fee: number; tickSp
       [[k.currency0, k.currency1, k.fee, k.tickSpacing, k.hooks]],
     ),
   );
+
+async function postJson(url: string, body: unknown): Promise<any | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      signal: ctrl.signal,
+      // The public RPC sits behind the same Cloudflare as the explorer: a bare fetch
+      // gets 403, a browser user-agent gets through.
+      headers: {
+        'content-type': 'application/json',
+        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36',
+      },
+      body: JSON.stringify(body),
+    });
+    return r.ok ? await r.json() : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function getJson(url: string): Promise<any | null> {
   const ctrl = new AbortController();
@@ -94,22 +122,25 @@ async function getJson(url: string): Promise<any | null> {
 /**
  * The PoolKey behind one poolId, read from the chain's own Initialize log.
  *
- * `eth_getLogs` is not an option here: Robinhood produces a block every ~0.1s, so
- * a 42-hour-old pool sits 1.5M blocks back and every RPC rejects a range that
- * wide. Blockscout's log index answers it in one call.
+ * The wallet's RPC cannot answer this: Robinhood produces a block every ~0.1s, so
+ * a 42-hour-old pool sits 1.5M blocks back and Alchemy's free tier caps getLogs at
+ * 10 blocks. The chain's public RPC takes the full range in one call. Blockscout
+ * used to serve this and is now behind a Cloudflare challenge (permanent 403).
  */
 async function poolKeyOf(ctx: ChainCtx, poolId: string): Promise<TokenPool['poolKey'] | null> {
   const memo = cacheLoad()[poolId.toLowerCase()];
   if (memo) return memo;
 
   const mgr = V4_MANAGER[ctx.key];
-  // ctx.blockscout points at the v2 API; the log-search endpoint is the v1 one.
-  const root = (ctx.blockscout ?? '').replace(/\/api\/v2\/?$/, '');
-  if (!mgr || !root) return null;
+  const rpc = LOGS_RPC[ctx.key];
+  if (!mgr || !rpc) return null;
 
-  const j = await getJson(
-    `${root}/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${mgr}&topic0=${TOPIC}&topic1=${poolId}&topic0_1_opr=and`,
-  );
+  const j = await postJson(rpc, {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'eth_getLogs',
+    params: [{ fromBlock: '0x0', toBlock: 'latest', address: mgr, topics: [TOPIC, poolId] }],
+  });
   const hit = (j?.result ?? [])[0];
   if (!hit) return null;
   let d: ethers.LogDescription | null;
