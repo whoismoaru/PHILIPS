@@ -1738,6 +1738,10 @@ const tightLabel = (p: explore.TokenPool): string => {
 const hookFee = (p: explore.TokenPool): boolean =>
   p.protocol === 'v4' && p.fee === 0 && !!p.poolKey?.hooks && p.poolKey.hooks !== ethers.ZeroAddress;
 
+/** Volume that proves a pool HAS traded, so a zero fee-growth reading means the
+ *  fee went somewhere other than the LPs rather than that nothing happened yet. */
+const NO_FEE_VOL_USD = 5_000;
+
 const poolSummaries = (pools: explore.TokenPool[]) =>
   pools.slice(0, POOL_PICK_MAX).map((p) => ({
     pair: `${p.otherSymbol} / ${p.baseSymbol}`,
@@ -2217,6 +2221,16 @@ async function continueAddlp(
           // at fee 30000 read "TVL $173" with activeLiq 0). Minting there gives
           // 'liquidity 0' or traps the funds. Drop it whatever the base (ETH and USDG alike).
           if (!h || h.liquidity === 0n) return null;
+          // A pool that has never accrued fee growth DESPITE real volume pays its
+          // LPs nothing: the hook takes the swap fee and routes it away. Providing
+          // liquidity there carries the full impermanent-loss risk for zero income,
+          // which is strictly worse than not opening at all — so it is dropped, not
+          // merely flagged. The volume test matters: a brand-new pool also reads
+          // zero, and that means "has not traded yet", not "will never pay".
+          if (!h.paysLps && (p.vol24hUsd ?? 0) >= NO_FEE_VOL_USD) {
+            console.log(`[pools] ${p.baseSymbol}/${p.otherSymbol} fee=${p.fee} dibuang: LP tak dapat fee (vol $${Math.round(p.vol24hUsd ?? 0).toLocaleString()}, feeGrowth 0)`);
+            return null;
+          }
           // For ETH pairs there is a market reference, so also drop anything off by >25%.
           if (p.base === 'weth' && tokMkt && h.impliedTokenEthPrice) {
             const r = h.impliedTokenEthPrice / tokMkt;

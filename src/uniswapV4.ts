@@ -653,8 +653,13 @@ export async function resolvePoolKeyV4(
 export async function poolHealthV4(
   cc: ChainCtx,
   pk: PoolKeyV4,
-): Promise<{ liquidity: bigint; impliedTokenEthPrice: number | null }> {
+): Promise<{ liquidity: bigint; impliedTokenEthPrice: number | null; paysLps: boolean }> {
   const liquidity = await readPoolLiquidity(cc, pk).catch(() => 0n);
+  // A pool that has never accrued fee growth pays its LPs nothing. Unreadable is
+  // NOT the same as zero: a failed read must not condemn a healthy pool, so it
+  // fails open to `true`.
+  const fg = await readFeeGrowth(cc, pk).catch(() => null);
+  const paysLps = fg === null ? true : fg.g0 > 0n || fg.g1 > 0n;
   let impliedTokenEthPrice: number | null = null;
   const pb = pairBase(cc, pk.currency0, pk.currency1);
   if (pb.base === 'ETH') {
@@ -670,7 +675,7 @@ export async function poolHealthV4(
       /* leave it null */
     }
   }
-  return { liquidity, impliedTokenEthPrice };
+  return { liquidity, impliedTokenEthPrice, paysLps };
 }
 
 async function ensurePermit2(cc: ChainCtx, token: string, spender: string, amount: bigint): Promise<void> {
@@ -1004,6 +1009,25 @@ async function readPoolLiquidity(cc: ChainCtx, pk: PoolKeyV4): Promise<bigint> {
   const slot = ethers.zeroPadValue(ethers.toBeHex(base + 3n), 32);
   const raw = BigInt(await mgr.extsload(slot));
   return raw & ((1n << 128n) - 1n);
+}
+
+/**
+ * A pool's LIFETIME fee growth. Zero on both sides means the pool has never paid
+ * its liquidity providers a single unit.
+ *
+ * On a hook pool with `fee = 0` the hook collects the swap fee and routes it
+ * elsewhere — protocol, creator, buyback — so `feeGrowthGlobal` never moves no
+ * matter how much volume passes through. Measured on Robinhood: $RSTR's deepest
+ * pool turned over $3.4M in a day with both counters still at zero, while three
+ * hookless pools on the same token had accrued normally.
+ */
+export async function readFeeGrowth(cc: ChainCtx, pk: PoolKeyV4): Promise<{ g0: bigint; g1: bigint }> {
+  const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const poolId = ethers.keccak256(coder.encode(['tuple(address,address,uint24,int24,address)'], [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]]));
+  const base = BigInt(ethers.keccak256(ethers.concat([poolId, ethers.zeroPadValue(ethers.toBeHex(6n), 32)])));
+  const at = async (off: bigint) => BigInt(await mgr.extsload(ethers.zeroPadValue(ethers.toBeHex(base + off), 32)));
+  return { g0: await at(1n), g1: await at(2n) };
 }
 
 /**
