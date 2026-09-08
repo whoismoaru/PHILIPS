@@ -108,7 +108,13 @@ export async function fetchTopPools(
   } finally {
     clearTimeout(timer);
   }
-  if (json?.errors?.length) throw new Error(json.errors[0]?.message ?? 'gateway error');
+  // GraphQL answers partially: on Robinhood every v4 pool returns "external API
+  // error" for cumulativeVolume while the pool itself arrives intact. Throwing on a
+  // non-empty errors[] discarded 37 good pools on every /add and fell through to the
+  // on-chain fallback -- seconds wasted before it even started. Only a response with
+  // no usable payload is a real failure; a missing optional field already reads as 0.
+  if (json?.errors?.length && !json?.data?.topV3Pools?.length && !json?.data?.topV4Pools?.length)
+    throw new Error(json.errors[0]?.message ?? 'gateway error');
 
   const raw: ApiPool[] = [
     ...(json?.data?.topV3Pools ?? []),
@@ -232,7 +238,13 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
   } finally {
     clearTimeout(timer);
   }
-  if (json?.errors?.length) throw new Error(json.errors[0]?.message ?? 'gateway error');
+  // GraphQL answers partially: on Robinhood every v4 pool returns "external API
+  // error" for cumulativeVolume while the pool itself arrives intact. Throwing on a
+  // non-empty errors[] discarded 37 good pools on every /add and fell through to the
+  // on-chain fallback -- seconds wasted before it even started. Only a response with
+  // no usable payload is a real failure; a missing optional field already reads as 0.
+  if (json?.errors?.length && !json?.data?.topV3Pools?.length && !json?.data?.topV4Pools?.length)
+    throw new Error(json.errors[0]?.message ?? 'gateway error');
 
   const out: TokenPool[] = [];
   const push = (p: ApiPool & { tickSpacing?: number; hook?: { address?: string } | null }, protocol: 'v3' | 'v4') => {
