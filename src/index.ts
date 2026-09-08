@@ -959,6 +959,17 @@ function finalizeClose(
   // see the NFT gone ('gone') must not get there first, or PnL is permanently 0.
   if (opts.reason !== 'cashed' && closingInFlight.has(tokenId)) return;
   const rec = store.get(tokenId);
+  // A position cannot legitimately vanish seconds after it was minted, but the RPC
+  // says it did: reading a brand-new tokenId from a node that has not caught up
+  // reverts with "invalid token id" -- the exact revert isGoneErr treats as proof of
+  // a burn. That killed #1092561 664ms after its mint; sync then re-imported it as a
+  // stray with no entry price, so its PnL read "entry unknown" forever. Only 'gone'
+  // is held back, and only briefly: a real burn is still caught by the next sweep.
+  const GRACE_MS = 60_000;
+  if (opts.reason === 'gone' && rec?.openedAt && Date.now() - rec.openedAt < GRACE_MS) {
+    console.log(`[gone] #${tokenId} diabaikan: baru ${Math.round((Date.now() - rec.openedAt) / 1000)}s, RPC kemungkinan tertinggal`);
+    return;
+  }
   // Journal exactly once, on the transition out of ACTIVE, to avoid a duplicate when
   // the close button is tapped again on an already-closed position.
   if (rec && rec.status === 'ACTIVE') journal.recordClose(rec, opts);
