@@ -185,52 +185,80 @@ export function v4ListDegraded(): boolean {
   return enumDegraded;
 }
 
-async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
+// Full-range eth_getLogs, which the wallet's own RPC refuses: Alchemy's free tier
+// caps the range at 10 blocks, and Robinhood is ~1.5M blocks a day. The chain's
+// public RPC answers the same query over all 58M blocks in under a second.
+const LOGS_RPC: Record<string, string> = {
+  robinhood: 'https://rpc.mainnet.chain.robinhood.com',
+};
+const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
+// Scans are incremental: the first one walks the whole chain, later ones resume from
+// where the last left off. The public RPC rate-limits full-range queries (observed
+// 429 after a handful in a row), and /positions is called often.
+const enumCache = new Map<string, { blok: number; ids: Set<string> }>();
+
+/** Forget the incremental scan state and walk the chain again from block 0. */
+export function resetV4EnumCache(): void {
+  enumCache.clear();
+}
+
+async function logsRpc(url: string, params: unknown): Promise<any[]> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { ...EXPLORER_HEADERS, 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getLogs', params: [params] }),
+  });
+  if (!res.ok) throw new Error(`logs HTTP ${res.status}`);
+  const j: any = await res.json();
+  if (j.error) throw new Error(String(j.error.message ?? 'logs error').slice(0, 80));
+  return j.result ?? [];
+}
+
+export async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
   const pm = V4_PM[cc.key];
   if (!pm) return [];
-  // Positions the bot manages are ALWAYS included: if Blockscout is down or lagging,
+  // Positions the bot manages are ALWAYS included: if enumeration is down or lagging,
   // your v4 positions must not vanish from /positions (catch->[] used to make them
   // flicker as "out of sync").
   const ids = new Set(allV4().filter((r) => r.chain === cc.key).map((r) => r.tokenId));
-  if (!cc.blockscout) return [...ids];
-  enumDegraded = false;
-  // Two attempts: Robinhood's Blockscout often fails BRIEFLY (a 3s abort, a 500, a
-  // 503) and succeeds a second later. Treating one failure as broken put an "indexer
-  // trouble" warning on nearly every /positions — and a warning that is always lit
-  // stops being read. The second attempt gets a longer timeout.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-        // Blockscout returns ~50 items per page, and the wallet accumulates an EMPTY
-        // v4 NFT on every close, so without pagination a live position can fall off
-        // page 1.
-      let url: string | null = `${cc.blockscout}/addresses/${cc.wallet.address}/nft?type=ERC-721`;
-      for (let page = 0; url && page < 10; page++) {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), attempt === 0 ? 3000 : 8000);
-        const res = await fetch(url, { headers: EXPLORER_HEADERS, signal: ctrl.signal }).finally(() =>
-          clearTimeout(t),
-        );
-        if (!res.ok) throw new Error(`blockscout HTTP ${res.status}`);
-        const j: any = await res.json();
-        for (const x of j.items || []) {
-          if ((x.token?.address_hash || x.token?.address || '').toLowerCase() === pm.toLowerCase()) ids.add(String(x.id));
-        }
-        const p = j.next_page_params;
-        url = p ? `${cc.blockscout}/addresses/${cc.wallet.address}/nft?${new URLSearchParams(p as any)}` : null;
-      }
+  const rpc = LOGS_RPC[cc.key];
+  if (!rpc) return [...ids];
+
+  const w = ethers.zeroPadValue(cc.wallet.address, 32);
+  const cache = enumCache.get(cc.key);
+  const dari = cache ? cache.blok + 1 : 0;
+  try {
+    const kini = await cc.provider.getBlockNumber();
+    if (cache && dari > kini) {
       enumDegraded = false;
-      break;
-    } catch (e) {
-      // Do not swallow this: an indexer failure that v4store happened to cover has to
-      // be visible. And not only in the server log — whoever is looking at /positions
-      // needs to know the list may be incomplete. This is what used to make positions
-      // "disappear" for no apparent reason.
-      enumDegraded = true;
-      console.log(
-        `[v4] enumerasi Blockscout gagal (percobaan ${attempt + 1}/2), pakai v4store saja:`,
-        (e as Error).message.slice(0, 100),
-      );
+      for (const id of cache.ids) ids.add(id);
+      return [...ids];
     }
+    const rentang = { fromBlock: '0x' + dari.toString(16), toBlock: '0x' + kini.toString(16), address: pm };
+    const [masuk, keluar] = await Promise.all([
+      logsRpc(rpc, { ...rentang, topics: [TRANSFER_TOPIC, null, w] }),
+      logsRpc(rpc, { ...rentang, topics: [TRANSFER_TOPIC, w, null] }),
+    ]);
+    // An NFT can leave and come back, so the LAST event per tokenId decides ownership.
+    // Ordering by (block, logIndex) is what makes a mint-then-burn in one transaction
+    // resolve correctly.
+    const ev = [
+      ...masuk.map((l) => [Number(l.blockNumber), Number(l.logIndex), l.topics[3], true] as const),
+      ...keluar.map((l) => [Number(l.blockNumber), Number(l.logIndex), l.topics[3], false] as const),
+    ].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const punya = new Map<string, boolean>(cache ? [...cache.ids].map((i) => [i, true]) : []);
+    for (const [, , topic, masukkah] of ev) punya.set(BigInt(topic).toString(), masukkah);
+    const dimiliki = new Set([...punya].filter(([, v]) => v).map(([k]) => k));
+    enumCache.set(cc.key, { blok: kini, ids: dimiliki });
+    for (const id of dimiliki) ids.add(id);
+    enumDegraded = false;
+  } catch (e) {
+    // Do not swallow this: an enumeration failure that v4store happened to cover has
+    // to be visible. And not only in the server log -- whoever is looking at
+    // /positions needs to know the list may be incomplete.
+    enumDegraded = true;
+    console.log('[v4] enumerasi log gagal, pakai v4store saja:', (e as Error).message.slice(0, 100));
+    if (cache) for (const id of cache.ids) ids.add(id);
   }
   return [...ids];
 }
