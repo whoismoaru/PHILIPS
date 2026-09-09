@@ -176,17 +176,20 @@ const QUOTER_ABI = [
 ];
 
 /**
- * Tangga slippage Uniswap: mulai 5%, naik ke 15% bila revert (volume ramai).
- * `max` menjepitnya: /buy & /sell mengirim 3 → tangga jadi [3] saja, tak pernah
- * ada percobaan kedua yang lebih longgar. Tanpa parameter = perilaku lama, sengaja
- * dipertahankan untuk close/sweep: di sana gagal berarti token nyangkut.
+ * The slippage band for EVERY swap the bot sends: start at 1%, step to 2%, then 3%,
+ * and never past it. 3 is a hard ceiling -- a caller asking for more is clamped down,
+ * not honoured. This replaced a 5%-then-15% ladder that close and sweep used
+ * uncapped, on the reasoning that a failed sell means a stuck token; the trade is
+ * deliberate, a swap that will not fill inside 3% now fails and is retried later
+ * rather than filling 15% down.
  *
  * Relay TIDAK diikutkan: default-nya sudah 1% (diverifikasi 2 Agu 2026 — kirim
  * slippageTolerance=300 justru melonggarkannya ke 3%), jadi biarkan apa adanya.
  */
-export function slipLadder(max?: number): number[] {
-  if (max === undefined) return [5, 15];
-  return [...new Set([Math.min(5, max), max])].filter((s) => s > 0);
+export const SLIP_MAX_PCT = 3;
+export function slipLadder(max: number = SLIP_MAX_PCT): number[] {
+  const cap = Math.min(max, SLIP_MAX_PCT);
+  return [...new Set([1, 2, 3].map((s) => Math.min(s, cap)))].filter((s) => s > 0);
 }
 
 /** Fallback: swap token → WETH langsung via Uniswap SwapRouter02 (pool ter-likuid). */
@@ -259,7 +262,7 @@ async function swapViaUniswap(
 /**
  * Swap token → ETH TAHAN BANTING:
  *  1. Relay, retry 3x (backoff 2s/5s) — kuat saat jaringan/API ramai.
- *  2. Fallback Uniswap router: slippage 5%, lalu 15% bila revert (volume ramai).
+ *  2. Fallback Uniswap router: slippage 1% → 2% → 3%, tak pernah lebih.
  * Lempar error hanya kalau SEMUA jalur gagal.
  */
 async function tokenBalance(tokenAddress: string, ctx: ChainCtx): Promise<bigint> {
@@ -331,7 +334,7 @@ async function lifiVerified(
     isNative ? ctx.provider.getBalance(ctx.wallet.address) : tokenBalance(toAddr, ctx);
   const before = await tokenBalance(tokenAddress, ctx);
   const outBefore = await outBal().catch(() => null);
-  const r = await withTimeout(swapViaLifi(tokenAddress, toAddr, amountWei, ctx, maxSlipPct ?? 5), LIFI_TIMEOUT_MS, 'lifi');
+  const r = await withTimeout(swapViaLifi(tokenAddress, toAddr, amountWei, ctx, Math.min(maxSlipPct ?? SLIP_MAX_PCT, SLIP_MAX_PCT)), LIFI_TIMEOUT_MS, 'lifi');
   const after = await tokenBalance(tokenAddress, ctx);
   if (before - after < (amountWei * 9n) / 10n) {
     throw new Error(`lifi did not reduce the token balance (before=${before} after=${after})`);
@@ -436,7 +439,7 @@ export async function swapTokenToEthRobust(
  * Swap token → USDG (untuk close posisi pasangan USDG). Pilih pool USDG/token
  * terlikuid, exactInputSingle via Uniswap router dgn minOut dari quoter (floor,
  * sama seperti jalur WETH — quoter gagal/0 → BATALKAN, hindari sandwich).
- * Slippage 5% lalu 15% bila revert. USDG TIDAK di-unwrap (tetap stablecoin).
+ * Slippage 1% → 2% → 3%, tak pernah lebih. USDG TIDAK di-unwrap (tetap stablecoin).
  */
 export async function swapTokenToUsdgRobust(
   tokenAddress: string,
@@ -593,8 +596,8 @@ export async function swapTokenToUsdgRobust(
       // Import dinamis: swapRoute.ts meng-import modul INI, jadi import statik
       // akan membuat siklus modul. Dipanggil saat runtime → aman.
       const { swapExactInBest } = await import('./swapRoute.js');
-      const leg1 = await swapExactInBest(tokenAddress, ctx.wethAddress, amountWei, ctx, maxSlipPct ?? 5, maxSlipPct);
-      const leg2 = await swapExactInBest(ctx.wethAddress, usdgAddress, leg1.outWei, ctx, maxSlipPct ?? 5, maxSlipPct);
+      const leg1 = await swapExactInBest(tokenAddress, ctx.wethAddress, amountWei, ctx, Math.min(maxSlipPct ?? SLIP_MAX_PCT, SLIP_MAX_PCT), maxSlipPct);
+      const leg2 = await swapExactInBest(ctx.wethAddress, usdgAddress, leg1.outWei, ctx, Math.min(maxSlipPct ?? SLIP_MAX_PCT, SLIP_MAX_PCT), maxSlipPct);
       return {
         txHashes: [...txHashes, ...leg1.txHashes, ...leg2.txHashes],
         outWei: leg2.outWei,

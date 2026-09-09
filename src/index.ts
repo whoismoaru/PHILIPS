@@ -48,7 +48,7 @@ import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v
 import * as v4store from './v4store.js';
 import * as pctPresets from './pctPresets.js';
 import { screenToken, formatScreen, bustScreenCache, getEthUsd, getTokenEthPrice } from './screening.js';
-import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE } from './relay.js';
+import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE, SLIP_MAX_PCT } from './relay.js';
 import { startMonitor } from './monitor.js';
 import * as store from './store.js';
 import * as journal from './journal.js';
@@ -3921,9 +3921,9 @@ async function recoverStrayWeth(cc: ChainCtx, why: string): Promise<void> {
 }
 
 const TSWAP_QUOTE_TTL_MS = 120_000;
-/** Maximum slippage for /buy and /sell — NEVER exceeded, with no escalation.
- *  The close and sweep paths deliberately do NOT use this: there, failing means a stuck token. */
-const MAX_SLIP_PCT = 3;
+/** Maximum slippage for /buy and /sell. Now simply the bot-wide ceiling: close and
+ *  sweep are held to the same 1-3% band, so this is no longer a stricter special case. */
+const MAX_SLIP_PCT = SLIP_MAX_PCT;
 
 async function wrapWithGasReserve(cc: ChainCtx, wrapWei: bigint): Promise<void> {
   const [nativeBal, buffer] = await Promise.all([
@@ -3973,7 +3973,7 @@ bot.action('tswapok', async (ctx) => {
     }
     await ctx.editMessageText(msg.msgProgress('swapping via the best route…'), html);
     // The price floor is the number the user ACTUALLY saw on the Preview card, minus 3%.
-    // The execution route has its own slippage fallback up to 15% and re-quotes itself;
+    // The execution route re-quotes itself and steps 1% -> 2% -> 3%, never beyond;
     // without this comparison nothing ties the executed result back to the figure shown.
     // agreed to. The check runs BEFORE the first tx, so aborting here costs 1 RPC.
     if (flow.quotedOutWei && flow.quotedOutWei > 0n) {

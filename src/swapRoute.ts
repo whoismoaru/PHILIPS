@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import { getChain, type ChainCtx } from './chains.js';
 import { approveExact } from './chain.js';
-import { NATIVE, lifiPreferred, relayQuoteOut, slipLadder, swapTokenViaRelay } from './relay.js';
+import { NATIVE, SLIP_MAX_PCT, lifiPreferred, relayQuoteOut, slipLadder, swapTokenViaRelay } from './relay.js';
 import { lifiQuoteOut, swapViaLifi } from './lifi.js';
 
 /**
@@ -182,7 +182,7 @@ export async function swapExactInBest(
   toAddr: string,
   amountInWei: bigint,
   ctx: ChainCtx = getChain(),
-  slipPct = 5,
+  slipPct = SLIP_MAX_PCT,
   maxSlipPct?: number,
 ): Promise<{ outWei: bigint; route: string; txHashes: string[] }> {
   const [uni, relayOut, lifiOut] = await Promise.all([
@@ -203,9 +203,10 @@ export async function swapExactInBest(
   const tryRelay = async () => ({ ...(await relayExec(fromAddr, toAddr, amountInWei, ctx)), route: 'relay' });
   const tryLifi = async () => ({ ...(await lifiExec(fromAddr, toAddr, amountInWei, ctx, maxSlipPct ?? slipPct)), route: 'lifi' });
 
-  // Tangga slippage Uniswap dijepit `maxSlipPct` (/buy & /sell mengirim 3): tanpa cap
-  // percobaan kedua memakai 15% — jauh di atas yang kamu setujui di kartu konfirmasi.
-  const uniSlips = maxSlipPct === undefined ? [slipPct, 15] : slipLadder(maxSlipPct);
+  // One band for every swap: 1% -> 2% -> 3%, clamped by `maxSlipPct` when the caller
+  // set a tighter one. Never above 3, so a route can no longer fill far below the
+  // number shown on the confirmation card.
+  const uniSlips = slipLadder(maxSlipPct);
   const uniSteps = uniSlips.map((s) => () => tryUni(s));
   // Urutkan penyedia menurut output quote (tertinggi dulu = likuiditas terdalam).
   // Rute yg quote-nya 0/null dibuang: tak ada gunanya dicoba. Uniswap dgn quote>0
