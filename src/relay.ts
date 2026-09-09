@@ -292,6 +292,16 @@ async function relayVerified(
   return { ...r, outEthWei: measured > 0n ? measured : r.outEthWei };
 }
 
+/**
+ * LI.FI is the primary router everywhere (swap in, swap out, bridge). A backup is
+ * only used when LI.FI's rate is genuinely worse -- more than this tolerance below
+ * the best alternative -- or when LI.FI cannot quote at all. Kept here so the swap
+ * and bridge selectors cannot drift apart.
+ */
+export const LIFI_TOL = 0.015; // 1.5%
+export const lifiPreferred = (lifi: bigint, bestOther: bigint): boolean =>
+  lifi > 0n && lifi * 1000n >= bestOther * BigInt(Math.floor((1 - LIFI_TOL) * 1000));
+
 /** Batas waktu LI.FI: kalau quote/tx belum kelar dalam tempo ini → anggap "lambat"
  *  dan mundur ke Relay/Uniswap. Sama untuk sisi jual & preview. */
 const LIFI_TIMEOUT_MS = 12_000;
@@ -302,24 +312,33 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 
-/** LI.FI token → ETH native, terverifikasi (saldo token benar-benar berkurang). */
-async function lifiVerifiedToEth(
+/**
+ * LI.FI token → `toAddr`, verified: the token balance must really drop, and the
+ * output is measured from the destination balance rather than trusted from the
+ * quote. `toAddr` = NATIVE swaps to the chain's native coin; any other address is
+ * an ERC20 (the stablecoin side uses this too).
+ */
+async function lifiVerified(
   tokenAddress: string,
+  toAddr: string,
   amountWei: bigint,
   ctx: ChainCtx,
   maxSlipPct?: number,
-): Promise<{ txHashes: string[]; outEthWei: bigint }> {
+): Promise<{ txHashes: string[]; outWei: bigint }> {
   const { swapViaLifi } = await import('./lifi.js'); // dynamic → hindari circular import
+  const isNative = toAddr === NATIVE;
+  const outBal = () =>
+    isNative ? ctx.provider.getBalance(ctx.wallet.address) : tokenBalance(toAddr, ctx);
   const before = await tokenBalance(tokenAddress, ctx);
-  const ethBefore = await ctx.provider.getBalance(ctx.wallet.address).catch(() => null);
-  const r = await withTimeout(swapViaLifi(tokenAddress, NATIVE, amountWei, ctx, maxSlipPct ?? 5), LIFI_TIMEOUT_MS, 'lifi');
+  const outBefore = await outBal().catch(() => null);
+  const r = await withTimeout(swapViaLifi(tokenAddress, toAddr, amountWei, ctx, maxSlipPct ?? 5), LIFI_TIMEOUT_MS, 'lifi');
   const after = await tokenBalance(tokenAddress, ctx);
   if (before - after < (amountWei * 9n) / 10n) {
     throw new Error(`lifi did not reduce the token balance (before=${before} after=${after})`);
   }
-  const ethAfter = await ctx.provider.getBalance(ctx.wallet.address).catch(() => null);
-  const measured = ethBefore !== null && ethAfter !== null && ethAfter > ethBefore ? ethAfter - ethBefore : 0n;
-  return { txHashes: r.txHashes, outEthWei: measured > 0n ? measured : r.outWei };
+  const outAfter = await outBal().catch(() => null);
+  const measured = outBefore !== null && outAfter !== null && outAfter > outBefore ? outAfter - outBefore : 0n;
+  return { txHashes: r.txHashes, outWei: measured > 0n ? measured : r.outWei };
 }
 
 export async function swapTokenToEthRobust(
@@ -331,12 +350,29 @@ export async function swapTokenToEthRobust(
   const errors: string[] = [];
 
   // Jalur 0 (UTAMA): LI.FI — agregator DEX terdalam & tercepat. Relay & Uniswap jadi
-  // cadangan bila LI.FI tak mendukung chain, rate-nya jelek, atau kelamaan (timeout).
-  try {
-    const r = await lifiVerifiedToEth(tokenAddress, amountWei, ctx, maxSlipPct);
-    return { ...r, route: 'lifi' };
-  } catch (e) {
-    errors.push(`lifi: ${(e as Error).message.slice(0, 80)}`);
+  // cadangan bila LI.FI tak mendukung chain, rate-nya lebih jelek dari keduanya, atau
+  // kelamaan (timeout). Rate dibandingkan lebih dulu, bukan hanya dipakai buta:
+  // "utama" berarti didahulukan selama harganya tak kalah, bukan dipakai apa pun rate-nya.
+  const { lifiQuoteOut } = await import('./lifi.js'); // dynamic → hindari circular import
+  const [lifiOutEth, relayOutEth] = await Promise.all([
+    lifiQuoteOut(tokenAddress, NATIVE, amountWei, ctx).catch(() => null),
+    relayQuoteOut(tokenAddress, NATIVE, amountWei, ctx).catch(() => null),
+  ]);
+  let lifiEthTried = false;
+  const tryLifiEth = async () => {
+    lifiEthTried = true;
+    try {
+      const r = await lifiVerified(tokenAddress, NATIVE, amountWei, ctx, maxSlipPct);
+      return { txHashes: r.txHashes, outEthWei: r.outWei, route: 'lifi' };
+    } catch (e) {
+      errors.push(`lifi: ${(e as Error).message.slice(0, 80)}`);
+      return null;
+    }
+  };
+  // Quote gagal di kedua sisi = tak ada pembanding; LI.FI tetap didahulukan.
+  if (lifiOutEth === null && relayOutEth === null ? true : lifiPreferred(lifiOutEth ?? 0n, relayOutEth ?? 0n)) {
+    const r = await tryLifiEth();
+    if (r) return r;
   }
 
   // Jalur 1: Relay (agregator, hasil ETH native langsung) — terverifikasi.
@@ -356,6 +392,13 @@ export async function swapTokenToEthRobust(
     } catch (e) {
       errors.push(`uniswap${slip}%: ${(e as Error).message.slice(0, 80)}`);
     }
+  }
+
+  // Semua cadangan gagal dan LI.FI belum sempat dicoba (quote-nya kalah). Coba
+  // sekarang: rate lebih jelek tetap lebih baik daripada token nyangkut.
+  if (!lifiEthTried) {
+    const r = await tryLifiEth();
+    if (r) return r;
   }
 
   // Jalur 3: 2-hop token → stablecoin → native. Wajib utk token yang likuiditasnya
@@ -436,6 +479,42 @@ export async function swapTokenToUsdgRobust(
   // Slipstream: quoter DEX tak tersedia → paksa lewat Relay/agregator (hasDirectPool=false).
   const hasDirectPool = !ctx.slipstream && bestReserve >= 0n;
 
+  // LI.FI is the primary router here too. This path used to go straight to the single
+  // most liquid USDG/token pool, so every sell into a stablecoin -- most positions on
+  // Robinhood -- was locked to one pool and never saw an aggregated route.
+  // Quote all three first: a backup only wins when LI.FI's rate is actually worse.
+  const { lifiQuoteOut } = await import('./lifi.js');
+  const [lifiOut, uniOut, relayOut] = await Promise.all([
+    lifiQuoteOut(tokenAddress, usdgAddress, amountWei, ctx).catch(() => null),
+    hasDirectPool
+      ? new ethers.Contract(ctx.quoterAddress, QUOTER_ABI, wallet)
+          .quoteExactInputSingle.staticCall({
+            tokenIn: tokenAddress, tokenOut: usdgAddress, amountIn: amountWei,
+            fee: bestFee, sqrtPriceLimitX96: 0n,
+          })
+          .then((q: any) => BigInt(q[0]))
+          .catch(() => null)
+      : Promise.resolve(null),
+    relayQuoteOut(tokenAddress, usdgAddress, amountWei, ctx).catch(() => null),
+  ]);
+  const bestOther = (uniOut ?? 0n) > (relayOut ?? 0n) ? (uniOut ?? 0n) : (relayOut ?? 0n);
+  const lifiFirst = lifiPreferred(lifiOut ?? 0n, bestOther);
+  let lifiTried = false;
+  const tryLifi = async (): Promise<{ txHashes: string[]; outWei: bigint; route: string } | null> => {
+    lifiTried = true;
+    try {
+      const r = await lifiVerified(tokenAddress, usdgAddress, amountWei, ctx, maxSlipPct);
+      return { ...r, route: 'lifi-usdg' };
+    } catch (e) {
+      console.log(`[swap] lifi→usdg gagal, mundur ke uniswap/relay: ${(e as Error).message.slice(0, 80)}`);
+      return null;
+    }
+  };
+  if (lifiFirst) {
+    const r = await tryLifi();
+    if (r) return r;
+  }
+
   const routerAddr = ctx.routerAddress;
   const txHashes: string[] = [];
   if (hasDirectPool) {
@@ -490,6 +569,13 @@ export async function swapTokenToUsdgRobust(
     return { txHashes: r.txHashes, outWei, route: 'relay-usdg' };
   } catch (e) {
     lastErr = `${lastErr} | relay: ${(e as Error).message.slice(0, 60)}`;
+  }
+
+  // LI.FI quoted worse than a backup, but every backup has now failed. Try it anyway
+  // before the 2-hop: a worse rate beats a stuck token.
+  if (!lifiTried) {
+    const r = await tryLifi();
+    if (r) return r;
   }
 
   // Rute 3: 2-hop token → WETH → USDG. Cermin dari `usdg-hop` di

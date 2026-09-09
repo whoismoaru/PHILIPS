@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { type ChainCtx } from './chains.js';
-import { getBridgeQuote, executeBridge, NATIVE, type BridgeQuote } from './relay.js';
+import { getBridgeQuote, executeBridge, lifiPreferred, NATIVE, type BridgeQuote } from './relay.js';
 import { lifiBridgeQuote, lifiSupports } from './lifi.js';
 
 export type BridgeAssets = { originCurrency?: string; destinationCurrency?: string };
@@ -44,6 +44,12 @@ export async function bestBridgeQuote(
     }
     return b.quote.outWei > a.quote.outWei ? 1 : b.quote.outWei < a.quote.outWei ? -1 : 0;
   });
+  // LI.FI = penyedia UTAMA, sama seperti sisi swap: didahulukan selama output-nya tak
+  // lebih jelek dari Relay di luar toleransi. Tanpa ini bridge murni "output tertinggi",
+  // sehingga selisih sepersekian persen sudah cukup memindahkannya ke Relay.
+  const lifi = ok.find((o) => o.provider === 'lifi');
+  const relay = ok.find((o) => o.provider === 'relay');
+  if (lifi && (!relay || lifiPreferred(lifi.quote.outWei, relay.quote.outWei))) return lifi;
   return ok[0];
 }
 

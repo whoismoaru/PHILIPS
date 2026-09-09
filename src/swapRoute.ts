@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import { getChain, type ChainCtx } from './chains.js';
 import { approveExact } from './chain.js';
-import { NATIVE, relayQuoteOut, slipLadder, swapTokenViaRelay } from './relay.js';
+import { NATIVE, lifiPreferred, relayQuoteOut, slipLadder, swapTokenViaRelay } from './relay.js';
 import { lifiQuoteOut, swapViaLifi } from './lifi.js';
 
 /**
@@ -32,15 +32,10 @@ const bal = (token: string, ctx: ChainCtx): Promise<bigint> =>
 // LI.FI = router UTAMA. Dipakai selama rate-nya tak lebih jelek dari alternatif
 // terbaik lebih dari LIFI_TOL, dan quote-nya tak kelamaan (LIFI_TIMEOUT_MS).
 // Kalau jelek/lambat → mundur ke Relay/Uniswap (best-of).
-const LIFI_TOL = 0.015; // 1.5%
 const LIFI_TIMEOUT_MS = 12_000;
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
 }
-/** LI.FI dipilih duluan bila quote-nya ≥ (1 − tol) × alternatif terbaik. */
-const lifiPreferred = (lifi: bigint, bestOther: bigint): boolean =>
-  lifi > 0n && lifi * 1000n >= bestOther * BigInt(Math.floor((1 - LIFI_TOL) * 1000));
-
 /** Quote Uniswap exact-in di pool from/to ter-likuid. null bila tak ada pool/quoter gagal. */
 export async function quoteUniswap(
   fromAddr: string,
