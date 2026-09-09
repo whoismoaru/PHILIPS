@@ -21,3 +21,13 @@ assert.equal(lifiPreferred(M, 0n), true, 'tanpa pembanding harus LI.FI');
 assert.equal(LIFI_TOL, 0.015, 'toleransi berubah tanpa sengaja');
 
 console.log('ok: pemilihan rute LI.FI-utama benar di semua kasus');
+
+// Slippage band: every swap steps 1% -> 2% -> 3%, and 3 is a ceiling nobody escapes.
+import { slipLadder, SLIP_MAX_PCT } from '../src/relay.js';
+assert.deepEqual(slipLadder(), [1, 2, 3], 'tangga bawaan harus 1-3%');
+assert.deepEqual(slipLadder(3), [1, 2, 3], 'cap 3 = tangga penuh');
+assert.deepEqual(slipLadder(2), [1, 2], 'cap 2 harus berhenti di 2%');
+assert.deepEqual(slipLadder(1), [1], 'cap 1 hanya 1%');
+assert.deepEqual(slipLadder(15), [1, 2, 3], 'permintaan 15% harus dijepit ke 3%');
+assert.equal(SLIP_MAX_PCT, 3, 'plafon slippage berubah tanpa sengaja');
+console.log('ok: slippage terkunci di pita 1-3% termasuk saat pemanggil minta lebih');

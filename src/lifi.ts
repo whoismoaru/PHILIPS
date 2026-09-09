@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { getChain, type ChainCtx } from './chains.js';
-import { NATIVE } from './relay.js';
+import { NATIVE, SLIP_MAX_PCT } from './relay.js';
 
 /**
  * LI.FI (mesin di balik Jumper) — agregator swap & bridge lintas ratusan DEX/bridge.
@@ -65,7 +65,7 @@ export async function lifiQuoteOut(
     toToken: tok(toAddr),
     fromAmount: amountWei.toString(),
     fromAddress: ctx.wallet.address,
-    slippage: '0.05',
+    slippage: String(SLIP_MAX_PCT / 100),
   });
   const raw = q?.estimate?.toAmount;
   try {
@@ -81,7 +81,7 @@ export async function swapViaLifi(
   toAddr: string,
   amountWei: bigint,
   ctx: ChainCtx,
-  slipPct = 5,
+  slipPct = SLIP_MAX_PCT,
 ): Promise<{ txHashes: string[]; outWei: bigint }> {
   if (!lifiSupports(ctx)) throw new Error('LI.FI tidak mendukung chain ini');
   const wallet = ctx.wallet;
@@ -92,7 +92,7 @@ export async function swapViaLifi(
     toToken: tok(toAddr),
     fromAmount: amountWei.toString(),
     fromAddress: wallet.address,
-    slippage: String(slipPct / 100),
+    slippage: String(Math.min(slipPct, SLIP_MAX_PCT) / 100),
   });
   if (!q) throw new Error('LI.FI quote gagal / kosong');
   const tr = q.transactionRequest;
@@ -156,7 +156,7 @@ export async function lifiBridgeQuote(
     fromAmount: amountWei.toString(),
     fromAddress: from.wallet.address,
     toAddress: from.wallet.address,
-    slippage: '0.05',
+    slippage: String(SLIP_MAX_PCT / 100),
   });
   if (!q) throw new Error('LI.FI bridge quote gagal');
   const tr = q.transactionRequest;

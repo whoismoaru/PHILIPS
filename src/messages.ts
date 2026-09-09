@@ -1013,8 +1013,9 @@ export function msgTSwapConfirm(o: {
     `📤 ${bold('You pay:')} ${bold(o.amountInLabel)}`,
     `📥 ${bold('You receive ≈')} ${bold(o.estOutLabel)}`,
     `🛣️ ${bold('Route:')} ${esc(o.route)}`,
-    // 5%->15% applies to router routes only; relay routes are protected by the provider's quoter.
-    `🛡️ ${bold('Slippage:')} ${o.route.startsWith('uniswap') ? 'auto 5% → 15%' : `${esc(o.route)} (auto)`}`,
+    // The 1->3% ladder applies to router routes only; relay/LI.FI routes are protected
+    // by the provider's own quoter.
+    `🛡️ ${bold('Slippage:')} ${o.route.startsWith('uniswap') ? 'auto 1% → 3%' : `${esc(o.route)} (auto)`}`,
   ];
   if (o.balanceLabel) body.push(`💰 ${bold('Balance:')} ${esc(o.balanceLabel)}`);
   if (o.shortLabel) {
@@ -1875,9 +1876,9 @@ export function msgSettings(
       ? [`• Quick %: buy ${esc(pcts.buy.join('/'))} · sell ${esc(pcts.sell.join('/'))} · add ${esc(pcts.add.join('/'))} · withdraw ${esc(pcts.stop.join('/'))} · bridge ${esc(pcts.bridge.join('/'))} · send ${esc(pcts.send.join('/'))}`]
       : []),
     `• Gas Fee: Auto-fetched from L2${gasCeiling ? ` · ceiling ${esc(gasCeiling)}/tx` : ''}`,
-    // The slippage figures match what the code ACTUALLY uses: a swap tries 5% first
-    // and rises to 15% if rejected; an LP mint is separate and far tighter (0.5%).
-    '• Swap Slippage: 5%, retried at 15% if rejected',
+    // The slippage figures match what the code ACTUALLY uses: a swap steps 1% -> 2%
+    // -> 3% and never beyond; an LP mint is separate and far tighter (0.5%).
+    '• Swap Slippage: 1%, retried at 2% then 3%, never higher',
     '• LP Mint Slippage: 0.5%',
     '',
     note(nowWib()),
