@@ -40,4 +40,13 @@ await assert.rejects(
   'bridge nyangkut harus punya pesan sendiri',
 );
 
+// --- sweepable: what a treasury sweep is allowed to move. ---
+import { sweepable } from '../src/commands/treasury.js';
+const pot = [fund(8453, 500), fund(4663, 120), fund(56, 3), fund(999, 80)];
+assert.deepEqual(sweepable(pot, 8453).map((f) => f.ctx.chainId), [4663, 999], 'chain home & debu harus dikecualikan');
+assert.deepEqual(sweepable(pot, 999).map((f) => f.ctx.chainId), [8453, 4663], 'home pindah → yg lain ikut tersapu');
+assert.equal(sweepable([fund(8453, 500)], 8453).length, 0, 'semua sudah di rumah → tak ada yg disapu');
+assert.equal(sweepable(pot.map((f) => ({ ...f, usd: 1 })), 8453).length, 0, 'semua debu → jangan bakar ongkos bridge');
+console.log('ok: sapuan treasury hanya menyentuh dana di luar chain rumah & di atas ambang debu');
+
 console.log('ok: pemilihan dana lintas chain benar, dan kedatangan hanya diakui lewat selisih saldo');
