@@ -517,6 +517,10 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
 const startKeyboard = () =>
   Markup.inlineKeyboard([
     ...(walletStore.isConnected() ? [] : [[Markup.button.callback('🔗 Connect Wallet', 'connect')]]),
+    // Treasury is where the one-balance model becomes visible. Without it on this card
+    // the feature is only discoverable by typing a command nobody knows exists yet.
+    // A view action, so it may share a row; its sweep sits behind its own confirm.
+    ...(walletStore.isConnected() ? [[Markup.button.callback('💰 Treasury', 'trshow')]] : []),
     [Markup.button.callback('📖 How it Works', 'howitworks')],
   ]);
 
@@ -562,7 +566,7 @@ bot.action('howto:add', async (ctx) => {
 const helpKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('💰 Portfolio', 'portfolio'), Markup.button.callback('📊 Active LPs', 'positions')],
-    [Markup.button.callback('🧾 PnL & Journal', 'pnl')],
+    [Markup.button.callback('🧾 PnL & Journal', 'pnl'), Markup.button.callback('🏦 Treasury', 'trshow')],
     [Markup.button.callback('⛔ Emergency Close All', 'closeall_confirm')],
   ]);
 

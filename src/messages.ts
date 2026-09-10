@@ -223,8 +223,9 @@ function cockpitLines(dryRun: boolean): string[] {
       ['/claim_fees', 'Harvest fees without closing'],
       ['/stop', 'Close an LP position completely'],
       ['/unwrap', 'Return stuck wrapped native to native'],
-      ['/buy', 'Buy a token (best route)'],
+      ['/buy', 'Buy a token — funded from any chain'],
       ['/sell', 'Sell a token from your wallet'],
+      ['/treasury', 'Stablecoin per chain, and sweep it home'],
       ['/bridge', 'Move native funds between chains'],
     ]),
     '',
@@ -233,6 +234,7 @@ function cockpitLines(dryRun: boolean): string[] {
     // Entry points with no command of their own — the only place they are named.
     '',
     note('Tip: paste a token CA straight into this chat to open its audit card.'),
+    note('Hold one stablecoin on one chain — buys and LPs pull it across by themselves.'),
     // Simulation mode changes what EVERY line above means (no money moves).
     ...(dryRun ? ['', note('mode: DRY RUN — no transaction is ever sent.')] : []),
   ];
@@ -272,6 +274,9 @@ export function msgStarted(o: {
     `🛠 ${bold('Core Features :')}`,
     '- Connect your Robinhood Wallet (Manual Import)',
     '- Single-Side LP (Provide liquidity with only 1 token)',
+    // The treasury model is the reason the other lines no longer say "on this chain":
+    // capital is held in one place and fetched to wherever the token lives.
+    '- One stablecoin balance funds every chain — bridged for you',
     '- Automated Token Security Audit &amp; Rug Pull Check',
     '- Track active LP positions, APR, and earned fees',
     '',
@@ -292,7 +297,7 @@ export function msgStarted(o: {
     // sentence has to point at something actually doable: pasting a CA. "Tap the
     // button below" would point at a button that is not there.
     o.walletShort
-      ? `Paste a token contract address into the chat, or send ${code('/add_lp')}, to open a new Single-Side LP and start earning trading fees.`
+      ? `Paste a token contract address into the chat, or send ${code('/add_lp')}, to open a new Single-Side LP and start earning trading fees. Check ${code('/treasury')} to see where your stablecoin sits.`
       : 'Tap the button below to Connect your Robinhood Wallet and start earning trading fees.',
   ].join('\n');
 }
@@ -354,13 +359,15 @@ export function msgHowItWorks(): string {
     '',
     `1️⃣ ${bold('Connect your wallet')} — import it from /settings. The key is stored encrypted on this bot's server so PHILIPS can sign transactions for you.`,
     '',
-    `2️⃣ ${bold('Pick a token')} — paste a contract address (CA) straight into the chat. Every token is audited first: honeypot, buy/sell tax, locked liquidity, holder spread.`,
+    `2️⃣ ${bold('Fund once, anywhere')} — hold USDC or USDT on a single chain. When a buy or an LP needs money on a different one, PHILIPS bridges and swaps it in the same step, gas included. ${code('/treasury')} shows where every dollar sits and sweeps it back home.`,
     '',
-    `3️⃣ ${bold('Open a single-side LP')} — paste the token's contract address into the chat. You deposit only one token; the position works like a passive limit order that keeps earning fees while it waits for your price.`,
+    `3️⃣ ${bold('Pick a token')} — paste a contract address (CA) straight into the chat. Every token is audited first: honeypot, buy/sell tax, locked liquidity, holder spread.`,
     '',
-    `4️⃣ ${bold('Monitor & harvest')} — /positions for in/out of range status and /claim_fees to harvest. Open a position for its Withdraw and Close buttons.`,
+    `4️⃣ ${bold('Open a single-side LP')} — paste the token's contract address into the chat. You deposit only one token; the position works like a passive limit order that keeps earning fees while it waits for your price.`,
     '',
-    `⚠️ ${bold('Risk')}: price can move through your range (impermanent loss), and new tokens can rug. PHILIPS blocks the clearly dangerous ones, but the final call is always yours.`,
+    `5️⃣ ${bold('Monitor &amp; harvest')} — /positions for in/out of range status and /claim_fees to harvest. Open a position for its Withdraw and Close buttons.`,
+    '',
+    `⚠️ ${bold('Risk')}: price can move through your range (impermanent loss), and new tokens can rug. A cross-chain entry also takes seconds to land, and PHILIPS only credits it once the balance really arrives. PHILIPS blocks the clearly dangerous ones, but the final call is always yours.`,
   ].join('\n');
 }
 
