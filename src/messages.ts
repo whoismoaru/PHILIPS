@@ -1004,6 +1004,8 @@ export function msgTSwapConfirm(o: {
   screenFailed?: boolean;
   balanceLabel?: string;
   shortLabel?: string | null; // kurang berapa (bila kurang → tombol Konfirmasi tak dirender)
+  fundLabel?: string; // beli dibiayai stablecoin dari chain lain (dijembatani otomatis)
+  fundEtaSec?: number | null;
 }): string {
   const body: string[] = [
     `${o.buy ? '📈' : '📉'} ${bold(o.buy ? 'Buy Order Preview' : 'Sell Order Preview')}`,
@@ -1018,6 +1020,18 @@ export function msgTSwapConfirm(o: {
     `🛡️ ${bold('Slippage:')} ${o.route.startsWith('uniswap') ? 'auto 1% → 3%' : `${esc(o.route)} (auto)`}`,
   ];
   if (o.balanceLabel) body.push(`💰 ${bold('Balance:')} ${esc(o.balanceLabel)}`);
+  // Cross-chain funding replaces the "top up" dead end: the money is on another chain and
+  // the bot fetches it. Say so plainly -- the user is approving a bridge, not just a swap.
+  if (o.fundLabel) {
+    body.push(
+      '',
+      `🌉 ${bold('Funded from:')} ${esc(o.fundLabel)}`,
+      note(
+        `bridged and swapped in one route${o.fundEtaSec ? ` · ~${o.fundEtaSec}s` : ''}; ` +
+          'the token is credited only after it really lands on the destination chain.',
+      ),
+    );
+  }
   if (o.shortLabel) {
     body.push('', `🔴 ${bold(`Short by ${esc(o.shortLabel)}`)} — top up your wallet, then try again.`);
   }

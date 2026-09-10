@@ -84,6 +84,7 @@ import {
   pairLabel,
 } from './chains.js';
 import { swapExactInBest, previewSwapOut } from './swapRoute.js';
+import { stableFunds, pickFund, xQuote, xExecute } from './xchain.js';
 
 // The position has been burned or no longer exists on chain (the NFT is gone).
 
@@ -2966,6 +2967,12 @@ type TSwapFlow = {
   route?: string;
   quotedAt?: number;      // kapan angka di kartu Preview dihitung (TTL konfirmasi)
   quotedOutWei?: bigint;  // hasil yang DILIHAT user — jadi lantai minOut saat eksekusi
+  // Cross-chain funding: the base asset is short on THIS chain, so the buy is paid for
+  // with a stablecoin held on another one. Set only when that route was quoted.
+  xFundKey?: string;      // chain yg membiayai
+  xFundAddr?: string;     // alamat stablecoin di chain itu
+  xFundWei?: bigint;      // berapa yg dibelanjakan di sisi sumber
+  xMinOutWei?: bigint;    // minimum sampai di chain tujuan — dasar bukti kedatangan
   startedAt: number;
 };
 const tswapFlows = new Map<number, TSwapFlow>();
@@ -3871,6 +3878,39 @@ async function tswapQuoteConfirm(
   } catch {
     /* an unreadable balance hides the balance line rather than blocking */
   }
+  // Short on THIS chain is no longer a dead end. The treasury lives in one stablecoin on
+  // whichever chain the user funded, and the buy fetches it: LI.FI carries the dollars over
+  // and delivers the token in a single route, so there is no separate bridge step to babysit.
+  //
+  // ponytail: only a stablecoin-denominated buy is funded this way. A WETH-based buy would
+  // need a price to convert the typed amount into dollars, and the treasury model this
+  // serves is dollar-denominated anyway -- add a price lookup here if an ETH-paired chain
+  // ever needs it.
+  let fundLabel: string | undefined;
+  let fundEtaSec: number | null = null;
+  if (tflow.buy && shortLabel && isStableBase(base.kind) && !config.safety.dryRun) {
+    try {
+      const wantUsd = Number(ethers.formatUnits(amountWei, base.decimals));
+      const fund = pickFund(await stableFunds(), wantUsd, cc.chainId);
+      if (fund && fund.ctx.chainId !== cc.chainId && fund.usd >= wantUsd) {
+        const srcWei = ethers.parseUnits(wantUsd.toFixed(fund.base.decimals), fund.base.decimals);
+        const xq = await xQuote(fund, cc, toAddr, srcWei);
+        // The floor is the number shown, minus the same 3% the same-chain path allows.
+        tflow.xFundKey = fund.ctx.key;
+        tflow.xFundAddr = fund.base.address;
+        tflow.xFundWei = srcWei;
+        tflow.xMinOutWei = (xq.quote.outWei * 97n) / 100n;
+        tflow.quotedOutWei = xq.quote.outWei;
+        tflow.route = `${xq.provider} (cross-chain)`;
+        tflow.outLabel = xq.quote.outLabel;
+        fundLabel = `${wantUsd.toFixed(2)} ${fund.base.symbol} on ${fund.ctx.label}`;
+        fundEtaSec = xq.quote.etaSec;
+        shortLabel = null; // dibiayai dari chain lain → Konfirmasi boleh muncul
+      }
+    } catch {
+      /* no cross-chain route: fall through to the plain "short by" card */
+    }
+  }
   const kb = shortLabel
     ? [[Markup.button.callback('⬅️ Back', tflow.previewBack ?? 'buyback:size'), Markup.button.callback('❌ Cancel', 'cancel')]]
     : [
@@ -3885,13 +3925,15 @@ async function tswapQuoteConfirm(
       chainLabel: cc.label,
       tokenSym: tflow.tokenSym!,
       amountInLabel,
-      estOutLabel,
-      route: q.route,
+      estOutLabel: tflow.outLabel ?? estOutLabel,
+      route: tflow.route ?? q.route,
       dryRun: config.safety.dryRun,
       danger: tflow.screenBahaya,
       screenFailed: !tflow.screenBahaya && /GAGAL/.test(tflow.screenText ?? ''),
       balanceLabel,
       shortLabel,
+      fundLabel,
+      fundEtaSec,
     }),
     { ...html, ...Markup.inlineKeyboard(kb) },
   );
@@ -3971,12 +4013,52 @@ bot.action('tswapok', async (ctx) => {
       );
       return;
     }
+    // Cross-chain buy: the dollars are on another chain, so this is not a local swap and
+    // must not run through the probe/retry machinery below -- the input balance that probe
+    // watches lives on the SOURCE chain, and a bridge still in flight would read as "never
+    // started" and be sent twice. It gets its own path, and its own proof: xExecute only
+    // returns once the token has really landed here.
+    if (buy && flow.xFundKey && flow.xFundWei && flow.xMinOutWei) {
+      const src = CHAINS[flow.xFundKey]!;
+      const fund = (await stableFunds()).find(
+        (f) => f.ctx.key === flow.xFundKey && f.base.address === flow.xFundAddr,
+      );
+      if (!fund) throw new Error(`funding balance on ${src.label} is gone — nothing was sent.`);
+      if (fund.balWei < flow.xFundWei) {
+        throw new Error(
+          `${fund.base.symbol} on ${src.label} dropped below the confirmed amount — nothing was sent.`,
+        );
+      }
+      await ctx.editMessageText(
+        msg.msgProgress(`bridging ${fund.base.symbol} from ${src.label} and swapping on ${cc.label}…`),
+        html,
+      );
+      const xq = await xQuote(fund, cc, token!, flow.xFundWei);
+      if (xq.quote.outWei < flow.xMinOutWei) {
+        throw new Error(
+          `Route moved since the preview (quoted ${flow.outLabel}, now ${xq.quote.outLabel}). Nothing was sent — run /buy again.`,
+        );
+      }
+      const r = await xExecute(xq, cc, token!, flow.xFundWei, flow.xMinOutWei);
+      const outLabel = `${Number(ethers.formatUnits(r.received, tokenDec!)).toLocaleString('en-US', { maximumFractionDigits: 6 })} ${tokenSym}`;
+      console.log(
+        `[xbuy] ${fund.base.symbol}@${src.label} → ${tokenSym}@${cc.label} sampai dalam ${Math.round(r.waitedMs / 1000)}s · ${r.txHashes.join(',')}`,
+      );
+      await ctx.editMessageText(
+        msg.msgTSwapDone({ buy, tokenSym: tokenSym!, amountInLabel: amountInLabel!, outLabel, route: `${xq.provider} (cross-chain)`, dryRun: false }),
+        html,
+      );
+      return;
+    }
     await ctx.editMessageText(msg.msgProgress('swapping via the best route…'), html);
     // The price floor is the number the user ACTUALLY saw on the Preview card, minus 3%.
     // The execution route re-quotes itself and steps 1% -> 2% -> 3%, never beyond;
     // without this comparison nothing ties the executed result back to the figure shown.
     // agreed to. The check runs BEFORE the first tx, so aborting here costs 1 RPC.
-    if (flow.quotedOutWei && flow.quotedOutWei > 0n) {
+    // A cross-chain buy is re-quoted against ITS own route below, not against a local
+    // pool: the figure on its card came from LI.FI end-to-end, so comparing it to a
+    // same-chain quoter here would abort on a difference that means nothing.
+    if (!flow.xFundKey && flow.quotedOutWei && flow.quotedOutWei > 0n) {
       const [qFrom, qTo] = buy ? [base!.address, token!] : [token!, base!.address];
       const fresh = await previewSwapOut(qFrom, qTo, amountWei, cc).catch(() => null);
       const floor = (flow.quotedOutWei * 97n) / 100n;
