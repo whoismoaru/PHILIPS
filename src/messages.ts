@@ -1046,6 +1046,18 @@ export function msgTSwapConfirm(o: {
   return body.join('\n');
 }
 
+/** Capital was pulled in from another chain before an LP entry. One card, so the user
+ *  can see exactly what moved and what it cost before the position card arrives. */
+export function msgXFunded(lines: string[]): string {
+  return [
+    `🌉 ${bold('Funded from treasury')}`,
+    '',
+    ...lines.map((l) => `• ${esc(l)}`),
+    '',
+    note('bridged and confirmed by balance on the destination chain; the LP opens next.'),
+  ].join('\n');
+}
+
 export function msgTSwapDone(o: {
   buy: boolean;
   tokenSym: string;

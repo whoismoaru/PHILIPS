@@ -84,7 +84,7 @@ import {
   pairLabel,
 } from './chains.js';
 import { swapExactInBest, previewSwapOut } from './swapRoute.js';
-import { stableFunds, pickFund, xQuote, xExecute } from './xchain.js';
+import { stableFunds, pickFund, xQuote, xExecute, balanceOn as xchainBalance } from './xchain.js';
 
 // The position has been burned or no longer exists on chain (the NFT is gone).
 
@@ -247,6 +247,110 @@ async function estimateAddCost(cc: ChainCtx, base: import('./chains.js').BaseAss
     balanceLabel: `${ethers.formatUnits(bal, base.decimals)} ${base.symbol} · ${msg.fmtEth(nativeBal)} ETH`,
     shortLabel: shorts.length ? shorts.join(' + ') : null,
   };
+}
+
+/**
+ * Fetch what an LP entry needs on `cc` from the stablecoin treasury on another chain.
+ *
+ * An LP mint cannot be done from the far side: both the base asset and the native gas
+ * have to be sitting on the destination chain before the wizard runs. So this is a
+ * genuine two-phase entry -- bridge, wait for the fill to land, then mint -- and not the
+ * single route a cross-chain BUY gets. Everything downstream of this call is the
+ * unchanged same-chain flow.
+ *
+ * Returns the message shown to the user, or null when nothing had to be bridged.
+ */
+async function fundFromTreasury(
+  cc: ChainCtx,
+  want: { token: string; needWei: bigint; decimals: number; symbol: string; usdPerUnit: number },
+  notify: (text: string) => Promise<void>,
+): Promise<string | null> {
+  const have = await xchainBalance(cc, want.token);
+  if (have >= want.needWei) return null;
+  const shortWei = want.needWei - have;
+  const shortUnits = Number(ethers.formatUnits(shortWei, want.decimals));
+  // Ask for a 3% margin over the gap: the arrival is measured, and a fill that lands
+  // exactly on the nose after bridge fees would still leave the mint one wei short.
+  const usd = shortUnits * want.usdPerUnit * 1.03;
+  if (!(usd > 0) || !Number.isFinite(usd)) throw new Error(`cannot price ${want.symbol} to fund it across chains`);
+
+  const fund = pickFund(await stableFunds(), usd, cc.chainId);
+  if (!fund || fund.ctx.chainId === cc.chainId || fund.usd < usd) {
+    throw new Error(
+      `Short ${shortUnits.toFixed(6)} ${want.symbol} on ${cc.label}, and no chain holds ~$${usd.toFixed(2)} of stablecoin to bridge it from.`,
+    );
+  }
+  const srcWei = ethers.parseUnits(usd.toFixed(fund.base.decimals), fund.base.decimals);
+  await notify(`bridging ~${usd.toFixed(2)} ${fund.base.symbol} from ${fund.ctx.label} for ${want.symbol}…`);
+  const q = await xQuote(fund, cc, want.token, srcWei);
+  // The floor is the quote minus 3%, the same tolerance every other route here allows.
+  const minOut = (q.quote.outWei * 97n) / 100n;
+  if (minOut < shortWei) {
+    throw new Error(
+      `Bridging $${usd.toFixed(2)} would deliver only ${q.quote.outLabel}, below the ${shortUnits.toFixed(6)} ${want.symbol} still needed.`,
+    );
+  }
+  const r = await xExecute(q, cc, want.token, srcWei, minOut);
+  const line = `${fund.base.symbol} ${usd.toFixed(2)} @ ${fund.ctx.label} → ${msg.cleanUnits(r.received, want.decimals)} ${want.symbol} @ ${cc.label} (${Math.round(r.waitedMs / 1000)}s)`;
+  console.log(`[xfund] ${line} · ${r.txHashes.join(',')}`);
+  return line;
+}
+
+/**
+ * Base asset AND gas, both fetched from the treasury when missing.
+ *
+ * Order matters: gas last. Bridging the base can itself be the thing that needs gas on
+ * the destination chain, and a native top-up that lands first would be spent by the
+ * approve that follows.
+ */
+async function fundAddFromTreasury(
+  cc: ChainCtx,
+  base: import('./chains.js').BaseAsset,
+  depositWei: bigint,
+  legs: number,
+  notify: (text: string) => Promise<void>,
+): Promise<string[]> {
+  const done: string[] = [];
+  // Needed for BOTH branches: the gas top-up below is always priced in native.
+  const ethUsd = await getEthUsd(cc.wethAddress, cc).catch(() => null);
+
+  // Base side. A wrappable base is funded as NATIVE -- the wizard wraps it itself.
+  if (base.wrappable) {
+    if (!ethUsd) throw new Error(`cannot price ${cc.nativeSymbol} on ${cc.label} — refusing to bridge blind.`);
+    const line = await fundFromTreasury(
+      cc,
+      { token: NATIVE, needWei: depositWei, decimals: 18, symbol: cc.nativeSymbol, usdPerUnit: ethUsd },
+      notify,
+    );
+    if (line) done.push(line);
+  } else {
+    const line = await fundFromTreasury(
+      cc,
+      { token: base.address, needWei: depositWei, decimals: base.decimals, symbol: base.symbol, usdPerUnit: 1 },
+      notify,
+    );
+    if (line) done.push(line);
+  }
+
+  // Gas side, priced the same way. Uses the same estimate ensureGasForLegs enforces, so a
+  // top-up here is exactly what that check is about to ask for.
+  const feeData = await cc.provider.getFeeData();
+  const gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
+  const gasNeed = (BigInt(Math.max(1, legs)) * 350_000n * gasPrice * 12n) / 10n;
+  if (gasNeed > 0n && ethUsd) {
+    const line = await fundFromTreasury(
+      cc,
+      { token: NATIVE, needWei: gasNeed, decimals: 18, symbol: cc.nativeSymbol, usdPerUnit: ethUsd },
+      notify,
+    ).catch((e) => {
+      // Gas is checked again by ensureGasForLegs with a clearer message; do not mask a
+      // successful base bridge behind a gas-quote hiccup.
+      console.log(`[xfund] gas top-up dilewati: ${(e as Error).message.slice(0, 120)}`);
+      return null;
+    });
+    if (line) done.push(line);
+  }
+  return done;
 }
 
 // The /add wizard flow (steps can move forward and back).
@@ -2535,6 +2639,28 @@ bot.action('back:amount', async (ctx) => {
 
 bot.action('addok', async (ctx) => {
   const flow = getFlow(ctx);
+  // One treasury, every chain: if the capital for this LP is not on the token's chain
+  // yet, fetch it before any path below runs. Placed here, ahead of the branching, so
+  // every entry shape (v3, v4, single, ladder) is funded by the same code and none of
+  // them had to change. A failure aborts BEFORE beginMoneyOp, so nothing is half-open.
+  if (flow?.selected && flow.ethAmount && !config.safety.dryRun) {
+    const ccFund = getChain(flow.chain);
+    const baseFund = baseOf(ccFund, flow.selected.base);
+    try {
+      const lines = await fundAddFromTreasury(
+        ccFund,
+        baseFund,
+        ethers.parseUnits(flow.ethAmount, baseFund.decimals),
+        flow.shape === 'bidask' ? (flow.legs ?? 1) : 1,
+        async (t) => void (await ctx.editMessageText(msg.msgProgress(t), html).catch(() => {})),
+      );
+      if (lines.length) await ctx.reply(msg.msgXFunded(lines), html);
+    } catch (e) {
+      flows.delete(ctx.from!.id);
+      await ctx.answerCbQuery('Funding failed.');
+      return ctx.reply(msg.msgError('add', e), html);
+    }
+  }
   // --- v4 LADDER path (batched modifyLiquidities: N legs in 1 atomic tx) ---
   if (flow?.selected?.protocol === 'v4' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1) {
     if (!flow.ethAmount || flow.rangePct === undefined || !flow.v4LadderLegs?.length)
