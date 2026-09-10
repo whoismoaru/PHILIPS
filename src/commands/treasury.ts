@@ -2,7 +2,7 @@ import { ethers } from 'ethers';
 import { Markup } from 'telegraf';
 import { bot, html } from '../core.js';
 import { CHAINS, type ChainCtx } from '../chains.js';
-import { bold, esc, note } from '../messages.js';
+import { bold, code, esc, note, nowWib } from '../messages.js';
 import { stableFunds, xQuote, xExecute, type StableFund } from '../xchain.js';
 import { config } from '../config.js';
 
@@ -34,34 +34,48 @@ export const sweepable = (funds: StableFund[], homeChainId?: number): StableFund
 
 const fmtUsd = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-function render(funds: StableFund[], home: ChainCtx | undefined): { text: string; kb: any } {
+/** Exported so the preview script can render it without a running bot. */
+export function render(funds: StableFund[], home: ChainCtx | undefined): { text: string; kb: any } {
   const total = funds.reduce((s, f) => s + f.usd, 0);
   const away = sweepable(funds, home?.chainId);
-  const body: string[] = [`🏦 ${bold('Treasury')}`, ''];
+  const awayUsd = away.reduce((s, f) => s + f.usd, 0);
+
+  const body: string[] = [
+    funds.length ? `🏦 ${bold('Treasury')} · ${funds.length} balance${funds.length === 1 ? '' : 's'}` : `🏦 ${bold('Treasury')}`,
+    '',
+  ];
+
   if (funds.length === 0) {
-    body.push('No stablecoin balance on any chain.');
+    body.push('⚪ No stablecoin on any chain.', '', note('deposit USDC or USDT on one chain — buys and LPs pull it across by themselves.'));
   } else {
-    for (const f of funds) {
-      const here = f.ctx.chainId === home?.chainId ? ' ← home' : '';
-      body.push(`• ${bold(fmtUsd(f.usd))} ${esc(f.base.symbol)} · ${esc(f.ctx.label)}${here}`);
-    }
-    body.push('', `${bold('Total:')} ${fmtUsd(total)}`);
+    // Monospace block so the dollar column lines up; no emoji inside <pre> (cell widths
+    // differ and would break the alignment).
+    const rows = funds.map((f) => {
+      const chain = f.ctx.chainId === home?.chainId ? `${f.ctx.label} (home)` : f.ctx.label;
+      return `${chain.padEnd(20).slice(0, 20)}${f.base.symbol.padEnd(7).slice(0, 7)}${fmtUsd(f.usd).padStart(11)}`;
+    });
+    body.push(`<pre>${esc(['chain'.padEnd(20) + 'stable'.padEnd(7) + 'usd'.padStart(11), ...rows].join('\n'))}</pre>`);
+    body.push('', `💰 ${bold(`Total: ${fmtUsd(total)}`)}`);
   }
+
   if (!home) {
-    body.push('', `⚠️ Home chain ${esc(HOME_KEY)} is not configured — set TREASURY_CHAIN.`);
+    body.push('', `⚠️ Home chain ${code(HOME_KEY)} is not configured — set ${code('TREASURY_CHAIN')} and restart.`);
   } else if (away.length) {
-    const awayUsd = away.reduce((s, f) => s + f.usd, 0);
-    body.push('', note(`${fmtUsd(awayUsd)} sits off ${home.label} on ${away.length} chain(s) and can be swept home.`));
+    body.push('', `🟡 ${fmtUsd(awayUsd)} sits off ${esc(home.label)} on ${away.length} chain${away.length === 1 ? '' : 's'}.`);
+  } else if (funds.length) {
+    body.push('', `🟢 All of it is on ${esc(home.label)}.`);
   }
-  body.push(note(`balances below ${fmtUsd(MIN_SWEEP_USD)} are left alone — a bridge would cost more than it moves.`));
-  const kb =
-    home && away.length
-      ? Markup.inlineKeyboard([
-          [Markup.button.callback(`🏦 Sweep ${fmtUsd(away.reduce((s, f) => s + f.usd, 0))} → ${home.label}`, 'trsweep')],
-          [Markup.button.callback('🔄 Refresh', 'trshow'), Markup.button.callback('❌ Close', 'cancel')],
-        ])
-      : Markup.inlineKeyboard([[Markup.button.callback('🔄 Refresh', 'trshow'), Markup.button.callback('❌ Close', 'cancel')]]);
-  return { text: body.join('\n'), kb };
+  if (funds.some((f) => f.usd < MIN_SWEEP_USD)) {
+    body.push(note(`under ${fmtUsd(MIN_SWEEP_USD)} per chain is left alone — a bridge would cost more than it moves.`));
+  }
+  body.push(note(`${config.safety.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
+
+  const rows: any[] = [];
+  // Money action on its own row, and it names the amount at stake rather than asking
+  // "are you sure?" about nothing.
+  if (home && away.length) rows.push([Markup.button.callback(`♻️ Sweep ${fmtUsd(awayUsd)} → ${home.label}`, 'trsweep')]);
+  rows.push([Markup.button.callback('🔄 Refresh', 'trshow'), Markup.button.callback('❌ Close', 'dismiss')]);
+  return { text: body.join('\n'), kb: Markup.inlineKeyboard(rows) };
 }
 
 async function show(ctx: any, edit: boolean) {
@@ -95,12 +109,18 @@ bot.action('trsweep', async (ctx) => {
 
     const done: string[] = [];
     const failed: string[] = [];
+    let landed = 0;
     // Chains are swept one at a time, not in parallel: each leg is a real bridge whose
     // arrival is waited on, and a failure part-way must leave the rest untouched and
     // reportable rather than firing five routes at once.
     for (const f of away) {
       try {
-        await ctx.editMessageText(`🏦 ${bold('Sweeping')}\n\n${esc(f.ctx.label)} · ${fmtUsd(f.usd)} ${esc(f.base.symbol)}…`, html);
+        await ctx
+          .editMessageText(
+            [`♻️ ${bold('Sweeping')} · ${done.length + failed.length + 1}/${away.length}`, '', `${esc(f.ctx.label)} — ${fmtUsd(f.usd)} ${esc(f.base.symbol)}`, '', note('waiting for the balance to land on the destination chain…')].join('\n'),
+            html,
+          )
+          .catch(() => {});
         if (config.safety.dryRun) {
           done.push(`${f.ctx.label}: ${fmtUsd(f.usd)} (dry run)`);
           continue;
@@ -109,15 +129,21 @@ bot.action('trsweep', async (ctx) => {
         const minOut = (q.quote.outWei * 97n) / 100n;
         const r = await xExecute(q, home, homeBase.address, f.balWei, minOut);
         const got = Number(ethers.formatUnits(r.received, homeBase.decimals));
+        landed += got;
         done.push(`${f.ctx.label}: ${fmtUsd(f.usd)} → ${fmtUsd(got)} ${homeBase.symbol} (${Math.round(r.waitedMs / 1000)}s)`);
       } catch (e) {
         failed.push(`${f.ctx.label}: ${(e as Error).message.slice(0, 100)}`);
       }
     }
-    const body = [`🏦 ${bold('Sweep complete')}`, ''];
+    // Header states the outcome in one glance: all home, or partly stuck.
+    const head = failed.length === 0 ? `✅ ${bold('Sweep complete')}` : `🟡 ${bold('Sweep partly done')}`;
+    const body = [head, ''];
     if (done.length) body.push(...done.map((l) => `✅ ${esc(l)}`));
     if (failed.length) body.push('', ...failed.map((l) => `❌ ${esc(l)}`));
-    body.push('', note('funds are counted from the balance that actually arrived, not from the quote.'));
+    if (landed > 0) body.push('', `💰 ${bold(`Landed: ${fmtUsd(landed)} ${homeBase.symbol} on ${home.label}`)}`);
+    if (failed.length) body.push('', note('the failed chains still hold their balance — tap Sweep again to retry just those.'));
+    body.push(note('counted from the balance that actually arrived, not from the quote.'));
+    body.push(note(`${config.safety.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
     await ctx.editMessageText(body.join('\n'), html);
     await show(ctx, false);
   } catch (e) {
