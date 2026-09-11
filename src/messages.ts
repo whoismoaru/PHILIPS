@@ -1568,6 +1568,8 @@ export function msgAmountStep(
   maxLabel: string,
   balanceLabel?: string,
   example = '0.05',
+  /** Set when part of the balance shown lives on other chains and will be bridged in. */
+  bridgedIn?: string,
 ): string {
   return [
     bold('OPEN LP · Step [3/5] Deposit Amount'),
@@ -1576,6 +1578,9 @@ export function msgAmountStep(
     // The balance is shown too: users used to choose blind and only then be told
     // "INSUFFICIENT" on the plan card, wasting a step and a round-trip.
     `• Balance -> ${bold(balanceLabel ?? '?')}`,
+    // Say where the money is. Showing a balance the chain does not actually hold, with no
+    // explanation, reads as a bug the first time a user sees it.
+    ...(bridgedIn ? [`• On other chains -> ${bold(bridgedIn)}, bridged in for you`] : []),
     `• Max Tx Limit -> ${bold(maxLabel)}`,
     '',
     `Tap a percentage below, or type the exact amount of ${bold(symbol)} in the chat.`,
