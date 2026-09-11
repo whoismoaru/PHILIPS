@@ -3,7 +3,8 @@ import { Markup } from 'telegraf';
 import { bot, html } from '../core.js';
 import { CHAINS, type ChainCtx } from '../chains.js';
 import { bold, code, esc, note, nowWib } from '../messages.js';
-import { stableFunds, xQuote, xExecute, type StableFund } from '../xchain.js';
+import { stableFunds, xQuote, xExecute, gasChain, gasSpendable, type StableFund } from '../xchain.js';
+import { getEthUsd } from '../screening.js';
 import { config } from '../config.js';
 
 /**
@@ -35,7 +36,17 @@ export const sweepable = (funds: StableFund[], homeChainId?: number): StableFund
 const fmtUsd = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** Exported so the preview script can render it without a running bot. */
-export function render(funds: StableFund[], home: ChainCtx | undefined): { text: string; kb: any } {
+/** The gas pocket as the card shows it. Read by `show`, passed in so `render` stays pure. */
+export type Pocket = { label: string; symbol: string; usd: number };
+
+/** Below this the pocket is called out: every chain's gas is refilled from it. */
+export const GAS_LOW_USD = 3;
+
+export function render(
+  funds: StableFund[],
+  home: ChainCtx | undefined,
+  pocket?: Pocket | null,
+): { text: string; kb: any } {
   const total = funds.reduce((s, f) => s + f.usd, 0);
   const away = sweepable(funds, home?.chainId);
   const awayUsd = away.reduce((s, f) => s + f.usd, 0);
@@ -58,6 +69,17 @@ export function render(funds: StableFund[], home: ChainCtx | undefined): { text:
     body.push('', `💰 ${bold(`Total: ${fmtUsd(total)}`)}`);
   }
 
+  // Gas is a separate pot on purpose (see fundGasFromPocket): it is never taken from the
+  // stablecoins above, so it needs its own line or it would run dry unseen.
+  if (pocket) {
+    const low = pocket.usd < GAS_LOW_USD;
+    body.push(
+      '',
+      `${low ? '🟡' : '⛽'} Gas pocket: ${bold(fmtUsd(pocket.usd))} ${esc(pocket.symbol)} on ${esc(pocket.label)}`,
+    );
+    if (low) body.push(note(`top up ${esc(pocket.symbol)} on ${esc(pocket.label)} — it pays gas on every chain.`));
+  }
+
   if (!home) {
     body.push('', `⚠️ Home chain ${code(HOME_KEY)} is not configured — set ${code('TREASURY_CHAIN')} and restart.`);
   } else if (away.length) {
@@ -78,10 +100,21 @@ export function render(funds: StableFund[], home: ChainCtx | undefined): { text:
   return { text: body.join('\n'), kb: Markup.inlineKeyboard(rows) };
 }
 
+/** Spendable pocket balance in dollars; null when its native cannot be priced. */
+async function readPocket(gc: ChainCtx): Promise<Pocket | null> {
+  const [bal, usdPer] = await Promise.all([
+    gc.provider.getBalance(gc.wallet.address).catch(() => null),
+    getEthUsd(gc.wethAddress, gc).catch(() => null),
+  ]);
+  if (bal === null || !usdPer) return null;
+  return { label: gc.label, symbol: gc.nativeSymbol, usd: Number(ethers.formatEther(gasSpendable(bal))) * usdPer };
+}
+
 async function show(ctx: any, edit: boolean) {
   const home = homeChain();
-  const funds = await stableFunds(0.01);
-  const { text, kb } = render(funds, home);
+  const gc = gasChain();
+  const [funds, pocket] = await Promise.all([stableFunds(0.01), readPocket(gc)]);
+  const { text, kb } = render(funds, home, pocket);
   const extra = { ...html, ...kb };
   return edit ? ctx.editMessageText(text, extra).catch(() => ctx.reply(text, extra)) : ctx.reply(text, extra);
 }
