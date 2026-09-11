@@ -8,9 +8,12 @@ import { bold, esc, italic } from '../messages.js';
 /**
  * /gas — what a transaction costs RIGHT NOW on each chain, in USD and Rupiah.
  *
- * The gas price comes from each chain's own RPC (`getFeeData`), the most
- * authoritative source there is and exactly what the bot uses when it sends a tx.
- * No third-party oracle sits in this path: the number shown is the number paid.
+ * The gas price comes from each chain's OWN PUBLIC ENDPOINT (the one its team
+ * publishes), not from the Alchemy node the bot trades through. A provider node
+ * answers `eth_gasPrice` from its own mempool view and its own pricing policy, so
+ * two providers on the same chain disagree; the chain's own endpoint is the figure
+ * the chain itself quotes. The bot's provider stays as the fallback, and a row says
+ * which one answered so a fallback is never mistaken for the official number.
  *
  * The gas UNITS (not the price) come from the median of this wallet's real
  * transactions over 14 days, not a guess. Textbook estimates (21k for everything)
@@ -76,11 +79,52 @@ async function usdToIdr(): Promise<number | null> {
   return v;
 }
 
-/** The effective gas price that will be paid. EIP-1559 -> maxFee; legacy -> gasPrice. */
-async function gasPriceOf(cc: ChainCtx): Promise<bigint | null> {
+/**
+ * Each chain's own published RPC, by chainId. These are the endpoints the chain
+ * teams themselves document -- deliberately NOT the .env ones, which all point at
+ * Alchemy.
+ */
+const OFFICIAL_RPC: Record<number, string> = {
+  4663: 'https://rpc.mainnet.chain.robinhood.com',
+  56: 'https://bsc-dataseed.bnbchain.org',
+  8453: 'https://mainnet.base.org',
+  999: 'https://rpc.hyperliquid.xyz/evm',
+  57073: 'https://rpc-gel.inkonchain.com',
+};
+
+/** eth_gasPrice straight from a URL. Raw fetch: one call, no provider to construct. */
+async function rawGasPrice(url: string): Promise<bigint | null> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_gasPrice', params: [] }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    const hex = (await r.json())?.result;
+    return typeof hex === 'string' ? BigInt(hex) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The effective gas price that will be paid, and where the figure came from. */
+async function gasPriceOf(cc: ChainCtx): Promise<{ price: bigint; official: boolean } | null> {
+  const url = OFFICIAL_RPC[cc.chainId];
+  if (url) {
+    const p = await rawGasPrice(url);
+    if (p !== null && p > 0n) return { price: p, official: true };
+  }
+  // Fallback only. Flagged, because an unflagged fallback would quietly claim to be
+  // the chain's own number while coming from the trading provider.
   try {
     const f = await cc.provider.getFeeData();
-    return f.gasPrice ?? f.maxFeePerGas ?? null;
+    const p = f.gasPrice ?? f.maxFeePerGas ?? null;
+    return p === null ? null : { price: p, official: false };
   } catch {
     return null;
   }
@@ -111,15 +155,16 @@ const idr = (v: number): string =>
 type Row = { label: string; usd: number | null; native: number; sym: string };
 
 /** Every operation's cost on one chain. `null` means that chain's RPC did not answer. */
-async function costsOf(cc: ChainCtx): Promise<{ label: string; gwei: string; nativeUsd: number | null; rows: Map<string, Row> } | null> {
-  const [price, nativeUsd] = await Promise.all([gasPriceOf(cc), getEthUsd(cc.wethAddress, cc).catch(() => null)]);
-  if (price === null) return null;
+async function costsOf(cc: ChainCtx): Promise<{ label: string; gwei: string; nativeUsd: number | null; official: boolean; rows: Map<string, Row> } | null> {
+  const [src, nativeUsd] = await Promise.all([gasPriceOf(cc), getEthUsd(cc.wethAddress, cc).catch(() => null)]);
+  if (src === null) return null;
+  const price = src.price;
   const rows = new Map<string, Row>();
   for (const [label, units] of [...OPS, ...MINOR]) {
     const native = Number(ethers.formatEther(price * units));
     rows.set(label, { label, usd: nativeUsd === null ? null : native * nativeUsd, native, sym: cc.nativeSymbol });
   }
-  return { label: cc.label, gwei: gwei(price), nativeUsd, rows };
+  return { label: cc.label, gwei: gwei(price), nativeUsd, official: src.official, rows };
 }
 
 type Chain = NonNullable<Awaited<ReturnType<typeof costsOf>>>;
@@ -162,6 +207,11 @@ export async function gasCard(): Promise<string> {
     ...section('Approve', chains, rate).map((l, i) => (i === 0 ? bold('SEND & APPROVE') : l)),
     '',
     ...(down.length ? [italic(`Unreachable: ${down.join(', ')}`), ''] : []),
+    // Silence here would mean "all official". Name the exceptions instead.
+    ...(() => {
+      const fb = chains.filter((c) => !c.official).map((c) => c.label);
+      return fb.length ? [italic(`Chain endpoint down, provider used: ${esc(fb.join(', '))}`), ''] : [];
+    })(),
     // The footer carries the date, time and zone, nothing else (owner's call).
     // The rate and an approve note once hitched a ride here and turned it into a
     // catch-all line.
