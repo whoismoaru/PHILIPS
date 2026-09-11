@@ -25,8 +25,6 @@ const DIAMOND: Record<number, string> = {
   999: '0x0a0758d937d1059c356D4714e57F5df0239bce1A', // HyperEVM
   8453: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', // Base
   56: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', // BSC
-  57073: '0x864b314D4C5a0399368609581d3E8933a63b9232', // Ink
-  1: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', // Ethereum
 };
 
 /** true bila LI.FI aktif untuk chain ini (diamond diketahui). */
