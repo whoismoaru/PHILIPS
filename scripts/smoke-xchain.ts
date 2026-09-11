@@ -49,4 +49,21 @@ assert.equal(sweepable([fund(8453, 500)], 8453).length, 0, 'semua sudah di rumah
 assert.equal(sweepable(pot.map((f) => ({ ...f, usd: 1 })), 8453).length, 0, 'semua debu → jangan bakar ongkos bridge');
 console.log('ok: sapuan treasury hanya menyentuh dana di luar chain rumah & di atas ambang debu');
 
+// --- gas pocket: sizing and the reserve it must never spend. ---
+import { ethers } from 'ethers';
+import { gasUsdNeeded, gasSpendable, GAS_KEEP_WEI } from '../src/xchain.js';
+
+// Destination native is not always ETH, so the size goes through USD, not 1:1.
+assert.equal(gasUsdNeeded(ethers.parseEther('0.01'), 3000), 30 * 1.03, 'gas disizing lewat USD + margin 3%');
+assert.ok(
+  gasUsdNeeded(ethers.parseEther('0.01'), 600) < gasUsdNeeded(ethers.parseEther('0.01'), 3000),
+  'native murah (BNB/HYPE) harus butuh dolar lebih sedikit drpd ETH utk jumlah yg sama',
+);
+
+// The pocket signs its own bridge, so it can never send everything it holds.
+assert.equal(gasSpendable(GAS_KEEP_WEI), 0n, 'saldo pas-pasan = tak ada yg boleh dikirim');
+assert.equal(gasSpendable(GAS_KEEP_WEI - 1n), 0n, 'di bawah cadangan jangan pernah negatif');
+assert.equal(gasSpendable(GAS_KEEP_WEI + 5n), 5n, 'hanya kelebihan di atas cadangan yg boleh pergi');
+console.log('ok: kantong gas menyisakan ongkos tx-nya sendiri & disizing lewat USD lintas native');
+
 console.log('ok: pemilihan dana lintas chain benar, dan kedatangan hanya diakui lewat selisih saldo');

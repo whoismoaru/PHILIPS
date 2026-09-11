@@ -85,7 +85,7 @@ import {
   pairLabel,
 } from './chains.js';
 import { swapExactInBest, previewSwapOut } from './swapRoute.js';
-import { stableFunds, pickFund, xQuote, xExecute, balanceOn as xchainBalance } from './xchain.js';
+import { stableFunds, pickFund, xQuote, xExecute, balanceOn as xchainBalance, fundGasFromPocket, gasChain } from './xchain.js';
 
 // The position has been burned or no longer exists on chain (the NFT is gone).
 
@@ -196,16 +196,29 @@ async function sweepTokenToBase(
  * "top up" message rather than a raw 'insufficient funds' revert. ~350k gas per leg
  * plus a 20% buffer.
  */
-async function ensureGasForLegs(cc: ChainCtx, legs: number, nativeValueWei: bigint): Promise<void> {
+async function ensureGasForLegs(
+  cc: ChainCtx,
+  legs: number,
+  nativeValueWei: bigint,
+  notify?: (text: string) => Promise<void>,
+): Promise<void> {
   const [feeData, nativeBal] = await Promise.all([cc.provider.getFeeData(), cc.provider.getBalance(cc.wallet.address)]);
   const gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
   const gasWei = (BigInt(Math.max(1, legs)) * 350_000n * gasPrice * 12n) / 10n;
   const need = gasWei + nativeValueWei;
-  if (nativeBal < need) {
+  if (nativeBal >= need) return;
+  // Every gas check in the bot routes through here, so this is the one place the pocket
+  // has to be reached from: top it up before complaining, and only report a shortfall
+  // once the pocket itself could not cover it.
+  await fundGasFromPocket(cc, need, notify ?? (async () => {})).catch((e) => {
+    console.log(`[xgas] top-up gagal: ${(e as Error).message.slice(0, 160)}`);
+  });
+  const after = await cc.provider.getBalance(cc.wallet.address);
+  if (after < need) {
     throw new Error(
       `Not enough ${cc.nativeSymbol} on ${cc.label} for gas: need ~${ethers.formatEther(need)} ` +
-        `(${legs} legs${nativeValueWei > 0n ? ' + deposit' : ''}), have ${ethers.formatEther(nativeBal)}. ` +
-        `Top up ${cc.nativeSymbol} for gas.`,
+        `(${legs} legs${nativeValueWei > 0n ? ' + deposit' : ''}), have ${ethers.formatEther(after)}. ` +
+        `Top up ${gasChain().nativeSymbol} on ${gasChain().label} — that pocket pays gas on every chain.`,
     );
   }
 }
@@ -333,24 +346,22 @@ async function fundAddFromTreasury(
     if (line) done.push(line);
   }
 
-  // Gas side, priced the same way. Uses the same estimate ensureGasForLegs enforces, so a
-  // top-up here is exactly what that check is about to ask for.
+  // Gas side comes from the POCKET, never from the stablecoin treasury: trading capital
+  // that quietly pays for gas turns a flat week into a slow loss on the PnL. Same estimate
+  // ensureGasForLegs enforces, so a top-up here is exactly what that check is about to ask.
   const feeData = await cc.provider.getFeeData();
   const gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
   const gasNeed = (BigInt(Math.max(1, legs)) * 350_000n * gasPrice * 12n) / 10n;
-  if (gasNeed > 0n && ethUsd) {
-    const line = await fundFromTreasury(
-      cc,
-      { token: NATIVE, needWei: gasNeed, decimals: 18, symbol: cc.nativeSymbol, usdPerUnit: ethUsd },
-      notify,
-    ).catch((e) => {
-      // Gas is checked again by ensureGasForLegs with a clearer message; do not mask a
-      // successful base bridge behind a gas-quote hiccup.
-      console.log(`[xfund] gas top-up dilewati: ${(e as Error).message.slice(0, 120)}`);
+  if (gasNeed > 0n) {
+    const line = await fundGasFromPocket(cc, gasNeed, notify).catch((e) => {
+      // ensureGasForLegs retries the pocket and reports it with real numbers; do not mask
+      // a successful capital bridge behind a gas hiccup here.
+      console.log(`[xgas] top-up dilewati: ${(e as Error).message.slice(0, 120)}`);
       return null;
     });
     if (line) done.push(line);
   }
+
   return done;
 }
 
@@ -4149,6 +4160,20 @@ bot.action('tswapok', async (ctx) => {
     // watches lives on the SOURCE chain, and a bridge still in flight would read as "never
     // started" and be sent twice. It gets its own path, and its own proof: xExecute only
     // returns once the token has really landed here.
+    // Gas for the chain that SIGNS this swap: the funding chain when the buy crosses
+    // chains, otherwise this one. Paid from the pocket, never from the stablecoin being
+    // traded. Non-fatal -- a real shortfall surfaces on the send below with its own numbers.
+    {
+      const signer = buy && flow.xFundKey ? CHAINS[flow.xFundKey]! : cc;
+      const fee = await signer.provider.getFeeData();
+      const gp = fee.maxFeePerGas ?? fee.gasPrice ?? 0n;
+      if (gp > 0n) {
+        await fundGasFromPocket(signer, (600_000n * gp * 12n) / 10n, async (t) => {
+          await ctx.editMessageText(msg.msgProgress(t), html).catch(() => {});
+        }).catch((e) => console.log(`[xgas] swap top-up dilewati: ${(e as Error).message.slice(0, 120)}`));
+      }
+    }
+
     if (buy && flow.xFundKey && flow.xFundWei && flow.xMinOutWei) {
       const src = CHAINS[flow.xFundKey]!;
       const fund = (await stableFunds()).find(

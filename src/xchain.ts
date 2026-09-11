@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
-import { CHAINS, ERC20_ABI, isStableBase, type BaseAsset, type ChainCtx } from './chains.js';
+import { CHAINS, DEFAULT_CHAIN, ERC20_ABI, isStableBase, type BaseAsset, type ChainCtx } from './chains.js';
+import { getEthUsd } from './screening.js';
 import { bestBridgeQuote, executeBridgeVia } from './bridgeRoute.js';
 import { NATIVE, type BridgeQuote } from './relay.js';
 
@@ -157,4 +158,102 @@ export async function xExecute(
   });
   const arr = await awaitArrival(to, toToken, before, minOutWei);
   return { txHashes: r.txHashes, received: arr.received, waitedMs: arr.waitedMs };
+}
+
+// ─── gas pocket: one ETH balance on Base pays gas on every chain ───────────────
+
+/**
+ * Gas is budgeted separately from trading capital, on purpose.
+ *
+ * Taking gas out of the stablecoin treasury would shrink the trading balance on every
+ * transaction, so a flat week would still read as a slow loss and PnL would mix market
+ * moves with network costs. Instead one native balance on ONE chain -- ETH on Base by
+ * default -- funds gas everywhere, and the stablecoin side moves only when a position
+ * is opened or closed.
+ *
+ * Base is also the chain that signs the outbound bridge, so the pocket keeps a reserve
+ * for its own transactions: a pocket that bridges itself dry cannot refill anything.
+ */
+export const GAS_CHAIN_KEY = process.env.GAS_CHAIN ?? 'base';
+/** Held back on the gas chain so the pocket can always pay for its own outbound tx. */
+export const GAS_KEEP_WEI = ethers.parseEther(process.env.GAS_KEEP_ETH ?? '0.0015');
+
+/**
+ * Dollars to bridge to cover `shortWei` of the destination native.
+ *
+ * 3% margin: the arrival is measured, and a fill that lands exactly on the nose after
+ * bridge fees would still leave the transaction one wei short of its own gas.
+ */
+export const gasUsdNeeded = (shortWei: bigint, toUsd: number): number =>
+  Number(ethers.formatEther(shortWei)) * toUsd * 1.03;
+
+/** What the pocket may send away, keeping its own outbound gas back. Never negative. */
+export const gasSpendable = (pocketWei: bigint): bigint =>
+  pocketWei > GAS_KEEP_WEI ? pocketWei - GAS_KEEP_WEI : 0n;
+
+export const gasChain = (): ChainCtx => CHAINS[GAS_CHAIN_KEY] ?? CHAINS[DEFAULT_CHAIN];
+
+/**
+ * Top the destination chain's native balance up to `needWei`, paid from the gas pocket.
+ *
+ * Returns null when nothing was needed, or when the destination IS the pocket -- there
+ * is no chain behind Base to refill it from, and `ensureGasForLegs` reports an empty
+ * pocket with a far clearer message than a failed bridge would.
+ *
+ * The destination native is not always ETH (BSC pays in BNB, HyperEVM in HYPE), so the
+ * size is set through USD rather than assumed one-to-one.
+ */
+export async function fundGasFromPocket(
+  to: ChainCtx,
+  needWei: bigint,
+  notify: (text: string) => Promise<void>,
+): Promise<string | null> {
+  const from = gasChain();
+  if (to.chainId === from.chainId) return null;
+
+  const have = await balanceOn(to, NATIVE);
+  if (have >= needWei) return null;
+  const shortWei = needWei - have;
+
+  const [toUsd, fromUsd] = await Promise.all([
+    getEthUsd(to.wethAddress, to).catch(() => null),
+    getEthUsd(from.wethAddress, from).catch(() => null),
+  ]);
+  if (!toUsd || !fromUsd) {
+    throw new Error(`cannot price ${to.nativeSymbol} or ${from.nativeSymbol} — refusing to bridge gas blind.`);
+  }
+
+  const usd = gasUsdNeeded(shortWei, toUsd);
+  const srcWei = ethers.parseEther((usd / fromUsd).toFixed(18));
+
+  const spendable = gasSpendable(await balanceOn(from, NATIVE));
+  if (srcWei > spendable) {
+    throw new Error(
+      `Gas pocket too small: need ~$${usd.toFixed(2)} of ${from.nativeSymbol} on ${from.label} for gas on ` +
+        `${to.label}, spendable ${ethers.formatEther(spendable)} ${from.nativeSymbol}. Top up ${from.label}.`,
+    );
+  }
+
+  await notify(`bridging ~$${usd.toFixed(2)} ${from.nativeSymbol} from ${from.label} for gas on ${to.label}…`);
+  const { provider, quote } = await bestBridgeQuote(from, to, srcWei, {
+    originCurrency: NATIVE,
+    destinationCurrency: NATIVE,
+  });
+  const minOut = (quote.outWei * 97n) / 100n;
+  if (minOut < shortWei) {
+    throw new Error(
+      `Bridging $${usd.toFixed(2)} would deliver only ${quote.outLabel}, below the gas still needed on ${to.label}.`,
+    );
+  }
+  const before = await balanceOn(to, NATIVE);
+  const r = await executeBridgeVia(provider, from, to, srcWei, minOut, {
+    originCurrency: NATIVE,
+    destinationCurrency: NATIVE,
+  });
+  const arr = await awaitArrival(to, NATIVE, before, minOut);
+  const line =
+    `${from.nativeSymbol} ${ethers.formatEther(srcWei)} @ ${from.label} → ` +
+    `${ethers.formatEther(arr.received)} ${to.nativeSymbol} @ ${to.label} (${Math.round(arr.waitedMs / 1000)}s)`;
+  console.log(`[xgas] ${line} · ${r.txHashes.join(',')}`);
+  return line;
 }
