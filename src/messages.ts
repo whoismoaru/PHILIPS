@@ -223,9 +223,8 @@ function cockpitLines(dryRun: boolean): string[] {
       ['/claim_fees', 'Harvest fees without closing'],
       ['/stop', 'Close an LP position completely'],
       ['/unwrap', 'Return stuck wrapped native to native'],
-      ['/buy', 'Buy a token — funded from any chain'],
+      ['/buy', 'Buy a token (best route)'],
       ['/sell', 'Sell a token from your wallet'],
-      ['/treasury', 'Stablecoin per chain, and sweep it home'],
       ['/bridge', 'Move native funds between chains'],
     ]),
     '',
@@ -234,7 +233,6 @@ function cockpitLines(dryRun: boolean): string[] {
     // Entry points with no command of their own — the only place they are named.
     '',
     note('Tip: paste a token CA straight into this chat to open its audit card.'),
-    note('Hold one stablecoin on one chain — buys and LPs pull it across by themselves.'),
     // Simulation mode changes what EVERY line above means (no money moves).
     ...(dryRun ? ['', note('mode: DRY RUN — no transaction is ever sent.')] : []),
   ];
@@ -274,9 +272,6 @@ export function msgStarted(o: {
     `🛠 ${bold('Core Features :')}`,
     '- Connect your Robinhood Wallet (Manual Import)',
     '- Single-Side LP (Provide liquidity with only 1 token)',
-    // The treasury model is the reason the other lines no longer say "on this chain":
-    // capital is held in one place and fetched to wherever the token lives.
-    '- One stablecoin balance funds every chain — bridged for you',
     '- Automated Token Security Audit &amp; Rug Pull Check',
     '- Track active LP positions, APR, and earned fees',
     '',
@@ -297,7 +292,7 @@ export function msgStarted(o: {
     // sentence has to point at something actually doable: pasting a CA. "Tap the
     // button below" would point at a button that is not there.
     o.walletShort
-      ? `Paste a token contract address into the chat, or send ${code('/add_lp')}, to open a new Single-Side LP and start earning trading fees. Check ${code('/treasury')} to see where your stablecoin sits.`
+      ? `Paste a token contract address into the chat, or send ${code('/add_lp')}, to open a new Single-Side LP and start earning trading fees.`
       : 'Tap the button below to Connect your Robinhood Wallet and start earning trading fees.',
   ].join('\n');
 }
@@ -359,15 +354,13 @@ export function msgHowItWorks(): string {
     '',
     `1️⃣ ${bold('Connect your wallet')} — import it from /settings. The key is stored encrypted on this bot's server so PHILIPS can sign transactions for you.`,
     '',
-    `2️⃣ ${bold('Fund once, anywhere')} — hold USDC or USDT on a single chain. When a buy or an LP needs money on a different one, PHILIPS bridges and swaps it in the same step, gas included. ${code('/treasury')} shows where every dollar sits and sweeps it back home.`,
+    `2️⃣ ${bold('Pick a token')} — paste a contract address (CA) straight into the chat. Every token is audited first: honeypot, buy/sell tax, locked liquidity, holder spread.`,
     '',
-    `3️⃣ ${bold('Pick a token')} — paste a contract address (CA) straight into the chat. Every token is audited first: honeypot, buy/sell tax, locked liquidity, holder spread.`,
+    `3️⃣ ${bold('Open a single-side LP')} — paste the token's contract address into the chat. You deposit only one token; the position works like a passive limit order that keeps earning fees while it waits for your price.`,
     '',
-    `4️⃣ ${bold('Open a single-side LP')} — paste the token's contract address into the chat. You deposit only one token; the position works like a passive limit order that keeps earning fees while it waits for your price.`,
+    `4️⃣ ${bold('Monitor & harvest')} — /positions for in/out of range status and /claim_fees to harvest. Open a position for its Withdraw and Close buttons.`,
     '',
-    `5️⃣ ${bold('Monitor &amp; harvest')} — /positions for in/out of range status and /claim_fees to harvest. Open a position for its Withdraw and Close buttons.`,
-    '',
-    `⚠️ ${bold('Risk')}: price can move through your range (impermanent loss), and new tokens can rug. A cross-chain entry also takes seconds to land, and PHILIPS only credits it once the balance really arrives. PHILIPS blocks the clearly dangerous ones, but the final call is always yours.`,
+    `⚠️ ${bold('Risk')}: price can move through your range (impermanent loss), and new tokens can rug. PHILIPS blocks the clearly dangerous ones, but the final call is always yours.`,
   ].join('\n');
 }
 
@@ -1011,8 +1004,6 @@ export function msgTSwapConfirm(o: {
   screenFailed?: boolean;
   balanceLabel?: string;
   shortLabel?: string | null; // kurang berapa (bila kurang → tombol Konfirmasi tak dirender)
-  fundLabel?: string; // beli dibiayai stablecoin dari chain lain (dijembatani otomatis)
-  fundEtaSec?: number | null;
 }): string {
   const body: string[] = [
     `${o.buy ? '📈' : '📉'} ${bold(o.buy ? 'Buy Order Preview' : 'Sell Order Preview')}`,
@@ -1027,18 +1018,6 @@ export function msgTSwapConfirm(o: {
     `🛡️ ${bold('Slippage:')} ${o.route.startsWith('uniswap') ? 'auto 1% → 3%' : `${esc(o.route)} (auto)`}`,
   ];
   if (o.balanceLabel) body.push(`💰 ${bold('Balance:')} ${esc(o.balanceLabel)}`);
-  // Cross-chain funding replaces the "top up" dead end: the money is on another chain and
-  // the bot fetches it. Say so plainly -- the user is approving a bridge, not just a swap.
-  if (o.fundLabel) {
-    body.push(
-      '',
-      `🌉 ${bold('Funded from:')} ${esc(o.fundLabel)}`,
-      note(
-        `bridged and swapped in one route${o.fundEtaSec ? ` · ~${o.fundEtaSec}s` : ''}; ` +
-          'the token is credited only after it really lands on the destination chain.',
-      ),
-    );
-  }
   if (o.shortLabel) {
     body.push('', `🔴 ${bold(`Short by ${esc(o.shortLabel)}`)} — top up your wallet, then try again.`);
   }
@@ -1051,18 +1030,6 @@ export function msgTSwapConfirm(o: {
   }
   body.push(note(`${o.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
   return body.join('\n');
-}
-
-/** Capital was pulled in from another chain before an LP entry. One card, so the user
- *  can see exactly what moved and what it cost before the position card arrives. */
-export function msgXFunded(lines: string[]): string {
-  return [
-    `🌉 ${bold('Funded from treasury')}`,
-    '',
-    ...lines.map((l) => `• ${esc(l)}`),
-    '',
-    note('bridged and confirmed by balance on the destination chain; the LP opens next.'),
-  ].join('\n');
 }
 
 export function msgTSwapDone(o: {
@@ -1568,8 +1535,6 @@ export function msgAmountStep(
   maxLabel: string,
   balanceLabel?: string,
   example = '0.05',
-  /** Set when part of the balance shown lives on other chains and will be bridged in. */
-  bridgedIn?: string,
 ): string {
   return [
     bold('OPEN LP · Step [3/5] Deposit Amount'),
@@ -1578,9 +1543,6 @@ export function msgAmountStep(
     // The balance is shown too: users used to choose blind and only then be told
     // "INSUFFICIENT" on the plan card, wasting a step and a round-trip.
     `• Balance -> ${bold(balanceLabel ?? '?')}`,
-    // Say where the money is. Showing a balance the chain does not actually hold, with no
-    // explanation, reads as a bug the first time a user sees it.
-    ...(bridgedIn ? [`• On other chains -> ${bold(bridgedIn)}, bridged in for you`] : []),
     `• Max Tx Limit -> ${bold(maxLabel)}`,
     '',
     `Tap a percentage below, or type the exact amount of ${bold(symbol)} in the chat.`,
