@@ -2006,7 +2006,16 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
   const raw = await rawBalanceFor(flow).catch(() => null);
   const balLabel = raw === null ? '?' : `${msg.cleanUnits(raw, dec)} ${a.symbol}`;
-  const text = msg.msgAmountStep(a.symbol, a.capLabel, balLabel, a.example);
+  // rawBalanceFor folds the off-chain treasury into the figure above; name that share so
+  // the number is not a mystery on a chain the wallet holds nothing on.
+  let bridgedIn: string | undefined;
+  if (raw !== null && flow.strategy !== 'token' && !wizardBase(flow).wrappable) {
+    const away = (await stableFunds().catch(() => []))
+      .filter((f) => f.ctx.chainId !== wizardCtx(flow).chainId)
+      .reduce((sum, f) => sum + f.usd, 0);
+    if (away > 0) bridgedIn = `$${away.toFixed(2)}`;
+  }
+  const text = msg.msgAmountStep(a.symbol, a.capLabel, balLabel, a.example, bridgedIn);
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
@@ -2020,9 +2029,21 @@ async function rawBalanceFor(flow: AddFlow): Promise<bigint> {
     return new ethers.Contract(flow.token, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address);
   }
   const base = wizardBase(flow);
-  return base.wrappable
-    ? cc.provider.getBalance(cc.wallet.address)
-    : new ethers.Contract(base.address, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address);
+  if (base.wrappable) return cc.provider.getBalance(cc.wallet.address);
+  const here: bigint = await new ethers.Contract(base.address, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address);
+  // The stablecoin side is no longer limited to this chain: fundAddFromTreasury bridges
+  // capital in before the mint, so the balance offered here is the whole treasury. Without
+  // this the wizard reads 0 on a chain holding nothing and the cross-chain entry it is
+  // supposed to enable can never be reached.
+  const elsewhere = (await stableFunds().catch(() => []))
+    .filter((f) => f.ctx.chainId !== cc.chainId)
+    .reduce((sum, f) => sum + f.usd, 0);
+  // Dollar stables are taken 1:1 across chains, minus the 3% margin the bridge asks for --
+  // offering the full figure would let a 100% deposit fail on arrival by a few cents.
+  // ponytail: stablecoin side only. A wrappable base is fundable too, but sizing it needs a
+  // live ETH price here; add that if WETH-based entries ever need cross-chain capital.
+  const reachable = elsewhere > 0 ? ethers.parseUnits((elsewhere * 0.97).toFixed(base.decimals), base.decimals) : 0n;
+  return here + reachable;
 }
 
 /**
