@@ -266,6 +266,7 @@ export async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
 const signExt24 = (v: bigint): number => Number(v >= 1n << 23n ? v - (1n << 24n) : v);
 
 // v4 Actions (v4-periphery libraries/Actions.sol)
+const DECREASE_LIQUIDITY = 0x01;
 const BURN_POSITION = 0x03;
 const TAKE_PAIR = 0x11;
 const V4_WRITE_ABI = [
@@ -430,6 +431,67 @@ export async function closePositionV4(
     }
   }
   return out;
+}
+
+/**
+ * Collect the fees of a v4 position WITHOUT touching its liquidity.
+ *
+ * v4 has no "collect" action: fees are settled by any liquidity change, so a decrease
+ * of ZERO moves the accrued fees out and leaves the position exactly as it was. Both
+ * minimums are 0 on purpose -- the amounts here ARE the fees, and a floor would make
+ * the call revert whenever the pool had earned nothing since the last read.
+ *
+ * The amounts collected are measured from the wallet's own balance delta, never from
+ * what the call claims, matching how every other money path here reports.
+ */
+export async function collectFeesV4(
+  tokenId: string,
+  cc: ChainCtx,
+): Promise<{ txHash: string; amount0: bigint; amount1: bigint; sym0: string; sym1: string; poolKey: PoolKeyV4 }> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
+  const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
+  const owner: string = await pm.ownerOf(tokenId);
+  if (owner.toLowerCase() !== cc.wallet.address.toLowerCase()) {
+    throw new Error(`v4 position #${tokenId} is not owned by this wallet.`);
+  }
+  const [pk] = await pm.getPoolAndPositionInfo(tokenId);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const actions = ethers.concat([Uint8Array.of(DECREASE_LIQUIDITY), Uint8Array.of(TAKE_PAIR)]);
+  const pDec = coder.encode(['uint256', 'uint256', 'uint128', 'uint128', 'bytes'], [tokenId, 0n, 0n, 0n, '0x']);
+  const pTake = coder.encode(['address', 'address', 'address'], [pk.currency0, pk.currency1, cc.wallet.address]);
+  const unlockData = coder.encode(['bytes', 'bytes[]'], [actions, [pDec, pTake]]);
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+
+  const bal = async (a: string) =>
+    a === ethers.ZeroAddress
+      ? cc.provider.getBalance(cc.wallet.address)
+      : (new ethers.Contract(a, ['function balanceOf(address) view returns (uint256)'], cc.provider).balanceOf(
+          cc.wallet.address,
+        ) as Promise<bigint>);
+
+  // Simulation first: a revert aborts before any gas is spent.
+  await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
+  const [b0, b1, sym0, sym1] = await Promise.all([
+    bal(pk.currency0),
+    bal(pk.currency1),
+    tokenSymbol(pk.currency0, cc),
+    tokenSymbol(pk.currency1, cc),
+  ]);
+  const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline));
+  const rc = await tx.wait();
+  const [a0, a1] = await Promise.all([bal(pk.currency0), bal(pk.currency1)]);
+  // Native gas is paid out of currency0 when it is ETH, so a delta can read negative;
+  // clamp rather than report a nonsense figure.
+  const delta = (before: bigint, after: bigint) => (after > before ? after - before : 0n);
+  return {
+    txHash: rc?.hash ?? tx.hash,
+    amount0: delta(b0, a0),
+    amount1: delta(b1, a1),
+    sym0,
+    sym1,
+    poolKey: pk,
+  };
 }
 
 /**
