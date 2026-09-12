@@ -1785,31 +1785,33 @@ export function msgSettings(
   gasCeiling?: string | null, // atap ongkos gas per-tx; null = tanpa atap
   pcts?: { buy: number[]; sell: number[]; add: number[]; stop: number[]; bridge: number[]; send: number[] },
 ): string {
-  return [
-    `⚙️ ${bold('PHILIPS Settings')}`,
+  const out = [
+    `\u2699\uFE0F ${bold('SETTINGS')}`,
     '',
-    `🔗 ${bold('Wallet Details')}`,
-    `• Address: ${addr ? code(shortAddr(addr)) : italic('not connected')}`,
-    ...(balance ? [`• Balance: ${esc(balance)}`] : []),
-    `• Network: ${esc(chainLabel)}`,
-    `• Status: ${dryRun ? `⚪ ${bold('DRY RUN')}` : `🟢 ${bold('LIVE')}`}`,
+    `\u{1F45B} ${bold('Wallet')} : ${addr ? code(shortAddr(addr)) : italic('not connected')}`,
+    ...(balance ? [`\u{1F4B0} ${bold('Balance')} : ${esc(balance)}`] : []),
+    `\u26D3\uFE0F ${bold('Chain')} : ${esc(chainLabel)}`,
+    `${dryRun ? '\u26AA' : '\u{1F7E2}'} ${bold('Mode')} : ${bold(dryRun ? 'DRY RUN' : 'LIVE')}`,
     '',
-    `💸 ${bold('Transaction Preferences')}`,
-    `• Tx Limit: ${esc(maxPerTx)}`,
-    ...(pcts
-      ? [`• Quick %: buy ${esc(pcts.buy.join('/'))} · sell ${esc(pcts.sell.join('/'))} · add ${esc(pcts.add.join('/'))} · withdraw ${esc(pcts.stop.join('/'))} · bridge ${esc(pcts.bridge.join('/'))} · send ${esc(pcts.send.join('/'))}`]
-      : []),
-    `• Gas Fee: Auto-fetched from L2${gasCeiling ? ` · ceiling ${esc(gasCeiling)}/tx` : ''}`,
-    // The slippage figures match what the code ACTUALLY uses: a swap steps 1% -> 2%
-    // -> 3% and never beyond; an LP mint is separate and far tighter (0.5%).
-    '• Swap Slippage: 1%, retried at 2% then 3%, never higher',
-    '• LP Mint Slippage: 0.5%',
-    '',
-    note(nowWib()),
-    '',
-    '—————————————————',
-    'Manage your wallet connection or adjust preferences below.',
-  ].join('\n');
+    `${bold('Tx limit')} : ${esc(maxPerTx)}`,
+    `${bold('Gas')} : auto-fetched${gasCeiling ? `, ceiling ${esc(gasCeiling)}/tx` : ', no ceiling'}`,
+    // These match what the code ACTUALLY does: a swap steps 1% -> 2% -> 3% and never
+    // beyond, while an LP mint is a separate, far tighter figure.
+    `${bold('Swap slippage')} : 1%, retried at 2% then 3%`,
+    `${bold('LP mint slippage')} : 0.5%`,
+  ];
+  if (pcts) {
+    // Named for the flow each one belongs to, not the internal key: "stop" is the
+    // percentage of an LP you close, which is a different thing from a withdrawal.
+    out.push(
+      '',
+      bold('Quick % :'),
+      `buy ${esc(pcts.buy.join('/'))} \u00B7 swap ${esc(pcts.sell.join('/'))} \u00B7 add lp ${esc(pcts.add.join('/'))}`,
+      `close lp ${esc(pcts.stop.join('/'))} \u00B7 bridge ${esc(pcts.bridge.join('/'))} \u00B7 withdraw ${esc(pcts.send.join('/'))}`,
+    );
+  }
+  out.push('', note(nowWib()));
+  return out.join('\n');
 }
 
 export function msgDisconnectConfirm(addr: string, openLp: number): string {

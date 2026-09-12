@@ -63,22 +63,25 @@ export async function cmdSettings(ctx: any) {
   const gasCeil = gasFeeCapLabel() ? `${gasFeeCapLabel()} ${cc.nativeSymbol}` : null;
   // Angka persen tiap alur bisa diubah dari sini — dulu dipatok di kode, jadi
   // praktis tak pernah bisa disesuaikan tanpa edit + restart.
+  // Labels follow the flows as they are now named. "Withdraw %" used to sit on pct:stop,
+  // which is the share of an LP you close -- a different thing from a withdrawal to an
+  // address, and the two shared one word.
   rows.push([
     Markup.button.callback('🛒 Buy %', 'pct:buy'),
-    Markup.button.callback('📉 Sell %', 'pct:sell'),
+    Markup.button.callback('💱 Swap %', 'pct:sell'),
   ]);
   rows.push([
     Markup.button.callback('➕ Add LP %', 'pct:add'),
-    Markup.button.callback('🗑️ Withdraw %', 'pct:stop'),
+    Markup.button.callback('⛔ Close LP %', 'pct:stop'),
   ]);
   rows.push([
     Markup.button.callback('🌉 Bridge %', 'pct:bridge'),
-    Markup.button.callback('📤 Send %', 'pct:send'),
+    Markup.button.callback('📤 Withdraw %', 'pct:send'),
   ]);
   rows.push([Markup.button.callback('🪜 Ladder legs', 'pct:legs')]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
-  rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
+  rows.push([Markup.button.callback('🏠 Menu', 'positions_back')]);
   return ctx.reply(msg.msgSettings(addr, bal, cc.label, config.safety.dryRun, maxEthLabel, gasCeil, pctPresets.all()), {
     ...html,
     ...Markup.inlineKeyboard(rows),
