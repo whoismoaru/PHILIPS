@@ -62,7 +62,7 @@ import { cmdBridge } from './commands/bridge.js';
 import { cmdSend } from './commands/send.js';
 import { cmdUnwrap } from './commands/unwrap.js';
 import { cmdAlerts } from './commands/alerts.js';
-import { cmdSettings } from './commands/wallet.js';
+import { cmdSettings, cmdConnect } from './commands/wallet.js';
 import { gasCard, gasKeyboard } from './commands/gas.js';
 import './commands/feesAndRemove.js';
 import './commands/alerts.js';
@@ -470,6 +470,12 @@ bot.action(/^cmd:([a-z_]+)$/, async (ctx: any) => {
 });
 
 bot.start(async (ctx) => {
+  // No wallet yet: ask for the key and nothing else. A welcome card whose every button
+  // needs a wallet is a menu of things that cannot be tapped.
+  //
+  // cmdConnect, not a copy of its card: it also arms awaitingSecret, and a prompt that
+  // asks for a key while nothing is listening would swallow whatever was pasted.
+  if (!walletStore.isConnected()) return cmdConnect(ctx);
   const { imported, gone } = await syncOnChainPositions().catch(() => ({ imported: 0, gone: 0 }));
   const cc = getChain();
   await ctx.reply(
