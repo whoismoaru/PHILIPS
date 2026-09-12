@@ -1777,21 +1777,16 @@ export function msgAlreadyConnected(addr: string): string {
 }
 
 export function msgSettings(
-  addr: string | null,
-  balance: string | null,
-  chainLabel: string,
   dryRun: boolean,
   maxPerTx: string,
   gasCeiling?: string | null, // atap ongkos gas per-tx; null = tanpa atap
-  pcts?: { buy: number[]; sell: number[]; add: number[]; stop: number[]; bridge: number[]; send: number[] },
 ): string {
-  const out = [
+  // Wallet, chain and the quick-% list are deliberately NOT here: the first two already
+  // head the WELCOME card, and each percentage is shown by the button that changes it.
+  return [
     `\u2699\uFE0F ${bold('SETTINGS')}`,
     '',
-    `\u{1F45B} ${bold('Wallet')} : ${addr ? code(shortAddr(addr)) : italic('not connected')}`,
-    ...(balance ? [`\u{1F4B0} ${bold('Balance')} : ${esc(balance)}`] : []),
-    `\u26D3\uFE0F ${bold('Chain')} : ${esc(chainLabel)}`,
-    `${dryRun ? '\u26AA' : '\u{1F7E2}'} ${bold('Mode')} : ${bold(dryRun ? 'DRY RUN' : 'LIVE')}`,
+    `${bold('Mode')} : ${bold(dryRun ? 'DRY RUN' : 'LIVE')}  ${dryRun ? '\u26AA' : '\u{1F7E2}'}`,
     '',
     `${bold('Tx limit')} : ${esc(maxPerTx)}`,
     `${bold('Gas')} : auto-fetched${gasCeiling ? `, ceiling ${esc(gasCeiling)}/tx` : ', no ceiling'}`,
@@ -1799,19 +1794,9 @@ export function msgSettings(
     // beyond, while an LP mint is a separate, far tighter figure.
     `${bold('Swap slippage')} : 1%, retried at 2% then 3%`,
     `${bold('LP mint slippage')} : 0.5%`,
-  ];
-  if (pcts) {
-    // Named for the flow each one belongs to, not the internal key: "stop" is the
-    // percentage of an LP you close, which is a different thing from a withdrawal.
-    out.push(
-      '',
-      bold('Quick % :'),
-      `buy ${esc(pcts.buy.join('/'))} \u00B7 swap ${esc(pcts.sell.join('/'))} \u00B7 add lp ${esc(pcts.add.join('/'))}`,
-      `close lp ${esc(pcts.stop.join('/'))} \u00B7 bridge ${esc(pcts.bridge.join('/'))} \u00B7 withdraw ${esc(pcts.send.join('/'))}`,
-    );
-  }
-  out.push('', note(nowWib()));
-  return out.join('\n');
+    '',
+    note(nowWib()),
+  ].join('\n');
 }
 
 export function msgDisconnectConfirm(addr: string, openLp: number): string {

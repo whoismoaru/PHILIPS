@@ -55,7 +55,6 @@ export async function handleSecret(ctx: any, raw: string): Promise<void> {
 export async function cmdSettings(ctx: any) {
   const addr = walletStore.address();
   const cc = getChain();
-  const bal = addr ? await cc.provider.getBalance(addr).then((b) => `${msg.cleanUnits(b, 18)} ETH`).catch(() => '?') : null;
   const rows: any[] = [];
   // Tombol "Adjust Slippage" dari naskah sengaja TIDAK dipasang: slippage masih
   // konstanta di kode, jadi tombolnya cuma akan membuka kartu yang tak mengubah apa
@@ -82,7 +81,7 @@ export async function cmdSettings(ctx: any) {
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
   rows.push([Markup.button.callback('🏠 Menu', 'positions_back')]);
-  return ctx.reply(msg.msgSettings(addr, bal, cc.label, config.safety.dryRun, maxEthLabel, gasCeil, pctPresets.all()), {
+  return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, gasCeil), {
     ...html,
     ...Markup.inlineKeyboard(rows),
   });
