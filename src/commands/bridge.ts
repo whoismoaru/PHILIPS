@@ -107,9 +107,14 @@ export async function cmdBridge(ctx: any) {
   const rs = routes();
   if (rs.length === 0) return ctx.reply(msg.msgBridgeUnavailable(), html);
   flows.delete(ctx.from.id);
-  const rows = rs.map((r) => [
-    Markup.button.callback(`${r.from.label} → ${r.to.label}`, `br:${r.from.key}:${r.to.key}`),
-  ]);
+  // One ROW per source chain, its destinations side by side -- four chains used to make
+  // twelve stacked buttons, a screen and a half of scrolling. The rows follow the card's
+  // numbered lines in the same order, so row 1 is line 1's destinations.
+  const bySource = new Map<string, ChainCtx[]>();
+  for (const r of rs) bySource.set(r.from.key, [...(bySource.get(r.from.key) ?? []), r.to]);
+  const rows = [...bySource].map(([fromKey, tos]) =>
+    tos.map((to) => Markup.button.callback(to.label, `br:${fromKey}:${to.key}`)),
+  );
   rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
   return ctx.reply(msg.msgBridgePick(rs.map((r) => ({ from: r.from.label, to: r.to.label }))), {
     ...html,
