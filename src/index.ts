@@ -1799,9 +1799,10 @@ const poolSummaries = (pools: explore.TokenPool[]) =>
 function poolKeyboard(pools: explore.TokenPool[]) {
   return Markup.inlineKeyboard([
     ...pools.slice(0, POOL_PICK_MAX).map((p, i) => [
-      Markup.button.callback(`${p.otherSymbol} / ${p.baseSymbol} (${hookFee(p) ? 'dynamic' : msg.feeLabel(p.fee)})`, `pick:${i}`),
+      Markup.button.callback(`${i + 1}. ${p.otherSymbol} / ${p.baseSymbol} (${hookFee(p) ? 'dynamic' : msg.feeLabel(p.fee)})`, `pick:${i}`),
     ]),
-    [Markup.button.callback('❌ Cancel', 'cancel')],
+    // Back returns to the token's own card, which is where this step was entered from.
+    [Markup.button.callback('⬅️ Back', 'hub:back'), Markup.button.callback('❌ Cancel', 'cancel')],
   ]);
 }
 
