@@ -74,10 +74,10 @@ async function heldLabels(cc: ChainCtx): Promise<Map<BaseKind, string>> {
         const sym = assetLabel(cc, b.kind);
         const amt = Number(ethers.formatUnits(wei, b.decimals));
         const usd = b.kind === 'weth' ? (px === null ? null : amt * px) : amt;
-        const amtLabel = amt.toLocaleString('en-US', { maximumFractionDigits: b.kind === 'weth' ? 6 : 2 });
+        const amtLabel = amt.toLocaleString('id-ID', { maximumFractionDigits: b.kind === 'weth' ? 6 : 2 });
         out.set(
           b.kind,
-          `${amtLabel} ${sym}${usd === null ? '' : ` / $${usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`}`,
+          `${amtLabel} ${sym}${usd === null ? '' : ` / $${usd.toLocaleString('id-ID', { maximumFractionDigits: 2 })}`}`,
         );
       } catch {
         /* unreadable: the caller falls back to the plain symbol */

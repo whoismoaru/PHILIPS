@@ -115,7 +115,7 @@ export function card(titleLine: string, body: string[], footer?: string): string
 // ─── number / money helpers ────────────────────────────────────────
 
 export function cleanUnits(wei: bigint, dec: number): string {
-  return Number(ethers.formatUnits(wei, dec)).toLocaleString('en-US', {
+  return Number(ethers.formatUnits(wei, dec)).toLocaleString('id-ID', {
     maximumFractionDigits: 4,
   });
 }
@@ -129,9 +129,10 @@ export function usdSigned(n: number): string {
 }
 
 export function usdPlain(n: number): string {
-  // Grouped, en-US: the rest of the bot's figures use this locale, and a card that
-  // groups one way while the next groups another reads as two different products.
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Grouped, id-ID (1.268,62): the owner's own locale, and every figure in the bot uses
+  // it -- a card that groups one way while the next groups another reads as two
+  // different products, and "1.268" would be read as one-point-two-six-eight.
+  return '$' + n.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /** Compact USD: $1.5M / $50.9K / $79. For pool lists and depth. */
@@ -715,7 +716,7 @@ export function msgPnl(opts: {
   empty?: boolean;
 }): string {
   const usd = (v: number) =>
-    `${v >= 0 ? '+' : '-'}${Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 })} USD`;
+    `${v >= 0 ? '+' : '-'}${Math.abs(v).toLocaleString('id-ID', { maximumFractionDigits: 0 })} USD`;
   const out = [bold(opts.chainLabel.toUpperCase()), ''];
   if (opts.empty || opts.trades === 0) {
     out.push(italic(`No closed trades with a measured result in ${opts.periodLabel.toLowerCase()}.`));

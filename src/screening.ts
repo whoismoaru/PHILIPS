@@ -548,7 +548,7 @@ export function formatScreen(
   const lpLocked = g?.lpLockedPct ?? null;
   const burnt = g?.burntPct ?? null;
 
-  const num = (n: number | null | undefined): string => (n == null ? UNK : n.toLocaleString('en-US'));
+  const num = (n: number | null | undefined): string => (n == null ? UNK : n.toLocaleString('id-ID'));
 
   // Pausable / cooldown: GMGN sends the owner's privilege list. An EMPTY list is an
   // answer of 'none', not 'unknown'; an unreadable payload (null) stays '?'.
