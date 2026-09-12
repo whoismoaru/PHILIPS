@@ -17,6 +17,7 @@ import {
   POS_CARD_CONCURRENCY,
   registeredCommands,
   startKeyboard,
+  startCard,
 } from './core.js';
 import { renderProfitCard } from './card.js';
 import { onchainV4Pools } from './onchainPools.js';
@@ -449,23 +450,7 @@ bot.start(async (ctx) => {
   // asks for a key while nothing is listening would swallow whatever was pasted.
   if (!walletStore.isConnected()) return cmdConnect(ctx);
   const { imported, gone } = await syncOnChainPositions().catch(() => ({ imported: 0, gone: 0 }));
-  const cc = getChain();
-  await ctx.reply(
-    msg.msgStarted({
-      dryRun: config.safety.dryRun,
-      chainLabel: cc.label,
-      chainId: cc.chainId,
-      positions: store.active().length,
-      imported,
-      gone,
-      // walletStore is the single source of truth for WHICH wallet is connected --
-      // the same one startKeyboard() branches on. Reading it off the chain context
-      // instead let the card and the keyboard disagree.
-      walletShort: walletStore.address() ? msg.shortAddr(walletStore.address()!) : null,
-      chainLabels: Object.values(CHAINS).map((c) => c.label),
-    }),
-    { ...html, ...startKeyboard() },
-  );
+  await ctx.reply(startCard({ imported, gone }), { ...html, ...startKeyboard() });
 });
 // Dismiss an alert card. Delete the message; if Telegram refuses (a message older than
 // 48 hours) fall back to editing the text so the buttons still go away.
@@ -1611,11 +1596,11 @@ bot.command('positions', (ctx) => cmdPositions(ctx, false));
 // Back from the position list to the menu card, EDITING the same message (no new bubble).
 bot.action('positions_back', async (ctx) => {
   await ctx.answerCbQuery();
-  const extra = { ...html, ...helpKeyboard() };
+  const extra = { ...html, ...startKeyboard() };
   try {
-    return await ctx.editMessageText(msg.msgHelp(config.safety.dryRun), extra);
+    return await ctx.editMessageText(startCard(), extra);
   } catch {
-    return ctx.reply(msg.msgHelp(config.safety.dryRun), extra); // pesan terlalu tua untuk diedit
+    return ctx.reply(startCard(), extra); // pesan terlalu tua untuk diedit
   }
 });
 

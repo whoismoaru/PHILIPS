@@ -1,6 +1,6 @@
 import { Markup } from 'telegraf';
 import { config } from '../config.js';
-import { bot, html, editProgress, maxEthLabel, registerFlowReset, startKeyboard } from '../core.js';
+import { bot, html, editProgress, maxEthLabel, registerFlowReset, startKeyboard, startCard } from '../core.js';
 import { getChain, rebuildChains, gasFeeCapLabel, CHAINS } from '../chains.js';
 import * as walletStore from '../walletStore.js';
 import * as store from '../store.js';
@@ -46,20 +46,7 @@ export async function handleSecret(ctx: any, raw: string): Promise<void> {
     await editProgress(ctx, prog, msg.msgConnected(addr), html);
     // Then the same card /start shows, with the same grid -- a fresh connect lands the
     // user exactly where a returning one does, instead of on a three-button stub.
-    const cc = getChain();
-    await ctx.reply(
-      msg.msgStarted({
-        dryRun: config.safety.dryRun,
-        chainLabel: cc.label,
-        chainId: cc.chainId,
-        positions: store.active().length,
-        imported: 0,
-        gone: 0,
-        walletShort: msg.shortAddr(addr),
-        chainLabels: Object.values(CHAINS).map((c) => c.label),
-      }),
-      { ...html, ...startKeyboard() },
-    );
+    await ctx.reply(startCard(), { ...html, ...startKeyboard() });
   } catch (e) {
     await editProgress(ctx, prog, msg.msgConnectFailed((e as Error).message));
   }
