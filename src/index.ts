@@ -5108,7 +5108,7 @@ const BOT_COMMANDS = [
   { command: 'sell', description: 'Sell a token (best route)' },
   { command: 'unwrap', description: 'Convert stuck wrapped native back' },
   { command: 'bridge', description: 'Move native funds across chains' },
-  { command: 'send', description: 'Send funds to another address' },
+  { command: 'send', description: 'Withdraw funds to another address' },
   // Dompet & setelan
   { command: 'gas', description: 'Current gas cost per chain (USD & IDR)' },
   { command: 'settings', description: 'Wallet & transaction preferences' },
