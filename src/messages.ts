@@ -1824,12 +1824,9 @@ export function msgNoFees(): string {
 }
 
 export function msgClaimPick(rows: Array<{ symbol: string; id: string; label: string }>): string {
-  const out = [`💵 ${bold('Unclaimed Fees')}`, '', 'Fees on your active positions :'];
-  rows.forEach((r, i) => out.push(`${i + 1}️⃣ ${bold(esc(r.symbol))} · #${esc(r.id)} — ${bold(esc(r.label))}`));
-  out.push(
-    '',
-    '⚠️ Fees go straight to your wallet. The LP position stays open; this only costs a little gas.',
-  );
+  const out = [`\u{1F4B5} ${bold('UNCLAIMED FEES')}`, '', 'Fees on your active positions :'];
+  rows.forEach((r, i) => out.push(`${i + 1}. ${bold(`$${esc(r.symbol)}`)} / #${esc(r.id)} = ${bold(esc(r.label))}`));
+  out.push('', note('fees go straight to wallet and your LP position stays open.'));
   return out.join('\n');
 }
 
