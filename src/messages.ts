@@ -654,27 +654,24 @@ function sgEth(n: number): string {
 }
 
 export function msgPnlPicker(chains: Array<{ label: string; trades: number; scored?: number }>): string {
-  const out = [`📈 ${bold('PnL Recap')}`, '', 'Pick a chain to recap its closed trades.', ''];
-  if (chains.length) {
+  // The count shown is the SCORED one: break-even trades under ~$0.1 are left out, the
+  // same rule the recap card applies. Showing the raw total here instead made those
+  // trades look like they went missing between the two screens.
+  const count = (c: { trades: number; scored?: number }) => c.scored ?? c.trades;
+  // "All chains" is a total, not a chain -- it sits apart, after the per-chain list.
+  const all = chains.find((c) => c.label === 'All chains');
+  const per = chains.filter((c) => c !== all);
+  const out = [bold('P&L RECAP'), ''];
+  if (per.length) {
     out.push(
-      ...tree(
-        chains.map((c) => [
-          c.label,
-          // Two figures. The recap card only counts what is SCORED, so naming the
-          // total alone here makes the difference (break-even, unreadable results)
-          // look like trades lost between two screens.
-          c.scored === undefined || c.scored === c.trades
-            ? `${c.trades} positions`
-            : `${c.trades} positions · ${c.scored} scored`,
-        ]),
-        12,
-      ),
-      '',
+      'Pick a chain to recap its closed trades :',
+      ...per.map((c) => `- ${esc(c.label)} = ${bold(String(count(c)))} positions`),
     );
+  } else {
+    out.push('No closed trades yet.');
   }
-  out.push(note('One ladder counts as one position, however many legs it was closed in.'));
-  out.push(note('Scored = wins/losses only; break-even trades under ~$0.1 are not scored.'));
-  out.push(note('All figures in USD, locked at each trade\'s close time.'));
+  if (all) out.push('', `${bold('All chains')} = ${bold(String(count(all)))} positions`);
+  out.push('', note(`LIVE \u00B7 ${nowWib()}`));
   return out.join('\n');
 }
 
