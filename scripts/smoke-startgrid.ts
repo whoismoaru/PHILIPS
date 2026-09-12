@@ -31,8 +31,8 @@ console.log('ok: 15 tombol /start punya handler, dan tombol uang dijaga sama sep
 // frozen at 0x0 when the cache was built before the keystore loaded) while the
 // keyboard read walletStore, so /start greeted a connected user as 0x0000…0000.
 assert.ok(
-  /walletShort: walletStore\.address\(\)/.test(src),
-  'kartu /start harus baca alamat dari walletStore, bukan dari konteks chain',
+  /walletShort: addr \? msg\.shortAddr\(addr\) : null/.test(core) && /const addr = walletStore\.address\(\)/.test(core),
+  'kartu menu harus baca alamat dari walletStore, bukan dari konteks chain',
 );
 const chainsSrc = await import('node:fs').then((fs) => fs.readFileSync('src/chains.ts', 'utf8'));
 assert.ok(
@@ -57,9 +57,21 @@ console.log('ok: /start tanpa dompet benar-benar menunggu kunci yang ditempel');
 // It used to end on a three-button stub, so the command grid was reachable only by
 // typing /start again right after connecting.
 const w2 = await import('node:fs').then((fs) => fs.readFileSync('src/commands/wallet.ts', 'utf8'));
-assert.ok(/msgConnected\(addr\)[\s\S]{0,600}msgStarted\(\{[\s\S]{0,400}startKeyboard\(\)/.test(w2),
+assert.ok(/msgConnected\(addr\)[\s\S]{0,400}startCard\(\)[\s\S]{0,80}startKeyboard\(\)/.test(w2),
   'setelah connect sukses harus menyusul kartu WELCOME beserta grid-nya');
 const msrc = await import('node:fs').then((fs) => fs.readFileSync('src/messages.ts', 'utf8'));
 assert.ok(/msgConnected\(_addr: string\): string \{[\s\S]{0,600}return `[^`]*Wallet Successfully Connected!/.test(msrc),
   'kartu sukses connect harus satu baris saja');
 console.log('ok: connect sukses → satu baris konfirmasi, lalu WELCOME + grid');
+
+// --- every route to "the menu" must render the same card ---
+// Back to Menu used to open the old /help card while /start showed the WELCOME grid,
+// so the bot had two different things called the menu.
+assert.ok(/export function startCard\(/.test(core), 'kartu menu harus hidup di satu fungsi (core.startCard)');
+for (const [file, body] of [['index.ts', src], ['wallet.ts', w2]] as Array<[string, string]>) {
+  assert.ok(!/msgStarted\(\{/.test(body), `${file} masih menyusun kartu menu sendiri, bukan lewat startCard()`);
+}
+const backBody = src.slice(src.indexOf("bot.action('positions_back'"), src.indexOf("bot.action('positions_back'") + 400);
+assert.ok(backBody.includes('startCard()') && backBody.includes('startKeyboard()'),
+  'tombol Back to Menu harus mendarat di kartu WELCOME beserta grid-nya');
+console.log('ok: /start, connect sukses, dan Back to Menu mendarat di kartu yang sama');

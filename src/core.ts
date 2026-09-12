@@ -2,6 +2,9 @@ import { Telegraf, Markup } from 'telegraf';
 import { ethers } from 'ethers';
 import { config } from './config.js';
 import * as walletStore from './walletStore.js';
+import * as store from './store.js';
+import * as msg from './messages.js';
+import { CHAINS, getChain } from './chains.js';
 
 /**
  * Fondasi bersama semua modul perintah: instance bot, opsi parse HTML, dan
@@ -286,3 +289,25 @@ export const startKeyboard = () => {
   }
   return Markup.inlineKeyboard(rows);
 };
+
+/**
+ * The WELCOME card, built in one place.
+ *
+ * /start, a successful connect and every "Back to Menu" button all land here, and when
+ * each built its own version they drifted: Back to Menu still opened the old /help card
+ * long after /start had become the real menu.
+ */
+export function startCard(o: { imported?: number; gone?: number } = {}): string {
+  const cc = getChain();
+  const addr = walletStore.address();
+  return msg.msgStarted({
+    dryRun: config.safety.dryRun,
+    chainLabel: cc.label,
+    chainId: cc.chainId,
+    positions: store.active().length,
+    imported: o.imported ?? 0,
+    gone: o.gone ?? 0,
+    walletShort: addr ? msg.shortAddr(addr) : null,
+    chainLabels: Object.values(CHAINS).map((c) => c.label),
+  });
+}
