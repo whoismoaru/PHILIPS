@@ -1086,7 +1086,7 @@ export function msgPositionCard(opts: {
     : opts.converted
       ? `${bold('OUT OF RANGE')} — fully converted`
       : `${bold('OUT OF RANGE')} — waiting`;
-  const strategy = tokenSide ? `Token Side (Sell the rip)` : `${base} Side (Buy the dip)`;
+  const strategy = tokenSide ? 'Token Side (sell the rip)' : `${base} Side (buy the dip)`;
   const investUnit = tokenSide ? sym : base;
   const range = esc(opts.range);
 
@@ -1104,58 +1104,55 @@ export function msgPositionCard(opts: {
       : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${range}).`;
 
   return [
-    `📊 ${bold(`Position Details: #${esc(opts.tokenId)}`)}`,
+    `\u{1F50D} ${bold(`POSITION #${esc(opts.tokenId)}`)}`,
     '',
-    `🔗 ${bold('Pair:')} ${base} / ${sym} ${italic(opts.feeIsTickSpacing ? `(ts ${opts.fee} · dynamic fee)` : `(${feeLabel(opts.fee)} Fee)`)}${opts.chain ? ` · ${esc(opts.chain)}` : ''}`,
-    `🎯 ${bold('Strategy:')} ${strategy}${isLeg ? ` · ${bold(`◣ ${opts.ladder!.shape === 'bidask' ? 'Bid-Ask' : 'Spot'} ladder`)}` : ''}`,
+    `Pair = ${bold(`$${sym}`)} / ${base} ${italic(opts.feeIsTickSpacing ? `(ts ${opts.fee}, dynamic fee)` : `(${feeLabel(opts.fee)} fee)`)}${opts.chain ? ` on ${esc(opts.chain)}` : ''}`,
+    `Strategy = ${strategy}${isLeg ? `, ${bold(`${opts.ladder!.shape === 'bidask' ? 'bid-ask' : 'spot'} ladder`)}` : ''}`,
     // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
-    // Shaped to match the v4 card so a bid-ask position reads the same across both
-    // protocols: v3 used to compress ladder and leg into one mixed list.
+    // Shaped so a bid-ask position reads the same across both protocols.
     ...(isLeg
       ? [
           '',
-          `🪜 ${bold(`LADDER · ${opts.ladder!.legCount} legs`)}`,
-          ...(opts.ladder!.groupInvest ? [`💰 ${bold('Deposit:')} ${esc(opts.ladder!.groupInvest)} ${investUnit}`] : []),
+          `\u{1FA9C} ${bold(`LADDER, ${opts.ladder!.legCount} legs`)}`,
+          ...(opts.ladder!.groupInvest ? [`Deposit = ${bold(`${esc(opts.ladder!.groupInvest)} ${investUnit}`)}`] : []),
           ...(opts.ladder!.ladderValue
             ? [
-                `💰 ${bold('Value now:')} ${esc(opts.ladder!.ladderValue)}`,
-                ...(opts.ladder!.ladderFees ? [italic(`↳ incl. fees ${esc(opts.ladder!.ladderFees)}`)] : []),
+                `Value now = ${bold(esc(opts.ladder!.ladderValue))}`,
+                ...(opts.ladder!.ladderFees ? [note(`incl. fees ${esc(opts.ladder!.ladderFees)}`)] : []),
               ]
             : []),
-          ...(opts.ladder!.ladderPnl ? [`📈 ${bold('Ladder PnL:')} ${esc(opts.ladder!.ladderPnl)}`] : []),
-          ...(opts.ladder!.ladderMcRange ? [`📉 ${bold('Ladder Range:')} ${italic(esc(opts.ladder!.ladderMcRange))}`] : []),
+          ...(opts.ladder!.ladderPnl ? [`Ladder PnL = ${esc(opts.ladder!.ladderPnl)}`] : []),
+          ...(opts.ladder!.ladderMcRange ? [`Ladder range = ${esc(opts.ladder!.ladderMcRange)}`] : []),
           ...(opts.ladder!.filled !== undefined
             ? [
-                `🎚 ${bold('Rungs:')} ${opts.ladder!.filled} filled · ${opts.ladder!.active} active · ${opts.ladder!.waiting} waiting` +
-                  (opts.ladder!.unread ? ` · ${italic(`${opts.ladder!.unread} unreadable`)}` : ''),
+                `Rungs = ${opts.ladder!.filled} filled, ${opts.ladder!.active} active, ${opts.ladder!.waiting} waiting` +
+                  (opts.ladder!.unread ? `, ${opts.ladder!.unread} unreadable` : ''),
               ]
             : []),
           '',
-          italic(
-            `— leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount}` +
-              (opts.ladder!.sharePct !== undefined ? `, ${opts.ladder!.sharePct.toFixed(1)}% of ladder capital` : '') +
-              ' —',
+          note(
+            `leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount}` +
+              (opts.ladder!.sharePct !== undefined ? `, ${opts.ladder!.sharePct.toFixed(1)}% of ladder capital` : ''),
           ),
-          `💰 ${bold('Leg Value:')} ${esc(opts.ladder!.legValue ?? opts.invest)} ${opts.ladder!.legValue ? '' : investUnit}`.trimEnd(),
-          ...(opts.ladder!.legFees ? [italic(`↳ incl. fees ${esc(opts.ladder!.legFees)}`)] : []),
+          `Leg value = ${bold(`${esc(opts.ladder!.legValue ?? opts.invest)}${opts.ladder!.legValue ? '' : ` ${investUnit}`}`)}`,
+          ...(opts.ladder!.legFees ? [note(`incl. fees ${esc(opts.ladder!.legFees)}`)] : []),
         ]
-      : [`💰 ${bold('Principal:')} ${esc(opts.invest)} ${investUnit}`]),
-    `${tokenSide ? '📈' : '📉'} ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${range} ${italic('from current price')}`,
+      : [`Principal = ${bold(`${esc(opts.invest)} ${investUnit}`)}`]),
+    `${isLeg ? 'Leg range' : 'Target range'} = ${range} ${italic('from current price')}`,
     // "now" only needs saying once, on the Ladder Range line.
-    ...(opts.mcRange ? [italic(`↳ market cap ${esc(isLeg ? opts.mcRange.replace(/ · now .*$/, '') : opts.mcRange)}`)] : []),
-    `📈 ${bold(isLeg ? 'Leg PnL:' : 'Current PnL:')} ${esc(opts.pnlText)}`,
-    `${opts.inRange ? '🟢' : opts.converted && isLeg ? '🟡' : '🔴'} ${bold('Status:')} ${
-      opts.converted && isLeg ? `${bold('LEG FILLED')} — bought, ladder still running` : status
+    ...(opts.mcRange ? [note(`market cap ${esc(isLeg ? opts.mcRange.replace(/ · now .*$/, '') : opts.mcRange)}`)] : []),
+    `${isLeg ? 'Leg PnL' : 'PnL'} = ${esc(opts.pnlText)}`,
+    `Status = ${opts.inRange ? '🟢' : opts.converted && isLeg ? '🟡' : '🔴'} ${
+      opts.converted && isLeg ? `${bold('LEG FILLED')}, bought, ladder still running` : status
     }`,
     '',
     // explain already contains <b> tags and escaped text, so do NOT run it through
     // italic() (which escapes again and shows the user a raw "&lt;b&gt;").
     `<i>${explain}</i>`,
     '',
-    `⏱️ <i>Age ${esc(opts.age)} · updated ${nowWib()}</i>`,
-    // The LIVE line was dropped: the time is already on the line above and "LIVE"
-    // supports no decision. DRY RUN is still named — that changes what the whole card means.
-    ...(opts.dryRun ? ['', modeLabel(true)] : []),
+    note(`age ${esc(opts.age)} \u00B7 ${nowWib()}`),
+    // DRY RUN is still named -- it changes what the whole card means.
+    ...(opts.dryRun ? [modeLabel(true)] : []),
   ].join('\n');
 }
 
@@ -1190,23 +1187,16 @@ export function msgPositionDetail(opts: {
   baseSymbol?: string;
 }): string {
   const base = opts.baseSymbol ?? 'WETH';
-  const e = opts.inRange ? '🟢' : '🔴';
   return [
-    hdr(`🔍 POSITION DETAIL #${opts.tokenId}`),
+    `\u{1F4C4} ${bold(`FULL DETAILS #${esc(opts.tokenId)}`)}`,
     '',
-    `Pair · ${bold(`${esc(base)} / ${esc(opts.symbol)}`)} (fee ${feeLabel(opts.fee)})`,
-    `Protocol · Uniswap v3${opts.chain ? ` | ${esc(opts.chain)}` : ''}`,
-    `Status · ${e} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`,
+    `Pair = ${bold(`$${esc(opts.symbol)}`)} / ${esc(base)} (${feeLabel(opts.fee)} fee)`,
+    `Protocol = Uniswap v3${opts.chain ? ` on ${esc(opts.chain)}` : ''}`,
+    `Status = ${opts.inRange ? '🟢' : '🔴'} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`,
     '',
-    `📊 ${bold('METRICS')}:`,
-    ...tree(
-      [
-        ['Assets', esc(opts.composition)],
-        ['Value', bold(esc(opts.value))],
-        ['Fees', `🟢 ${bold(esc(opts.fees))} (unclaimed)`],
-      ],
-      6,
-    ),
+    `Assets = ${esc(opts.composition)}`,
+    `Value = ${bold(esc(opts.value))}`,
+    `Unclaimed fees = ${bold(esc(opts.fees))}`,
     '',
     note(nowWib()),
   ].join('\n');
