@@ -877,23 +877,27 @@ async function buildPositionCard(
   // The explorer link points at the position NFT (Blockscout: /token/<pm>/instance/<id>)
   // rather than just the wallet address — that is what "view this position" really means.
   const explorer = cc.blockscout?.replace(/\/api\/v2\/?$/, '') ?? null;
-  const rowTop = [
-    Markup.button.callback('📄 Full Details', `detail:${rec.tokenId}`),
-    Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`),
-  ];
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
-      explorer
-        ? [Markup.button.url('🔗 View on Explorer', `${explorer}/token/${cc.pmAddress}/instance/${rec.tokenId}`)]
-        : [],
-      rowTop,
+      [
+        Markup.button.callback('📄 Full Details', `detail:${rec.tokenId}`),
+        Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`),
+      ],
+      // "Remove Liquidity", not "Withdraw": withdrawing now means sending funds out to an
+      // address, and this pulls part of an LP back into the wallet.
       [
         Markup.button.callback('💵 Harvest Fees', `claim:${rec.tokenId}`),
-        Markup.button.callback('🗑️ Withdraw', `rm:${rec.tokenId}`),
+        Markup.button.callback('➖ Remove Liquidity', `rm:${rec.tokenId}`),
       ],
-      [Markup.button.callback('❌ Close Position', `stop:${rec.tokenId}`)], // aksi uang: baris sendiri
-      [Markup.button.callback('⬅️ Back to Positions', 'positions')],
+      // The one irreversible action here keeps its own row, and ⛔ is the vocabulary's
+      // stop marker -- ❌ reads as "failed", which this is not.
+      [Markup.button.callback('⛔ Close Position', `stop:${rec.tokenId}`)],
+      explorer
+        ? [Markup.button.url('🔗 Explorer', `${explorer}/token/${cc.pmAddress}/instance/${rec.tokenId}`),
+           Markup.button.callback('⬅️ Positions', 'positions')]
+        : [Markup.button.callback('⬅️ Positions', 'positions')],
+      [Markup.button.callback('🏠 Menu', 'positions_back')],
     ].filter((r) => r.length)),
   };
   return { text, extra };
@@ -1585,11 +1589,13 @@ async function cmdPositions(ctx: any, edit = false) {
   const idBtns = top.map((r) => Markup.button.callback(`🔍 #${r.id} Details`, `pos_detail_${r.id}`));
   // One button per row, per the design.
   const kbRows: ReturnType<typeof Markup.button.callback>[][] = idBtns.map((b) => [b]);
+  // Close All moves money and cannot be undone, so it sits alone rather than one slip
+  // away from Refresh.
   kbRows.push([
-    Markup.button.callback('⬅️ Back', 'positions_back'),
     Markup.button.callback('🔄 Refresh', 'positions_refresh'),
-    Markup.button.callback('🚫 Close All', 'closeall_confirm'),
+    Markup.button.callback('🏠 Menu', 'positions_back'),
   ]);
+  kbRows.push([Markup.button.callback('⛔ Close All Positions', 'closeall_confirm')]);
   const extra = { ...html, ...Markup.inlineKeyboard(kbRows) };
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
