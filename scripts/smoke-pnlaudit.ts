@@ -151,21 +151,21 @@ assert.equal(
   'entri hilang tanpa jejak',
 );
 
-// The card prints dollars rather than native units, and owns up to what it could
-// not convert.
+// The card reports in dollars, and its three figures are the book's own.
+const mainUsd = usd.books[0];
 const kartuUsd = msgPnl({
   dryRun: false, chainLabel: 'All chains', periodLabel: 'All Time',
-  known: usd.known, count: usd.count, untracked: usd.untracked, excluded: usd.excluded,
-  recovered: usd.recovered, unconverted: usd.unconverted, books: usd.books,
+  trades: mainUsd?.known ?? 0, grossWin: mainUsd?.grossWin ?? 0,
+  grossLoss: mainUsd?.grossLoss ?? 0, winratePct: mainUsd ? journal.winrateOf(mainUsd) : 0,
+  empty: !mainUsd,
 });
-assert.match(kartuUsd, /\$/, 'kartu USD tanpa tanda dolar');
+assert.match(kartuUsd, /USD/, 'kartu tak menyebut satuannya');
 assert.ok(!/USDG book|ETH book|HYPE book/.test(kartuUsd), 'masih ada buku per satuan di kartu USD');
-assert.match(
-  msgPnl({ dryRun: false, chainLabel: 'x', periodLabel: 'y', known: 1, count: 9, unconverted: 3,
-    books: [{ unit: 'USD', known: 1, wins: 1, losses: 0, flats: 0, net: 1, grossWin: 1, grossLoss: 0 }] }),
-  /no USD rate/,
-  'entri tanpa kurs tak diakui di kartu',
-);
+if (mainUsd) {
+  // The count on the card must be the SCORED one -- the same number the chain picker
+  // shows, or the two screens disagree about how many trades exist.
+  assert.match(kartuUsd, new RegExp(`Trade = <b>${mainUsd.known}</b>`), 'jumlah trade di kartu bukan angka berskor');
+}
 
 console.log('smoke-pnlaudit: total USD OK');
 
@@ -187,23 +187,40 @@ assert.equal(
 assert.equal(berskor + impas, st0.positions, 'posisi tak bisa direkonsiliasi dari skor');
 assert.ok(st0.positions <= st0.legs, 'posisi tak mungkin lebih banyak dari leg-nya');
 
+const main0 = st0.books[0];
 const kartu = msgPnl({
   dryRun: false, chainLabel: 'All chains', periodLabel: 'All Time',
-  known: st0.known, count: st0.count, untracked: st0.untracked,
-  excluded: st0.excluded, recovered: st0.recovered, books: st0.books,
+  trades: main0?.known ?? 0, grossWin: main0?.grossWin ?? 0,
+  grossLoss: main0?.grossLoss ?? 0, winratePct: main0 ? journal.winrateOf(main0) : 0,
+  empty: !main0,
 });
-assert.match(kartu, new RegExp(`${st0.count} closed`), 'kartu tak menyebut jumlah entri');
-assert.match(kartu, new RegExp(`<b>${berskor}</b>`), 'kartu tak menyebut jumlah berskor');
-assert.match(kartu, /scored/, 'istilah scored harus muncul');
-if (impas) assert.match(kartu, /break-even/, 'impas tak dijelaskan di mana pun');
+// The card no longer prints a reconciliation line: both screens now count the same
+// scored positions, so there is no gap left to explain.
+//
+// But the card reads books[0] ALONE, so it is only correct while the USD conversion
+// really collapses everything into a single book. Unconverted native units would split
+// the stats in two and the card would silently report the first half as the whole.
+assert.equal(usd.books.length <= 1, true, 'kartu baca books[0] saja — konversi USD harus menyisakan satu buku');
+assert.match(kartu, new RegExp(`Trade = <b>${main0?.known ?? 0}</b>`), 'kartu tak memakai jumlah berskor bukunya');
+assert.match(kartu, /Win Rate/, 'winrate hilang dari kartu');
+void berskor;
 
-// The chain picker shows TWO figures when they differ, one when they match.
-const picker = msgPnlPicker([{ label: 'Robinhood', trades: 480, scored: 161 }, { label: 'Ink', trades: 0, scored: 0 }]);
-assert.match(picker, /480 positions · 161 scored/);
-assert.match(picker, /Ink[^\n]*0 positions/);
-assert.ok(!/0 positions · 0 scored/.test(picker), 'angka sama tak perlu ditulis dua kali');
-assert.match(picker, /Scored = wins\/losses only/, 'istilah "scored" harus dijelaskan');
-assert.match(picker, /All figures in USD/, 'pemilih harus menyebut satuannya');
+// The picker shows ONE figure per chain: the scored count, the same number the recap
+// card reports. It used to print "480 positions · 161 scored", which invited the reader
+// to treat 480 as the real total and then find it nowhere else in the bot.
+const picker = msgPnlPicker([
+  { label: 'All chains', trades: 483, scored: 161 },
+  { label: 'Robinhood', trades: 480, scored: 161 },
+  { label: 'Ink', trades: 0, scored: 0 },
+]);
+assert.match(picker, /Robinhood = <b>161<\/b> positions/, 'picker harus pakai angka berskor');
+assert.ok(!/480/.test(picker), 'total mentah tak boleh muncul — tak cocok dgn kartu rekap');
+assert.match(picker, /Ink = <b>0<\/b> positions/, 'chain kosong tetap didaftar');
+// The total is a total, not a chain: it belongs below the list, not inside it.
+assert.ok(
+  picker.indexOf('All chains') > picker.indexOf('Robinhood'),
+  'All chains harus di bawah daftar chain, bukan di antaranya',
+);
 console.log('smoke-pnlaudit: rekonsiliasi OK');
 
 // The ownership filter must fail CLOSED: an unreadable address gives zero entries,

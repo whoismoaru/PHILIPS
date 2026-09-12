@@ -685,101 +685,30 @@ export function msgPnl(opts: {
   dryRun: boolean;
   chainLabel: string;
   periodLabel: string;
-  known: number;
-  count?: number;
-  untracked?: number;
-  excluded?: number;
-  recovered?: number;
-  unconverted?: number; // entri yang kursnya tak terbaca — dilewati, bukan dianggap nol
-  estimated?: number; // entri lama tanpa cap kurs — dinilai dgn kurs SEKARANG
-  books: Array<{
-    unit: string;
-    known: number;
-    wins: number;
-    losses: number;
-    flats?: number;
-    net: number;
-    grossWin: number;
-    grossLoss: number;
-    best?: { symbol: string; pnl: number };
-    worst?: { symbol: string; pnl: number };
-  }>;
+  /** Scored positions -- a ladder counts once, break-even under ~$0.1 is left out. */
+  trades: number;
+  grossWin: number;
+  grossLoss: number;
+  winratePct: number;
+  /** Set when the period holds no scored trade at all. */
+  empty?: boolean;
 }): string {
-  const head = `📈 ${bold('PnL Recap')} · ${bold(esc(opts.chainLabel))} · ${esc(opts.periodLabel)}`;
-  if (opts.known === 0) {
-    const out = [head, '', note('no closed trades with a measured result in this period.')];
-    if (opts.unconverted)
-      out.push(note(`Not counted: ${opts.unconverted} with no USD rate.`));
-    if (opts.untracked) out.push(note(`${opts.untracked} closed outside the bot (result unknown).`));
-    out.push('', note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
-    return out.join('\n');
-  }
-  // Native units (ETH/BNB/HYPE) need 5 decimals; USD and stablecoins need 2.
-  const num = (v: number, unit: string): string => {
-    const d = unit === 'ETH' || unit === 'BNB' || unit === 'HYPE' ? 5 : 2;
-    return unit === 'USD'
-      ? `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
-      : `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
-  };
-  const out = [head, ''];
-  // Entry count against scored count: the only place the difference is explained.
-  if (opts.count !== undefined) {
-    const scored = opts.books.reduce((a, b) => a + b.known, 0);
-    const flats = opts.books.reduce((a, b) => a + (b.flats ?? 0), 0);
-    // note() escapes its contents, so the emphasis goes OUTSIDE. Sweeps and
-    // unreadable results already have their own lines in the card's footer; what
-    // belongs here is the difference nothing else explained: break-even.
-    if (opts.count !== scored)
-      out.push(
-        `${note(`${opts.count} closed →`)} ${bold(String(scored))} ${note(
-          `scored${flats ? ` · ${flats} break-even (under ~$0.1)` : ''}` +
-            (opts.unconverted ? ` · ${opts.unconverted} no USD rate` : '') +
-            (opts.estimated ? ` · ${opts.estimated} at today's rate` : ''),
-        )}`,
-        '',
-      );
-  }
-  for (const b of opts.books) {
-    // Break-even (PnL exactly 0) stays out of the winrate denominator — counted in,
-    // the winrate climbs without a single extra trade actually winning.
-    const winrate = b.wins + b.losses > 0 ? (b.wins / (b.wins + b.losses)) * 100 : 0;
-    // b.known is ALREADY wins+losses (break-even is excluded), so nothing to subtract.
-    const pf = b.grossLoss < 0 ? b.grossWin / Math.abs(b.grossLoss) : null;
-    const avgWin = b.wins > 0 ? b.grossWin / b.wins : 0;
-    const avgLoss = b.losses > 0 ? b.grossLoss / b.losses : 0;
+  const usd = (v: number) =>
+    `${v >= 0 ? '+' : '-'}${Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 })} USD`;
+  const out = [bold(opts.chainLabel.toUpperCase()), ''];
+  if (opts.empty || opts.trades === 0) {
+    out.push(italic(`No closed trades with a measured result in ${opts.periodLabel.toLowerCase()}.`));
+  } else {
     out.push(
-      `${dot(b.net)} ${bold(b.unit === 'USD' ? 'Net' : `${esc(b.unit)} book`)} : ${bold(num(b.net, b.unit))}`,
-      ...tree(
-        [
-          ['Trades', `${b.known} (${b.wins}W / ${b.losses}L)`],
-          ['Winrate', `🎯 ${bold(`${winrate.toFixed(1)}%`)}`],
-          // Break-even is listed separately to make clear it does NOT feed winrate or PF.
-          ...((b.flats
-            ? [['Flat', `${b.flats} trade${b.flats === 1 ? '' : 's'} (under ~$0.1 — not scored)`]]
-            : []) as Array<[string, string]>),
-          // A profit factor below 1 means a loss, however high the winrate.
-          ['Profit factor', pf === null ? '—' : `${pf < 1 ? '🔴' : '🟢'} ${bold(pf.toFixed(2))}`],
-          ['Avg win', `🟢 ${num(avgWin, b.unit)}`],
-          ['Avg loss', `🔴 ${num(avgLoss, b.unit)}`],
-          ['Profit', `🟢 ${num(b.grossWin, b.unit)}`],
-          ['Loss', `🔴 ${num(b.grossLoss, b.unit)}`],
-          ...((b.best ? [['Best', `${b.best.symbol} (${num(b.best.pnl, b.unit)})`]] : []) as Array<[string, string]>),
-          ...((b.worst && b.worst.pnl < 0
-            ? [['Worst', `${b.worst.symbol} (${num(b.worst.pnl, b.unit)})`]]
-            : []) as Array<[string, string]>),
-        ],
-        9,
-      ),
+      `${esc(opts.periodLabel)} ${bold('Statistics :')}`,
+      `1. Trade = ${bold(String(opts.trades))} Positions`,
+      `2. Profit = ${bold(usd(opts.grossWin))}`,
+      `3. Loss = ${bold(usd(opts.grossLoss))}`,
       '',
+      `${bold('Win Rate')} = ${bold(`${Math.round(opts.winratePct)}%`)}`,
     );
   }
-  const tail: string[] = [];
-  if (opts.recovered)
-    out.push(note(`Includes ${opts.recovered} leftover sweep(s) credited to the books above (not counted as trades).`));
-  if (opts.untracked) tail.push(`${opts.untracked} closed outside the bot (result unknown)`);
-  if (opts.excluded) tail.push(`${opts.excluded} legacy entries without result data`);
-  if (tail.length) out.push(note(`Not counted: ${tail.join(' · ')}.`));
-  out.push(note(`${opts.dryRun ? 'DRY RUN' : 'LIVE'} · ${nowWib()}`));
+  out.push('', note(opts.dryRun ? 'DRY RUN' : 'LIVE'));
   return out.join('\n');
 }
 

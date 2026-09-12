@@ -113,7 +113,7 @@ const periodKb = (chain: string, active?: journal.PeriodKey) =>
     ...rows2(Object.keys(journal.PERIODS) as journal.PeriodKey[], (k) =>
       Markup.button.callback(`${active === k ? '• ' : ''}${journal.PERIODS[k].label}`, `pnl:${chain}:${k}`),
     ),
-    [Markup.button.callback('‹ Chains', 'pnlback'), Markup.button.callback('📜 History', 'history')],
+    [Markup.button.callback('⬅️ Back', 'pnlback')],
   ]);
 
 export async function cmdPnl(ctx: any) {
@@ -182,46 +182,19 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
 
 /** A short caption; the detail is already legible in the image (1024-char limit). */
 function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStats): string {
-  const p = journal.PERIODS[key];
-  const lines = [`📈 <b>PnL Recap</b> · <b>${chain === ALL ? 'All chains' : chainLabel(chain)}</b> · ${p.label}`, ''];
-  if (s.books.length === 0) lines.push('<i>no closed trades with a measured result in this period.</i>');
-  else
-    for (const b of s.books)
-      lines.push(
-        `${b.net >= 0 ? '🟢' : '🔴'} <b>${b.unit}</b> ${n2(b.net, b.unit)} · ${b.known} trades · ` +
-          `${journal.winrateOf(b).toFixed(1)}% WR${journal.profitFactorOf(b) === null ? '' : ` · PF ${journal.profitFactorOf(b)!.toFixed(2)}`}`,
-      );
-  // Reconciliation: the journal's entry count MUST be traceable from this card.
-  // Without the break-even line, the gap between the two totals is explained nowhere.
-  const scored = s.books.reduce((a, b) => a + b.known, 0);
-  const flats = s.books.reduce((a, b) => a + b.flats, 0);
-  // Two levels, because a ladder closes as many legs but one position. Saying
-  // "724 closed -> 158 scored" without the step between makes hundreds of trades
-  // look like they evaporated; the position count is what explains them.
-  const tail: string[] = [
-    s.positions === s.legs
-      ? `${s.count} closed → ${scored} scored`
-      : `${s.count} legs → ${s.positions} positions → ${scored} scored`,
-  ];
-  if (flats) tail.push(`${flats} break-even`);
-  if (s.untracked) tail.push(`${s.untracked} result unknown`);
-  // Without this line the caption's arithmetic stops adding up the moment a
-  // backfill placeholder exists. The text card has always named it; the image
-  // caption had not.
-  if (s.excluded) tail.push(`${s.excluded} legacy, no result data`);
-  // Has to be named: these entries hold REAL proceeds that are deliberately left
-  // unbooked, so net comes out smaller than the money that actually landed.
-  if (s.noCapital) tail.push(`${s.noCapital} entry cost unknown, excluded`);
-  if (s.recovered) tail.push(`${s.recovered} sweep credited`);
-  if (s.unconverted) tail.push(`${s.unconverted} no USD rate`);
-  if (s.estimated) tail.push(`${s.estimated} at today's rate`);
-  lines.push('', `<i>${tail.join(' · ')}</i>`);
-  // New entries are locked to their close-time rate; only older ones are estimated.
-  lines.push(
-    `<i>USD locked at close time${s.estimated ? `; ${s.estimated} older entr${s.estimated === 1 ? 'y' : 'ies'} valued at today's rate` : ''}.</i>`,
-  );
-  lines.push('', `<i>${config.safety.dryRun ? 'DRY RUN' : 'LIVE'}</i>`);
-  return lines.join('\n');
+  // Same card as the text fallback, on purpose: the caption used to carry its own
+  // layout and its own rounding, so the image and the text disagreed on the totals.
+  const main = s.books[0];
+  return msg.msgPnl({
+    dryRun: config.safety.dryRun,
+    chainLabel: chain === ALL ? 'All chains' : chainLabel(chain),
+    periodLabel: journal.PERIODS[key].label,
+    trades: main?.known ?? 0,
+    grossWin: main?.grossWin ?? 0,
+    grossLoss: main?.grossLoss ?? 0,
+    winratePct: main ? journal.winrateOf(main) : 0,
+    empty: !main,
+  });
 }
 
 /**
@@ -244,18 +217,17 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
   const rates = await usdRates();
   const s = journal.statsFor(since, chain === ALL ? undefined : chain, (u) => rates.get(u) ?? null);
   const kb = periodKb(chain, key);
+  // One USD book covers everything now, so the card reads off books[0] alone.
+  const main = s.books[0];
   const text = msg.msgPnl({
     dryRun: config.safety.dryRun,
     chainLabel: chain === ALL ? 'All chains' : chainLabel(chain),
     periodLabel: p.label,
-    known: s.known,
-    count: s.count,
-    untracked: s.untracked,
-    excluded: s.excluded,
-    recovered: s.recovered,
-    unconverted: s.unconverted,
-    estimated: s.estimated,
-    books: s.books,
+    trades: main?.known ?? 0,
+    grossWin: main?.grossWin ?? 0,
+    grossLoss: main?.grossLoss ?? 0,
+    winratePct: main ? journal.winrateOf(main) : 0,
+    empty: !main,
   });
   const buf = await pnlImage(chain, key, s);
   if (!buf) return fresh ? ctx.reply(text, { ...html, ...kb }) : swap(ctx, text, { ...html, ...kb });
