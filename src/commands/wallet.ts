@@ -1,7 +1,7 @@
 import { Markup } from 'telegraf';
 import { config } from '../config.js';
 import { bot, html, editProgress, maxEthLabel, registerFlowReset, startKeyboard } from '../core.js';
-import { getChain, rebuildChains, gasFeeCapLabel } from '../chains.js';
+import { getChain, rebuildChains, gasFeeCapLabel, CHAINS } from '../chains.js';
 import * as walletStore from '../walletStore.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
@@ -56,6 +56,7 @@ export async function handleSecret(ctx: any, raw: string): Promise<void> {
         imported: 0,
         gone: 0,
         walletShort: msg.shortAddr(addr),
+        chainLabels: Object.values(CHAINS).map((c) => c.label),
       }),
       { ...html, ...startKeyboard() },
     );

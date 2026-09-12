@@ -257,15 +257,18 @@ export function msgStarted(o: {
   imported: number;
   gone: number;
   walletShort?: string | null;
+  /** Every chain the bot is configured for, in menu order. Falls back to chainLabel. */
+  chainLabels?: string[];
 }): string {
-  // Deliberately short. Everything a returning user needs is one tap away on the grid
-  // below, and the old card spent fifteen lines re-explaining the bot to someone who
-  // had already been using it for months.
+  const chains = o.chainLabels?.length ? o.chainLabels.join('/') : o.chainLabel;
   const out = [
     bold('WELCOME TO PHILIPS!'),
     '',
     'Your ultimate assistant for managing Single-Side Liquidity Pools on EVM Chain. ' +
       'Streamline your DeFi strategy, from automated dip-buying and profit-taking to effortless fee tracking.',
+    '',
+    `\u{1F45B} ${bold('Wallet')} : ${code(o.walletShort ?? 'not connected')}`,
+    `\u{26D3}\u{FE0F} ${bold('Chain')} : ${esc(chains)}`,
     '',
     'Pick a command below to begin.',
   ];
@@ -275,10 +278,7 @@ export function msgStarted(o: {
     const bits = [o.imported ? `${o.imported} imported` : '', o.gone ? `${o.gone} closed elsewhere` : ''].filter(Boolean);
     out.push('', note(`positions synced: ${bits.join(' \u00B7 ')}`));
   }
-  out.push(
-    '',
-    note(`${o.walletShort ? `${o.walletShort} \u00B7 ` : ''}${o.chainLabel} \u00B7 ${o.dryRun ? 'DRY RUN' : 'LIVE'} \u00B7 ${nowWib()}`),
-  );
+  out.push('', note(`${o.dryRun ? 'DRY RUN' : 'LIVE'} \u00B7 ${nowWib()}`));
   return out.join('\n');
 }
 

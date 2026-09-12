@@ -462,6 +462,7 @@ bot.start(async (ctx) => {
       // the same one startKeyboard() branches on. Reading it off the chain context
       // instead let the card and the keyboard disagree.
       walletShort: walletStore.address() ? msg.shortAddr(walletStore.address()!) : null,
+      chainLabels: Object.values(CHAINS).map((c) => c.label),
     }),
     { ...html, ...startKeyboard() },
   );
