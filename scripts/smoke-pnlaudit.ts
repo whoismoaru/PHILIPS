@@ -159,7 +159,10 @@ const kartuUsd = msgPnl({
   grossLoss: mainUsd?.grossLoss ?? 0, winratePct: mainUsd ? journal.winrateOf(mainUsd) : 0,
   empty: !mainUsd,
 });
-assert.match(kartuUsd, /USD/, 'kartu tak menyebut satuannya');
+// Dollars are shown as "$", not a trailing "USD": every book is converted before it
+// reaches the card, and the suffix made a converted ETH book look like it was still ETH.
+assert.match(kartuUsd, /\$/, 'kartu tak menyebut satuannya');
+assert.ok(!/\bUSD\b/.test(kartuUsd), 'satuan harus lewat simbol $, bukan akhiran USD');
 assert.ok(!/USDG book|ETH book|HYPE book/.test(kartuUsd), 'masih ada buku per satuan di kartu USD');
 if (mainUsd) {
   // The count on the card must be the SCORED one -- the same number the chain picker
