@@ -6,6 +6,7 @@ import { CHAINS, getChain, isStableBase, type ChainCtx, type BaseKind } from '..
 import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridgeRoute.js';
 import { NATIVE } from '../relay.js';
 import { ERC20_ABI } from '../chain.js';
+import { getEthUsd } from '../screening.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
@@ -51,6 +52,40 @@ registerFlowReset((uid) => flows.delete(uid));
 /** Simbol tampilan aset sumber: native pakai simbol native, stablecoin pakai simbolnya. */
 const assetLabel = (cc: ChainCtx, kind: BaseKind): string =>
   kind === 'weth' ? cc.nativeSymbol : (cc.bases.find((b) => b.kind === kind)?.symbol ?? kind.toUpperCase());
+
+/**
+ * Balance per base asset on one chain, as "714 USDG / $714".
+ *
+ * A balance that cannot be read falls back to the bare symbol rather than "0": zero is a
+ * claim about the wallet, an unread balance is a claim about the RPC.
+ */
+async function heldLabels(cc: ChainCtx): Promise<Map<BaseKind, string>> {
+  const out = new Map<BaseKind, string>();
+  const px = cc.bases.some((b) => b.kind === 'weth')
+    ? await getEthUsd(cc.wethAddress, cc).catch(() => null)
+    : null;
+  await Promise.all(
+    cc.bases.map(async (b) => {
+      try {
+        const wei: bigint =
+          b.kind === 'weth'
+            ? await cc.provider.getBalance(cc.wallet.address)
+            : await new ethers.Contract(b.address, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address);
+        const sym = assetLabel(cc, b.kind);
+        const amt = Number(ethers.formatUnits(wei, b.decimals));
+        const usd = b.kind === 'weth' ? (px === null ? null : amt * px) : amt;
+        const amtLabel = amt.toLocaleString('en-US', { maximumFractionDigits: b.kind === 'weth' ? 6 : 2 });
+        out.set(
+          b.kind,
+          `${amtLabel} ${sym}${usd === null ? '' : ` / $${usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`}`,
+        );
+      } catch {
+        /* unreadable: the caller falls back to the plain symbol */
+      }
+    }),
+  );
+  return out;
+}
 
 /**
  * Petakan aset sumber (kind di chain asal) ke aset tujuan di chain tujuan:
@@ -135,8 +170,11 @@ bot.action(/^br:(\w+):(\w+)$/, async (ctx) => {
   if (!from || !to) return ctx.answerCbQuery('Chain unavailable.');
   await ctx.answerCbQuery();
   flows.set(ctx.from!.id, { fromKey, toKey, startedAt: Date.now() });
+  // Each button carries what is actually held, the same shape /swap uses. Picking an
+  // asset blind and only then being told the balance is zero wastes two taps.
+  const held = await heldLabels(from);
   const rows = from.bases.map((b) => [
-    Markup.button.callback(assetLabel(from, b.kind), `bra:${fromKey}:${toKey}:${b.kind}`),
+    Markup.button.callback(held.get(b.kind) ?? assetLabel(from, b.kind), `bra:${fromKey}:${toKey}:${b.kind}`),
   ]);
   rows.push([Markup.button.callback('⬅️ Back', 'br:back'), Markup.button.callback('❌ Cancel', 'cancel')]);
   await ctx.editMessageText(msg.msgBridgeAsset(from.label, to.label), { ...html, ...Markup.inlineKeyboard(rows) });

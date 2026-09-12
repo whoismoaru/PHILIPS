@@ -2156,11 +2156,11 @@ export function msgBridgePick(routes: Array<{ from: string; to: string }>): stri
 
 export function msgBridgeAsset(fromLabel: string, toLabel: string): string {
   return [
-    `🌉 ${bold('Bridge')} · ${esc(fromLabel)} → ${esc(toLabel)}`,
+    bold(`${esc(fromLabel)} \u2192 ${esc(toLabel)}`),
     '',
-    `🪙 ${bold('Which asset do you want to bridge?')}`,
+    'Which asset do you want to bridge?',
     '',
-    note('a stablecoin arrives as the matching stablecoin on the destination chain; native arrives as native.'),
+    note('a stablecoin arrives as the matching stablecoin on the destination chain, native arrives as native.'),
   ].join('\n');
 }
 
