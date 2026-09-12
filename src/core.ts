@@ -278,9 +278,12 @@ export const START_GRID: Array<[label: string, data: string]> = [
   // Swap stays -- it opens the holdings list, which is the point when the CA is the
   // thing you do not have to hand. It runs /sell: the label is the wider word, the
   // action behind it is still selling a holding back to the pair's base.
+  // No Unwrap either: sweepStuckWeth unwraps stray WETH on every chain each minute, and
+  // recoverStrayWeth fires the moment an add or close fails. /unwrap stays as a typed
+  // command for the rare case both are unavailable; it does not need a button.
   ['🎯 Claim Fees', 'cmd:claim_fees'], ['💱 Swap', 'cmd:sell'], ['🌉 Bridge', 'cmd:bridge'],
-  ['📤 Send', 'cmd:send'], ['♻️ Unwrap', 'cmd:unwrap'], ['⛽ Gas', 'cmd:gas'],
-  ['🔔 Alerts', 'cmd:alerts'], ['⚙️ Settings', 'cmd:settings'], ['📖 Help', 'help'],
+  ['📤 Send', 'cmd:send'], ['⛽ Gas', 'cmd:gas'], ['🔔 Alerts', 'cmd:alerts'],
+  ['⚙️ Settings', 'cmd:settings'], ['📖 Help', 'help'],
 ];
 
 export const startKeyboard = () => {
