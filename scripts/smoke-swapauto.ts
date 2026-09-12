@@ -42,4 +42,15 @@ assert.ok(
 );
 assert.ok(/minOutWei/.test(br.slice(br.indexOf('async function execBridge('))), 'eksekusi bridge harus memakai lantai itu');
 
-console.log('ok: swap & bridge otomatis lewat satu jalur eksekusi, dengan lantai quote & guard saldo');
+// --- and /send, which is the only path that moves money OUT of the wallet ---
+const sd = readFileSync('src/commands/send.ts', 'utf8');
+assert.equal((sd.match(/async function execSend\(/g) ?? []).length, 1, 'execSend harus tunggal');
+assert.ok(/bot\.action\('sndgo'/.test(sd), 'tombol Confirm withdraw harus tetap terdaftar (dipakai dry run)');
+const sdAuto = sd.slice(sd.indexOf('if (!config.safety.dryRun) {'), sd.indexOf('return ctx.reply(\n    msg.msgSendConfirm'));
+assert.ok(/return execSend\(auto\)/.test(sdAuto), 'withdraw otomatis harus lewat execSend');
+// The ceiling is checked before confirm() is ever called; without it an auto-send could
+// leave the wallet unable to pay for its own gas.
+assert.ok(/wei > usableNow/.test(sd), 'jumlah harus dibandingkan dgn saldo yang boleh dikirim');
+assert.ok(/nativeReserve|GAS|usable/.test(sd), 'cadangan gas harus tetap disisihkan');
+
+console.log('ok: swap, bridge & withdraw otomatis lewat satu jalur eksekusi, dengan lantai quote & guard saldo');
