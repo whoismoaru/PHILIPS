@@ -2139,15 +2139,18 @@ export function msgUnwrapDone(amount: string, txHash: string | null, wrapped = '
 // ─── /bridge — move funds between chains (Relay) ───────────────────
 
 export function msgBridgePick(routes: Array<{ from: string; to: string }>): string {
+  // Grouped by source chain: one line per chain you can leave from, with every
+  // destination on it. Listing each pair on its own line made twelve near-identical
+  // rows for four chains.
+  const byFrom = new Map<string, string[]>();
+  for (const r of routes) byFrom.set(r.from, [...(byFrom.get(r.from) ?? []), r.to]);
   return [
-    `🌉 ${bold('Bridge Between Chains')}`,
+    `\u{1F309} ${bold('BRIDGE CROSS CHAIN')}`,
     '',
-    'Move native funds from one chain to another via Relay.',
+    `${bold('Available Routes :')}`,
+    ...[...byFrom].map(([from, tos], i) => `${i + 1}. ${esc(from)} \u2192 ${esc(tos.join('/'))}`),
     '',
-    `🔀 ${bold('Available Routes :')}`,
-    ...routes.map((r) => `• ${esc(r.from)} → ${esc(r.to)}`),
-    '',
-    note('a bridge cannot be undone — funds land on the destination chain and only another bridge brings them back.'),
+    note('a bridge cannot be undone, funds land on the destination chain and only another bridge brings them back.'),
   ].join('\n');
 }
 
