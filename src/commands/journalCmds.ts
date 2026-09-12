@@ -142,10 +142,10 @@ const swap = async (ctx: any, text: string, extra: any) => {
   }
 };
 
-const n2 = (v: number, unit: string): string => {
-  const d = unit === 'ETH' || unit === 'BNB' || unit === 'HYPE' ? 5 : 2;
-  return `${v >= 0 ? '+' : ''}${v.toFixed(d)} ${unit}`;
-};
+// Every recap figure is in dollars (see usdRates below), so it is printed as one --
+// the unit suffix used to make a converted ETH book look like it was still ETH.
+const n2 = (v: number, _unit: string): string =>
+  `${v >= 0 ? '+' : '-'}$${Math.abs(v).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /**
  * The PnL card as an IMAGE — the same artwork as the profit card on close, so a

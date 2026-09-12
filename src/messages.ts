@@ -715,8 +715,10 @@ export function msgPnl(opts: {
   /** Set when the period holds no scored trade at all. */
   empty?: boolean;
 }): string {
-  const usd = (v: number) =>
-    `${v >= 0 ? '+' : '-'}${Math.abs(v).toLocaleString('id-ID', { maximumFractionDigits: 0 })} USD`;
+  // Everything on this card is already valued in dollars (statsFor converts each book
+  // through its own chain's rate), so the unit belongs in the symbol, not trailing every
+  // figure as "USD" -- which also invited reading the ETH book as if it were still ETH.
+  const usd = (v: number) => `${v >= 0 ? '+' : '-'}${usdPlain(Math.abs(v))}`;
   const out = [bold(opts.chainLabel.toUpperCase()), ''];
   if (opts.empty || opts.trades === 0) {
     out.push(italic(`No closed trades with a measured result in ${opts.periodLabel.toLowerCase()}.`));
