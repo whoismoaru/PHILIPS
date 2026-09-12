@@ -118,7 +118,7 @@ export async function cmdBridge(ctx: any) {
       rs.slice(i, i + 2).map((r) => Markup.button.callback(`${r.from.label} → ${r.to.label}`, `br:${r.from.key}:${r.to.key}`)),
     );
   }
-  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   return ctx.reply(msg.msgBridgePick(rs.map((r) => ({ from: r.from.label, to: r.to.label }))), {
     ...html,
     ...Markup.inlineKeyboard(rows),
