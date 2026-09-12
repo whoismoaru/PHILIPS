@@ -10,7 +10,7 @@ import * as journal from './journal.js';
 import * as v4store from './v4store.js';
 import { checkV4Status, v4Supported, v4OwnerOf } from './uniswapV4.js';
 import { getEthUsd } from './screening.js';
-import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgIlAlert, msgConverted, msgV4Range } from './messages.js';
+import { msgRangeEnter, msgRangeExit, msgPriceDrop, msgIlAlert, msgConverted, msgV4Range, msgSwept } from './messages.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -197,7 +197,20 @@ async function sweepLeftovers(bot: Telegraf) {
       });
       const gotLabel = `${Number(ethers.formatUnits(res.outEthWei, res.dec)).toFixed(res.dec >= 18 ? 6 : 2)} ${res.unit}`;
       console.log(`[sweep] ${r.symbol} (${cc.key}) → +${gotLabel} via ${res.route}`);
-      await notify(bot, null, `♻️ Swept leftover ${r.symbol} → +${gotLabel} (${res.route})`, {});
+      // Default extra = html. Passing {} here used to strip the parse mode, so any
+      // markup in this card would have reached the chat as raw tags.
+      await notify(
+        bot,
+        null,
+        msgSwept({
+          symbol: r.symbol,
+          tokenId: r.tokenId,
+          amountLabel: gotLabel,
+          chainLabel: cc.label,
+          route: res.route,
+          dryRun: config.safety.dryRun,
+        }),
+      );
     } catch (e) {
       const emsg = (e as Error).message ?? '';
       // Token debu (nilai terlalu kecil utk di-swap) → mundur lama, jangan ulang tiap 6j.

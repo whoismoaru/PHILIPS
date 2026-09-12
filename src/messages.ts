@@ -2326,3 +2326,29 @@ export function msgSendDone(o: {
   out.push('', nowWib());
   return out.join('\n');
 }
+
+/**
+ * Leftover token recovered after a position closed.
+ *
+ * The money lands here LONG after the close card was sent, so this is the only place
+ * the recovery is ever shown. It names the position it belongs to: without the id the
+ * line reads as a windfall from nowhere, when it is really the tail of a trade already
+ * in the journal.
+ */
+export function msgSwept(o: {
+  symbol: string;
+  tokenId: string;
+  amountLabel: string;
+  chainLabel: string;
+  route: string;
+  dryRun: boolean;
+}): string {
+  return [
+    `\u267B\uFE0F ${bold('LEFTOVER SWEPT')}`,
+    '',
+    `${bold(`$${esc(o.symbol)}`)} / #${esc(o.tokenId)} = ${bold(`+${esc(o.amountLabel)}`)}`,
+    '',
+    note('recovered from a closed position, and added to its PnL.'),
+    note(`${esc(o.chainLabel)} \u00B7 ${esc(o.route)} \u00B7 ${o.dryRun ? 'DRY RUN' : 'LIVE'} \u00B7 ${nowWib()}`),
+  ].join('\n');
+}
