@@ -108,12 +108,13 @@ export async function cmdBridge(ctx: any) {
   if (rs.length === 0) return ctx.reply(msg.msgBridgeUnavailable(), html);
   flows.delete(ctx.from.id);
   // One ROW per source chain, its destinations side by side -- four chains used to make
-  // twelve stacked buttons, a screen and a half of scrolling. The rows follow the card's
-  // numbered lines in the same order, so row 1 is line 1's destinations.
-  const bySource = new Map<string, ChainCtx[]>();
-  for (const r of rs) bySource.set(r.from.key, [...(bySource.get(r.from.key) ?? []), r.to]);
-  const rows = [...bySource].map(([fromKey, tos]) =>
-    tos.map((to) => Markup.button.callback(to.label, `br:${fromKey}:${to.key}`)),
+  // twelve stacked buttons, a screen and a half of scrolling. Each button still names
+  // BOTH ends: a lone destination label repeats across rows with a different meaning
+  // each time, and reads wrong unless the card above is read alongside it.
+  const bySource = new Map<string, { from: ChainCtx; to: ChainCtx }[]>();
+  for (const r of rs) bySource.set(r.from.key, [...(bySource.get(r.from.key) ?? []), r]);
+  const rows = [...bySource].map(([, pairs]) =>
+    pairs.map((p) => Markup.button.callback(`${p.from.label} → ${p.to.label}`, `br:${p.from.key}:${p.to.key}`)),
   );
   rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
   return ctx.reply(msg.msgBridgePick(rs.map((r) => ({ from: r.from.label, to: r.to.label }))), {

@@ -2150,8 +2150,6 @@ export function msgBridgePick(routes: Array<{ from: string; to: string }>): stri
     `${bold('Available Routes :')}`,
     ...[...byFrom].map(([from, tos], i) => `${i + 1}. ${esc(from)} \u2192 ${esc(tos.join('/'))}`),
     '',
-    // The buttons carry destinations only; this says which row belongs to which line.
-    note('each numbered line is one row of buttons below, in the same order.'),
     note('a bridge cannot be undone, funds land on the destination chain and only another bridge brings them back.'),
   ].join('\n');
 }
