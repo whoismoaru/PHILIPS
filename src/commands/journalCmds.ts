@@ -100,7 +100,9 @@ const rows2 = <T,>(items: T[], make: (x: T) => any) => {
 
 const chainKb = (chains: Awaited<ReturnType<typeof pnlChains>>) =>
   Markup.inlineKeyboard([
-    ...rows2(chains, (c) => Markup.button.callback(c.label, `pnlc:${c.key}`)),
+    // Same order as the card: chains first, the All-chains total last.
+    ...rows2(chains.filter((c) => c.key !== ALL), (c) => Markup.button.callback(c.label, `pnlc:${c.key}`)),
+    ...(chains.some((c) => c.key === ALL) ? [[Markup.button.callback('All chains', `pnlc:${ALL}`)]] : []),
     [Markup.button.callback('📜 History', 'history'), Markup.button.callback('📊 View Positions', 'positions')],
   ]);
 
