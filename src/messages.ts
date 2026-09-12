@@ -2166,13 +2166,12 @@ export function msgBridgeAsset(fromLabel: string, toLabel: string): string {
 
 export function msgBridgeAmount(fromLabel: string, toLabel: string, balanceLabel: string, symbol: string): string {
   return [
-    `🌉 ${bold('Bridge')} · ${esc(fromLabel)} → ${esc(toLabel)}`,
+    bold(`${esc(fromLabel)} \u2192 ${esc(toLabel)}`),
+    ...(balanceLabel ? [bold(esc(balanceLabel))] : []),
     '',
-    `💼 ${bold('Balance:')} ${bold(balanceLabel)}`,
-    '',
-    `Please type the amount of ${bold(symbol)} to bridge.`,
+    `Please type the amount of ${bold(esc(symbol))} to bridge.`,
     // Gas is paid on the SOURCE chain: sending the entire balance makes the tx itself fail.
-    note('leave some for gas on the origin chain — sending your whole balance will fail.'),
+    note('leave some for gas on the origin chain, sending your whole balance will fail.'),
   ].join('\n');
 }
 
