@@ -1801,6 +1801,10 @@ function poolKeyboard(pools: explore.TokenPool[]) {
     ...pools.slice(0, POOL_PICK_MAX).map((p, i) => [
       Markup.button.callback(`${i + 1}. ${p.otherSymbol} / ${p.baseSymbol} (${hookFee(p) ? 'dynamic' : msg.feeLabel(p.fee)})`, `pick:${i}`),
     ]),
+    // Refresh re-runs discovery: TVL, volume and APR here are read once and go stale
+    // fast on a young token, and picking a pool off a five-minute-old APR is the whole
+    // decision this card exists for.
+    [Markup.button.callback('🔄 Refresh', 'pool:refresh')],
     // Back returns to the token's own card, which is where this step was entered from.
     [Markup.button.callback('⬅️ Back', 'hub:back'), Markup.button.callback('❌ Cancel', 'cancel')],
   ]);
@@ -2512,6 +2516,16 @@ bot.action(/^leg:(\d+)$/, async (ctx) => {
   } catch (err) {
     await ctx.reply(msg.msgError('plan', (err as Error).message), html);
   }
+});
+
+// Re-read the pools for the token this flow is on, into the same bubble.
+bot.action('pool:refresh', async (ctx: any) => {
+  const flow = flows.get(ctx.from!.id);
+  if (!flow?.token) return ctx.answerCbQuery('Expired — paste the CA again.');
+  await ctx.answerCbQuery('Re-reading pools…');
+  return continueAddlp(ctx, flow.token, flow.chain ?? getChain().key, {
+    message_id: ctx.callbackQuery.message.message_id,
+  });
 });
 
 bot.action('back:pool', async (ctx) => {
