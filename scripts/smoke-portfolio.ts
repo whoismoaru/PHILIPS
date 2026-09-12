@@ -18,18 +18,19 @@ const kartu = msgStatus({ dryRun: false, positions: 1, chains, totalUsd: 151.48,
 
 assert.match(kartu, /EQUITY :/);
 assert.match(kartu, /BY CHAIN :/);
-assert.match(kartu, /Total: <b>\$362\.94<\/b>/, 'total = bebas + LP');
+assert.match(kartu, /Total: <b>\$362,94<\/b>/, 'total = bebas + LP');
 assert.match(kartu, /1 position\b/, 'tunggal tak boleh "positions"');
 assert.match(msgStatus({ dryRun: false, positions: 3, chains, totalUsd: 1, lpUsd: 1 }), /3 positions/);
 
 // Nama pendek hanya untuk yang terdaftar; sisanya apa adanya.
-assert.match(kartu, /<b>RH<\/b>: \$22\.67/);
+assert.match(kartu, /<b>RH<\/b>: \$22,67/);
 assert.match(kartu, /<b>BASE<\/b>/);
 assert.match(kartu, /<b>HyperEVM<\/b>/, 'chain tak terdaftar pakai labelnya sendiri');
 
 // Nilai chain = native + SELURUH stablecoin di chain itu.
-assert.match(kartu, /<b>BSC<\/b>: \$122\.63/, 'stablecoin harus ikut nilai chain-nya');
-assert.match(kartu, /0\.0004 BNB · 122\.37 USDT/, 'nominal tiap aset tetap tampil');
+assert.match(kartu, /<b>BSC<\/b>: \$122,63/, 'stablecoin harus ikut nilai chain-nya');
+// Assets are separated by '/' now, and the amounts come in already formatted.
+assert.match(kartu, /0\.0004 BNB \/ 122\.37 USDT/, 'nominal tiap aset tetap tampil');
 
 // Chain kosong tak menyita baris.
 assert.ok(!kartu.includes('Ink'), 'chain bersaldo nol tak perlu ditampilkan');

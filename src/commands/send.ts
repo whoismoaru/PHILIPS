@@ -48,7 +48,7 @@ const sending = new Set<number>();
 registerFlowReset((uid) => flows.delete(uid));
 
 /** Sisa native yang WAJIB ditinggal untuk gas — kirim habis = tx-nya sendiri gagal. */
-const fmtAmt = (wei: bigint, dec: number) => Number(ethers.formatUnits(wei, dec)).toLocaleString('en-US', {
+const fmtAmt = (wei: bigint, dec: number) => Number(ethers.formatUnits(wei, dec)).toLocaleString('id-ID', {
   maximumFractionDigits: dec >= 18 ? 6 : 2,
 });
 
@@ -127,7 +127,7 @@ export async function handleSendAddress(ctx: any, raw: string): Promise<boolean>
     f.assets.map((a) => {
       const amt = Number(ethers.formatUnits(a.wei, a.decimals));
       const px = a.address === null ? prices.get(f.cc.key) ?? null : 1;
-      const usd = px === null ? '' : ` / $${(amt * px).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+      const usd = px === null ? '' : ` / $${(amt * px).toLocaleString('id-ID', { maximumFractionDigits: 2 })}`;
       return Markup.button.callback(
         `${f.cc.label}: ${fmtAmt(a.wei, a.decimals)} ${a.symbol}${usd}${f.isContract ? ' ⚠️' : ''}`,
         `snd:${f.cc.key}:${a.address ?? 'native'}`,
@@ -200,7 +200,7 @@ async function renderAmount(ctx: any, flow: SendFlow, balWei: bigint) {
         const px = flow.asset!.address === null ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1;
         if (px === null) return label;
         const usd = Number(ethers.formatUnits(usable, flow.asset!.decimals)) * px;
-        return `${label} / $${usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+        return `${label} / $${usd.toLocaleString('id-ID', { maximumFractionDigits: 2 })}`;
       })(),
       nativeReserve: flow.asset!.address === null,
       isContract: !!flow.isContract,

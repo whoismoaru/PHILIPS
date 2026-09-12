@@ -567,7 +567,7 @@ async function renderStatus(ctx: any, edit: boolean) {
               const erc = new ethers.Contract(b.address, ERC20_ABI, c.provider);
               const raw: bigint = await erc.balanceOf(c.wallet.address);
               const amt = Number(ethers.formatUnits(raw, b.decimals));
-              if (amt > 0) stables.push({ symbol: b.symbol, amount: amt.toFixed(2), usd: amt }); // ≈ $1
+              if (amt > 0) stables.push({ symbol: b.symbol, amount: amt.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), usd: amt }); // ≈ $1
             } catch {
             /* an unreadable stablecoin is skipped rather than failing the card */
             }
@@ -3547,7 +3547,7 @@ async function buyFromPct(ctx: any, flow: TSwapFlow, pct: number): Promise<unkno
   if (amountWei <= 0n) {
     return ctx.reply(msg.msgError('buy', `No spendable ${sym} left after the gas reserve.`), html);
   }
-  const label = `${Number(ethers.formatUnits(amountWei, base.decimals)).toLocaleString('en-US', { maximumFractionDigits: base.decimals >= 18 ? 6 : 2 })} ${sym} (${pct}%)`;
+  const label = `${Number(ethers.formatUnits(amountWei, base.decimals)).toLocaleString('id-ID', { maximumFractionDigits: base.decimals >= 18 ? 6 : 2 })} ${sym} (${pct}%)`;
   return tswapQuoteConfirm(ctx, flow, cc, base.address, flow.token!, amountWei, label);
 }
 
@@ -3699,13 +3699,13 @@ async function addStableBases(cc: ChainCtx, out: SellHolding[]): Promise<void> {
   }
 }
 
-const fmt4 = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 4 });
+const fmt4 = (n: number) => n.toLocaleString('id-ID', { maximumFractionDigits: 4 });
 /** "Chain: amount SYMBOL / $value" -- the one label for a holding, everywhere. */
 function holdingLabel(h: SellHolding): string {
   const chain = CHAINS[h.chainKey ?? getChain().key]?.label ?? h.chainKey ?? getChain().label;
   // A missing price drops the dollar half rather than printing $0, which would read as
   // a worthless token instead of an unread one.
-  const usd = h.usd === null || h.usd === undefined ? '' : ` / $${h.usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+  const usd = h.usd === null || h.usd === undefined ? '' : ` / $${h.usd.toLocaleString('id-ID', { maximumFractionDigits: 2 })}`;
   return `${chain}: ${fmt4(h.amountNum)} ${h.symbol}${usd}`;
 }
 
@@ -3890,7 +3890,7 @@ async function tswapQuoteConfirm(
   }
   const outDec = tflow.buy ? tflow.tokenDec! : base.decimals;
   const outSym = tflow.buy ? tflow.tokenSym! : base.symbol;
-  const estOutLabel = `${Number(ethers.formatUnits(q.out, outDec)).toLocaleString('en-US', { maximumFractionDigits: outDec >= 18 ? 6 : 2 })} ${outSym}`;
+  const estOutLabel = `${Number(ethers.formatUnits(q.out, outDec)).toLocaleString('id-ID', { maximumFractionDigits: outDec >= 18 ? 6 : 2 })} ${outSym}`;
   tflow.amountWei = amountWei;
   tflow.amountInLabel = amountInLabel;
   tflow.outLabel = estOutLabel;
@@ -4097,7 +4097,7 @@ async function execTSwap(ctx: any) {
         }
         const r = await swapExactInBest(base!.address, token!, amountWei, cc, MAX_SLIP_PCT, MAX_SLIP_PCT);
         return {
-          outLabel: `${Number(ethers.formatUnits(r.outWei, tokenDec!)).toLocaleString('en-US', { maximumFractionDigits: 6 })} ${tokenSym}`,
+          outLabel: `${Number(ethers.formatUnits(r.outWei, tokenDec!)).toLocaleString('id-ID', { maximumFractionDigits: 6 })} ${tokenSym}`,
           route: r.route,
           outWei: r.outWei,
           txHashes: r.txHashes,
@@ -4220,7 +4220,7 @@ async function sendProfitCard(
   // folded base-price movement into a number that should be pure LP result (depositing 1
   // ETH and getting 1 ETH back could read "-$120" simply because ETH fell), and left it out
   // of line with the deposit and received lines below it.
-  const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
+  const fmt = (n: number) => n.toLocaleString('id-ID', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
   const pnlBig = `${positive ? '+' : ''}${fmt(pnl)} ${baseSym}`;
   const buf = await renderProfitCard({
     pair: pairLabel(baseSym, rec.symbol),
@@ -5021,7 +5021,7 @@ bot.on(message('text'), async (ctx) => {
         if (amountWei <= 0n || amountWei > balTok) {
           return ctx.reply(msg.msgError('swap', `Not enough token balance (you have ${ethers.formatUnits(balTok, tflow.tokenDec!)}).`), html);
         }
-        amountInLabel = `${Number(ethers.formatUnits(amountWei, tflow.tokenDec!)).toLocaleString('en-US', { maximumFractionDigits: 4 })} ${tflow.tokenSym}`;
+        amountInLabel = `${Number(ethers.formatUnits(amountWei, tflow.tokenDec!)).toLocaleString('id-ID', { maximumFractionDigits: 4 })} ${tflow.tokenSym}`;
         fromAddr = tflow.token!;
         toAddr = base.address;
       }
@@ -5059,7 +5059,7 @@ bot.on(message('text'), async (ctx) => {
     if (balWei !== null) {
       const sym = flow.strategy === 'token' ? a.symbol : wizardBase(flow).wrappable ? wizardCtx(flow).nativeSymbol : a.symbol;
       cap = Number(ethers.formatUnits(balWei, dec));
-      capLabel = `${cap.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${sym}`;
+      capLabel = `${cap.toLocaleString('id-ID', { maximumFractionDigits: 6 })} ${sym}`;
     }
     if (num > cap) return ctx.reply(msg.msgOverLimit(capLabel), html);
     flow.awaitingAmount = false;
