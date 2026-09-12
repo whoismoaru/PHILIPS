@@ -1700,7 +1700,7 @@ export function msgLpOpened(tokenId: string, notes: string[], pair?: string, ran
 // ─── wallet: /settings (connect and disconnect via buttons) ────────
 
 export function msgAlerts(a: { rangeNotify: boolean; dropPct: number | null; ilPct: number | null }): string {
-  const on = (v: boolean) => (v ? '✅' : '⬜');
+  const on = (v: boolean) => (v ? '✅' : '⬜️');
   return [
     `\u{1F514} ${bold('POSITION ALERTS')}`,
     '',
@@ -1708,16 +1708,18 @@ export function msgAlerts(a: { rangeNotify: boolean; dropPct: number | null; ilP
     // Range and "converted" share one switch, and the card has to say so: turning range
     // alerts off silently removes the converted warning too, which is the one alert that
     // reports capital no longer able to recover on its own.
-    `${on(a.rangeNotify)} A position enters or leaves its range — v3 and v4`,
+    `${on(a.rangeNotify)} A position enters or leaves its range v3 and v4`,
     `${on(a.rangeNotify)} A position converts fully to the other token and stops earning`,
-    `${on(a.dropPct !== null)} The token drops ${a.dropPct === null ? '—' : bold(`${a.dropPct}%`)} below your entry`,
-    `${on(a.ilPct !== null)} Value plus fees falls ${a.ilPct === null ? '—' : bold(`${a.ilPct}%`)} below your deposit`,
+    // The thresholds live on the buttons, which is also where they are changed.
+    `${on(a.dropPct !== null)} The token drops below your entry`,
+    `${on(a.ilPct !== null)} Value plus fees falls below your deposit`,
     '',
     // Recoveries are not a preference: they report money that has already moved.
     `${bold('Always on :')} leftover tokens swept back to base, and stuck wrapped native unwrapped.`,
     '',
     note('the buttons cycle each value; OFF disables that notification.'),
-    note('"net loss" already counts the fees collected — not theoretical IL that ignores them.'),
+    note('"net loss" already counts the fees collected, not theoretical IL that ignores them.'),
+    '',
     note(nowWib()),
   ].join('\n');
 }
