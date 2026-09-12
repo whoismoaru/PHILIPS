@@ -103,7 +103,7 @@ const chainKb = (chains: Awaited<ReturnType<typeof pnlChains>>) =>
     // Same order as the card: chains first, the All-chains total last.
     ...rows2(chains.filter((c) => c.key !== ALL), (c) => Markup.button.callback(c.label, `pnlc:${c.key}`)),
     ...(chains.some((c) => c.key === ALL) ? [[Markup.button.callback('All chains', `pnlc:${ALL}`)]] : []),
-    [Markup.button.callback('📜 History', 'history'), Markup.button.callback('📊 View Positions', 'positions')],
+    [Markup.button.callback('📊 View Positions', 'positions')],
     // Same callback the other cards use, so every route to the menu lands on one card.
     [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
   ]);
