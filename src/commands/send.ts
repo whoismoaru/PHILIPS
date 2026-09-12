@@ -251,7 +251,7 @@ async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
     {
       ...html,
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Confirm & Send', 'sndgo')],
+        [Markup.button.callback('✅ Confirm & Withdraw', 'sndgo')],
         [Markup.button.callback('❌ Cancel', 'cancel')],
       ]),
     },

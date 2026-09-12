@@ -240,6 +240,8 @@ function cockpitLines(dryRun: boolean): string[] {
       ['/buy', 'Buy a token (best route)'],
       ['/sell', 'Sell a token from your wallet'],
       ['/bridge', 'Move native funds between chains'],
+      // /send was missing from this list entirely -- the only command with no line here.
+      ['/send', 'Withdraw funds to another address'],
     ]),
     '',
     `⚠️ ${bold('Notice :')}`,
@@ -2213,7 +2215,7 @@ export function msgBridgeConfirm(o: {
     // The quote is refreshed at confirmation; the figure above becomes its floor.
     italic(
       o.dryRun
-        ? '*DRY RUN, no transaction will be sent.'
+        ? '*DRY RUN, nothing will be withdrawn.'
         : '*the quote is refreshed the moment you confirm, if the route moves against you, nothing is sent. Bridges cannot be reversed.',
     ),
   ].join('\n');
@@ -2260,7 +2262,7 @@ export function msgBridgeUnavailable(): string {
 
 export function msgSendAskAddress(): string {
   return [
-    bold('SEND'),
+    bold('WITHDRAW'),
     '',
     '💬 Paste the destination address.',
     '',
@@ -2270,12 +2272,12 @@ export function msgSendAskAddress(): string {
 
 export function msgSendPickAsset(to: string, chains: string[], anyContract: boolean): string {
   const out = [
-    bold('SEND'),
+    bold('WITHDRAW'),
     '',
     `📮 ${bold('To:')} ${code(shortAddr(to))}`,
     `🔎 ${bold('Found balances on:')} ${esc(chains.join(', '))}`,
     '',
-    'Pick what to send.',
+    'Pick what to withdraw.',
   ];
   if (anyContract) {
     out.push('', `⚠️ ${italic('This address is a contract on at least one chain. Contracts can reject or trap plain transfers, so those rows are marked.')}`);
@@ -2293,11 +2295,11 @@ export function msgSendAmount(o: {
   isContract: boolean;
 }): string {
   const out = [
-    `${bold('SEND')} · ${esc(o.chainLabel)}`,
+    `${bold('WITHDRAW')} · ${esc(o.chainLabel)}`,
     '',
     `📮 ${bold('To:')} ${code(shortAddr(o.to))}`,
     `💰 ${bold('Balance:')} ${esc(o.balance)}`,
-    `✅ ${bold('Sendable:')} ${bold(o.usable)}`,
+    `✅ ${bold('Withdrawable:')} ${bold(o.usable)}`,
     '',
     `Tap a percentage, type an amount like ${code('0.5')}, or a percentage like ${code('12.5%')}.`,
   ];
@@ -2314,7 +2316,7 @@ export function msgSendConfirm(o: {
   dryRun: boolean;
 }): string {
   const out = [
-    bold('SEND REVIEW'),
+    bold('WITHDRAW REVIEW'),
     '',
     `📤 ${bold('Amount:')} ${bold(o.amount)}`,
     `📮 ${bold('To:')} ${code(o.to)}`,
@@ -2327,7 +2329,7 @@ export function msgSendConfirm(o: {
     '',
     italic(
       o.dryRun
-        ? '*DRY RUN, no transaction will be sent.'
+        ? '*DRY RUN, nothing will be withdrawn.'
         : '*check the address one more time. A transfer cannot be reversed, and there is nobody to appeal to.',
     ),
   );
@@ -2342,13 +2344,13 @@ export function msgSendDone(o: {
   dryRun: boolean;
 }): string {
   const out = [
-    `✅ ${bold('SENT')}`,
+    `✅ ${bold('WITHDRAWN')}`,
     '',
     `📤 ${bold(o.amount)} → ${code(shortAddr(o.to))}`,
     `🔗 ${esc(o.chainLabel)}`,
   ];
   if (o.txHash) out.push('', `🔗 ${bold('Tx:')}`, code(o.txHash));
-  if (o.dryRun) out.push('', note('DRY RUN, no transaction was sent.'));
+  if (o.dryRun) out.push('', note('DRY RUN, nothing was withdrawn.'));
   out.push('', nowWib());
   return out.join('\n');
 }
