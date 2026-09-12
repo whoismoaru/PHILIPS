@@ -193,7 +193,15 @@ async function renderAmount(ctx: any, flow: SendFlow, balWei: bigint) {
       chainLabel: cc.label,
       symbol: flow.asset!.symbol,
       balance: `${fmtAmt(balWei, flow.asset!.decimals)} ${flow.asset!.symbol}`,
-      usable: `${fmtAmt(usable, flow.asset!.decimals)} ${flow.asset!.symbol}`,
+      // Same "amount SYMBOL / $value" shape as the button that got here. The dollar half
+      // is dropped when the price cannot be read, never shown as $0.
+      usable: await (async () => {
+        const label = `${fmtAmt(usable, flow.asset!.decimals)} ${flow.asset!.symbol}`;
+        const px = flow.asset!.address === null ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1;
+        if (px === null) return label;
+        const usd = Number(ethers.formatUnits(usable, flow.asset!.decimals)) * px;
+        return `${label} / $${usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+      })(),
       nativeReserve: flow.asset!.address === null,
       isContract: !!flow.isContract,
     }),
@@ -274,9 +282,12 @@ async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
     }),
     {
       ...html,
+      // The money button names the amount at stake, and sits on its own row. A withdrawal
+      // leaves the wallet for an address the user typed: it keeps its confirm step even
+      // though /swap and /bridge no longer have one.
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Confirm & Withdraw', 'sndgo')],
-        [Markup.button.callback('❌ Cancel', 'cancel')],
+        [Markup.button.callback(`✅ Confirm & Withdraw ${fmtAmt(wei, flow.asset!.decimals)} ${flow.asset!.symbol}`, 'sndgo')],
+        [Markup.button.callback('⬅️ Back', 'snd:back'), Markup.button.callback('🏠 Menu', 'positions_back')],
       ]),
     },
   );
