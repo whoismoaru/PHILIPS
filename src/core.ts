@@ -275,9 +275,10 @@ export const START_GRID: Array<[label: string, data: string]> = [
   ['💰 Portfolio', 'portfolio'], ['📊 Positions', 'positions'], ['🧾 PnL', 'pnl'],
   // No Add LP, Close LP or Buy: all three start from a pasted CA or from the position
   // itself in /positions. A button for any of them would only ask for the CA again.
-  // Sell stays -- it opens the holdings list, which is the point when the CA is the
-  // thing you do not have to hand.
-  ['🎯 Claim Fees', 'cmd:claim_fees'], ['🔴 Sell', 'cmd:sell'], ['🌉 Bridge', 'cmd:bridge'],
+  // Swap stays -- it opens the holdings list, which is the point when the CA is the
+  // thing you do not have to hand. It runs /sell: the label is the wider word, the
+  // action behind it is still selling a holding back to the pair's base.
+  ['🎯 Claim Fees', 'cmd:claim_fees'], ['💱 Swap', 'cmd:sell'], ['🌉 Bridge', 'cmd:bridge'],
   ['📤 Send', 'cmd:send'], ['♻️ Unwrap', 'cmd:unwrap'], ['⛽ Gas', 'cmd:gas'],
   ['🔔 Alerts', 'cmd:alerts'], ['⚙️ Settings', 'cmd:settings'], ['📖 Help', 'help'],
 ];
