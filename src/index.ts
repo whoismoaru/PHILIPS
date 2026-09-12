@@ -2982,6 +2982,7 @@ type TSwapFlow = {
   fromHub?: boolean;             // masuk dari kartu hub CA → tombol Kembali menuju hub
   tokenBalWei?: bigint;          // /sell: saldo token terpilih (raw) untuk hitung %
   tokenBalNum?: number;          // /sell: saldo token terpilih (angka) untuk label
+  holdingLine?: string;          // /sell: baris holding persis spt di tombolnya
   amountWei?: bigint;
   amountInLabel?: string;
   outLabel?: string;
@@ -3690,16 +3691,21 @@ async function addStableBases(cc: ChainCtx, out: SellHolding[]): Promise<void> {
 }
 
 const fmt4 = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 4 });
+/** "Chain: amount SYMBOL / $value" -- the one label for a holding, everywhere. */
+function holdingLabel(h: SellHolding): string {
+  const chain = CHAINS[h.chainKey ?? getChain().key]?.label ?? h.chainKey ?? getChain().label;
+  // A missing price drops the dollar half rather than printing $0, which would read as
+  // a worthless token instead of an unread one.
+  const usd = h.usd === null || h.usd === undefined ? '' : ` / $${h.usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+  return `${chain}: ${fmt4(h.amountNum)} ${h.symbol}${usd}`;
+}
+
 function sellListKb(list: SellHolding[], _showChain = false) {
   // "Chain: amount SYMBOL / $value". The chain leads because it decides where the swap
   // executes, and the dollar figure is what makes two holdings comparable at a glance.
   // A missing price drops the dollar half rather than printing $0, which would read as
   // a worthless token instead of an unread one.
-  const rows = list.map((h, i) => {
-    const chain = CHAINS[h.chainKey ?? getChain().key]?.label ?? h.chainKey ?? getChain().label;
-    const usd = h.usd === null ? '' : ` / $${h.usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
-    return [Markup.button.callback(`${chain}: ${fmt4(h.amountNum)} ${h.symbol}${usd}`, `sellpick:${i}`)];
-  });
+  const rows = list.map((h, i) => [Markup.button.callback(holdingLabel(h), `sellpick:${i}`)]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   return Markup.inlineKeyboard(rows);
 }
@@ -3716,7 +3722,10 @@ function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
     [Markup.button.callback('⬅️ Back', back), Markup.button.callback('❌ Cancel', 'cancel')],
   ];
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
-  const text = msg.msgSellAmount(flow.tokenSym!, `${fmt4(flow.tokenBalNum!)} ${flow.tokenSym}`);
+  const text = msg.msgSellAmount(
+    flow.holdingLine ??
+      `${CHAINS[flow.chainKey ?? getChain().key]?.label ?? getChain().label}: ${fmt4(flow.tokenBalNum!)} ${flow.tokenSym}`,
+  );
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
@@ -3794,6 +3803,7 @@ bot.action(/^sellpick:(\d+)$/, async (ctx) => {
   flow.tokenDec = h.dec;
   flow.tokenBalWei = h.balWei;
   flow.tokenBalNum = h.amountNum;
+  flow.holdingLine = holdingLabel(h);
   await ctx.answerCbQuery();
   await sellAmountStep(ctx, flow, true);
 });
@@ -3803,7 +3813,9 @@ bot.action(/^sellpct:(\d+|custom)$/, async (ctx) => {
   if (!flow?.token || flow.tokenBalWei === undefined) return ctx.answerCbQuery('Expired — start again with /sell.');
   if (ctx.match[1] === 'custom') {
     await ctx.answerCbQuery();
-    return ctx.editMessageText(msg.msgSellTypeAmount(flow.tokenSym!), {
+    // The holding line stays: without it the prompt asks "how much" with the balance
+    // it refers to scrolled off the screen.
+    return ctx.editMessageText(msg.msgSellTypeAmount(flow.holdingLine ?? '', flow.tokenSym!), {
       ...html,
       ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', 'sellback:amount')]]),
     });
