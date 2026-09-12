@@ -362,7 +362,7 @@ export function msgHowItWorks(): string {
     '',
     `3️⃣ ${bold('Open a single-side LP')} — paste the token's contract address into the chat. You deposit only one token; the position works like a passive limit order that keeps earning fees while it waits for your price.`,
     '',
-    `4️⃣ ${bold('Monitor & harvest')} — /positions for in/out of range status and /claim_fees to harvest. Open a position for its Withdraw and Close buttons.`,
+    `4️⃣ ${bold('Monitor & harvest')} — /positions for in/out of range status and /claim_fees to harvest. Open a position for its Remove Liquidity and Close buttons.`,
     '',
     `⚠️ ${bold('Risk')}: price can move through your range (impermanent loss), and new tokens can rug. PHILIPS blocks the clearly dangerous ones, but the final call is always yours.`,
   ].join('\n');
@@ -1851,38 +1851,39 @@ export function msgClaimDone(id: string, label: string, txHash: string | null): 
 
 export function msgRemovePct(id: string): string {
   return [
-    `🗑️ ${bold('Withdraw Liquidity')} · #${esc(id)}`,
+    // "Remove liquidity", not "withdraw": a withdrawal now means sending funds out to an
+    // address. This pulls part of an LP back into the wallet, which is a different act.
+    `\u2796 ${bold('REMOVE LIQUIDITY')} · #${esc(id)}`,
     '',
-    'How much do you want to withdraw?',
+    'How much of this position do you want to pull out?',
     '',
-    note('25/50/75% is a partial withdrawal — the position stays alive and keeps earning fees.'),
-    note('100% closes the position entirely (burns the NFT and swaps the proceeds to ETH).'),
+    note('25/50/75% is partial, the position stays alive and keeps earning fees.'),
+    note('100% closes it entirely: the NFT is burned and the proceeds are swapped back to base.'),
   ].join('\n');
 }
 
 export function msgRemoveConfirm(id: string, symbol: string, pct: number, est: string, dryRun: boolean): string {
   return [
-    `📝 ${bold('Confirm Withdrawal')}`,
+    `\u2796 ${bold('REMOVE LIQUIDITY REVIEW')}`,
     '',
-    `Withdrawing ${bold(`${pct}%`)} from position ${bold(symbol)} · #${esc(id)}.`,
-    `Estimated out: ${bold(est)} plus any unclaimed fees.`,
+    `${bold(`${pct}%`)} of ${bold(`$${esc(symbol)}`)} / #${esc(id)}`,
+    `Estimated out = ${bold(esc(est))} plus any unclaimed fees`,
+    `Left in the pool = ${bold(`${100 - pct}%`)}, still earning`,
     '',
-    `The position ${bold('stays open')} with the remaining ${100 - pct}% of its liquidity.`,
-    // The cost basis shrinks along with a partial withdrawal — without this note, the
+    // The cost basis shrinks along with a partial removal -- without this note, the
     // smaller PnL afterwards reads like a sudden loss.
     note('your recorded cost basis is scaled down by the same share, so PnL stays comparable.'),
-    '',
-    note(dryRun ? 'DRY RUN — no transaction will be sent' : 'LIVE · confirming sends a transaction and costs gas'),
+    note(dryRun ? 'DRY RUN, no transaction will be sent.' : `LIVE \u00B7 ${nowWib()}`),
   ].join('\n');
 }
 
 export function msgRemoveDone(id: string, pct: number, txHash: string | null): string {
   return [
-    `✅ ${bold('Withdrawal Complete')}`,
+    `\u2705 ${bold('LIQUIDITY REMOVED')}`,
     '',
-    `${bold(`${pct}%`)} of position ${bold(`#${id}`)} liquidity is now in your wallet, along with any unclaimed fees.`,
-    `The remaining ${100 - pct}% is still working in the pool.`,
-    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — no transaction was sent.')]),
+    `${bold(`${pct}%`)} of #${esc(id)} is now in your wallet, along with any unclaimed fees.`,
+    `The remaining ${bold(`${100 - pct}%`)} is still working in the pool.`,
+    ...(txHash ? ['', bold('Tx Hash :'), code(txHash)] : ['', note('DRY RUN, no transaction was sent.')]),
     '',
     note(nowWib()),
   ].join('\n');

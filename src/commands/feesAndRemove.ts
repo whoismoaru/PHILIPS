@@ -176,8 +176,10 @@ bot.action(/^rm:(\d+)$/, async (ctx) => {
     ...html,
     ...Markup.inlineKeyboard([
       ...pctPresets.chunkButtons(pctPresets.get('stop').map((p) => Markup.button.callback(`${p}%`, `rmpct:${id}:${p}`))),
-      [Markup.button.callback('100% (close position)', `stop:${id}`)],
-      [Markup.button.callback('❌ Cancel', 'cancel')],
+      // 100% is not a percentage of a partial removal -- it closes the position, so it
+      // routes to the close flow and says so on its own row.
+      [Markup.button.callback('⛔ 100% — close the position', `stop:${id}`)],
+      [Markup.button.callback('⬅️ Back', `pos_detail_${id}`), Markup.button.callback('🏠 Menu', 'positions_back')],
     ]),
   });
 });
