@@ -70,7 +70,7 @@ export async function cmdSend(ctx: any) {
   flows.set(ctx.from.id, { awaitingAddress: true, startedAt: Date.now() });
   return ctx.reply(msg.msgSendAskAddress(), {
     ...html,
-    ...Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'cancel')]]),
+    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'positions_back')]]),
   });
 }
 bot.command('send', cmdSend);

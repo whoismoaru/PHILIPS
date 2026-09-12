@@ -2262,9 +2262,9 @@ export function msgBridgeUnavailable(): string {
 
 export function msgSendAskAddress(): string {
   return [
-    bold('WITHDRAW'),
+    `\u{1F4E5} ${bold('WITHDRAW')}`,
     '',
-    '💬 Paste the destination address.',
+    'Paste the destination address',
     '',
     note('an EVM address is the same on every chain, so the bot cannot tell which one you mean from the address alone. It will show you where you have a balance and let you pick.'),
   ].join('\n');
