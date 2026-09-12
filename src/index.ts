@@ -3700,7 +3700,7 @@ function sellListKb(list: SellHolding[], _showChain = false) {
     const usd = h.usd === null ? '' : ` / $${h.usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
     return [Markup.button.callback(`${chain}: ${fmt4(h.amountNum)} ${h.symbol}${usd}`, `sellpick:${i}`)];
   });
-  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   return Markup.inlineKeyboard(rows);
 }
 
