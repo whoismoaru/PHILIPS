@@ -93,13 +93,12 @@ export async function cmdClaimFees(ctx: any) {
 bot.command('claim_fees', cmdClaimFees);
 
 const claiming = new Set<string>(); // anti double-tap: tx kedua menarik 0 & buang gas
+/** Collect for one position. The caller has already answered the callback and taken
+ *  the anti-double-tap slot, so this only has to undo the slot it was handed. */
 async function doClaim(ctx: any, proto: string, chainKey: string, id: string) {
   const tag = `${proto}:${id}`;
-  if (claiming.has(tag)) return ctx.answerCbQuery('Processing…');
   const cc = CHAINS[chainKey];
-  if (!cc) return ctx.answerCbQuery('Unknown chain.');
-  claiming.add(tag);
-  await ctx.answerCbQuery();
+  if (!cc) return void (await ctx.reply(msg.msgError('claim', `Unknown chain ${chainKey}.`), html));
   store.beginMoneyOp(); // sweep monitor tak boleh mengirim tx dari dompet yang sama
   try {
     if (config.safety.dryRun) {
@@ -141,14 +140,25 @@ async function doClaim(ctx: any, proto: string, chainKey: string, id: string) {
   }
 }
 
-bot.action(/^claim:(v3|v4):([a-z0-9_-]+):(\d+)$/i, (ctx: any) =>
-  doClaim(ctx, ctx.match[1], ctx.match[2], ctx.match[3]),
-);
+// The spinner is answered in the handler itself, not in a helper: a Telegram button
+// that returns without answering spins until it times out.
+bot.action(/^claim:(v3|v4):([a-z0-9_-]+):(\d+)$/i, async (ctx: any) => {
+  const [, proto, chainKey, id] = ctx.match as string[];
+  const tag = `${proto}:${id}`;
+  if (claiming.has(tag)) return ctx.answerCbQuery('Processing…');
+  claiming.add(tag);
+  await ctx.answerCbQuery();
+  return doClaim(ctx, proto, chainKey, id);
+});
 
 // Buttons from cards sent before the protocol tag existed carry a bare id, which is
 // always a v3 position whose record names its own chain.
-bot.action(/^claim:(\d+)$/, (ctx: any) => {
+bot.action(/^claim:(\d+)$/, async (ctx: any) => {
   const id = ctx.match[1];
+  const tag = `v3:${id}`;
+  if (claiming.has(tag)) return ctx.answerCbQuery('Processing…');
+  claiming.add(tag);
+  await ctx.answerCbQuery();
   const rec = store.active().find((r) => r.tokenId === id);
   return doClaim(ctx, 'v3', rec?.chain ?? ctxOf(rec ?? ({} as any)).key, id);
 });
