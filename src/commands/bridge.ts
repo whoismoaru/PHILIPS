@@ -324,6 +324,20 @@ async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<voi
     flow.inLabel = q.inLabel;
     flow.outLabel = q.outLabel;
     flow.quotedAt = Date.now();
+    // A bridge now goes the moment the amount is set, matching /swap. The Confirm card's
+    // protections are all still in force: minOutWei is the floor the fill is held to,
+    // balance and gas were checked above, and a dry run still never sends.
+    if (!config.safety.dryRun) {
+      await editProgress(ctx, prog, msg.msgProgress(`bridging ${q.inLabel} → ${q.outLabel}…`));
+      // execBridge is written for a button press: hand it the two callback-only methods,
+      // aimed at the progress bubble, rather than copying the money path for this entry.
+      const auto: any = Object.create(ctx);
+      auto.answerCbQuery = async () => {};
+      auto.editMessageText = (text: string, extra?: any) =>
+        ctx.telegram.editMessageText(ctx.chat.id, prog.message_id, undefined, text, extra).catch(() => {});
+      return execBridge(auto);
+    }
+
     await editProgress(
       ctx,
       prog,
@@ -350,7 +364,12 @@ async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<voi
   }
 }
 
-bot.action('br:go', async (ctx) => {
+/**
+ * Send the bridge the flow describes. Registered as Confirm, and called directly when a
+ * typed amount goes straight out -- one implementation, so the two entry points cannot
+ * drift apart on a path that cannot be undone.
+ */
+async function execBridge(ctx: any) {
   const uid = ctx.from!.id;
   const flow = flows.get(uid);
   if (!flow?.amountWei || flow.minOutWei === undefined) return ctx.answerCbQuery('Expired — start again with /bridge.');
@@ -397,4 +416,12 @@ bot.action('br:go', async (ctx) => {
     inFlight.delete(uid);
     store.endMoneyOp();
   }
+}
+
+// The spinner is released here, in the handler: a button that returns without answering
+// keeps spinning until Telegram times it out. execBridge answers again on its guard
+// paths, which Telegram simply ignores.
+bot.action('br:go', async (ctx: any) => {
+  await ctx.answerCbQuery();
+  return execBridge(ctx);
 });
