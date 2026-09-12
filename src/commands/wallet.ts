@@ -202,6 +202,6 @@ bot.action('disconnect:ok', async (ctx) => {
   await ctx.answerCbQuery();
   walletStore.disconnect();
   rebuildChains();
-  await ctx.editMessageText(msg.msgDisconnected(), html);
+  await ctx.editMessageText(msg.msgDisconnected(walletStore.envKeyRefused()), html);
 });
 
