@@ -76,6 +76,14 @@ export async function cmdSend(ctx: any) {
 }
 bot.command('send', cmdSend);
 
+// Back = ask for the address again, which is the step before this one. cmdSend clears
+// the flow itself, so a half-filled withdrawal cannot survive the trip backwards.
+bot.action('snd:back', async (ctx: any) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+  return cmdSend(ctx);
+});
+
 /** Alamat ditempel → pindai kelima chain, tawarkan yang ada isinya. */
 export async function handleSendAddress(ctx: any, raw: string): Promise<boolean> {
   const flow = flows.get(ctx.from.id);
@@ -130,7 +138,13 @@ export async function handleSendAddress(ctx: any, raw: string): Promise<boolean>
     ctx,
     prog,
     msg.msgSendPickAsset(to, usable.map((f) => f.cc.label), found.some((f) => f.isContract)),
-    { ...html, ...Markup.inlineKeyboard([...rows.map((r) => [r]), [Markup.button.callback('⬅️ Back to Menu', 'positions_back')]]) },
+    {
+      ...html,
+      ...Markup.inlineKeyboard([
+        ...rows.map((r) => [r]),
+        [Markup.button.callback('⬅️ Back', 'snd:back'), Markup.button.callback('🏠 Menu', 'positions_back')],
+      ]),
+    },
   );
   return true;
 }
