@@ -3909,6 +3909,22 @@ async function tswapQuoteConfirm(
   } catch {
     /* an unreadable balance hides the balance line rather than blocking */
   }
+  // A SWAP executes as soon as the amount is set: the owner asked for no confirm step on
+  // this side. The protections the Confirm button used to carry are all still on:
+  // quotedOutWei becomes the floor execTSwap holds the fill to, the per-tx limit was
+  // checked above, and a shortfall still stops here with a card instead of a send.
+  if (!tflow.buy && !shortLabel && !config.safety.dryRun) {
+    await editProgress(ctx, prog, msg.msgProgress(`swapping ${amountInLabel} → ${estOutLabel}…`));
+    // execTSwap is written for a button press: give it the two callback-only methods,
+    // pointed at the progress bubble, rather than duplicating the money path for this
+    // one entry point.
+    const auto: any = Object.create(ctx);
+    auto.answerCbQuery = async () => {};
+    auto.editMessageText = (text: string, extra?: any) =>
+      ctx.telegram.editMessageText(ctx.chat.id, prog.message_id, undefined, text, extra).catch(() => {});
+    return execTSwap(auto);
+  }
+
   const kb = shortLabel
     ? [[Markup.button.callback('⬅️ Back', tflow.previewBack ?? 'buyback:size'), Markup.button.callback('❌ Cancel', 'cancel')]]
     : [
@@ -3978,7 +3994,12 @@ async function wrapWithGasReserve(cc: ChainCtx, wrapWei: bigint): Promise<void> 
   await wtx.wait();
 }
 
-bot.action('tswapok', async (ctx) => {
+/**
+ * Execute the swap the flow describes. Registered as the Confirm button, and called
+ * directly when a typed amount executes straight away -- one implementation, so the
+ * auto path cannot drift from the confirmed one.
+ */
+async function execTSwap(ctx: any) {
   const uid = ctx.from!.id;
   const flow = tswapFlows.get(uid);
   if (!flow || flow.amountWei === undefined || !flow.base || !flow.token) {
@@ -4085,7 +4106,9 @@ bot.action('tswapok', async (ctx) => {
     tswapInFlight.delete(uid);
     store.endMoneyOp();
   }
-});
+}
+
+bot.action('tswapok', execTSwap);
 
 bot.action(/^stop:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
