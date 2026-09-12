@@ -103,7 +103,7 @@ function routes(): Array<{ from: ChainCtx; to: ChainCtx }> {
   return out;
 }
 
-async function cmdBridge(ctx: any) {
+export async function cmdBridge(ctx: any) {
   const rs = routes();
   if (rs.length === 0) return ctx.reply(msg.msgBridgeUnavailable(), html);
   flows.delete(ctx.from.id);

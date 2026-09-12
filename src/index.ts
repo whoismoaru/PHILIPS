@@ -57,6 +57,13 @@ import * as explore from './explore.js';
 import * as krystal from './krystal.js';
 import { awaitingSecret, handleSecret } from './commands/wallet.js';
 import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
+import { cmdClaimFees } from './commands/feesAndRemove.js';
+import { cmdBridge } from './commands/bridge.js';
+import { cmdSend } from './commands/send.js';
+import { cmdUnwrap } from './commands/unwrap.js';
+import { cmdAlerts } from './commands/alerts.js';
+import { cmdSettings } from './commands/wallet.js';
+import { gasCard, gasKeyboard } from './commands/gas.js';
 import './commands/feesAndRemove.js';
 import './commands/alerts.js';
 import './commands/unwrap.js';
@@ -343,7 +350,11 @@ const NEEDS_WALLET = /^\/(add_lp|stop|claim_fees|buy|sell|unwrap|bridge|send)\b/
 // Buttons that ACTUALLY send a tx. Guarding commands alone is not enough: a flow can
 // start with a wallet connected and then be disconnected, leaving the button still
 // tappable — and what appears then is not "connect your wallet" but a raw VoidSigner error.
-const NEEDS_WALLET_CB = /^(addok|tswapok|close:|closev4go:|claim:|rmok:|unwrap:go|br:go|sndgo)/;
+// The /start grid entries are guarded too: tapping `cmd:buy` must behave exactly like
+// typing /buy, or an old start card left in the chat becomes a way around the guard
+// after the wallet is disconnected.
+const NEEDS_WALLET_CB =
+  /^(addok|tswapok|close:|closev4go:|claim:|rmok:|unwrap:go|br:go|sndgo|cmd:(stop|claim_fees|buy|sell|unwrap|bridge|send)$)/;
 bot.use((ctx: any, next: any) => {
   const t = ctx.message?.text ?? '';
   const cb = ctx.callbackQuery?.data ?? '';
@@ -402,17 +413,61 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
   return { imported, gone };
 }
 
-// The /start inline keyboard (same as /help but with a Help button rather than Close
-// All). 'portfolio' and 'status' are now the SAME card (the money card), so one button
-// covers both. The 'portfolio' action stays alive for buttons in older messages.
-// The Add Liquidity button was dropped on request: opening an LP starts by pasting a
-// CA, so that button only opened a "how to use" card — one tap that did nothing.
-// Connect Wallet stays, because it genuinely acts.
-const startKeyboard = () =>
-  Markup.inlineKeyboard([
-    ...(walletStore.isConnected() ? [] : [[Markup.button.callback('🔗 Connect Wallet', 'connect')]]),
-    [Markup.button.callback('📖 How it Works', 'howitworks')],
-  ]);
+/**
+ * The /start grid: every command the bot answers, as one tap each.
+ *
+ * This deliberately breaks the usual "at most six buttons per card" rule. /start is a
+ * launcher, not a card that asks a question -- hiding twelve of fifteen commands behind
+ * a submenu costs a tap on every use to save scrolling once.
+ *
+ * Connect Wallet replaces the whole grid when there is no wallet: nothing else on it
+ * would work anyway.
+ */
+const START_GRID: Array<[label: string, data: string]> = [
+  ['💰 Portfolio', 'portfolio'], ['📊 Positions', 'positions'], ['🧾 PnL', 'pnl'],
+  ['➕ Add LP', 'howto:add'], ['🎯 Claim Fees', 'cmd:claim_fees'], ['⛔ Close LP', 'cmd:stop'],
+  ['🟢 Buy', 'cmd:buy'], ['🔴 Sell', 'cmd:sell'], ['🌉 Bridge', 'cmd:bridge'],
+  ['📤 Send', 'cmd:send'], ['♻️ Unwrap', 'cmd:unwrap'], ['⛽ Gas', 'cmd:gas'],
+  ['🔔 Alerts', 'cmd:alerts'], ['⚙️ Settings', 'cmd:settings'], ['📖 Help', 'help'],
+];
+
+const startKeyboard = () => {
+  if (!walletStore.isConnected()) {
+    return Markup.inlineKeyboard([[Markup.button.callback('🔗 Connect Wallet', 'connect')]]);
+  }
+  const rows = [];
+  for (let i = 0; i < START_GRID.length; i += 3) {
+    rows.push(START_GRID.slice(i, i + 3).map(([t, d]) => Markup.button.callback(t, d)));
+  }
+  return Markup.inlineKeyboard(rows);
+};
+
+/**
+ * Grid buttons run the real command handler, not a copy of it.
+ *
+ * Every one of these is also reachable by typing the command, and two implementations
+ * of the same action drift apart the moment one is edited. The handlers take the
+ * Telegraf context either way, so a callback context works unchanged.
+ */
+const GRID_ACTIONS: Record<string, (ctx: any) => Promise<unknown>> = {
+  claim_fees: cmdClaimFees,
+  stop: cmdCloseAll,
+  buy: cmdBuy,
+  sell: cmdSell,
+  bridge: cmdBridge,
+  send: cmdSend,
+  unwrap: cmdUnwrap,
+  alerts: cmdAlerts,
+  settings: cmdSettings,
+  gas: async (ctx: any) => ctx.reply(await gasCard(), { ...html, ...gasKeyboard() }),
+};
+
+bot.action(/^cmd:([a-z_]+)$/, async (ctx: any) => {
+  const fn = GRID_ACTIONS[ctx.match[1]];
+  await ctx.answerCbQuery();
+  if (!fn) return;
+  return fn(ctx);
+});
 
 bot.start(async (ctx) => {
   const { imported, gone } = await syncOnChainPositions().catch(() => ({ imported: 0, gone: 0 }));
