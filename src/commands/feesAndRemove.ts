@@ -58,7 +58,9 @@ async function unclaimedList(): Promise<Claimable[]> {
           return {
             id: p.tokenId,
             chainKey: cc.key,
-            symbol: `${p.sym0}/${p.sym1}`,
+            // The token, not the pair: the base side is the same on every row and
+            // says nothing about which position this is.
+            symbol: p.base && p.sym0 === p.base ? p.sym1 : p.base && p.sym1 === p.base ? p.sym0 : `${p.sym0}/${p.sym1}`,
             label: `${amt.toFixed(dec >= 18 ? 5 : 2)} ${p.base ?? ''}`.trim(),
             base: amt,
             v4: true,
@@ -82,7 +84,7 @@ export async function cmdClaimFees(ctx: any) {
   const rows = list.map((x) => [
     Markup.button.callback(`💵 ${x.symbol} · ${x.label}`, `claim:${x.v4 ? 'v4' : 'v3'}:${x.chainKey}:${x.id}`),
   ]);
-  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   await editProgress(
     ctx,
     prog,
