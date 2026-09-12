@@ -66,7 +66,7 @@ async function assetsOn(cc: ChainCtx): Promise<Array<{ address: string | null; s
   return out;
 }
 
-async function cmdSend(ctx: any) {
+export async function cmdSend(ctx: any) {
   flows.set(ctx.from.id, { awaitingAddress: true, startedAt: Date.now() });
   return ctx.reply(msg.msgSendAskAddress(), {
     ...html,

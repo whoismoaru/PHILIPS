@@ -18,7 +18,7 @@ function alertsKeyboard() {
   ]);
 }
 
-async function cmdAlerts(ctx: any) {
+export async function cmdAlerts(ctx: any) {
   return ctx.reply(msg.msgAlerts(alerts.get()), { ...html, ...alertsKeyboard() });
 }
 bot.command('alerts', cmdAlerts);

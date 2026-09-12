@@ -258,43 +258,28 @@ export function msgStarted(o: {
   gone: number;
   walletShort?: string | null;
 }): string {
-  const sync =
-    o.imported || o.gone
-      ? [o.imported ? `+${o.imported} imported` : '', o.gone ? `${o.gone} closed outside the bot` : '']
-          .filter(Boolean)
-          .join(' · ')
-      : '';
-  return [
-    bold('WELCOME TO PHILIPS!'),
+  // Deliberately short. Everything a returning user needs is one tap away on the grid
+  // below, and the old card spent fifteen lines re-explaining the bot to someone who
+  // had already been using it for months.
+  const out = [
+    `\u{1F7E2} ${bold('WELCOME TO PHILIPS!')}`,
     '',
-    `PHILIPS is your personal assistant for managing Single-Side Liquidity Pools (LP) on ${bold('Uniswap')}. PHILIPS goal is to make DeFi simple, secure, and efficient. Whether you are automatically buying the dip, taking profit on the rip, or tracking your fees, I've got you covered.`,
+    'Your ultimate assistant for managing Single-Side Liquidity Pools on EVM Chain. ' +
+      'Streamline your DeFi strategy, from automated dip-buying and profit-taking to effortless fee tracking.',
     '',
-    `🛠 ${bold('Core Features :')}`,
-    '- Connect your Robinhood Wallet (Manual Import)',
-    '- Single-Side LP (Provide liquidity with only 1 token)',
-    '- Automated Token Security Audit &amp; Rug Pull Check',
-    '- Track active LP positions, APR, and earned fees',
+    'Pick a command below to begin.',
+  ];
+  // Position drift is reported only when it happened: silence means nothing moved, and
+  // a line reading "0 imported, 0 gone" is noise on every single start.
+  if (o.imported || o.gone) {
+    const bits = [o.imported ? `${o.imported} imported` : '', o.gone ? `${o.gone} closed elsewhere` : ''].filter(Boolean);
+    out.push('', note(`positions synced: ${bits.join(' \u00B7 ')}`));
+  }
+  out.push(
     '',
-    `⚠️ ${bold('Security Notice :')}`,
-    // The official door is now the Connect Wallet button in /settings — /connect was
-    // removed, and telling the user to type a command that does not exist opens
-    // exactly the hole this warning is trying to close (they go looking for the
-    // "official flow" and trust a fake one).
-    `PHILIPS will ${bold('never')} ask for your Seed Phrase outside of the official Connect Wallet flow in ${code('/settings')}. DeFi involves risks, including Impermanent Loss (IL). ${bold('Always DYOR.')}`,
-    '',
-    // The "Bot Status" block was dropped on request. Two things stay because they
-    // change what this card means: simulation mode (no money moves) and the position
-    // sync result (the bot found or closed positions without being asked).
-    ...(o.dryRun ? [`⚪ ${bold('DRY RUN')} — simulation mode, no funds will move.`, ''] : []),
-    ...(sync ? [`🔄 ${bold('Sync:')} ${esc(sync)}`, ''] : []),
-    `👉 ${bold('Get Started :')}`,
-    // With a wallet connected there is no primary button left on this card, so the
-    // sentence has to point at something actually doable: pasting a CA. "Tap the
-    // button below" would point at a button that is not there.
-    o.walletShort
-      ? `Paste a token contract address into the chat, or send ${code('/add_lp')}, to open a new Single-Side LP and start earning trading fees.`
-      : 'Tap the button below to Connect your Robinhood Wallet and start earning trading fees.',
-  ].join('\n');
+    note(`${o.walletShort ? `${o.walletShort} \u00B7 ` : ''}${o.chainLabel} \u00B7 ${o.dryRun ? 'DRY RUN' : 'LIVE'} \u00B7 ${nowWib()}`),
+  );
+  return out.join('\n');
 }
 
 /** How to start an LP — used by the "Open LP" button on /start (there is no CA-less wizard yet). */
@@ -1788,23 +1773,15 @@ export function msgNeedWallet(): string {
 
 export function msgConnectPrompt(): string {
   return [
-    `🔗 ${bold('Connect Your Wallet')}`,
+    bold('CONNECT WALLET'),
     '',
-    `To connect manually, please send your ${bold('Private Key')} or ${bold('Seed Phrase')} directly to this chat.`,
+    `Paste your ${bold('private key')} (0x\u2026) or ${bold('12/24-word seed phrase')} in this chat.`,
+    'PHILIPS signs your LP and swap transactions with it.',
     '',
-    'PHILIPS uses this to auto-sign transactions for Uniswap LP on your behalf.',
-    '',
-    `⚠️ ${bold('CRITICAL SECURITY WARNING :')}`,
-    `1. PHILIPS will ${bold('NEVER')} ask for your seed phrase outside of this secure connection process.`,
-    '2. Ensure you are in a private chat. Do not use this bot in group chats.',
-    '3. Only connect a wallet with funds you are willing to risk in DeFi.',
-    // Two facts that must not fall off this card: the key passes through Telegram's
-    // servers (and cannot be recalled), and on our side it is encrypted. Both change
-    // the "which wallet do I use here" decision — this is not security boilerplate.
-    '4. Your message passes through Telegram servers. PHILIPS deletes it the moment it arrives, but anything already sent cannot be unsent.',
-    '5. On this server the key is stored encrypted (keystore JSON, scrypt+AES) — never as plain text.',
-    '',
-    `📥 ${bold('Please paste your Private Key (starts with 0x) or 12/24-word Seed Phrase below :')}`,
+    // The one warning that changes WHICH wallet is worth pasting: Telegram carries the
+    // message before PHILIPS can delete it, and a sent message cannot be unsent.
+    note('Telegram carries this message first \u2014 PHILIPS deletes it on arrival, but it cannot be unsent.'),
+    note(`LIVE \u00B7 ${nowWib()}`),
   ].join('\n');
 }
 

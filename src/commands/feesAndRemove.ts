@@ -30,7 +30,7 @@ async function unclaimedList(): Promise<Array<{ rec: store.PosRecord; label: str
   return out.filter((x): x is { rec: store.PosRecord; label: string; base: number } => x !== null && x.base > 0);
 }
 
-async function cmdClaimFees(ctx: any) {
+export async function cmdClaimFees(ctx: any) {
   const prog = await ctx.reply(msg.msgProgress('reading unclaimed fees…'), html);
   const list = await unclaimedList();
   if (!list.length) return editProgress(ctx, prog, msg.msgNoFees());

@@ -56,7 +56,7 @@ export async function handleSecret(ctx: any, raw: string): Promise<void> {
   }
 }
 
-async function cmdSettings(ctx: any) {
+export async function cmdSettings(ctx: any) {
   const addr = walletStore.address();
   const cc = getChain();
   const bal = addr ? await cc.provider.getBalance(addr).then((b) => `${msg.cleanUnits(b, 18)} ETH`).catch(() => '?') : null;

@@ -50,7 +50,7 @@ async function stuckEverywhere(): Promise<Array<{ cc: ChainCtx; bal: bigint }>> 
   return found.filter((x): x is { cc: ChainCtx; bal: bigint } => x !== null);
 }
 
-async function cmdUnwrap(ctx: any) {
+export async function cmdUnwrap(ctx: any) {
   const cc = getChain();
   const { wrapped, native } = symbolsOf(cc);
   const prog = await ctx.reply(msg.msgProgress('reading wrapped-native balances…'), html);
