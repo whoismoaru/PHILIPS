@@ -3690,12 +3690,16 @@ async function addStableBases(cc: ChainCtx, out: SellHolding[]): Promise<void> {
 }
 
 const fmt4 = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 4 });
-function sellListKb(list: SellHolding[], showChain = false) {
-  const rows = list.map((h, i) => [Markup.button.callback(
-    `${h.symbol} · ${fmt4(h.amountNum)}${h.usd ? ` · $${h.usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : ''}` +
-      (showChain && h.chainKey ? ` @${CHAINS[h.chainKey]?.label ?? h.chainKey}` : ''),
-    `sellpick:${i}`,
-  )]);
+function sellListKb(list: SellHolding[], _showChain = false) {
+  // "Chain: amount SYMBOL / $value". The chain leads because it decides where the swap
+  // executes, and the dollar figure is what makes two holdings comparable at a glance.
+  // A missing price drops the dollar half rather than printing $0, which would read as
+  // a worthless token instead of an unread one.
+  const rows = list.map((h, i) => {
+    const chain = CHAINS[h.chainKey ?? getChain().key]?.label ?? h.chainKey ?? getChain().label;
+    const usd = h.usd === null ? '' : ` / $${h.usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+    return [Markup.button.callback(`${chain}: ${fmt4(h.amountNum)} ${h.symbol}${usd}`, `sellpick:${i}`)];
+  });
   rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
   return Markup.inlineKeyboard(rows);
 }
