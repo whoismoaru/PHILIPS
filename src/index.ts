@@ -3952,6 +3952,38 @@ async function tswapQuoteConfirm(
 }
 
 /**
+ * What the swap really cost: gas in dollars, and the gap between the quote and the fill.
+ *
+ * Both are read from what happened, never from the quote's own estimate. A receipt that
+ * cannot be fetched drops that line rather than reporting zero -- "$0 fee" is a claim,
+ * "no figure" is the truth.
+ */
+async function swapCost(
+  cc: ChainCtx,
+  txHashes: string[],
+  quotedOutWei: bigint | undefined,
+  outWei: bigint,
+): Promise<{ feeUsd: number | null; slipPct: number | null }> {
+  let feeUsd: number | null = null;
+  try {
+    const rcs = await Promise.all(txHashes.map((h) => cc.provider.getTransactionReceipt(h)));
+    let gasWei = 0n;
+    for (const rc of rcs) if (rc) gasWei += rc.gasUsed * (rc.gasPrice ?? 0n);
+    const px = gasWei > 0n ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
+    if (px) feeUsd = Number(ethers.formatEther(gasWei)) * px;
+  } catch {
+    /* no receipt, no fee line */
+  }
+  // Positive = filled BELOW the quote, which is the direction that costs money. A fill
+  // above the quote is reported as 0, not as a negative "gain" the user cannot bank on.
+  const slipPct =
+    quotedOutWei && quotedOutWei > 0n
+      ? Math.max(0, (Number(quotedOutWei - outWei) / Number(quotedOutWei)) * 100)
+      : null;
+  return { feeUsd, slipPct };
+}
+
+/**
  * Wrap native → wrapped, TAPI sisakan gas.
  *
  * Without this reserve: type an amount right up against the balance and the deposit
@@ -4047,7 +4079,7 @@ async function execTSwap(ctx: any) {
         );
       }
     }
-    const attempt = async (): Promise<{ outLabel: string; route: string }> => {
+    const attempt = async (): Promise<{ outLabel: string; route: string; outWei: bigint; txHashes: string[] }> => {
       if (buy) {
         // base -> token. With an ETH base: wrap what is needed first (Uniswap wants WETH).
         if (base!.wrappable) {
@@ -4058,6 +4090,8 @@ async function execTSwap(ctx: any) {
         return {
           outLabel: `${Number(ethers.formatUnits(r.outWei, tokenDec!)).toLocaleString('en-US', { maximumFractionDigits: 6 })} ${tokenSym}`,
           route: r.route,
+          outWei: r.outWei,
+          txHashes: r.txHashes,
         };
       }
       // Menjual SALDO NATIVE: daftar jual mencatatnya memakai alamat wrapped-native,
@@ -4072,13 +4106,20 @@ async function execTSwap(ctx: any) {
         return {
           outLabel: `${Number(ethers.formatUnits(r.outWei, base!.decimals)).toFixed(2)} ${base!.symbol}`,
           route: r.route,
+          outWei: r.outWei,
+          txHashes: r.txHashes,
         };
       }
       // Selling an ordinary token ends in native ETH (owner's request, 2 Aug 2026).
       // A token with only a USDG pool is still served, through the internal 2-hop route.
       // swapTokenToEthRobust (token→USDG→ETH).
       const r = await swapTokenToEthRobust(token!, amountWei, cc, MAX_SLIP_PCT);
-      return { outLabel: `${Number(ethers.formatEther(r.outEthWei)).toFixed(6)} ${cc.nativeSymbol}`, route: r.route };
+      return {
+        outLabel: `${Number(ethers.formatEther(r.outEthWei)).toFixed(6)} ${cc.nativeSymbol}`,
+        route: r.route,
+        outWei: r.outEthWei,
+        txHashes: r.txHashes,
+      };
     };
 
     // The probe is the input asset's balance. A drop means the swap already ran (at least
@@ -4090,14 +4131,18 @@ async function execTSwap(ctx: any) {
     const probe = sellNative
       ? () => cc.provider.getBalance(cc.wallet.address)
       : () => inC.balanceOf(cc.wallet.address) as Promise<bigint>;
-    const { outLabel, route } = await retryOnce(
+    const { outLabel, route, outWei, txHashes } = await retryOnce(
       'swap',
       probe,
       attempt,
       { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
     );
+    // Gas actually burned, and how far the fill landed from the quote. Both are
+    // measured after the fact -- the quote's own fee estimate is a guess, and slippage
+    // that is not compared against a real fill is just the slippage cap restated.
+    const { feeUsd, slipPct } = await swapCost(cc, txHashes, flow.quotedOutWei, outWei);
     await ctx.editMessageText(
-      msg.msgTSwapDone({ buy, tokenSym: tokenSym!, amountInLabel: amountInLabel!, outLabel, route, dryRun: false }),
+      msg.msgTSwapDone({ buy, tokenSym: tokenSym!, amountInLabel: amountInLabel!, outLabel, route, feeUsd, slipPct, dryRun: false }),
       html,
     );
   } catch (e) {
