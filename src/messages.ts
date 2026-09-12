@@ -938,6 +938,16 @@ export function msgTSwapConfirm(o: {
   return body.join('\n');
 }
 
+/** Router name as a reader knows it: "lifi" and "uniswap(slip 2%)" are internal labels. */
+function routeLabel(route?: string): string {
+  if (!route) return 'the best route';
+  const r = route.toLowerCase();
+  if (r.startsWith('lifi')) return 'Li.fi';
+  if (r.startsWith('relay')) return 'Relay';
+  if (r.startsWith('uniswap')) return 'Uniswap';
+  return route;
+}
+
 export function msgTSwapDone(o: {
   buy: boolean;
   tokenSym: string;
@@ -947,29 +957,23 @@ export function msgTSwapDone(o: {
   dryRun: boolean;
 }): string {
   if (o.dryRun) {
+    // Never the filled card in dry run: it would claim a trade that never happened.
     return [
-      `⚪ ${bold('Swap (DRY RUN)')}`,
+      `\u26AA ${bold('DRY RUN')}`,
       '',
-      note('DRY RUN mode — nothing was executed.'),
+      `Would receive ${bold(`+${esc(o.outLabel)}`)}`,
+      `Paying ${bold(esc(o.amountInLabel))} using ${esc(routeLabel(o.route))}`,
       '',
-      ...tree([['Pay', bold(o.amountInLabel)], ['≈ get', bold(o.outLabel)]], 8),
+      note(`DRY RUN \u00B7 ${nowWib()}`),
     ].join('\n');
   }
   return [
-    `✅ ${bold(o.buy ? 'Buy Order Filled' : 'Sell Order Filled')}`,
+    `\u2705 ${bold('ORDER FILLED')}`,
     '',
-    `🟢 ${bold('Received:')} ${bold(`+${o.outLabel}`)}`,
+    `Received ${bold(`+${esc(o.outLabel)}`)}`,
+    `Paid ${bold(esc(o.amountInLabel))} using ${esc(routeLabel(o.route))}`,
     '',
-    ...tree(
-      [
-        ['Paid', esc(o.amountInLabel)],
-        ['Token', esc(o.tokenSym)],
-        ['Route', esc(o.route ?? '—')],
-      ],
-      8,
-    ),
-    '',
-    note(nowWib()),
+    note(`LIVE \u00B7 ${nowWib()}`),
   ].join('\n');
 }
 
