@@ -1241,64 +1241,55 @@ export function msgPositionsList(opts: {
 }): string {
   const MAX_ROWS = 12;
   const shown = opts.rows.slice(0, MAX_ROWS);
-  const blocks = shown.map((r) => {
-    // The side is written from the perspective of the asset DEPOSITED: "ETH Side" means the base went in.
+  const blocks = shown.map((r, i) => {
+    // The side is written from the perspective of the asset DEPOSITED: "USDG Side" means
+    // the base went in. The symbol FOLLOWS the position -- naming ETH on a USDG position
+    // would name an asset that was never deposited.
     const tokenSide = r.strategy === 'token';
-    // The symbol FOLLOWS the position: "ETH Side" on a USDT position names an asset
-    // that was never deposited. With no data it reads 'Base Side' rather than guessing ETH.
-    const side = tokenSide ? 'Token Side (Sell the rip)' : `${r.baseSymbol ?? 'Base'} Side (Buy the dip)`;
-    // Three states, not two: not yet reached the range, inside the range, and already
-    // through the WHOLE range (capital fully converted to the other asset, no longer
-    // earning fees). Without the third, a position whose buy is FINISHED reads exactly
-    // like one that has not started.
+    const side = tokenSide ? 'Token Side (sell the rip)' : `${r.baseSymbol ?? 'Base'} Side (buy the dip)`;
+    // Three states, not two: not yet reached the range, inside it, and already through
+    // the WHOLE range (capital fully converted, no longer earning). Without the third, a
+    // position whose buy is FINISHED reads exactly like one that has not started.
     const status = r.inRange
-      ? bold('Active (In Range)')
+      ? 'Active (in range)'
       : r.converted
-        ? `${bold('Fully Converted (Out of Range)')} → ${esc(r.convertedInto ?? 'token')}`
-        : bold('Waiting (Out of Range)');
-    // Percentages only, as briefed — the dollar figures live on the position detail card.
+        ? `Fully converted (out of range) → ${r.convertedInto ?? 'token'}`
+        : 'Waiting (out of range)';
     const pnl = r.pnlPct === null ? `— ${italic('(entry unknown)')}` : fmtPct(r.pnlPct);
     return [
-      `${r.inRange ? '🟢' : '🔴'} ${bold(`${r.pair}${r.protocol ? ` (${r.protocol})` : ''}`)}`,
-      `- ID: #${esc(r.id)}`,
-      `- Strategy: ${esc(side)}`,
-      `- Invested: ${esc(r.investLabel)}`,
-      `- Status: ${status} · ${esc(r.age)}`,
-      `- Uncollected Fees: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
-      `- PnL: ${pnl}`,
+      `${i + 1}. ${r.inRange ? '🟢' : '🔴'} ${bold(`$${esc(r.pair)}`)} / #${esc(r.id)}${r.protocol ? ` (${esc(r.protocol)})` : ''}`,
+      `Strategy = ${esc(side)}`,
+      `Invested = ${bold(esc(r.investLabel))}`,
+      `Status = ${esc(status)}, ${esc(r.age)}`,
+      `Fees = ${bold(esc(r.feesUsdLabel ?? r.feesLabel ?? '—'))}`,
+      `PnL = ${pnl}`,
     ].join('\n');
   });
 
-  const out = [
-    bold('POSITIONS'),
-    '',
-    blocks.join('\n\n'),
-  ];
+  const out = [`\u{1F4CA} ${bold('POSITIONS')}`, '', blocks.join('\n\n')];
   // The v4 list is the bot's records combined with the indexer's enumeration. If the
-  // indexer fails, positions the bot did NOT record vanish without a trace — this used
+  // indexer fails, positions the bot did NOT record vanish without a trace -- this used
   // to be silent, server-log only.
   if (opts.listDegraded) {
-    out.push('', `⚠️ ${italic('The indexer is lagging — positions opened outside the bot may be missing from this list.')}`);
+    out.push('', note('the indexer is lagging, positions opened outside the bot may be missing from this list.'));
   }
-  if (opts.rows.length > MAX_ROWS)
-    out.push('', note(`+${opts.rows.length - MAX_ROWS} more positions — close some to see them`));
-  // The closing note follows what is ACTUALLY true. "Liquidity is currently inactive"
-  // only holds when every position really is waiting; printing it while one is earning
-  // fees (or has fully converted) makes this card lie about the very thing the user
-  // reads it to decide.
+  if (opts.rows.length > MAX_ROWS) out.push('', note(`+${opts.rows.length - MAX_ROWS} more positions, close some to see them`));
+  // The closing line follows what is ACTUALLY true. "Not active yet" only holds when
+  // every position really is waiting; printing it while one is earning fees makes this
+  // card lie about the very thing it is read to decide.
   const anyIn = shown.some((r) => r.inRange);
   const anyConverted = shown.some((r) => !r.inRange && r.converted);
   const anyWaiting = shown.some((r) => !r.inRange && !r.converted);
   const tail = anyIn
     ? anyWaiting || anyConverted
-      ? 'Some positions are in range and earning fees; the rest are listed above.'
+      ? 'Some positions are in range and earning fees, the rest are listed above.'
       : 'Your liquidity is in range and earning fees.'
     : anyConverted && !anyWaiting
       ? 'Your liquidity has fully converted and stopped earning fees. Withdraw it, or wait for the price to move back into range.'
       : anyConverted
-        ? 'Part of your liquidity has fully converted and stopped earning fees; the rest is still waiting to enter range.'
+        ? 'Part of your liquidity has fully converted and stopped earning fees, the rest is still waiting to enter range.'
         : 'Your liquidity is not active yet. It starts earning fees once the token price moves into your range.';
-  out.push('', italic(tail));
+  out.push('', tail, '', note(nowWib()));
   return out.join('\n');
 }
 
