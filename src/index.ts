@@ -477,9 +477,11 @@ bot.action('howto:add', async (ctx) => {
 // keyboard). A 2-column grid (thumb-friendly); money actions get their own row.
 const helpKeyboard = () =>
   Markup.inlineKeyboard([
-    [Markup.button.callback('💰 Portfolio', 'portfolio'), Markup.button.callback('📊 Active LPs', 'positions')],
-    [Markup.button.callback('🧾 PnL & Journal', 'pnl')],
+    [Markup.button.callback('💰 Portfolio', 'portfolio'), Markup.button.callback('📊 Positions', 'positions')],
+    // Close All is the one destructive action in the bot, so it keeps its own row and
+    // says what it does. It has no other entry point now that /stop is menu-hidden.
     [Markup.button.callback('⛔ Emergency Close All', 'closeall_confirm')],
+    [Markup.button.callback('🏠 Menu', 'positions_back')],
   ]);
 
 bot.command('help', (ctx) =>
