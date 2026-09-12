@@ -5102,12 +5102,9 @@ const BOT_COMMANDS = [
   // Riset
   // LP
   { command: 'claim_fees', description: 'Collect fees without closing' },
-  { command: 'stop', description: 'Close an LP position' },
-  // Swap
-  { command: 'buy', description: 'Buy a token (best route)' },
-  { command: 'sell', description: 'Sell a token (best route)' },
-  { command: 'unwrap', description: 'Convert stuck wrapped native back' },
-  { command: 'bridge', description: 'Move native funds across chains' },
+  // Trade & move funds
+  { command: 'sell', description: 'Swap a token you hold (best route)' },
+  { command: 'bridge', description: 'Move funds across chains' },
   { command: 'send', description: 'Withdraw funds to another address' },
   // Dompet & setelan
   { command: 'gas', description: 'Current gas cost per chain (USD & IDR)' },
@@ -5122,7 +5119,12 @@ const BOT_COMMANDS = [
  */
 // Hidden aliases: /status is the old name for /portfolio; /add_lp is still the only door
 // to the top-pool picker (with no CA), so its handler stays alive.
-const HIDDEN_COMMANDS = new Set(['status', 'add_lp']);
+//
+// /stop, /buy and /unwrap are hidden on purpose too: the menu mirrors the /start grid,
+// and none of them has a button there. Closing belongs to the position it closes in
+// /positions, buying starts from a pasted CA, and stray wrapped native is unwrapped by
+// the monitor every minute. All three still work when typed.
+const HIDDEN_COMMANDS = new Set(['status', 'add_lp', 'stop', 'buy', 'unwrap']);
 
 function assertMenuComplete(): void {
   const inMenu = new Set(BOT_COMMANDS.map((c) => c.command));
