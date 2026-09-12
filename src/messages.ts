@@ -2297,16 +2297,18 @@ export function msgSendAmount(o: {
   isContract: boolean;
 }): string {
   const out = [
-    `${bold('WITHDRAW')} · ${esc(o.chainLabel)}`,
+    `\u{1F4EE} ${bold('To:')} ${code(shortAddr(o.to))}`,
+    // The holding line stays from the button that was tapped, so the figure being split
+    // into a percentage is still on screen while the amount is chosen.
+    bold(`${esc(o.chainLabel)}: ${esc(o.usable)}`),
     '',
-    `📮 ${bold('To:')} ${code(shortAddr(o.to))}`,
-    `💰 ${bold('Balance:')} ${esc(o.balance)}`,
-    `✅ ${bold('Withdrawable:')} ${bold(o.usable)}`,
+    'How much do you want to withdraw?',
     '',
-    `Tap a percentage, type an amount like ${code('0.5')}, or a percentage like ${code('12.5%')}.`,
+    // italic() escapes its argument, so code() inside it would print the tags literally.
+    `Tap a percentage, or type ${code('0.5')} or ${code('12.5%')}.`,
   ];
-  if (o.nativeReserve) out.push('', note('a gas reserve is kept aside, so 100% still leaves enough to pay for the transfer'));
-  if (o.isContract) out.push('', `⚠️ ${italic('the destination is a contract on this chain')}`);
+  if (o.nativeReserve) out.push(note('a gas reserve is kept aside, so 100% still leaves enough to pay for the transfer.'));
+  if (o.isContract) out.push(note('the destination is a contract on this chain.'));
   return out.join('\n');
 }
 
@@ -2318,21 +2320,23 @@ export function msgSendConfirm(o: {
   dryRun: boolean;
 }): string {
   const out = [
-    bold('WITHDRAW REVIEW'),
+    `\u{1F4E4} ${bold('WITHDRAW REVIEW')}`,
     '',
-    `📤 ${bold('Amount:')} ${bold(o.amount)}`,
-    `📮 ${bold('To:')} ${code(o.to)}`,
-    `🔗 ${bold('Chain:')} ${esc(o.chainLabel)}`,
+    `${bold(esc(o.amount))} on ${esc(o.chainLabel)}`,
+    // FULL address on the last screen before signing: the short form hides exactly the
+    // middle characters that tell two similar addresses apart.
+    `\u2192 ${code(o.to)}`,
   ];
   if (o.isContract) {
-    out.push('', `⚠️ ${bold('That address is a contract on this chain.')} ${italic('A contract that does not handle plain transfers keeps the funds for good.')}`);
+    out.push('', `\u26A0\uFE0F ${bold('That address is a contract on this chain.')}`,
+      italic('A contract that does not handle plain transfers keeps the funds for good.'));
   }
   out.push(
     '',
-    italic(
+    note(
       o.dryRun
-        ? '*DRY RUN, nothing will be withdrawn.'
-        : '*check the address one more time. A transfer cannot be reversed, and there is nobody to appeal to.',
+        ? 'DRY RUN, nothing will be withdrawn.'
+        : 'check the address one more time. A transfer cannot be reversed, and there is nobody to appeal to.',
     ),
   );
   return out.join('\n');
@@ -2346,14 +2350,14 @@ export function msgSendDone(o: {
   dryRun: boolean;
 }): string {
   const out = [
-    `✅ ${bold('WITHDRAWN')}`,
+    `\u2705 ${bold(o.dryRun ? 'WITHDRAW (DRY RUN)' : 'WITHDRAWN')}`,
     '',
-    `📤 ${bold(o.amount)} → ${code(shortAddr(o.to))}`,
-    `🔗 ${esc(o.chainLabel)}`,
+    `${bold(esc(o.amount))} on ${esc(o.chainLabel)}`,
+    `\u2192 ${code(o.to)}`,
   ];
-  if (o.txHash) out.push('', `🔗 ${bold('Tx:')}`, code(o.txHash));
+  if (o.txHash) out.push('', bold('Tx Hash :'), code(o.txHash));
   if (o.dryRun) out.push('', note('DRY RUN, nothing was withdrawn.'));
-  out.push('', nowWib());
+  out.push('', note(nowWib()));
   return out.join('\n');
 }
 
