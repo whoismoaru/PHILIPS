@@ -214,8 +214,11 @@ bot.action(/^bra:(\w+):(\w+):(\w+)$/, async (ctx) => {
     awaitingAmount: true,
     startedAt: Date.now(),
   });
+  // The same "714 USDG / $714" line the asset button carried, so the figure the user
+  // tapped is the figure still on screen while they type.
+  const held = await heldLabels(from);
   const bal = await assetBalance(from, kind);
-  await ctx.editMessageText(msg.msgBridgeAmount(from.label, to.label, bal.label, a.srcSymbol), {
+  await ctx.editMessageText(msg.msgBridgeAmount(from.label, to.label, held.get(kind) ?? bal.label, a.srcSymbol), {
     ...html,
     ...Markup.inlineKeyboard([
       ...pctPresets.chunkButtons(pctPresets.get('bridge').map((p) => Markup.button.callback(`${p}%`, `brpct:${p}`))),
