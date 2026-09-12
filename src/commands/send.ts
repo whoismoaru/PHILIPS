@@ -16,6 +16,7 @@ import { gasBuffer } from '../uniswap.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
+import { getEthUsd } from '../screening.js';
 
 /**
  * /send — kirim dana ke alamat lain.
@@ -108,19 +109,28 @@ export async function handleSendAddress(ctx: any, raw: string): Promise<boolean>
     await editProgress(ctx, prog, msg.msgError('send', 'No spendable balance on any chain.'));
     return true;
   }
+  // Same shape as /swap and /bridge: "Chain: amount SYMBOL / $value". A price that
+  // cannot be read drops the dollar half rather than printing $0.
+  const prices = new Map<string, number | null>();
+  await Promise.all(
+    usable.map(async (f) => prices.set(f.cc.key, await getEthUsd(f.cc.wethAddress, f.cc).catch(() => null))),
+  );
   const rows = usable.flatMap((f) =>
-    f.assets.map((a) =>
-      Markup.button.callback(
-        `${f.cc.label} · ${fmtAmt(a.wei, a.decimals)} ${a.symbol}${f.isContract ? ' ⚠️' : ''}`,
+    f.assets.map((a) => {
+      const amt = Number(ethers.formatUnits(a.wei, a.decimals));
+      const px = a.address === null ? prices.get(f.cc.key) ?? null : 1;
+      const usd = px === null ? '' : ` / $${(amt * px).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+      return Markup.button.callback(
+        `${f.cc.label}: ${fmtAmt(a.wei, a.decimals)} ${a.symbol}${usd}${f.isContract ? ' ⚠️' : ''}`,
         `snd:${f.cc.key}:${a.address ?? 'native'}`,
-      ),
-    ),
+      );
+    }),
   );
   await editProgress(
     ctx,
     prog,
     msg.msgSendPickAsset(to, usable.map((f) => f.cc.label), found.some((f) => f.isContract)),
-    { ...html, ...Markup.inlineKeyboard([...rows.map((r) => [r]), [Markup.button.callback('❌ Cancel', 'cancel')]]) },
+    { ...html, ...Markup.inlineKeyboard([...rows.map((r) => [r]), [Markup.button.callback('⬅️ Back to Menu', 'positions_back')]]) },
   );
   return true;
 }

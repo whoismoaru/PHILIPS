@@ -2270,17 +2270,19 @@ export function msgSendAskAddress(): string {
   ].join('\n');
 }
 
-export function msgSendPickAsset(to: string, chains: string[], anyContract: boolean): string {
+export function msgSendPickAsset(to: string, _chains: string[], anyContract: boolean): string {
   const out = [
-    bold('WITHDRAW'),
-    '',
-    `📮 ${bold('To:')} ${code(shortAddr(to))}`,
-    `🔎 ${bold('Found balances on:')} ${esc(chains.join(', '))}`,
+    // The FULL address, not the short form: this is the last screen before an amount is
+    // chosen, and a withdrawal to the wrong address has no appeal.
+    `\u{1F4EE} ${bold('To:')} ${code(to)}`,
     '',
     'Pick what to withdraw.',
   ];
   if (anyContract) {
-    out.push('', `⚠️ ${italic('This address is a contract on at least one chain. Contracts can reject or trap plain transfers, so those rows are marked.')}`);
+    out.push(
+      '',
+      note('this address is a contract on at least one chain. Contracts can reject or trap plain transfers, so those rows are marked.'),
+    );
   }
   return out.join('\n');
 }
