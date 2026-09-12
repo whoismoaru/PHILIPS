@@ -16,6 +16,7 @@ import {
   registerFlowReset,
   POS_CARD_CONCURRENCY,
   registeredCommands,
+  startKeyboard,
 } from './core.js';
 import { renderProfitCard } from './card.js';
 import { onchainV4Pools } from './onchainPools.js';
@@ -412,35 +413,6 @@ async function syncOnChainPositions(cc: ChainCtx = getChain()): Promise<{ import
   if (imported || gone) console.log(`[sync] impor=${imported} gone=${gone} (chain ${cc.key})`);
   return { imported, gone };
 }
-
-/**
- * The /start grid: every command the bot answers, as one tap each.
- *
- * This deliberately breaks the usual "at most six buttons per card" rule. /start is a
- * launcher, not a card that asks a question -- hiding twelve of fifteen commands behind
- * a submenu costs a tap on every use to save scrolling once.
- *
- * Connect Wallet replaces the whole grid when there is no wallet: nothing else on it
- * would work anyway.
- */
-const START_GRID: Array<[label: string, data: string]> = [
-  ['💰 Portfolio', 'portfolio'], ['📊 Positions', 'positions'], ['🧾 PnL', 'pnl'],
-  ['➕ Add LP', 'howto:add'], ['🎯 Claim Fees', 'cmd:claim_fees'], ['⛔ Close LP', 'cmd:stop'],
-  ['🟢 Buy', 'cmd:buy'], ['🔴 Sell', 'cmd:sell'], ['🌉 Bridge', 'cmd:bridge'],
-  ['📤 Send', 'cmd:send'], ['♻️ Unwrap', 'cmd:unwrap'], ['⛽ Gas', 'cmd:gas'],
-  ['🔔 Alerts', 'cmd:alerts'], ['⚙️ Settings', 'cmd:settings'], ['📖 Help', 'help'],
-];
-
-const startKeyboard = () => {
-  if (!walletStore.isConnected()) {
-    return Markup.inlineKeyboard([[Markup.button.callback('🔗 Connect Wallet', 'connect')]]);
-  }
-  const rows = [];
-  for (let i = 0; i < START_GRID.length; i += 3) {
-    rows.push(START_GRID.slice(i, i + 3).map(([t, d]) => Markup.button.callback(t, d)));
-  }
-  return Markup.inlineKeyboard(rows);
-};
 
 /**
  * Grid buttons run the real command handler, not a copy of it.

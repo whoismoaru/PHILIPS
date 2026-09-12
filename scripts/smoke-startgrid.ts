@@ -5,8 +5,11 @@ import assert from 'node:assert/strict';
  * a button whose callback has no handler, and a money button that skips the wallet guard.
  */
 const src = await import('node:fs').then((fs) => fs.readFileSync('src/index.ts', 'utf8'));
+// The grid and its keyboard live in core.ts so both /start and the post-connect card
+// can build them without importing index.ts back into a cycle.
+const core = await import('node:fs').then((fs) => fs.readFileSync('src/core.ts', 'utf8'));
 
-const grid = [...src.matchAll(/\['[^']*',\s*'(cmd:[a-z_]+|portfolio|positions|pnl|help|howto:add)'\]/g)].map((m) => m[1]);
+const grid = [...core.matchAll(/\['[^']*',\s*'(cmd:[a-z_]+|portfolio|positions|pnl|help|howto:add)'\]/g)].map((m) => m[1]);
 assert.equal(grid.length, 15, `grid harus 15 tombol, terbaca ${grid.length}`);
 
 // Every cmd:* button must appear as a key in GRID_ACTIONS.
@@ -49,3 +52,14 @@ const wsrc = await import('node:fs').then((fs) => fs.readFileSync('src/commands/
 assert.ok(/export function cmdConnect[\s\S]{0,400}awaitingSecret\.add/.test(wsrc),
   'cmdConnect harus memasang awaitingSecret sebelum meminta kunci');
 console.log('ok: /start tanpa dompet benar-benar menunggu kunci yang ditempel');
+
+// --- a fresh connect must land on the same card a returning user sees ---
+// It used to end on a three-button stub, so the command grid was reachable only by
+// typing /start again right after connecting.
+const w2 = await import('node:fs').then((fs) => fs.readFileSync('src/commands/wallet.ts', 'utf8'));
+assert.ok(/msgConnected\(addr\)[\s\S]{0,600}msgStarted\(\{[\s\S]{0,400}startKeyboard\(\)/.test(w2),
+  'setelah connect sukses harus menyusul kartu WELCOME beserta grid-nya');
+const msrc = await import('node:fs').then((fs) => fs.readFileSync('src/messages.ts', 'utf8'));
+assert.ok(/msgConnected\(_addr: string\): string \{[\s\S]{0,600}return `[^`]*Wallet Successfully Connected!/.test(msrc),
+  'kartu sukses connect harus satu baris saja');
+console.log('ok: connect sukses → satu baris konfirmasi, lalu WELCOME + grid');

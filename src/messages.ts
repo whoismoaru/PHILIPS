@@ -1796,24 +1796,11 @@ export function msgConnectFailed(reason: string): string {
   ].join('\n');
 }
 
-export function msgConnected(addr: string): string {
-  return [
-    `✅ ${bold('Wallet Successfully Connected!')}`,
-    '',
-    `🔗 ${bold('Address ->')} ${code(shortAddr(addr))}`,
-    '',
-    `🛡️ ${bold('Security Action :')}`,
-    '• For your safety, the message containing your Private Key / Seed Phrase has been automatically deleted from this chat.',
-    // Encryption at rest is named because this card is the only place the user sees
-    // where their key goes; "linked" alone leaves them guessing how it is stored.
-    '• Your wallet is now securely linked to PHILIPS — the key is stored encrypted on this server.',
-    '',
-    note(nowWib()),
-    '',
-    '—————————————————',
-    `👉 ${bold('Next Steps :')}`,
-    'Select an option below to continue.',
-  ].join('\n');
+export function msgConnected(_addr: string): string {
+  // One line. The address, the chain and the mode all appear on the WELCOME card that
+  // follows immediately, so repeating them here only pushes that card off the screen.
+  // The pasted message is deleted by handleSecret before this is ever sent.
+  return `\u2705 ${bold('Wallet Successfully Connected!')}`;
 }
 
 export function msgAlreadyConnected(addr: string): string {

@@ -1,6 +1,6 @@
 import { Markup } from 'telegraf';
 import { config } from '../config.js';
-import { bot, html, editProgress, maxEthLabel, registerFlowReset } from '../core.js';
+import { bot, html, editProgress, maxEthLabel, registerFlowReset, startKeyboard } from '../core.js';
 import { getChain, rebuildChains, gasFeeCapLabel } from '../chains.js';
 import * as walletStore from '../walletStore.js';
 import * as store from '../store.js';
@@ -43,14 +43,22 @@ export async function handleSecret(ctx: any, raw: string): Promise<void> {
   try {
     const addr = walletStore.connect(raw);
     rebuildChains(); // kontrak lama masih memegang VoidSigner
-    await editProgress(ctx, prog, msg.msgConnected(addr), {
-      ...html,
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback('💧 Add Liquidity', 'howto:add')],
-        [Markup.button.callback('📊 View Positions', 'positions')],
-        [Markup.button.callback('⚙️ Settings', 'settings')],
-      ]),
-    });
+    await editProgress(ctx, prog, msg.msgConnected(addr), html);
+    // Then the same card /start shows, with the same grid -- a fresh connect lands the
+    // user exactly where a returning one does, instead of on a three-button stub.
+    const cc = getChain();
+    await ctx.reply(
+      msg.msgStarted({
+        dryRun: config.safety.dryRun,
+        chainLabel: cc.label,
+        chainId: cc.chainId,
+        positions: store.active().length,
+        imported: 0,
+        gone: 0,
+        walletShort: msg.shortAddr(addr),
+      }),
+      { ...html, ...startKeyboard() },
+    );
   } catch (e) {
     await editProgress(ctx, prog, msg.msgConnectFailed((e as Error).message));
   }
