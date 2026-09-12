@@ -3,7 +3,7 @@ import { Markup } from 'telegraf';
 import { bot, html } from '../core.js';
 import { CHAINS, type ChainCtx } from '../chains.js';
 import { getEthUsd } from '../screening.js';
-import { bold, esc, italic } from '../messages.js';
+import { bold, esc, italic, nowWib } from '../messages.js';
 
 /**
  * /gas — what a transaction costs RIGHT NOW on each chain, in USD and Rupiah.
@@ -201,10 +201,9 @@ export async function gasCard(): Promise<string> {
     bold('⛽️ GAS FEE'),
     '',
     ...OPS.flatMap(([op]) => [...section(op, chains, rate), '']),
-    // SEND & APPROVE is pinned to APPROVE, the dearer of the two. Using Send
-    // (21k) in a section called "Send & Approve" would understate half of what it
-    // promises by 55%.
-    ...section('Approve', chains, rate).map((l, i) => (i === 0 ? bold('SEND & APPROVE') : l)),
+    // WITHDRAW & APPROVE is priced on APPROVE, the dearer of the two. Using the 21k
+    // transfer figure would understate half of what the heading promises by 55%.
+    ...section('Approve', chains, rate).map((l, i) => (i === 0 ? bold('WITHDRAW & APPROVE') : l)),
     '',
     ...(down.length ? [italic(`Unreachable: ${down.join(', ')}`), ''] : []),
     // Silence here would mean "all official". Name the exceptions instead.
@@ -212,33 +211,16 @@ export async function gasCard(): Promise<string> {
       const fb = chains.filter((c) => !c.official).map((c) => c.label);
       return fb.length ? [italic(`Chain endpoint down, provider used: ${esc(fb.join(', '))}`), ''] : [];
     })(),
-    // The footer carries the date, time and zone, nothing else (owner's call).
-    // The rate and an approve note once hitched a ride here and turned it into a
-    // catch-all line.
-    italic(clock()),
+    // One stamp across every card in the bot: "12 Sep 2026, 22:50 WIB". This card used
+    // to print the SERVER's zone (UTC+08:00), which is not where the owner reads it.
+    italic(nowWib()),
   ].join('\n');
 }
 
-/** Read time plus server zone. This is what makes Refresh HONEST: without it,
- *  tapping the button while gas has not moved produces an identical message,
- *  Telegram rejects the edit ("not modified"), and the card sits there looking
- *  like a broken button. */
-function clock(): string {
-  const d = new Date();
-  const tanggal = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-  return `${tanggal} · ${d.toLocaleTimeString('en-GB', { hour12: false })} ${offsetLabel()}`;
-}
 
 /** One button: re-read every chain. */
 export const gasKeyboard = () => Markup.inlineKeyboard([[Markup.button.callback('🔄 Refresh', 'gas:refresh')]]);
 
-/** Server timezone label, so the time on the card is not ambiguous. */
-function offsetLabel(): string {
-  const m = -new Date().getTimezoneOffset();
-  if (m === 0) return 'UTC';
-  const sign = m > 0 ? '+' : '-';
-  return `UTC${sign}${String(Math.floor(Math.abs(m) / 60)).padStart(2, '0')}:${String(Math.abs(m) % 60).padStart(2, '0')}`;
-}
 
 bot.command('gas', async (ctx) => {
   const wait = await ctx.reply('⛽ Reading gas from each chain…');
@@ -249,12 +231,19 @@ bot.command('gas', async (ctx) => {
   });
 });
 
-bot.action('gas:refresh', async (ctx) => {
-  await ctx.answerCbQuery('Reading gas…');
+bot.action('gas:refresh', async (ctx: any) => {
+  // The footer is minute-precision now (uniform with every other card), so two refreshes
+  // inside one minute with unmoved gas produce an identical message. Telegram rejects
+  // that edit, and a silently rejected edit reads as a dead button -- so the answer to
+  // the tap carries the news instead.
   try {
     await ctx.editMessageText(await gasCard(), { ...html, ...gasKeyboard() });
+    await ctx.answerCbQuery('Updated');
   } catch (e) {
-    // "message is not modified" just means the numbers have not moved. Not a failure.
-    if (!/not modified/i.test((e as Error).message)) throw e;
+    if (!/not modified/i.test((e as Error).message)) {
+      await ctx.answerCbQuery('Read failed').catch(() => {});
+      throw e;
+    }
+    await ctx.answerCbQuery('Gas unchanged').catch(() => {});
   }
 });
