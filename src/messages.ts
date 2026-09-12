@@ -954,6 +954,10 @@ export function msgTSwapDone(o: {
   amountInLabel: string;
   outLabel: string;
   route?: string;
+  /** Gas actually burned, in dollars. null when no receipt could be read. */
+  feeUsd?: number | null;
+  /** How far below the quote the fill landed. null when there was no quote to compare. */
+  slipPct?: number | null;
   dryRun: boolean;
 }): string {
   if (o.dryRun) {
@@ -967,11 +971,18 @@ export function msgTSwapDone(o: {
       note(`DRY RUN \u00B7 ${nowWib()}`),
     ].join('\n');
   }
+  // Each half is dropped on its own when unmeasurable: a missing receipt must not blank
+  // out a slippage figure that was read correctly.
+  const cost = [
+    o.feeUsd === null || o.feeUsd === undefined ? null : `Fee $${o.feeUsd < 0.01 ? o.feeUsd.toFixed(4) : o.feeUsd.toFixed(2)}`,
+    o.slipPct === null || o.slipPct === undefined ? null : `Slippage ${o.slipPct.toFixed(2)}%`,
+  ].filter(Boolean);
   return [
     `\u2705 ${bold('ORDER FILLED')}`,
     '',
     `Received ${bold(`+${esc(o.outLabel)}`)}`,
     `Paid ${bold(esc(o.amountInLabel))} using ${esc(routeLabel(o.route))}`,
+    ...(cost.length ? [cost.join(' \u00B7 ')] : []),
     '',
     note(`LIVE \u00B7 ${nowWib()}`),
   ].join('\n');
