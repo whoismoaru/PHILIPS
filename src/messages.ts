@@ -222,41 +222,47 @@ function balanceFields(gasEth: string): Array<[string, string]> {
 
 // The cockpit body shared by /start and /help: VIEW/EXECUTION/EMERGENCY in a tree.
 function cockpitLines(dryRun: boolean): string[] {
-  const grp = (rows: Array<[string, string]>) => rows.map(([c, d]) => `• ${c} — ${esc(d)}`);
+  const grp = (rows: Array<[string, string]>) => rows.map(([c, d]) => `\u2022 ${c} \u2014 ${esc(d)}`);
   return [
-    `📊 ${bold('View & Analytics :')}`,
+    `\u{1F4CA} ${bold('View :')}`,
     ...grp([
-      ['/portfolio', 'Balance, equity & wallet breakdown'],
-      ['/positions', 'Live monitoring of active LPs'],
-      ['/pnl', 'PnL recap & closed-trade journal'],
-      ['/alerts', 'Position notification settings'],
+      ['/portfolio', 'balances and equity, per chain'],
+      ['/positions', 'active LPs, live'],
+      ['/pnl', 'recap of closed trades'],
+      ['/gas', 'what a transaction costs on each chain'],
     ]),
     '',
-    `⚙️ ${bold('Execution & Trade :')}`,
+    `\u{1F4B8} ${bold('Move funds :')}`,
     ...grp([
-      ['/claim_fees', 'Harvest fees without closing'],
-      ['/stop', 'Close an LP position completely'],
-      ['/unwrap', 'Return stuck wrapped native to native'],
-      ['/buy', 'Buy a token (best route)'],
-      ['/sell', 'Sell a token from your wallet'],
-      ['/bridge', 'Move native funds between chains'],
-      // /send was missing from this list entirely -- the only command with no line here.
-      ['/send', 'Withdraw funds to another address'],
+      ['/claim_fees', 'harvest fees, the position stays open'],
+      ['/sell', 'swap a token you hold'],
+      ['/bridge', 'move funds across chains'],
+      ['/send', 'withdraw to another address'],
     ]),
     '',
-    `⚠️ ${bold('Notice :')}`,
-    `Commands under ${bold('Execution & Trade')} will move funds on-chain. Always double-check details before signing.`,
-    // Entry points with no command of their own — the only place they are named.
+    `\u2699\uFE0F ${bold('Setup :')}`,
+    ...grp([
+      ['/settings', 'mode, limits and quick percentages'],
+      ['/alerts', 'what PHILIPS notifies you about'],
+    ]),
     '',
-    note('Tip: paste a token CA straight into this chat to open its audit card.'),
-    // Simulation mode changes what EVERY line above means (no money moves).
-    ...(dryRun ? ['', note('mode: DRY RUN — no transaction is ever sent.')] : []),
+    // The only place these entry points are named: neither has a button or a menu entry.
+    `${bold('Paste a token CA')} into this chat to open its audit card \u2014 that is where ${bold('Add LP')} and ${bold('Buy')} start.`,
+    '',
+    // Kept off the menu on purpose, so this is the only place they are discoverable.
+    note('typed only: /stop closes an LP, /buy, /unwrap.'),
+    // The single most important behaviour change to know about before tapping anything.
+    ...(dryRun
+      ? [note('mode: DRY RUN — no transaction is ever sent.')]
+      : [note('swap, bridge and withdraw have no confirm step: the amount you enter is sent.')]),
+    '',
+    note(nowWib()),
   ];
 }
 
 /** The command list card (/help). */
 export function msgHelp(dryRun: boolean): string {
-  return [bold('PHILIPS · LP Cockpit'), '', ...cockpitLines(dryRun)].join('\n');
+  return [`\u{1F4D6} ${bold('HELP')}`, '', ...cockpitLines(dryRun)].join('\n');
 }
 
 /**
