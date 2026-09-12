@@ -1371,24 +1371,24 @@ export function msgPoolStep(
   tokenLabel?: string,
   pools?: Array<{ pair: string; ver: string; feeLabel: string; tvl: string; vol?: string; apr: string; tight: string }>,
 ): string {
-  const out = [bold('OPEN LP · Step [1/5] Choose Pool'), ''];
-  if (tokenLabel) out.push(`🎯 ${bold('Target Token:')} ${esc(tokenLabel)}`, '');
+  const out = [bold('OPEN LP | Choose Pool'), ''];
   if (pools?.length) {
-    out.push(`📊 ${bold('AVAILABLE POOLS :')}`);
-    for (const p of pools) {
-      // The pair is deliberately NOT repeated here: its button sits right below and
-      // already carries `TOKEN / BASE (fee)`, so the line would only duplicate the
-      // same text while pushing the numbers — the thing that actually distinguishes
-      // one pool from another — onto a second line. Row order matches button order.
-      out.push(`- ${italic(`(${p.ver}, ${p.feeLabel} Fee)`)}`);
-      // 'fills<=' moved here from the button: it is the price distance before a
-      // single-sided position STARTS filling — the number that decides which pool
-      // really works — and a Telegram button is too narrow to hold it.
-      out.push(`  TVL: ${esc(p.tvl)} | Vol 24h: ${esc(p.vol ?? '?')} | APR: ${esc(p.apr)} | fills≤${esc(p.tight)}`);
-    }
+    out.push(bold('AVAILABLE POOLS :'));
+    pools.forEach((p, i) => {
+      // The pair is deliberately NOT repeated here: its button sits right below carrying
+      // `TOKEN / BASE (fee)`, so the line would duplicate that text while pushing the
+      // numbers -- the thing that actually separates one pool from another -- down a
+      // line. Row order matches button order, which is what the number refers to.
+      out.push(`${i + 1}. ${italic(`(${p.ver}, ${p.feeLabel} Fee)`)}`);
+      // 'fills<=' lives here rather than on the button: it is the price distance before
+      // a single-sided position STARTS filling -- the number that decides which pool
+      // really works -- and a Telegram button is too narrow to hold it.
+      out.push(`  TVL: ${esc(p.tvl)} / Vol 24h: ${esc(p.vol ?? '?')} / APR: ${esc(p.apr)} / fills≤${esc(p.tight)}`);
+    });
   } else {
     out.push(bold('Pick the deepest pool (v3 & v4):'));
   }
+  void tokenLabel; // the token is named on every button below; a header line repeats it
   return out.join('\n');
 }
 
