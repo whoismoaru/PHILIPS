@@ -664,7 +664,7 @@ export function msgPnlPicker(chains: Array<{ label: string; trades: number; scor
   const out = [bold('P&L RECAP'), ''];
   if (per.length) {
     out.push(
-      'Pick a chain to recap its closed trades :',
+      `\u{1F9FE} Pick a chain to recap its closed trades :`,
       ...per.map((c) => `- ${esc(c.label)} = ${bold(String(count(c)))} positions`),
     );
   } else {
