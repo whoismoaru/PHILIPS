@@ -107,15 +107,17 @@ export async function cmdBridge(ctx: any) {
   const rs = routes();
   if (rs.length === 0) return ctx.reply(msg.msgBridgeUnavailable(), html);
   flows.delete(ctx.from.id);
-  // One ROW per source chain, its destinations side by side -- four chains used to make
-  // twelve stacked buttons, a screen and a half of scrolling. Each button still names
-  // BOTH ends: a lone destination label repeats across rows with a different meaning
-  // each time, and reads wrong unless the card above is read alongside it.
-  const bySource = new Map<string, { from: ChainCtx; to: ChainCtx }[]>();
-  for (const r of rs) bySource.set(r.from.key, [...(bySource.get(r.from.key) ?? []), r]);
-  const rows = [...bySource].map(([, pairs]) =>
-    pairs.map((p) => Markup.button.callback(`${p.from.label} → ${p.to.label}`, `br:${p.from.key}:${p.to.key}`)),
-  );
+  // TWO per row, filled evenly across all twelve pairs. Telegram splits a row's width
+  // between its buttons and offers no width of its own, so buttons-per-row is the only
+  // lever: at three, "HyperEVM → Robinhood" gets a third of the screen and wraps.
+  // Grouping by source chain is what made the old vertical list twelve rows long, and it
+  // is no longer needed now that every button names both ends itself.
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  for (let i = 0; i < rs.length; i += 2) {
+    rows.push(
+      rs.slice(i, i + 2).map((r) => Markup.button.callback(`${r.from.label} → ${r.to.label}`, `br:${r.from.key}:${r.to.key}`)),
+    );
+  }
   rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
   return ctx.reply(msg.msgBridgePick(rs.map((r) => ({ from: r.from.label, to: r.to.label }))), {
     ...html,
