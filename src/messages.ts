@@ -2339,16 +2339,16 @@ export function msgSwept(o: {
   symbol: string;
   tokenId: string;
   amountLabel: string;
-  chainLabel: string;
-  route: string;
   dryRun: boolean;
 }): string {
   return [
     `\u267B\uFE0F ${bold('LEFTOVER SWEPT')}`,
     '',
     `${bold(`$${esc(o.symbol)}`)} / #${esc(o.tokenId)} = ${bold(`+${esc(o.amountLabel)}`)}`,
+    'recovered from a closed position, and added to its PnL.',
     '',
-    note('recovered from a closed position, and added to its PnL.'),
-    note(`${esc(o.chainLabel)} \u00B7 ${esc(o.route)} \u00B7 ${o.dryRun ? 'DRY RUN' : 'LIVE'} \u00B7 ${nowWib()}`),
+    // Chain and route stay in the service log: neither changes what the reader does
+    // with this, and both pushed the figure off the first line on a phone.
+    note(`${o.dryRun ? 'DRY RUN' : 'LIVE'} \u00B7 ${nowWib()}`),
   ].join('\n');
 }

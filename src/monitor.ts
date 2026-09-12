@@ -202,14 +202,7 @@ async function sweepLeftovers(bot: Telegraf) {
       await notify(
         bot,
         null,
-        msgSwept({
-          symbol: r.symbol,
-          tokenId: r.tokenId,
-          amountLabel: gotLabel,
-          chainLabel: cc.label,
-          route: res.route,
-          dryRun: config.safety.dryRun,
-        }),
+        msgSwept({ symbol: r.symbol, tokenId: r.tokenId, amountLabel: gotLabel, dryRun: config.safety.dryRun }),
       );
     } catch (e) {
       const emsg = (e as Error).message ?? '';
