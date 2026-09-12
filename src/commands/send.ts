@@ -272,6 +272,22 @@ async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
   const cc = CHAINS[flow.chainKey!]!;
   flow.amountWei = wei;
   flow.awaitingAmount = false;
+  // No confirm step, matching /swap and /bridge. What the button used to guard is still
+  // guarded: the amount was checked against the spendable balance (gas reserve included)
+  // before this is reached, and a dry run still sends nothing.
+  if (!config.safety.dryRun) {
+    const prog = await ctx.reply(
+      msg.msgProgress(`withdrawing ${fmtAmt(wei, flow.asset!.decimals)} ${flow.asset!.symbol} on ${cc.label}…`),
+      html,
+    );
+    // execSend is written for a button press: hand it the two callback-only methods,
+    // aimed at the progress bubble.
+    const auto: any = Object.create(ctx);
+    auto.answerCbQuery = async () => {};
+    auto.editMessageText = (text: string, extra?: any) =>
+      ctx.telegram.editMessageText(ctx.chat.id, prog.message_id, undefined, text, extra).catch(() => {});
+    return execSend(auto);
+  }
   return ctx.reply(
     msg.msgSendConfirm({
       to: flow.to!,
@@ -282,9 +298,6 @@ async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
     }),
     {
       ...html,
-      // The money button names the amount at stake, and sits on its own row. A withdrawal
-      // leaves the wallet for an address the user typed: it keeps its confirm step even
-      // though /swap and /bridge no longer have one.
       ...Markup.inlineKeyboard([
         [Markup.button.callback(`✅ Confirm & Withdraw ${fmtAmt(wei, flow.asset!.decimals)} ${flow.asset!.symbol}`, 'sndgo')],
         [Markup.button.callback('⬅️ Back', 'snd:back'), Markup.button.callback('🏠 Menu', 'positions_back')],
@@ -293,7 +306,12 @@ async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
   );
 }
 
-bot.action('sndgo', async (ctx) => {
+/**
+ * Send the withdrawal the flow describes. Registered as Confirm, and called directly
+ * when an amount is entered -- one implementation, so the two entry points cannot drift
+ * on the one path in this bot that sends money OUT of the wallet.
+ */
+async function execSend(ctx: any) {
   const uid = ctx.from!.id;
   const flow = flows.get(uid);
   if (!flow?.amountWei || !flow.asset || !flow.to) return ctx.answerCbQuery('Expired — start again with /send.');
@@ -323,4 +341,11 @@ bot.action('sndgo', async (ctx) => {
     sending.delete(uid);
     store.endMoneyOp();
   }
+}
+
+// The spinner is answered in the handler; execSend answers again on its guard paths,
+// which Telegram ignores.
+bot.action('sndgo', async (ctx: any) => {
+  await ctx.answerCbQuery();
+  return execSend(ctx);
 });
