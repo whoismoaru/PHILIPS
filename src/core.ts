@@ -273,12 +273,13 @@ export function resetFlows(uid: number): void {
  */
 export const START_GRID: Array<[label: string, data: string]> = [
   ['💰 Portfolio', 'portfolio'], ['📊 Positions', 'positions'], ['🧾 PnL', 'pnl'],
-  // No Add LP and no Close LP: opening starts by pasting a CA, and closing lives on the
-  // position itself in /positions. A button for either would only open a how-to card.
-  ['🎯 Claim Fees', 'cmd:claim_fees'], ['🟢 Buy', 'cmd:buy'], ['🔴 Sell', 'cmd:sell'],
-  ['🌉 Bridge', 'cmd:bridge'], ['📤 Send', 'cmd:send'], ['♻️ Unwrap', 'cmd:unwrap'],
-  ['⛽ Gas', 'cmd:gas'], ['🔔 Alerts', 'cmd:alerts'], ['⚙️ Settings', 'cmd:settings'],
-  ['📖 Help', 'help'],
+  // No Add LP, Close LP or Buy: all three start from a pasted CA or from the position
+  // itself in /positions. A button for any of them would only ask for the CA again.
+  // Sell stays -- it opens the holdings list, which is the point when the CA is the
+  // thing you do not have to hand.
+  ['🎯 Claim Fees', 'cmd:claim_fees'], ['🔴 Sell', 'cmd:sell'], ['🌉 Bridge', 'cmd:bridge'],
+  ['📤 Send', 'cmd:send'], ['♻️ Unwrap', 'cmd:unwrap'], ['⛽ Gas', 'cmd:gas'],
+  ['🔔 Alerts', 'cmd:alerts'], ['⚙️ Settings', 'cmd:settings'], ['📖 Help', 'help'],
 ];
 
 export const startKeyboard = () => {
