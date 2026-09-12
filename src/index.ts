@@ -4228,7 +4228,8 @@ async function sendProfitCard(
         ? [{ label: 'fees', value: `${fmt(Number(ethers.formatUnits(feesBaseWei, dec)))} ${baseSym}` }]
         : []),
     ],
-    footerLeft: `#${tokenId} · ${new Date().toISOString().slice(0, 10)} ${msg.nowWib()}`,
+    // nowWib() carries the date now; the ISO prefix printed it twice.
+    footerLeft: `#${tokenId} · ${msg.nowWib()}`,
     // The position's shape follows its record; an older position with no marker is treated
     // as SPOT (which is exactly how things behaved before ladders existed).
     shape: shape ?? rec.shape ?? 'spot',
