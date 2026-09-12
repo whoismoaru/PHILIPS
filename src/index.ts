@@ -2915,10 +2915,11 @@ async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('⛔ Close Position', `close:${tokenId}`)],
+      // The money button names the position it burns, on its own row.
+      [Markup.button.callback(`⛔ Close #${tokenId} for good`, `close:${tokenId}`)],
       [
         Markup.button.callback('⬅️ Back', `back:card:${tokenId}`),
-        Markup.button.callback('❌ Cancel', 'cancel'),
+        Markup.button.callback('🏠 Menu', 'positions_back'),
       ],
     ]),
   };

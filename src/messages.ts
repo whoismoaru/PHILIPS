@@ -793,12 +793,13 @@ export function msgPriceDrop(
 export function msgCloseAllPick(countV3: number, countV4 = 0): string {
   const total = countV3 + countV4;
   return [
-    `⛔ ${bold('Close LP Position')}`,
+    `\u26D4 ${bold('CLOSE A POSITION')}`,
     '',
-    `Found ${bold(`${total} active LP position${total === 1 ? '' : 's'}`)}${countV4 ? ` (${countV3} v3 · ${countV4} v4)` : ''}.`,
-    'Pick the one to close — tap ⛔ Close on its card.',
+    `${bold(`${total} active position${total === 1 ? '' : 's'}`)}${countV4 ? ` (${countV3} v3, ${countV4} v4)` : ''}`,
+    'Pick one below, then close it from its card.',
     '',
     note('each close still goes through its own confirmation.'),
+    note(nowWib()),
   ].join('\n');
 }
 
@@ -1902,19 +1903,19 @@ export function msgStopConfirm(opts: {
   baseSymbol: string;
   otherAmt: string;
 }): string {
-  const body = [
-    ...hrows([
-      ['Pair', `${opts.baseSymbol} / ${opts.symbol} · ${feeLabel(opts.fee)}`],
-      ['Age', opts.age],
-      ['Fees', opts.feeText],
-      ['Out', `${opts.baseAmt} ${opts.baseSymbol} + ${opts.otherAmt} ${opts.symbol}`],
-    ]),
+  return [
+    `\u26D4 ${bold(`CLOSE POSITION #${esc(opts.tokenId)}`)}`,
     '',
-    bold(`PnL  ${opts.pnlText}`),
+    `Pair = ${bold(`$${esc(opts.symbol)}`)} / ${esc(opts.baseSymbol)} (${feeLabel(opts.fee)} fee)`,
+    `Age = ${esc(opts.age)}`,
+    `Fees = ${bold(esc(opts.feeText))}`,
+    `Out = ${bold(`${esc(opts.baseAmt)} ${esc(opts.baseSymbol)}`)} + ${esc(opts.otherAmt)} ${esc(opts.symbol)}`,
+    `PnL = ${bold(esc(opts.pnlText))}`,
     '',
-    quoteHtml(`⚠️ Closing removes the liquidity and swaps everything to ${esc(opts.baseSymbol)}. This cannot be undone.`),
-  ];
-  return card(title('CLOSE', `#${opts.tokenId}`), body, nowWib());
+    // This one keeps its confirm step: closing burns the position and cannot be undone.
+    note(`closing removes the liquidity and swaps everything to ${esc(opts.baseSymbol)}. This cannot be undone.`),
+    note(nowWib()),
+  ].join('\n');
 }
 
 export function msgNoActiveToStop(): string {
@@ -1955,22 +1956,20 @@ export function msgCashOut(opts: {
 }): string {
   const ladder = (opts.legs ?? 0) > 1;
   const out = [
-    `✅ ${bold(`${ladder ? 'Ladder' : 'Position'} Closed &amp; Cashed Out`)}`,
+    `\u2705 ${bold('POSITION CLOSED')}`,
     '',
-    ladder
-      ? `🎉 ${bold('Ladder:')} #${esc(opts.tokenId)} · ${opts.legs} legs`
-      : `🎉 ${bold('Position ID:')} #${esc(opts.tokenId)}`,
-    `💰 ${bold('Received:')} ${bold(opts.ethOut)}`,
+    `#${esc(opts.tokenId)}${ladder ? ` \u00B7 ladder, ${opts.legs} legs` : ''}`,
+    `Received = ${bold(esc(opts.ethOut))}`,
   ];
 
-  // The steps that were ACTUALLY executed, straight from the executor. Each hash goes
-  // on its own line: mid sentence, 66 characters are impossible to select with a thumb.
+  // The steps that were ACTUALLY executed, straight from the executor. Each hash on its
+  // own line: mid-sentence, 66 characters are impossible to select with a thumb.
   if (opts.notes.length) {
-    out.push('', `📝 ${bold('Steps performed :')}`);
+    out.push('', bold('Steps :'));
     for (const n of opts.notes) {
-      const m = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
-      out.push(`• ${esc(m ? m[1] : n)}`);
-      if (m) out.push(code(m[2]));
+      const mt = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
+      out.push(`\u2022 ${esc(mt ? mt[1] : n)}`);
+      if (mt) out.push(code(mt[2]));
     }
   }
 
@@ -1978,25 +1977,24 @@ export function msgCashOut(opts: {
   const inNotes = opts.notes.join(' ');
   const extraTx = opts.txHashes.filter((h) => !inNotes.includes(h));
   if (extraTx.length) {
-    out.push('', `🔗 ${bold('Tx Hash:')}`);
+    out.push('', bold('Tx Hash :'));
     for (const h of extraTx) out.push(code(h));
   }
 
-  // The closing sentence used to ALWAYS read "unwrapped back into native ETH" —
-  // including on closes that returned USDT or USDG, which are never unwrapped and are
-  // not ETH. It now follows the asset actually received.
+  // This sentence used to ALWAYS read "unwrapped back into native ETH" -- including on
+  // closes that returned USDT or USDG, which are never unwrapped and are not ETH. It
+  // follows the asset actually received.
   const sym = opts.baseSymbol ?? 'ETH';
-  const akhir = opts.native
-    ? `The paired token was swapped and unwrapped back into ${bold(`native ${esc(sym)}`)}, now sitting safely in your wallet.`
-    : `The paired token was swapped into ${bold(esc(sym))} and is sitting safely in your wallet.`;
   out.push(
     '',
-    `⏱️ <i>Completed at ${nowWib()}</i>`,
-    '',
-    `<i>Your LP has been withdrawn. ${akhir}</i>`,
+    opts.native
+      ? `The paired token was swapped and unwrapped back into ${bold(`native ${esc(sym)}`)}, now in your wallet.`
+      : `The paired token was swapped into ${bold(esc(sym))} and is in your wallet.`,
   );
-  if (opts.leftover)
-    out.push('', note('some dust had no swap route and stays in your wallet — the monitor will retry, or sell it via /sell.'));
+  if (opts.leftover) {
+    out.push(note('some dust had no swap route and stays in your wallet, the monitor will retry, or swap it yourself.'));
+  }
+  out.push('', note(nowWib()));
   return out.join('\n');
 }
 
