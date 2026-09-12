@@ -262,7 +262,7 @@ export function msgStarted(o: {
   // below, and the old card spent fifteen lines re-explaining the bot to someone who
   // had already been using it for months.
   const out = [
-    `\u{1F7E2} ${bold('WELCOME TO PHILIPS!')}`,
+    bold('WELCOME TO PHILIPS!'),
     '',
     'Your ultimate assistant for managing Single-Side Liquidity Pools on EVM Chain. ' +
       'Streamline your DeFi strategy, from automated dip-buying and profit-taking to effortless fee tracking.',
