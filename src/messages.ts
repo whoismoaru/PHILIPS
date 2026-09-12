@@ -2350,7 +2350,7 @@ export function msgSendDone(o: {
   dryRun: boolean;
 }): string {
   const out = [
-    `\u2705 ${bold(o.dryRun ? 'WITHDRAW (DRY RUN)' : 'WITHDRAWN')}`,
+    `\u2705 ${bold(o.dryRun ? 'WITHDRAW (DRY RUN)' : 'WITHDRAW SUCCESS')}`,
     '',
     `${bold(esc(o.amount))} on ${esc(o.chainLabel)}`,
     `\u2192 ${code(o.to)}`,
