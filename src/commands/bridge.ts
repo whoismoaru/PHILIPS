@@ -173,9 +173,18 @@ bot.action(/^br:(\w+):(\w+)$/, async (ctx) => {
   // Each button carries what is actually held, the same shape /swap uses. Picking an
   // asset blind and only then being told the balance is zero wastes two taps.
   const held = await heldLabels(from);
-  const rows = from.bases.map((b) => [
-    Markup.button.callback(held.get(b.kind) ?? assetLabel(from, b.kind), `bra:${fromKey}:${toKey}:${b.kind}`),
-  ]);
+  // "→ BNB" / "→ USDT": the asset that actually lands. A stablecoin does not always keep
+  // its name across chains (USDG here, USDT there), so naming only the source asset
+  // leaves the arrival a surprise.
+  const rows = from.bases.flatMap((b) => {
+    let dst: string;
+    try {
+      dst = resolveAssets(from, to, b.kind).dstSymbol;
+    } catch {
+      return []; // no receiving asset on the destination chain: not a route, not a button
+    }
+    return [[Markup.button.callback(`${held.get(b.kind) ?? assetLabel(from, b.kind)} → ${dst}`, `bra:${fromKey}:${toKey}:${b.kind}`)]];
+  });
   rows.push([Markup.button.callback('⬅️ Back', 'br:back'), Markup.button.callback('❌ Cancel', 'cancel')]);
   await ctx.editMessageText(msg.msgBridgeAsset(from.label, to.label), { ...html, ...Markup.inlineKeyboard(rows) });
 });
