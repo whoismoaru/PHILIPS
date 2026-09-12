@@ -73,26 +73,11 @@ show(
   m.msgPnl({
     dryRun: false,
     chainLabel: 'Robinhood',
-    periodLabel: 'All time',
-    known: 106,
-    excluded: 13,
-    count: 138,
-    untracked: 19,
-    recovered: 0,
-    books: [
-      {
-        unit: 'ETH',
-        known: 106,
-        wins: 93,
-        losses: 13,
-        flats: 0,
-        net: 0.122745,
-        grossWin: 0.2,
-        grossLoss: -0.077,
-        best: { symbol: 'VLAD', pnl: 0.03 },
-        worst: { symbol: 'PONS', pnl: -0.02 },
-      },
-    ],
+    periodLabel: 'All Time',
+    trades: 138,
+    grossWin: 1819,
+    grossLoss: -724,
+    winratePct: 87,
   }),
 );
 
