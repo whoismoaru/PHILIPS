@@ -10,7 +10,11 @@ const src = await import('node:fs').then((fs) => fs.readFileSync('src/index.ts',
 const core = await import('node:fs').then((fs) => fs.readFileSync('src/core.ts', 'utf8'));
 
 const grid = [...core.matchAll(/\['[^']*',\s*'(cmd:[a-z_]+|portfolio|positions|pnl|help|howto:add)'\]/g)].map((m) => m[1]);
-assert.equal(grid.length, 15, `grid harus 15 tombol, terbaca ${grid.length}`);
+assert.equal(grid.length, 13, `grid harus 13 tombol, terbaca ${grid.length}`);
+// Add LP and Close LP are deliberately absent: opening starts from a pasted CA, and
+// closing belongs to the position it closes, inside /positions.
+assert.ok(!grid.includes('howto:add') && !grid.includes('cmd:stop'),
+  'Add LP / Close LP tak boleh kembali ke grid — jalurnya sudah ada di tempat lain');
 
 // Every cmd:* button must appear as a key in GRID_ACTIONS.
 const actions = new Set([...src.matchAll(/^\s{2}([a-z_]+): (?:cmd[A-Za-z]+|async)/gm)].map((m) => m[1]));
@@ -24,7 +28,7 @@ for (const m of ['stop', 'claim_fees', 'buy', 'sell', 'unwrap', 'bridge', 'send'
   assert.ok(guard.includes(m), `cmd:${m} memindahkan uang tapi tak dijaga NEEDS_WALLET_CB`);
 }
 
-console.log('ok: 15 tombol /start punya handler, dan tombol uang dijaga sama seperti command-nya');
+console.log('ok: 13 tombol /start punya handler, dan tombol uang dijaga sama seperti command-nya');
 
 // --- the wallet a card shows must be the wallet the keyboard branches on ---
 // These drifted apart once already: the card read the chain context (a VoidSigner
