@@ -1232,12 +1232,18 @@ export function msgPositionsList(opts: {
 }): string {
   const MAX_ROWS = 12;
   const shown = opts.rows.slice(0, MAX_ROWS);
-  const blocks = shown.map((r, i) => {
+  const blocks = shown.map((r) => {
+    // "$JACOB/USDG": the token leads, the base follows. The stored pair is base-first and
+    // sometimes already carries both sides, so the base is matched out rather than
+    // appended -- appending blindly produced "USDG / JACOB/USDG".
+    const base = r.baseSymbol ?? null;
+    const parts = r.pair.split('/').map((x) => x.trim()).filter(Boolean);
+    const token = base ? (parts.find((x) => x.toLowerCase() !== base.toLowerCase()) ?? parts[parts.length - 1]) : parts[0];
+    const pair = base ? `${token}/${base}` : parts.join('/');
     // The side is written from the perspective of the asset DEPOSITED: "USDG Side" means
-    // the base went in. The symbol FOLLOWS the position -- naming ETH on a USDG position
-    // would name an asset that was never deposited.
+    // the base went in. Naming ETH on a USDG position would name an asset never deposited.
     const tokenSide = r.strategy === 'token';
-    const side = tokenSide ? 'Token Side (sell the rip)' : `${r.baseSymbol ?? 'Base'} Side (buy the dip)`;
+    const side = tokenSide ? 'Token Side (sell the rip)' : `${base ?? 'Base'} Side (buy the dip)`;
     // Three states, not two: not yet reached the range, inside it, and already through
     // the WHOLE range (capital fully converted, no longer earning). Without the third, a
     // position whose buy is FINISHED reads exactly like one that has not started.
@@ -1248,12 +1254,12 @@ export function msgPositionsList(opts: {
         : 'Waiting (out of range)';
     const pnl = r.pnlPct === null ? `— ${italic('(entry unknown)')}` : fmtPct(r.pnlPct);
     return [
-      `${i + 1}. ${r.inRange ? '🟢' : '🔴'} ${bold(`$${esc(r.pair)}`)} / #${esc(r.id)}${r.protocol ? ` (${esc(r.protocol)})` : ''}`,
-      `Strategy = ${esc(side)}`,
-      `Invested = ${bold(esc(r.investLabel))}`,
-      `Status = ${esc(status)}, ${esc(r.age)}`,
-      `Fees = ${bold(esc(r.feesUsdLabel ?? r.feesLabel ?? '—'))}`,
-      `PnL = ${pnl}`,
+      `${r.inRange ? '🟢' : '🔴'} ${bold(`$${esc(pair)}`)} | #${esc(r.id)}${r.protocol ? ` (${esc(r.protocol)})` : ''}`,
+      `- Strategy = ${esc(side)}`,
+      `- Invested = ${esc(r.investLabel)}`,
+      `- Status = ${esc(status)}, ${esc(r.age)}`,
+      `- Fees = ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
+      `- PnL = ${pnl}`,
     ].join('\n');
   });
 
