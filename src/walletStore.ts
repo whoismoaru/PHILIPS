@@ -19,6 +19,15 @@ import { config } from './config.js';
  */
 
 const FILE = join(process.cwd(), 'data', 'keystore.json');
+/**
+ * Written by disconnect(), checked by adoptEnvKey().
+ *
+ * Disconnecting only deletes the keystore, and PRIVATE_KEY stays in .env -- so the
+ * next start adopted it again and the wallet the owner had just removed was silently
+ * back. A disconnect has to outlive a restart, so it leaves a mark saying the .env key
+ * was refused on purpose. Connecting again clears the mark.
+ */
+const TOMBSTONE = join(process.cwd(), 'data', 'wallet.disconnected');
 
 function passphrase(): string {
   const s = process.env.WALLET_SECRET || config.telegram.botToken;
@@ -33,6 +42,10 @@ let loaded = false;
 function adoptEnvKey(): void {
   const pk = config.wallet.privateKey?.trim();
   if (!pk) return;
+  if (existsSync(TOMBSTONE)) {
+    console.log('[wallet] PRIVATE_KEY di .env dilewati: dompet dicabut lewat /settings. Hapus barisnya di .env kalau memang tak dipakai lagi.');
+    return;
+  }
   // Bentuknya divalidasi DI SINI, sebelum menyentuh ethers. Alasannya konkret:
   // ethers menyensor nilai hanya pada galat "invalid private key". Kalau panjang
   // atau karakternya salah — persis kasus salah tempel — ia melempar "invalid
@@ -71,6 +84,8 @@ function load(): ethers.HDNodeWallet | ethers.Wallet | null {
 }
 
 function save(w: ethers.HDNodeWallet | ethers.Wallet): void {
+  // A fresh connect is consent: clear the refusal left by an earlier disconnect.
+  if (existsSync(TOMBSTONE)) unlinkSync(TOMBSTONE);
   // Jangan menumpang efek samping impor store.ts: kalau urutan impor berubah,
   // data/ belum ada dan penyimpanan kunci gagal senyap.
   mkdirSync(dirname(FILE), { recursive: true });
@@ -152,6 +167,15 @@ export function connect(secret: string): string {
 /** Putuskan dompet: keystore dihapus dari disk & dari memori. */
 export function disconnect(): void {
   if (existsSync(FILE)) unlinkSync(FILE);
+  // The mark is what makes the disconnect survive a restart; see TOMBSTONE.
+  mkdirSync(dirname(TOMBSTONE), { recursive: true });
+  writeFileSync(TOMBSTONE, new Date().toISOString(), { mode: 0o600 });
   cached = null;
   loaded = true;
 }
+
+/** true when an .env PRIVATE_KEY exists but is being refused because of a disconnect. */
+export function envKeyRefused(): boolean {
+  return !!config.wallet.privateKey?.trim() && existsSync(TOMBSTONE);
+}
+

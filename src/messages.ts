@@ -1883,11 +1883,21 @@ export function msgDisconnectConfirm(addr: string, openLp: number): string {
   return out.join('\n');
 }
 
-export function msgDisconnected(): string {
+export function msgDisconnected(envKeyStillThere = false): string {
   return [
     `✅ ${bold('Wallet Disconnected')}`,
     '',
     'Your encrypted key has been deleted from this server.',
+    // The .env copy is a SECOND copy of the same key, and deleting the keystore does
+    // not touch it. Saying nothing here would let the owner believe the key is gone
+    // from the machine when a plain-text copy is still sitting in a file.
+    ...(envKeyStillThere
+      ? [
+          '',
+          `⚠️ ${bold('A copy is still in your .env')}`,
+          `PHILIPS will refuse to load it, but it remains on this server in plain text. Remove the ${code('PRIVATE_KEY')} line to delete it for good.`,
+        ]
+      : []),
     '',
     `Want to use PHILIPS again later? Open ${code('/settings')}. Stay safe!`,
   ].join('\n');
