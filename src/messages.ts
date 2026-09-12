@@ -1385,6 +1385,15 @@ export function msgPoolStep(
       // really works -- and a Telegram button is too narrow to hold it.
       out.push(`  TVL: ${esc(p.tvl)} / Vol 24h: ${esc(p.vol ?? '?')} / APR: ${esc(p.apr)} / fills≤${esc(p.tight)}`);
     });
+    // What the two numbers on the right actually mean for the money, said once. The
+    // trade-off is stated with it: a lower fee tier fills sooner BECAUSE its ticks are
+    // finer, but every trade through it pays you less -- leaving that out would sell the
+    // cheapest pool as strictly better, which it is not.
+    out.push(
+      '',
+      note('a smaller fee and a smaller fills≤ mean your liquidity starts filling sooner, so it begins earning earlier.'),
+      note('the trade-off: a lower fee tier pays less per trade, so it needs more volume to earn the same.'),
+    );
   } else {
     out.push(bold('Pick the deepest pool (v3 & v4):'));
   }
