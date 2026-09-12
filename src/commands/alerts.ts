@@ -15,6 +15,7 @@ function alertsKeyboard() {
     [Markup.button.callback(`${a.rangeNotify ? '🔔' : '🔕'} In/out range: ${a.rangeNotify ? 'ON' : 'OFF'}`, 'al:range')],
     [Markup.button.callback(`📉 Price drop: ${a.dropPct === null ? 'OFF' : `-${a.dropPct}%`}`, 'al:drop')],
     [Markup.button.callback(`⚠️ Net loss: ${a.ilPct === null ? 'OFF' : `-${a.ilPct}%`}`, 'al:il')],
+    [Markup.button.callback('🏠 Menu', 'positions_back')],
   ]);
 }
 
