@@ -824,16 +824,8 @@ export function msgSellNoHoldings(): string {
   ].join('\n');
 }
 
-export function msgSellAmount(sym: string, balLabel: string): string {
-  return [
-    `📉 ${bold('Sell Token')}`,
-    '',
-    `🔗 ${bold('Token:')} ${esc(sym)}`,
-    `💰 ${bold('Balance:')} ${esc(balLabel)}`,
-    '',
-    'How much do you want to sell?',
-    note('the receiving asset is picked automatically — whichever route returns the most value.'),
-  ].join('\n');
+export function msgSellAmount(holdingLine: string): string {
+  return [bold(esc(holdingLine)), '', 'How much do you want to swap?'].join('\n');
 }
 
 /** One flow's card in /settings: the value currently in use. */
@@ -879,8 +871,11 @@ export function msgPctInvalid(o: { unit: string; min: number; max: number }): st
   );
 }
 
-export function msgSellTypeAmount(sym: string): string {
-  return [`📉 ${bold('Sell Token')}`, '', `💬 Type how much ${bold(sym)} to sell (or ${code('all')}).`].join('\n');
+export function msgSellTypeAmount(holdingLine: string, sym: string): string {
+  return [
+    ...(holdingLine ? [bold(esc(holdingLine)), ''] : []),
+    `Type how much ${bold(esc(sym))} to swap (or ${code('all')}).`,
+  ].join('\n');
 }
 
 export function msgTSwapBase(chainLabel: string, buy: boolean): string {
