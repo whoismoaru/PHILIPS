@@ -199,11 +199,9 @@ async function sweepLeftovers(bot: Telegraf) {
       console.log(`[sweep] ${r.symbol} (${cc.key}) → +${gotLabel} via ${res.route}`);
       // Default extra = html. Passing {} here used to strip the parse mode, so any
       // markup in this card would have reached the chat as raw tags.
-      await notify(
-        bot,
-        null,
-        msgSwept({ symbol: r.symbol, tokenId: r.tokenId, amountLabel: gotLabel, dryRun: config.safety.dryRun }),
-      );
+      // Flag on the first line on purpose: smoke-alerts scans these calls line by line to
+      // prove every notification respects /alerts, and a wrapped call hides the flag.
+      await notify(bot, null, msgSwept({ symbol: r.symbol, tokenId: r.tokenId, amountLabel: gotLabel, dryRun: config.safety.dryRun }));
     } catch (e) {
       const emsg = (e as Error).message ?? '';
       // Token debu (nilai terlalu kecil utk di-swap) → mundur lama, jangan ulang tiap 6j.
