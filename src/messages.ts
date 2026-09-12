@@ -810,9 +810,9 @@ export function msgBuySafetyHint(sym: string): string {
 
 export function msgSellList(n: number): string {
   return [
-    `📉 ${bold('Sell Token')}`,
+    `\u267B\uFE0F ${bold('SWAP TOKEN')}`,
     '',
-    `You hold ${bold(String(n))} token${n === 1 ? '' : 's'} — pick one to sell :`,
+    `You hold ${bold(String(n))} token${n === 1 ? '' : 's'}, pick one to swap :`,
   ].join('\n');
 }
 
