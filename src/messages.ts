@@ -1778,9 +1778,6 @@ export function msgConnectPrompt(): string {
     `Paste your ${bold('private key')} (0x\u2026) or ${bold('12/24-word seed phrase')} in this chat.`,
     'PHILIPS signs your LP and swap transactions with it.',
     '',
-    // The one warning that changes WHICH wallet is worth pasting: Telegram carries the
-    // message before PHILIPS can delete it, and a sent message cannot be unsent.
-    note('Telegram carries this message first \u2014 PHILIPS deletes it on arrival, but it cannot be unsent.'),
     note(`LIVE \u00B7 ${nowWib()}`),
   ].join('\n');
 }

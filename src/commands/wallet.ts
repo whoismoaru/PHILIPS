@@ -16,7 +16,7 @@ import * as msg from '../messages.js';
 // ---------- /settings — dompet (connect & disconnect = tombol) ----------
 export const awaitingSecret = new Set<number>();
 
-function cmdConnect(ctx: any) {
+export function cmdConnect(ctx: any) {
   if (walletStore.isConnected()) return ctx.reply(msg.msgAlreadyConnected(walletStore.address()!), html);
   awaitingSecret.add(ctx.from.id);
   return ctx.reply(msg.msgConnectPrompt(), {

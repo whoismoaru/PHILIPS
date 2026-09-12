@@ -37,3 +37,15 @@ assert.ok(
   'cache chain harus dibangun ulang bila dompet muncul setelah cache jadi',
 );
 console.log('ok: alamat di kartu & tombol berasal dari satu sumber, cache chain sembuh sendiri');
+
+// --- /start with no wallet must ARM the connect flow, not just print its card ---
+// Printing msgConnectPrompt() directly leaves awaitingSecret empty, so the key the user
+// then pastes is read as an ordinary message and ignored.
+assert.ok(
+  /if \(!walletStore\.isConnected\(\)\) return cmdConnect\(ctx\);/.test(src),
+  '/start tanpa dompet harus memanggil cmdConnect, bukan mencetak kartunya sendiri',
+);
+const wsrc = await import('node:fs').then((fs) => fs.readFileSync('src/commands/wallet.ts', 'utf8'));
+assert.ok(/export function cmdConnect[\s\S]{0,400}awaitingSecret\.add/.test(wsrc),
+  'cmdConnect harus memasang awaitingSecret sebelum meminta kunci');
+console.log('ok: /start tanpa dompet benar-benar menunggu kunci yang ditempel');
