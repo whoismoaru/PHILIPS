@@ -129,7 +129,9 @@ export function usdSigned(n: number): string {
 }
 
 export function usdPlain(n: number): string {
-  return '$' + n.toFixed(2);
+  // Grouped, en-US: the rest of the bot's figures use this locale, and a card that
+  // groups one way while the next groups another reads as two different products.
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /** Compact USD: $1.5M / $50.9K / $79. For pool lists and depth. */
@@ -616,9 +618,9 @@ export function msgStatus(opts: {
     rows.map((r, i) => `${i === rows.length - 1 ? '└' : '├'}  ${r}`);
 
   const parts: string[] = [
-    bold('PORTFOLIO'),
+    `\u{1F4B0} ${bold('PORTFOLIO')}`,
     '',
-    `💰 ${bold('EQUITY :')}`,
+    bold('EQUITY :'),
     ...tree([
       `Total: ${bold(equity)}`,
       ...(opts.lpUsd === undefined
@@ -633,7 +635,7 @@ export function msgStatus(opts: {
   if (held.length) {
     parts.push(
       '',
-      `📊 ${bold('BY CHAIN :')}`,
+      bold('BY CHAIN :'),
       ...tree(
         held.map((c) => {
           const aset: string[] = [];
@@ -646,7 +648,7 @@ export function msgStatus(opts: {
           const nilai = bagian.some((u) => u === null || u === undefined)
             ? '—'
             : usdPlain(bagian.reduce<number>((a, u) => a + (u ?? 0), 0));
-          return `${bold(esc(SHORT[c.label] ?? c.label))}: ${nilai}${aset.length ? ` ${italic(`(${aset.join(' · ')})`)}` : ''}`;
+          return `${bold(esc(SHORT[c.label] ?? c.label))}: ${nilai}${aset.length ? ` ${italic(`(${aset.join(' / ')})`)}` : ''}`;
         }),
       ),
     );
@@ -662,7 +664,7 @@ export function msgStatus(opts: {
   //
   // LIVE mode is no longer labelled: that is the normal state, and printing it on
   // every card is what stops "DRY RUN" standing out when it matters.
-  parts.push('', opts.dryRun ? `⚪ ${bold('DRY RUN')} · ${nowWib()}` : nowWib());
+  parts.push('', opts.dryRun ? `⚪ ${bold('DRY RUN')} · ${note(nowWib())}` : note(nowWib()));
 
   return parts.join('\n');
 }
