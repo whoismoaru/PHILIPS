@@ -480,7 +480,10 @@ bot.start(async (ctx) => {
       positions: store.active().length,
       imported,
       gone,
-      walletShort: msg.shortAddr(cc.wallet.address),
+      // walletStore is the single source of truth for WHICH wallet is connected --
+      // the same one startKeyboard() branches on. Reading it off the chain context
+      // instead let the card and the keyboard disagree.
+      walletShort: walletStore.address() ? msg.shortAddr(walletStore.address()!) : null,
     }),
     { ...html, ...startKeyboard() },
   );
