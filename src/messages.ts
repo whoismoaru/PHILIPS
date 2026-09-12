@@ -171,19 +171,26 @@ export function modeLabel(dryRun: boolean): string {
 }
 
 /** The owner's local time (WIB, UTC+7), not UTC: these cards are read on a phone in Jakarta. */
-export function nowWib(): string {
+/** Clock only: "22:10 WIB". Internal -- cards stamp the date too, see nowWib(). */
+function timeWib(): string {
   const d = new Date(Date.now() + 7 * 3_600_000);
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
   return `${hh}:${mm} WIB`;
 }
 
-/** "12 Sep 2026, 21:54 WIB" — for cards that get scrolled back to days later. */
-export function dateWib(): string {
+/**
+ * The stamp every card carries: "12 Sep 2026, 22:10 WIB".
+ *
+ * The date is not decoration. These cards are scrolled back to days later to find when
+ * money moved, and a bare "22:10" cannot tell yesterday's fill from last week's.
+ */
+export function nowWib(): string {
   const d = new Date(Date.now() + 7 * 3_600_000);
   const bulan = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${d.getUTCDate()} ${bulan[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${nowWib()}`;
+  return `${d.getUTCDate()} ${bulan[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${timeWib()}`;
 }
+
 
 function footerMode(dryRun?: boolean): string {
   if (dryRun === undefined) return nowWib();
@@ -2236,7 +2243,7 @@ export function msgBridgeDone(o: {
     '',
     'Funds usually arrive within seconds. Check /portfolio once the destination chain updates.',
     '',
-    note(dateWib()),
+    note(nowWib()),
   );
   return out.join('\n');
 }
