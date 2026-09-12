@@ -29,4 +29,17 @@ assert.ok(
 );
 assert.ok(/quotedOutWei/.test(src.slice(src.indexOf('async function execTSwap('))), 'eksekusi harus memakai lantai quote');
 
-console.log('ok: swap otomatis tetap lewat satu jalur eksekusi, dengan lantai quote & guard saldo');
+// --- the same rule for /bridge, which is the harder case: it cannot be undone ---
+const br = readFileSync('src/commands/bridge.ts', 'utf8');
+assert.equal((br.match(/async function execBridge\(/g) ?? []).length, 1, 'execBridge harus tunggal');
+assert.ok(/bot\.action\('br:go'/.test(br), 'tombol Confirm bridge harus tetap terdaftar');
+const brAuto = br.slice(br.indexOf('if (!config.safety.dryRun) {'), br.indexOf('await editProgress(\n      ctx,\n      prog,\n      msg.msgBridgeConfirm'));
+assert.ok(/return execBridge\(auto\)/.test(brAuto), 'bridge otomatis harus lewat execBridge');
+// minOutWei is the floor the fill is held to; it must be set before the auto branch.
+assert.ok(
+  br.indexOf('flow.minOutWei = (q.outWei * 99n) / 100n;') < br.indexOf('if (!config.safety.dryRun) {'),
+  'minOutWei harus terisi sebelum eksekusi otomatis',
+);
+assert.ok(/minOutWei/.test(br.slice(br.indexOf('async function execBridge('))), 'eksekusi bridge harus memakai lantai itu');
+
+console.log('ok: swap & bridge otomatis lewat satu jalur eksekusi, dengan lantai quote & guard saldo');
