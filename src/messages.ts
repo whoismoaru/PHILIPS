@@ -178,6 +178,13 @@ export function nowWib(): string {
   return `${hh}:${mm} WIB`;
 }
 
+/** "12 Sep 2026, 21:54 WIB" — for cards that get scrolled back to days later. */
+export function dateWib(): string {
+  const d = new Date(Date.now() + 7 * 3_600_000);
+  const bulan = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${d.getUTCDate()} ${bulan[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${nowWib()}`;
+}
+
 function footerMode(dryRun?: boolean): string {
   if (dryRun === undefined) return nowWib();
   return `${modeLabel(dryRun)} · ${nowWib()}`;
@@ -2214,22 +2221,22 @@ export function msgBridgeDone(o: {
   dryRun: boolean;
 }): string {
   const out = [
-    `✅ ${bold('Bridge Sent')}`,
+    `\u2705 ${bold(o.dryRun ? 'BRIDGE (DRY RUN)' : 'BRIDGE SUCCESS')}`,
     '',
-    `🔀 ${bold('Route:')} ${esc(o.fromLabel)} → ${esc(o.toLabel)}`,
-    `📤 ${bold('Sent:')} ${bold(o.inLabel)}`,
-    `📥 ${bold('Receiving ≈')} ${bold(o.outLabel)}`,
+    `${esc(o.fromLabel)} \u2192 ${esc(o.toLabel)}`,
+    `${bold(esc(o.inLabel))} \u2192 ${bold(esc(o.outLabel))}`,
   ];
   if (o.txHashes.length) {
-    out.push('', `🔗 ${bold('Tx Hash:')}`);
+    out.push('', `${bold('Tx Hash :')}`);
+    // Own line each, as <code>: a hash is copied, and a wrapped one copies broken.
     for (const h of o.txHashes) out.push(code(h));
   }
   if (o.dryRun) out.push('', note('DRY RUN — no transaction was sent.'));
   out.push(
     '',
-    italic('Funds usually arrive within seconds. Check /portfolio once the destination chain updates.'),
+    'Funds usually arrive within seconds. Check /portfolio once the destination chain updates.',
     '',
-    note(nowWib()),
+    note(dateWib()),
   );
   return out.join('\n');
 }
