@@ -521,6 +521,16 @@ export function venueCtx(cc: ChainCtx, venue?: string): ChainCtx {
 // `CHAINS[...]` / `Object.values(CHAINS)` need no changes at all.
 let ctxCache: Record<string, ChainCtx> | null = null;
 function chains(): Record<string, ChainCtx> {
+  // Self-heal a cache built before the wallet existed. The first module to touch
+  // CHAINS decides what every context holds, and if that happened before the keystore
+  // was readable, every chain froze around a VoidSigner -- reads kept working, so the
+  // only symptom was an address of 0x0 on cards, while every write would have failed.
+  // rebuildChains() alone does not cover it: it is called on /connect, and a wallet
+  // adopted from .env never goes through /connect.
+  if (ctxCache && walletStore.isConnected()) {
+    const anyCtx = Object.values(ctxCache)[0];
+    if (anyCtx && anyCtx.wallet.address === ethers.ZeroAddress) ctxCache = null;
+  }
   if (!ctxCache) ctxCache = Object.fromEntries(Object.entries(DEFS).map(([k, d]) => [k, build(k, d)]));
   return ctxCache;
 }
