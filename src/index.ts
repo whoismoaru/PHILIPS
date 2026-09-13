@@ -1339,6 +1339,15 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     age: tracked ? msg.fmtAge(Date.now() - tracked.openedAt) : undefined,
     pool: poolRow ?? undefined,
     poolUnindexed: poolRow === null,
+    // In range = already filling, so 0%. Otherwise the distance to the NEARER end of the
+    // range: that is how far the price still has to travel before this position does
+    // anything at all.
+    fillsLabel:
+      p.inRange === true
+        ? '0%'
+        : p.rangePctHigh !== null && p.rangePctLow !== null
+          ? msg.fmtPct(Math.min(Math.abs(p.rangePctHigh), Math.abs(p.rangePctLow)))
+          : undefined,
     chain: cc.label,
     mcRange,
     converted: p.converted,
