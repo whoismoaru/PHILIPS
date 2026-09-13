@@ -1335,15 +1335,15 @@ export function msgPositionsList(opts: {
 }
 
 export function msgNoPositions(): string {
-  return card(
-    title('POSITIONS'),
-    [
-      note('no LP positions recorded yet.'),
-      '',
-      note('open one with'),
-      code('/add_lp <CA>'),
-    ],
-  );
+  return [
+    `\u{1F4CA} ${bold('POSITIONS')}`,
+    '',
+    // /add_lp is menu-hidden now; pasting the CA is the way in, so that is what this says.
+    note('no LP positions recorded yet'),
+    note('open one with paste your CA'),
+    '',
+    note(nowWib()),
+  ].join('\n');
 }
 
 /** Trade history — one aligned table; the count in the header is what is actually shown. */
