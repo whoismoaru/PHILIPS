@@ -59,4 +59,14 @@ const exec = idx.slice(idx.indexOf('async function execAdd('), idx.indexOf('asyn
 assert.ok(/protocol === 'v4'/.test(exec), 'execAdd harus menangani v4');
 assert.ok(/renderPlanStepV4/.test(idx), 'rencana v4 harus punya jalurnya sendiri');
 
+// --- the top-up accepts BOTH a percentage tap and a typed amount ---
+// It shipped with only the buttons wired, so typing a number did nothing at all while the
+// card invited exactly that.
+assert.ok(/bot\.action\(\/\^tup:/.test(idx), 'tombol persen top-up hilang');
+assert.ok(/const t = topUps\.get\(ctx\.from\.id\);/.test(idx), 'ketikan nominal harus ditangani juga');
+assert.ok(/return execTopUp\(ctx, ctx\.from\.id, wei\)/.test(idx), 'nominal yang diketik harus dieksekusi');
+// Both paths must respect the gas reserve on a native base.
+assert.equal((idx.match(/t\.base\.wrappable \? held - \(await gasBuffer\(cc\)\)|t\.base\.wrappable \? raw - \(await gasBuffer\(cc\)\)/g) ?? []).length, 2,
+  'kedua jalur nominal harus menyisihkan cadangan gas');
+
 console.log('ok: kartu, tombol, dan alur setara antara v3 & v4 di semua chain');
