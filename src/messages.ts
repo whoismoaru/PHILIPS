@@ -1209,6 +1209,20 @@ export function msgPositionDetail(opts: {
 }
 
 /** Consolidated position list: a summary plus a per-position tree, in one message. */
+/**
+ * "$JACOB/USDG": the token leads, the base follows.
+ *
+ * The stored pair is base-first and sometimes already carries both sides, so the base is
+ * matched out rather than appended -- appending blindly produced "USDG / JACOB/USDG".
+ * Exported because the list card and its buttons must show the SAME label.
+ */
+export function posPair(pair: string, baseSymbol?: string | null): string {
+  const parts = pair.split('/').map((x) => x.trim()).filter(Boolean);
+  if (!baseSymbol) return parts.join('/');
+  const token = parts.find((x) => x.toLowerCase() !== baseSymbol.toLowerCase()) ?? parts[parts.length - 1];
+  return `${token}/${baseSymbol}`;
+}
+
 export function msgPositionsList(opts: {
   dryRun: boolean;
   activeCount: number;
@@ -1239,13 +1253,8 @@ export function msgPositionsList(opts: {
   const MAX_ROWS = 12;
   const shown = opts.rows.slice(0, MAX_ROWS);
   const blocks = shown.map((r) => {
-    // "$JACOB/USDG": the token leads, the base follows. The stored pair is base-first and
-    // sometimes already carries both sides, so the base is matched out rather than
-    // appended -- appending blindly produced "USDG / JACOB/USDG".
     const base = r.baseSymbol ?? null;
-    const parts = r.pair.split('/').map((x) => x.trim()).filter(Boolean);
-    const token = base ? (parts.find((x) => x.toLowerCase() !== base.toLowerCase()) ?? parts[parts.length - 1]) : parts[0];
-    const pair = base ? `${token}/${base}` : parts.join('/');
+    const pair = posPair(r.pair, base);
     // The side is written from the perspective of the asset DEPOSITED: "USDG Side" means
     // the base went in. Naming ETH on a USDG position would name an asset never deposited.
     const tokenSide = r.strategy === 'token';
