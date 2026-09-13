@@ -2418,3 +2418,16 @@ export function msgSwept(o: {
     note(`${o.dryRun ? 'DRY RUN' : 'LIVE'} \u00B7 ${nowWib()}`),
   ].join('\n');
 }
+
+/** Summary after Close All. Names what failed rather than reporting a round number. */
+export function msgCloseAllDone(done: number, total: number, failed: string[]): string {
+  const ok = failed.length === 0;
+  return [
+    `${ok ? '\u2705' : '\u{1F7E1}'} ${bold(ok ? 'ALL POSITIONS CLOSED' : 'CLOSE ALL PARTLY DONE')}`,
+    '',
+    `${bold(String(done))} of ${bold(String(total))} closed`,
+    ...(failed.length ? ['', bold('Still open :'), ...failed.map((f) => `\u2022 ${esc(f)}`)] : []),
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
