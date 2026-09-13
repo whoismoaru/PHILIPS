@@ -245,16 +245,19 @@ function cockpitLines(dryRun: boolean): string[] {
     '',
     bold('Setup :'),
     ...grp([
-      ['/settings', 'mode, limits and quick percentages'],
+      ['/settings', 'mode, limits, LP shape and quick percentages'],
       ['/alerts', 'what PHILIPS notifies you about'],
     ]),
     '',
     // The only place these entry points are named: neither has a button or a menu entry.
     'Paste a token CA into this chat to open its audit card, that is where Add LP and Buy start.',
     // The single most important behaviour change to know about before tapping anything.
+    // The one line on this card that changes how you tap. It has to name EVERY path that
+    // now goes straight out: closing lost its confirmation the same day swapping did, and
+    // a list that stops at three reads as a promise about the other two.
     dryRun
       ? 'mode: DRY RUN, no transaction is ever sent.'
-      : 'swap, bridge and withdraw have no confirm step: the amount you enter is sent.',
+      : 'nothing asks twice: swap, bridge, withdraw and opening an LP execute on the amount you enter, and Close Position executes on the tap.',
     '',
     note(nowWib()),
   ];
