@@ -24,9 +24,14 @@ for (const [name, fn] of [
 
 // --- Add Liquidity reaches both, and the v4 lookup covers EVERY v4 chain ---
 assert.equal((idx.match(/posadd:\$\{/g) ?? []).length, 2, 'tombol Add Liquidity harus ada di kartu v3 DAN v4');
-const posadd = idx.slice(idx.indexOf("bot.action(/^posadd:"), idx.indexOf("bot.action(/^posadd:") + 1400);
+const posadd = idx.slice(idx.indexOf("bot.action(/^posadd:"), idx.indexOf("bot.action(/^posadd:") + 3200);
 assert.ok(/Object\.values\(CHAINS\)\.filter\(\(x\) => v4Supported\(x\)\)/.test(posadd),
   'pencarian posisi v4 harus melintasi semua chain, bukan chain aktif saja');
+// The pool is already known, so Add Liquidity must NOT rediscover it: that would rescreen
+// the token and ask which pool to use, for a question the button already answered.
+assert.ok(!/continueAddlp/.test(posadd), 'Add Liquidity dari posisi tak boleh memindai pool ulang');
+assert.equal((posadd.match(/renderStrategyStep\(ctx, flow, false\)/g) ?? []).length, 2,
+  'kedua protokol harus mendarat langsung di langkah strategi');
 
 // --- unclaimed fees see both protocols, across every chain ---
 assert.ok(/listPositionsV4/.test(fees) && /store\.active\(\)/.test(fees), '/claim_fees harus membaca v3 dan v4');
