@@ -39,8 +39,11 @@ one bad endpoint no longer takes the bot down with it.
 
 After the installer finishes, open Telegram and talk to your bot :
 
-**1.** Send `/start`. You should see a welcome card. If nothing happens, your
-Telegram id in `.env` is wrong. Only that one account can use the bot.
+**1.** The installer already sent you a test message and said whether Telegram accepted
+it, so a wrong token or id is caught before you get here. Send `/start`; you should see a
+welcome card. If the bot stays silent even though the test message arrived, read
+`journalctl -u philips-bot -n 50`: a 409 there means the same token is being polled by
+another instance, and only one of them can ever receive anything.
 
 **2.** Send `/settings` → **Connect Wallet** → paste a private key or seed phrase.
 The message is deleted from the chat immediately, and the key is stored encrypted
