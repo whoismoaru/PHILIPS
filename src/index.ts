@@ -736,18 +736,6 @@ async function buildPositionCard(
   // -0.7% to -90.2%, when from today's price the edges were +34.7% to -86.8%. The
   // absolute bounds do stay still, and are shown by the mcap line below (pinned to
   // entry). Same as the v4 card.
-  // Distance to each end of the range, in percent from the current price. The range
-  // label below is built from the same two numbers, so the card cannot contradict itself.
-  const rangePcts = (() => {
-    const now = Number(d.currentPrice);
-    if (now > 0) {
-      const pf = (p: string) => (Number(p) / now - 1) * 100;
-      return [pf(d.priceUpper), pf(d.priceLower)].sort((x, y) => y - x) as [number, number];
-    }
-    const sgn = d.baseIsToken0 ? -1 : 1;
-    const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
-    return [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a) as [number, number];
-  })();
   const range = (() => {
     const now = Number(d.currentPrice);
     if (now > 0) {
@@ -903,11 +891,30 @@ async function buildPositionCard(
       return undefined;
     }
   })();
+  // The base the POOL contract actually holds. Always readable, index or no index -- and
+  // it is the pool's liquidity, not this position's capital.
+  const poolBaseWei = await (async () => {
+    try {
+      const hit = (await discoverAllPools(rec.ca, cc).catch(() => [])).find(
+        (p) => p.fee === rec.fee && p.base === d.baseKind,
+      );
+      return hit ? hit.baseReserve : null;
+    } catch {
+      return null;
+    }
+  })();
   const text = msg.msgPositionCard({
     pool: poolRow,
+    poolDepth: poolBaseWei === null ? undefined : `${msg.cleanUnits(poolBaseWei, d.baseDecimals)} ${d.baseSymbol}`,
     // In range = already filling, so 0%. Otherwise the distance to the NEARER end of the
     // range: how far the price still has to travel before this position does anything.
-    fillsLabel: d.inRange ? '0%' : msg.fmtPct(Math.min(...rangePcts.map(Math.abs))),
+    // Same rule as the v4 card: a property of the POOL. v3 fee tiers map to fixed tick
+    // spacings, so the fee is what sets how tightly a position can sit.
+    fillsLabel: (() => {
+      const spacing = rec.fee === 100 ? 1 : rec.fee === 500 ? 10 : rec.fee === 3000 ? 60 : 200;
+      const t = (Math.pow(1.0001, spacing) - 1) * 100;
+      return `\u2264${t < 1 ? t.toFixed(1) : Math.round(t)}%`;
+    })(),
     tokenId: rec.tokenId,
     symbol: rec.symbol,
     fee: rec.fee,
@@ -1351,15 +1358,14 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     pool: poolRow ?? undefined,
     poolUnindexed: poolRow === null,
     poolDepth: depthLabel,
-    // In range = already filling, so 0%. Otherwise the distance to the NEARER end of the
-    // range: that is how far the price still has to travel before this position does
-    // anything at all.
-    fillsLabel:
-      p.inRange === true
-        ? '0%'
-        : p.rangePctHigh !== null && p.rangePctLow !== null
-          ? msg.fmtPct(Math.min(Math.abs(p.rangePctHigh), Math.abs(p.rangePctLow)))
-          : undefined,
+    // A property of the POOL, not of this position: tick spacing sets how close to the
+    // price a single-sided position can sit, and so how far price must move before one
+    // starts filling. Measured from the position's own range instead, the same pool read
+    // differently on two cards.
+    fillsLabel: (() => {
+      const t = (Math.pow(1.0001, Number(p.poolKey.tickSpacing) || 1) - 1) * 100;
+      return `\u2264${t < 1 ? t.toFixed(1) : Math.round(t)}%`;
+    })(),
     chain: cc.label,
     mcRange,
     converted: p.converted,
