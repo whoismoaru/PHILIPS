@@ -147,3 +147,27 @@ export function parseList(raw: string): number[] | null {
   const nums = parts.map(Number);
   return nums.some((n) => !Number.isFinite(n)) ? null : nums;
 }
+
+// ─── default LP shape ────────────────────────────────────────────────────────
+/**
+ * SPOT or BID-ASK, chosen once in /settings instead of on every deposit.
+ *
+ * It used to be a wizard step, which asked the same question every time for an answer
+ * that almost never changes. Stored beside the presets so it survives a restart.
+ */
+export type LpShape = 'spot' | 'bidask';
+const SHAPE_FILE = join(process.cwd(), 'data', 'lpshape.json');
+
+export function shape(): LpShape {
+  try {
+    const v = JSON.parse(readFileSync(SHAPE_FILE, 'utf8'))?.shape;
+    return v === 'bidask' ? 'bidask' : 'spot';
+  } catch {
+    return 'spot'; // one position that earns fees -- the safer default of the two
+  }
+}
+
+export function setShape(v: LpShape): LpShape {
+  writeFileSync(SHAPE_FILE, JSON.stringify({ shape: v }), 'utf8');
+  return v;
+}

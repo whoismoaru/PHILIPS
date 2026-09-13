@@ -2533,9 +2533,12 @@ bot.action(/^rng:(\d+)$/, async (ctx) => {
   flow.ladderPlans = undefined;
   // A Bid-Ask ladder on the BASE side (buy-the-dip) — v3 (multicall) and v4 (batched
   // modifyLiquidities). The token side previews a single SPOT position (the old behaviour).
-  if (flow.strategy === 'base') {
+  // The shape is a SETTING now (/settings -> LP shape), not a question asked on every
+  // deposit. Only the base side can ladder; the token side has always been a single spot.
+  if (flow.strategy === 'base' && pctPresets.shape() === 'bidask') {
+    flow.shape = 'bidask';
     await ctx.answerCbQuery();
-    return renderShapeStep(ctx, flow, true);
+    return renderLegStep(ctx, flow, true);
   }
   flow.shape = 'spot';
   flow.legs = 1;
@@ -2547,19 +2550,6 @@ bot.action(/^rng:(\d+)$/, async (ctx) => {
   }
 });
 
-/** The distribution SHAPE step: SPOT (even, one position) or BID-ASK (a buy-the-dip ladder). */
-async function renderShapeStep(ctx: any, flow: AddFlow, edit: boolean) {
-  const text = msg.msgShapeStep(flow.selected?.otherSymbol ?? 'token', flow.rangePct ?? 0);
-  const extra = {
-    ...html,
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback('▬ SPOT (one position, earns fees)', 'shape:spot')],
-      [Markup.button.callback('◣ BID-ASK ladder (buy-dip) →', 'shape:bidask')],
-      [Markup.button.callback('⬅️ Back', 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
-    ]),
-  };
-  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
-}
 
 /** Choose the leg count for a Bid-Ask ladder (auto-capped to the pool's spacing when planned). */
 async function renderLegStep(ctx: any, flow: AddFlow, edit: boolean) {
@@ -2574,7 +2564,9 @@ async function renderLegStep(ctx: any, flow: AddFlow, edit: boolean) {
   const rows = [
     ...pctPresets.chunkButtons(cheap),
     ...pctPresets.chunkButtons(pricey),
-    [Markup.button.callback('⬅️ Back', 'back:shape'), Markup.button.callback('❌ Cancel', 'cancel')],
+    // Back goes to the range step: the shape question moved to /settings, so there is no
+    // shape screen behind this one any more.
+    [Markup.button.callback('⬅️ Back', 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
   ];
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
@@ -2675,13 +2667,12 @@ bot.action('back:range', async (ctx) => {
   await renderRangeStep(ctx, flow, true);
 });
 
-bot.action('back:shape', async (ctx) => {
-  const flow = getFlow(ctx);
-  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
-  flow.plan = undefined;
-  flow.ladderPlans = undefined;
+// Buttons on cards sent before the shape step was removed still land somewhere sensible.
+bot.action('back:shape', async (ctx: any) => {
+  const flow = flows.get(ctx.from!.id);
+  if (!flow) return ctx.answerCbQuery('Expired — start again by pasting the CA.');
   await ctx.answerCbQuery();
-  await renderShapeStep(ctx, flow, true);
+  return renderRangeStep(ctx, flow, true);
 });
 
 bot.action('back:legs', async (ctx) => {

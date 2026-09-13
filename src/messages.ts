@@ -1491,17 +1491,6 @@ export function msgRangeStep(tokenSide = false): string {
   ].join('\n');
 }
 
-export function msgShapeStep(tokenSym: string, rangePct: number): string {
-  return [
-    bold('OPEN LP · Choose Distribution'),
-    '',
-    `How should your capital be spread across the −${rangePct}% range?`,
-    '',
-    `${bold('▬ SPOT')} — one position near price. Harvests the most fees, standard strategy.`,
-    `${bold('◣ BID-ASK')} — multi-leg ladder, capital heaviest at the lowest prices.`,
-    `Buys more ${esc(tokenSym)} the deeper it dips, protects capital, but earns less fee.`,
-  ].join('\n');
-}
 
 export function msgLegStep(tokenSym: string, rangePct: number): string {
   return [
@@ -1839,6 +1828,8 @@ export function msgSettings(
   dryRun: boolean,
   maxPerTx: string,
   gasCeiling?: string | null, // atap ongkos gas per-tx; null = tanpa atap
+  /** Default deposit shape, chosen here instead of on every /add. */
+  lpShape?: 'spot' | 'bidask',
 ): string {
   // Wallet, chain and the quick-% list are deliberately NOT here: the first two already
   // head the WELCOME card, and each percentage is shown by the button that changes it.
@@ -1853,6 +1844,7 @@ export function msgSettings(
     // beyond, while an LP mint is a separate, far tighter figure.
     `${bold('Swap slippage')} : 1%, retried at 2% then 3%`,
     `${bold('LP mint slippage')} : 0.5%`,
+    ...(lpShape ? [`${bold('LP shape')} : ${bold(lpShape === 'bidask' ? 'BID-ASK ladder' : 'SPOT')}`] : []),
     '',
     note(nowWib()),
   ].join('\n');

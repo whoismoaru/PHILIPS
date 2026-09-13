@@ -77,16 +77,32 @@ export async function cmdSettings(ctx: any) {
     Markup.button.callback('🌉 Bridge %', 'pct:bridge'),
     Markup.button.callback('📤 Withdraw %', 'pct:send'),
   ]);
-  rows.push([Markup.button.callback('🪜 Ladder legs', 'pct:legs')]);
+  // The LP shape is a one-off choice, so it lives here rather than being asked on every
+  // deposit. The label carries the current value -- a toggle that does not say what it is
+  // set to makes you tap it to find out.
+  const sh = pctPresets.shape();
+  rows.push([
+    Markup.button.callback(`${sh === 'bidask' ? '◣' : '▬'} LP shape: ${sh === 'bidask' ? 'BID-ASK' : 'SPOT'}`, 'lpshape'),
+    Markup.button.callback('🪜 Ladder legs', 'pct:legs'),
+  ]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
-  return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, gasCeil), {
+  return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, gasCeil, pctPresets.shape()), {
     ...html,
     ...Markup.inlineKeyboard(rows),
   });
 }
 bot.command('settings', cmdSettings);
+
+// One tap flips it; the card redraws so the new value is visible immediately.
+bot.action('lpshape', async (ctx: any) => {
+  const next = pctPresets.shape() === 'bidask' ? 'spot' : 'bidask';
+  pctPresets.setShape(next);
+  await ctx.answerCbQuery(next === 'bidask' ? 'Bid-ask ladder' : 'Single spot position');
+  await ctx.deleteMessage().catch(() => {});
+  return cmdSettings(ctx);
+});
 
 // Perintah apa pun (/add, /buy, /sell, /bridge) membatalkan prompt persen yang
 // menggantung — kalau tidak, nominal yang diketik user tertelan sebagai jawaban.
