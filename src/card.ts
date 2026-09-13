@@ -77,7 +77,22 @@ const COL = {
   red: '#F85149',
   chipBg: '#1B2333',
   amber: '#F0883E', // activity counts only: a state, never a result
+  // The bot's OWN colour. Deliberately neither the green nor the red: the name is an
+  // identity, and a brand painted in a result colour reads as a result.
+  brand: '#4DA3FF',
 };
+
+/**
+ * The bot's name, underlined in its own colour. Drawn from the same helper on every card
+ * so the masthead cannot drift apart between them.
+ */
+function masthead(ctx: SKRSContext2D, x: number, y: number) {
+  ctx.font = '21px PhMono';
+  ctx.fillStyle = COL.brand;
+  ctx.fillText('PHILIPS', x, y);
+  // The rule is exactly as wide as the word; a fixed width would hang off the end.
+  ctx.fillRect(x, y + 9, ctx.measureText('PHILIPS').width, 2);
+}
 
 function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
@@ -151,9 +166,7 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   ctx.restore();
 
   const X = 76;
-  ctx.fillStyle = COL.muted;
-  ctx.font = '19px PhSansB';
-  ctx.fillText('PHILIPS', X, 84);
+  masthead(ctx, X, 80);
   ctx.fillStyle = COL.text;
   ctx.font = '29px PhSansB';
   ctx.fillText(o.pair, X, 128);
@@ -308,9 +321,7 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
   // The bot's name heads the text column, not the artwork: over the picture it fought
   // whatever happened to be bright there, and a backdrop the owner can swap at any time
   // is no place to put a fixed label.
-  ctx.fillStyle = COL.muted;
-  ctx.font = '21px PhMono';
-  ctx.fillText('PHILIPS', X, 74);
+  masthead(ctx, X, 74);
 
   const label = (t: string, y: number) => {
     ctx.fillStyle = COL.muted;
