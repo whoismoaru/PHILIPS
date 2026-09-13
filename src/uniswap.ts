@@ -908,51 +908,6 @@ export async function listPositions(ctx: ChainCtx = getChain()): Promise<Positio
  * and no burn. What comes out is the unclaimed fees; the principal stays in the pool.
  * Returns raw token0/token1 amounts plus the tx hash.
  */
-/**
- * Add more base into an existing v3 position, at its own range.
- *
- * Single-sided, like every deposit here. That only holds while the price sits OUTSIDE the
- * range on the base side: in range a mint needs both tokens, so the caller is told rather
- * than sent into a revert. amountMin is 0 for the side being added because the desired
- * amount IS the floor -- the position's ticks are fixed, so there is no price to slip.
- */
-export async function increaseLiquidityV3(
-  tokenId: string,
-  baseAmountWei: bigint,
-  ctx: ChainCtx = getChain(),
-): Promise<{ txHash: string; amount0: bigint; amount1: bigint }> {
-  const pm = ctx.positionManager;
-  const pos = await pm.positions(tokenId);
-  const [token0, token1, tickLower, tickUpper] = [pos.token0, pos.token1, Number(pos.tickLower), Number(pos.tickUpper)];
-  const base = basesFor(ctx).find(
-    (b) => b.address.toLowerCase() === token0.toLowerCase() || b.address.toLowerCase() === token1.toLowerCase(),
-  );
-  if (!base) throw new Error('this position has no base asset the bot can deposit.');
-  const baseIsToken0 = base.address.toLowerCase() === token0.toLowerCase();
-
-  const poolAddr = await ctx.factory.getPool(token0, token1, pos.fee);
-  const slot0 = await new ethers.Contract(poolAddr, ['function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint8,bool)'], ctx.provider).slot0();
-  const tick = Number(slot0[1]);
-  if (tick >= tickLower && tick < tickUpper) {
-    throw new Error(
-      `#${tokenId} is in range, so adding needs BOTH tokens. Wait until it is out of range, or open a new position instead.`,
-    );
-  }
-
-  const txHashes = await approveExact(base.address, ctx.pmAddress, baseAmountWei, ctx.wallet as ethers.Wallet);
-  void txHashes;
-  const tx = await pm.increaseLiquidity({
-    tokenId,
-    amount0Desired: baseIsToken0 ? baseAmountWei : 0n,
-    amount1Desired: baseIsToken0 ? 0n : baseAmountWei,
-    amount0Min: 0n,
-    amount1Min: 0n,
-    deadline: BigInt(Math.floor(Date.now() / 1000) + 600),
-  });
-  const rc = await tx.wait();
-  return { txHash: rc?.hash ?? tx.hash, amount0: baseIsToken0 ? baseAmountWei : 0n, amount1: baseIsToken0 ? 0n : baseAmountWei };
-}
-
 export async function collectFeesOnly(
   tokenId: string,
   ctx: ChainCtx = getChain(),
