@@ -1990,32 +1990,32 @@ export function msgCashOut(opts: {
   baseSymbol?: string; // aset hasil cash-out — menentukan kalimat penutup
   native?: boolean; // hasil di-unwrap jadi native chain (bukan stablecoin)
   leftover?: boolean; // masih ada debu token yang belum tersapu
+  pair?: string; // "$富贵/USDG" — label yang sama dgn kartu posisi
+  protocol?: 'V3' | 'V4';
 }): string {
   const ladder = (opts.legs ?? 0) > 1;
   const out = [
     `\u2705 ${bold('POSITION CLOSED')}`,
     '',
-    `#${esc(opts.tokenId)}${ladder ? ` \u00B7 ladder, ${opts.legs} legs` : ''}`,
-    `Received: ${bold(esc(opts.ethOut))}`,
+    `${bold(esc(opts.pair ?? ''))} | #${esc(opts.tokenId)}${opts.protocol ? ` (${opts.protocol})` : ''}${ladder ? ` \u00B7 ladder, ${opts.legs} legs` : ''}`,
   ];
 
-  // The steps that were ACTUALLY executed, straight from the executor. Each hash on its
-  // own line: mid-sentence, 66 characters are impossible to select with a thumb.
-  if (opts.notes.length) {
-    out.push('', bold('Steps :'));
-    for (const n of opts.notes) {
-      const mt = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
-      out.push(`\u2022 ${esc(mt ? mt[1] : n)}`);
-      if (mt) out.push(code(mt[2]));
-    }
-  }
+  // The steps that were ACTUALLY executed, straight from the executor, numbered. The tx
+  // hash is stripped out of each line and collected below: mid-sentence, 66 characters
+  // are impossible to select with a thumb.
+  const steps = opts.notes.map((n) => n.replace(/\s*\(tx 0x[0-9a-fA-F]+\)/, '').trim()).filter(Boolean);
+  steps.push(`Received ${opts.ethOut}`);
+  out.push('', bold('Step by step :'), ...steps.map((t, i) => `${i + 1}. ${esc(t)}`));
 
-  // Hashes that did not make it into the notes (a swap with no note, say).
+  // Every hash the close produced, including any that never made it into a note.
   const inNotes = opts.notes.join(' ');
-  const extraTx = opts.txHashes.filter((h) => !inNotes.includes(h));
-  if (extraTx.length) {
+  const hashes = [
+    ...(opts.notes.map((n) => n.match(/\(tx (0x[0-9a-fA-F]+)\)/)?.[1]).filter(Boolean) as string[]),
+    ...opts.txHashes.filter((h) => !inNotes.includes(h)),
+  ];
+  if (hashes.length) {
     out.push('', bold('Tx Hash :'));
-    for (const h of extraTx) out.push(code(h));
+    for (const h of hashes) out.push(code(h));
   }
 
   // This sentence used to ALWAYS read "unwrapped back into native ETH" -- including on

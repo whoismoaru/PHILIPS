@@ -148,7 +148,7 @@ export function v4Supported(cc: ChainCtx): boolean {
 const symCache = new Map<string, string>();
 const decCache = new Map<string, number>();
 
-async function tokenSymbol(addr: string, cc: ChainCtx): Promise<string> {
+export async function tokenSymbol(addr: string, cc: ChainCtx): Promise<string> {
   if (!addr || addr === ethers.ZeroAddress) return 'ETH'; // native currency0
   const key = `${cc.key}:${addr.toLowerCase()}`;
   const hit = symCache.get(key);
