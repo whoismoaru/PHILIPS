@@ -396,6 +396,10 @@ export function msgV4Position(p: {
     // Why "Value now" is not simply the market price — see the note in index.ts.
     exitNote?: string;
     filled?: number; active?: number; waiting?: number }; // leg dari grup ladder
+  /** The pool's own depth and activity, read fresh when the card is opened. */
+  pool?: { tvl: string; vol?: string; apr: string };
+  /** True when the pool index has no entry for this pool yet (new pools are missing). */
+  poolUnindexed?: boolean;
 }): string {
   // Match the V3 card's layout (msgPositionCard): one fact per line, status on its
   // own line, with a strategy and an explanation of the money.
@@ -439,6 +443,16 @@ export function msgV4Position(p: {
     `${statusEmoji} ${bold(`$${esc(posPair(p.pair, p.baseSymbol))}`)} | #${esc(p.tokenId)} (V4)`,
     '',
     `Fee: ${esc(p.feeLabel)}${p.chain ? ` \u00B7 ${esc(p.chain)}` : ''}`,
+    // The POOL's own figures, not the position's: how deep it is and how hard it trades
+    // decides whether this position keeps earning. Absent when the lookup failed --
+    // inventing a TVL would be worse than leaving the line out.
+    ...(p.pool
+      ? [`TVL: ${esc(p.pool.tvl)} / Vol 24h: ${esc(p.pool.vol ?? '?')} / APR: ${esc(p.pool.apr)}`]
+      : p.poolUnindexed
+        // Said, not silently dropped: an absent line on one card and present on the next
+        // reads as a bug, and the reason matters (a brand-new pool is not a dead one).
+        ? [note('pool depth not indexed yet, too new')]
+        : []),
     `Strategy: ${base} Side (buy the dip)${isLeg ? `, ${bold(`${p.ladder!.shape === 'bidask' ? 'bid-ask' : 'spot'} ladder`)}` : ''}`,
     // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
     ...(isLeg

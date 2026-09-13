@@ -1264,6 +1264,35 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
         };
       })()
     : undefined;
+  // The pool this position sits in, matched out of the token's pools by fee. One
+  // lookup per card open, and a failure just drops the line -- a position card must
+  // still render when the pool index is down.
+  const poolRow = await (async () => {
+    if (!tokenSymbol) return undefined;
+    const tokenAddr = [p.poolKey.currency0, p.poolKey.currency1].find(
+      (a) => a !== ethers.ZeroAddress && a.toLowerCase() !== cc.wethAddress.toLowerCase() && !cc.bases.some((b) => b.address.toLowerCase() === a.toLowerCase()),
+    );
+    if (!tokenAddr) return undefined;
+    // Matched on the POOL KEY, not the fee: these pools carry dynamic fees, so the fee
+    // the gateway reports is the current effective one and drifts away from the fee
+    // stored in the position (19990 against 20971 on the same pool).
+    const same = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+    const hit = (await explore.poolsForToken(cc, tokenAddr).catch(() => [])).find(
+      (x) =>
+        x.protocol === 'v4' &&
+        x.poolKey &&
+        same(x.poolKey.currency0, p.poolKey.currency0) &&
+        same(x.poolKey.currency1, p.poolKey.currency1) &&
+        Number(x.poolKey.tickSpacing) === Number(p.poolKey.tickSpacing) &&
+        same(x.poolKey.hooks, p.poolKey.hooks),
+    );
+    if (!hit) return null; // known miss: the index has this token but not this pool
+    return {
+      tvl: msg.usdCompact(hit.tvlUsd),
+      vol: hit.vol24hUsd != null && hit.vol24hUsd > 0 ? msg.usdCompact(hit.vol24hUsd) : undefined,
+      apr: hit.aprPct == null ? '?' : `~${hit.aprPct >= 100 ? Math.round(hit.aprPct) : hit.aprPct.toFixed(1)}%`,
+    };
+  })();
   const text = msg.msgV4Position({
     tokenId: p.tokenId,
     pair: `${p.sym0} / ${p.sym1}`,
@@ -1278,6 +1307,8 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     baseSymbol,
     tokenSymbol,
     age: tracked ? msg.fmtAge(Date.now() - tracked.openedAt) : undefined,
+    pool: poolRow ?? undefined,
+    poolUnindexed: poolRow === null,
     chain: cc.label,
     mcRange,
     converted: p.converted,
