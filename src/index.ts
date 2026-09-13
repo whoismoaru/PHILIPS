@@ -887,9 +887,10 @@ async function buildPositionCard(
       // "Remove Liquidity", not "Withdraw": withdrawing now means sending funds out to an
       // address, and this pulls part of an LP back into the wallet.
       [
+        Markup.button.callback('➕ Add Liquidity', `posadd:${rec.tokenId}`),
         Markup.button.callback('💵 Harvest Fees', `claim:${rec.tokenId}`),
-        Markup.button.callback('➖ Remove Liquidity', `rm:${rec.tokenId}`),
       ],
+      [Markup.button.callback('➖ Remove Liquidity', `rm:${rec.tokenId}`)],
       // The one irreversible action here keeps its own row, and ⛔ is the vocabulary's
       // stop marker -- ❌ reads as "failed", which this is not.
       [Markup.button.callback('⛔ Close Position', `stop:${rec.tokenId}`)],
@@ -1304,8 +1305,15 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('🔄 Refresh', `posv4:${p.tokenId}`), Markup.button.callback('‹ Positions', 'positions_refresh')],
-      [Markup.button.callback('⛔ Close v4 Position', `closev4:${p.tokenId}`)],
+      // Add Liquidity reopens the /add wizard on THIS position's token and chain, so
+      // topping up an existing pool no longer means pasting its CA again.
+      [
+        Markup.button.callback('➕ Add Liquidity', `posadd:${p.tokenId}`),
+        Markup.button.callback('🔄 Refresh', `posv4:${p.tokenId}`),
+      ],
+      [Markup.button.callback('⛔ Close Position', `closev4:${p.tokenId}`)],
+      [Markup.button.callback('⬅️ Positions', 'positions_refresh')],
+      [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
     ]),
   };
   return { text, extra };
@@ -2530,6 +2538,36 @@ bot.action(/^leg:(\d+)$/, async (ctx) => {
 });
 
 // Re-read the pools for the token this flow is on, into the same bubble.
+/**
+ * Add more liquidity to the pool a position already sits in.
+ *
+ * The token and chain come from the position itself, so the wizard opens where the user
+ * already is instead of asking for a CA that is right there on the card. It is the SAME
+ * /add wizard from there on -- screening, pool choice and every guard still run.
+ */
+bot.action(/^posadd:(\d+)$/, async (ctx: any) => {
+  const id = ctx.match[1];
+  await ctx.answerCbQuery();
+  const rec = store.get(id);
+  let ca = rec?.ca ?? null;
+  let chainKey = rec?.chain ?? null;
+  if (!ca) {
+    // v4 positions are not in the store: find the one that owns this id, and read the
+    // token side straight off its pool key.
+    for (const c of Object.values(CHAINS).filter((x) => v4Supported(x))) {
+      const hit = (await listPositionsV4(c).catch(() => [])).find((x) => x.tokenId === id);
+      if (!hit) continue;
+      const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === c.wethAddress.toLowerCase();
+      const isStable = (a: string) => c.bases.some((b) => isStableBase(b.kind) && b.address.toLowerCase() === a.toLowerCase());
+      ca = [hit.poolKey.currency0, hit.poolKey.currency1].find((a) => !isEth(a) && !isStable(a)) ?? null;
+      chainKey = c.key;
+      break;
+    }
+  }
+  if (!ca) return ctx.reply(msg.msgError('add', 'could not tell which token this position holds.'), html);
+  return continueAddlp(ctx, ethers.getAddress(ca), chainKey ?? getChain().key, null);
+});
+
 bot.action('pool:refresh', async (ctx: any) => {
   const flow = flows.get(ctx.from!.id);
   if (!flow?.token) return ctx.answerCbQuery('Expired — paste the CA again.');

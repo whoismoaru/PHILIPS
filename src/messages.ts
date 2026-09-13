@@ -434,10 +434,12 @@ export function msgV4Position(p: {
 
   const isLeg = p.ladder && p.ladder.legCount > 1;
   const lines = [
-    `📊 ${bold(`Position Details: #${esc(p.tokenId)}`)}`,
+    // Same header the list card uses, so the card you land on is recognisably the row
+    // you tapped: state emoji, pair, id, protocol.
+    `${statusEmoji} ${bold(`$${esc(posPair(p.pair, p.baseSymbol))}`)} | #${esc(p.tokenId)} (V4)`,
     '',
-    `🔗 ${bold('Pair:')} ${esc(p.pair)} ${italic(`(${esc(p.feeLabel)} Fee)`)}${p.chain ? ` · ${esc(p.chain)}` : ''}`,
-    `🎯 ${bold('Strategy:')} ${base} Side (Buy the dip)${isLeg ? ` · ${bold(`◣ ${p.ladder!.shape === 'bidask' ? 'Bid-Ask' : 'Spot'} ladder`)}` : ''}`,
+    `Fee: ${esc(p.feeLabel)}${p.chain ? ` \u00B7 ${esc(p.chain)}` : ''}`,
+    `Strategy: ${base} Side (buy the dip)${isLeg ? `, ${bold(`${p.ladder!.shape === 'bidask' ? 'bid-ask' : 'spot'} ladder`)}` : ''}`,
     // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
     ...(isLeg
       ? [
@@ -1110,9 +1112,11 @@ export function msgPositionCard(opts: {
       : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${range}).`;
 
   return [
-    `\u{1F50D} ${bold(`POSITION #${esc(opts.tokenId)}`)}`,
+    // Same header the list card uses, so the card you land on is recognisably the row
+    // you tapped: state emoji, pair, id, protocol.
+    `${opts.inRange ? '🟢' : opts.converted ? '🟡' : '🔴'} ${bold(`$${esc(posPair(`${base} / ${sym}`, base))}`)} | #${esc(opts.tokenId)} (V3)`,
     '',
-    `Pair: ${bold(`$${sym}`)} / ${base} ${italic(opts.feeIsTickSpacing ? `(ts ${opts.fee}, dynamic fee)` : `(${feeLabel(opts.fee)} fee)`)}${opts.chain ? ` on ${esc(opts.chain)}` : ''}`,
+    `Fee: ${italic(opts.feeIsTickSpacing ? `ts ${opts.fee}, dynamic` : feeLabel(opts.fee))}${opts.chain ? ` \u00B7 ${esc(opts.chain)}` : ''}`,
     `Strategy: ${strategy}${isLeg ? `, ${bold(`${opts.ladder!.shape === 'bidask' ? 'bid-ask' : 'spot'} ladder`)}` : ''}`,
     // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
     // Shaped so a bid-ask position reads the same across both protocols.
