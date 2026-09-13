@@ -1452,14 +1452,19 @@ export function msgStrategyStep(
   return [
     bold('OPEN LP | Select Strategy'),
     '',
-    `Pool: ${bold(esc(pair))}${pool ? ` (${esc(pool.ver)}, ${esc(pool.feeLabel)} fee)` : ''}`,
-    // The numbers from the pool you tapped, carried forward. Three pools of the same
+    `${bold(esc(pair))}${pool ? ` (${esc(pool.ver)}, ${esc(pool.feeLabel)} fee)` : ''}`,
+    // The numbers from the pool you tapped, carried forward. Several pools of the same
     // pair differ ONLY by these, so without them the next screen cannot tell you which
     // one you are about to deposit into.
-    ...(pool ? [`TVL: ${esc(pool.tvl)} / Vol 24h: ${esc(pool.vol ?? '?')} / APR: ${esc(pool.apr)} / fills≤${esc(pool.tight)}`] : []),
-    ...(price ? [`Price: 1 ${esc(tokenSym)} = ${esc(price)} ${esc(baseSym)}`] : []),
-    '',
-    'Choose your single-side deposit strategy :',
+    ...(pool
+      ? [
+          `├ TVL: ${esc(pool.tvl)}`,
+          `├ Vol: ${esc(pool.vol ?? '—')} (24h)`,
+          `├ APR: ${esc(pool.apr)}`,
+          `└ Fills: ≤${esc(pool.tight)}`,
+        ]
+      : []),
+    ...(price ? ['', note(`1 ${esc(tokenSym)} = ${esc(price)} ${esc(baseSym)}`)] : []),
     '',
     `🟢 ${bold(`${baseSym} Side (buy the dip)`)}`,
     `You deposit ${bold(baseSym)}. It converts to ${esc(tokenSym)} and earns fees when the price ${bold('drops')} into your range.`,
@@ -1467,8 +1472,6 @@ export function msgStrategyStep(
     `🔵 ${bold('Token Side (sell the rip)')}`,
     `You deposit ${bold(tokenSym)}. It converts to ${esc(baseSym)} and earns fees when the price ${bold('rises')} into your range.`,
     '',
-    // The condition that decides whether the second button is usable at all.
-    note(`Token Side requires you to already hold ${tokenSym} — swap for it first if you do not.`),
     note(nowWib()),
   ].join('\n');
 }
