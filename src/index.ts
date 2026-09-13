@@ -735,6 +735,18 @@ async function buildPositionCard(
   // -0.7% to -90.2%, when from today's price the edges were +34.7% to -86.8%. The
   // absolute bounds do stay still, and are shown by the mcap line below (pinned to
   // entry). Same as the v4 card.
+  // Distance to each end of the range, in percent from the current price. The range
+  // label below is built from the same two numbers, so the card cannot contradict itself.
+  const rangePcts = (() => {
+    const now = Number(d.currentPrice);
+    if (now > 0) {
+      const pf = (p: string) => (Number(p) / now - 1) * 100;
+      return [pf(d.priceUpper), pf(d.priceLower)].sort((x, y) => y - x) as [number, number];
+    }
+    const sgn = d.baseIsToken0 ? -1 : 1;
+    const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - d.currentTick)) - 1) * 100;
+    return [pctOf(d.tickUpper), pctOf(d.tickLower)].sort((a, b) => b - a) as [number, number];
+  })();
   const range = (() => {
     const now = Number(d.currentPrice);
     if (now > 0) {
@@ -892,6 +904,9 @@ async function buildPositionCard(
   })();
   const text = msg.msgPositionCard({
     pool: poolRow,
+    // In range = already filling, so 0%. Otherwise the distance to the NEARER end of the
+    // range: how far the price still has to travel before this position does anything.
+    fillsLabel: d.inRange ? '0%' : msg.fmtPct(Math.min(...rangePcts.map(Math.abs))),
     tokenId: rec.tokenId,
     symbol: rec.symbol,
     fee: rec.fee,
