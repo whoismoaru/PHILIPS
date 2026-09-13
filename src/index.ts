@@ -3406,6 +3406,7 @@ async function renderTokenHub(
     // This card is static: its prices are frozen at the second you pasted the CA. For a
     // newly born token a minute is already a long time, so offer a way to refresh in place.
     [Markup.button.callback('🔄 Refresh', `ca:refresh:${ca}`), Markup.button.callback('❌ Cancel', 'cancel')],
+    [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
   ]);
 
   hubs.set(ctx.from.id, {
