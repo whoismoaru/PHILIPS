@@ -60,6 +60,8 @@ import * as krystal from './krystal.js';
 import { awaitingSecret, handleSecret } from './commands/wallet.js';
 import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import { cmdClaimFees } from './commands/feesAndRemove.js';
+import { increaseLiquidityV4 } from './uniswapV4.js';
+import { increaseLiquidityV3 } from './uniswap.js';
 import { cmdBridge } from './commands/bridge.js';
 import { cmdSend } from './commands/send.js';
 import { cmdUnwrap } from './commands/unwrap.js';
@@ -2655,44 +2657,98 @@ bot.action(/^leg:(\d+)$/, async (ctx) => {
  * already is instead of asking for a CA that is right there on the card. It is the SAME
  * /add wizard from there on -- screening, pool choice and every guard still run.
  */
+/**
+ * Add more into a position that already exists.
+ *
+ * No pool choice, no strategy, no range: all three are already fixed by the position
+ * being added to. The only open question is how much, so that is the only one asked --
+ * and answering it deposits straight into the SAME position rather than opening another.
+ */
+
+/** A deposit INTO an existing position: only the amount is still unknown. */
+type TopUp = { id: string; chainKey: string; protocol: 'v3' | 'v4'; symbol: string; base: BaseAsset; at: number };
+const topUps = new Map<number, TopUp>();
+registerFlowReset((uid) => topUps.delete(uid));
+
+async function renderTopUpAmount(ctx: any, uid: number) {
+  const t = topUps.get(uid)!;
+  const cc = getChain(t.chainKey);
+  const bal = await (t.base.wrappable
+    ? cc.provider.getBalance(cc.wallet.address)
+    : (new ethers.Contract(t.base.address, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address) as Promise<bigint>)
+  ).catch(() => null);
+  const sym = t.base.wrappable ? cc.nativeSymbol : t.base.symbol;
+  const label = bal === null ? '?' : `${msg.cleanUnits(bal, t.base.decimals)} ${sym}`;
+  return ctx.reply(msg.msgTopUpAmount(t.symbol, t.id, label, sym), {
+    ...html,
+    ...Markup.inlineKeyboard([
+      ...pctPresets.chunkButtons(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `tup:${p}`))),
+      [Markup.button.callback('❌ Cancel', 'cancel')],
+    ]),
+  });
+}
+
+/** Deposit `amountWei` into the position this top-up points at, and report it. */
+async function execTopUp(ctx: any, uid: number, amountWei: bigint) {
+  const t = topUps.get(uid);
+  if (!t) return ctx.reply(msg.msgError('add', 'expired — open the position again.'), html);
+  topUps.delete(uid); // idempotency: clear BEFORE sending, so a double tap cannot deposit twice
+  const cc = getChain(t.chainKey);
+  const label = `${msg.cleanUnits(amountWei, t.base.decimals)} ${t.base.wrappable ? cc.nativeSymbol : t.base.symbol}`;
+  const prog = await ctx.reply(msg.msgProgress(`adding ${label} to #${t.id}…`), html);
+  const edit = (text: string) => ctx.telegram.editMessageText(ctx.chat.id, prog.message_id, undefined, text, html).catch(() => {});
+  if (config.safety.dryRun) return void (await edit(msg.msgDryRunAddDone()));
+  store.beginMoneyOp();
+  try {
+    // A wrappable base is held as native, and both position managers want the wrapped
+    // token: wrap exactly what is being deposited, keeping gas back.
+    if (t.base.wrappable) {
+      const have: bigint = await cc.weth.balanceOf(cc.wallet.address);
+      if (have < amountWei) await wrapWithGasReserve(cc, amountWei - have);
+    }
+    const r =
+      t.protocol === 'v4'
+        ? await increaseLiquidityV4(t.id, amountWei, cc)
+        : await increaseLiquidityV3(t.id, amountWei, cc);
+    console.log(`[topup] #${t.id} ${t.protocol} ${label} (${cc.key}) tx ${r.txHash}`);
+    await edit(msg.msgTopUpDone(t.symbol, t.id, label, r.txHash));
+  } catch (e) {
+    await edit(msg.msgError('add', (e as Error).message));
+  } finally {
+    store.endMoneyOp();
+  }
+}
+
+bot.action(/^tup:(\d{1,3})$/, async (ctx: any) => {
+  const uid = ctx.from!.id;
+  const t = topUps.get(uid);
+  if (!t) return ctx.answerCbQuery('Expired — open the position again.');
+  const pct = Number(ctx.match[1]);
+  await ctx.answerCbQuery();
+  const cc = getChain(t.chainKey);
+  const raw = await (t.base.wrappable
+    ? cc.provider.getBalance(cc.wallet.address)
+    : (new ethers.Contract(t.base.address, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address) as Promise<bigint>)
+  ).catch(() => 0n);
+  // A native base pays gas out of the same balance, so the reserve comes off first.
+  const usable = t.base.wrappable ? raw - (await gasBuffer(cc)) : raw;
+  const wei = usable > 0n ? (usable * BigInt(pct)) / 100n : 0n;
+  if (wei <= 0n) return ctx.reply(msg.msgError('amount', 'nothing available to deposit after the gas reserve.'), html);
+  return execTopUp(ctx, uid, wei);
+});
+
 bot.action(/^posadd:(\d+)$/, async (ctx: any) => {
   const id = ctx.match[1];
   await ctx.answerCbQuery();
   resetFlows(ctx.from!.id); // a new deposit: drop whatever half-finished flow was open
 
-  // The pool is ALREADY known -- it is the one this position sits in. Rediscovering it
-  // would re-screen the token, re-rank every pool of the pair, and then ask which one to
-  // use, for a question the button already answered.
   const rec = store.get(id);
   if (rec) {
     const cc = getChain(rec.chain);
     const base = baseOf(cc, rec.baseKind ?? 'weth');
-    const flow: AddFlow = {
-      token: rec.ca,
-      chain: cc.key,
-      pools: [],
-      selected: {
-        protocol: 'v3',
-        base: base.kind,
-        baseSymbol: base.symbol,
-        otherSymbol: rec.symbol,
-        fee: rec.fee,
-        tvlUsd: 0,
-      },
-      base: base.kind,
-      fee: rec.fee,
-      // Not re-screened: the wallet is already IN this pool, so an audit verdict now
-      // would be a warning about a decision already made. The deposit guards still run.
-      screenBahaya: false,
-      screenFailed: false,
-      startedAt: Date.now(),
-    };
-    flows.set(ctx.from!.id, flow);
-    return renderStrategyStep(ctx, flow, false);
+    topUps.set(ctx.from!.id, { id, chainKey: cc.key, protocol: 'v3', symbol: rec.symbol, base, at: Date.now() });
+    return renderTopUpAmount(ctx, ctx.from!.id);
   }
-
-  // v4 positions are not in the store: find the one that owns this id and rebuild its
-  // pool straight from the pool key it already carries.
   for (const c of Object.values(CHAINS).filter((x) => v4Supported(x))) {
     const p = (await listPositionsV4(c).catch(() => [])).find((x) => x.tokenId === id);
     if (!p) continue;
@@ -2701,30 +2757,10 @@ bot.action(/^posadd:(\d+)$/, async (ctx: any) => {
     const token = [p.poolKey.currency0, p.poolKey.currency1].find((a) => !isEth(a) && !stable(a));
     if (!token) break;
     const baseCur = [p.poolKey.currency0, p.poolKey.currency1].find((a) => a !== token)!;
-    const baseAsset = stable(baseCur);
-    const flow: AddFlow = {
-      token: ethers.getAddress(token),
-      chain: c.key,
-      pools: [],
-      selected: {
-        protocol: 'v4',
-        base: baseAsset ? baseAsset.kind : 'weth',
-        baseSymbol: baseAsset ? baseAsset.symbol : c.nativeSymbol,
-        otherSymbol: [p.sym0, p.sym1].find((x) => x !== (baseAsset?.symbol ?? c.nativeSymbol)) ?? 'token',
-        fee: p.fee,
-        tvlUsd: 0,
-        poolKey: p.poolKey,
-        baseIsCurrency0: baseCur.toLowerCase() === p.poolKey.currency0.toLowerCase(),
-      },
-      base: baseAsset ? baseAsset.kind : 'weth',
-      fee: p.fee,
-      // Not re-screened: see the v3 branch above.
-      screenBahaya: false,
-      screenFailed: false,
-      startedAt: Date.now(),
-    };
-    flows.set(ctx.from!.id, flow);
-    return renderStrategyStep(ctx, flow, false);
+    const base = stable(baseCur) ?? baseOf(c, 'weth');
+    const sym = [p.sym0, p.sym1].find((x) => x !== base.symbol) ?? 'token';
+    topUps.set(ctx.from!.id, { id, chainKey: c.key, protocol: 'v4', symbol: sym, base, at: Date.now() });
+    return renderTopUpAmount(ctx, ctx.from!.id);
   }
   return ctx.reply(msg.msgError('add', 'could not tell which pool this position sits in.'), html);
 });

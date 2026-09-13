@@ -24,14 +24,26 @@ for (const [name, fn] of [
 
 // --- Add Liquidity reaches both, and the v4 lookup covers EVERY v4 chain ---
 assert.equal((idx.match(/posadd:\$\{/g) ?? []).length, 2, 'tombol Add Liquidity harus ada di kartu v3 DAN v4');
-const posadd = idx.slice(idx.indexOf("bot.action(/^posadd:"), idx.indexOf("bot.action(/^posadd:") + 3200);
+// Bounded to the handler itself: the next bot.action after it is a different flow, and
+// letting the slice run past it made this assert read that flow's code instead.
+const posaddAt = idx.indexOf("bot.action(/^posadd:");
+const posadd = idx.slice(posaddAt, idx.indexOf('bot.action(', posaddAt + 20));
 assert.ok(/Object\.values\(CHAINS\)\.filter\(\(x\) => v4Supported\(x\)\)/.test(posadd),
   'pencarian posisi v4 harus melintasi semua chain, bukan chain aktif saja');
-// The pool is already known, so Add Liquidity must NOT rediscover it: that would rescreen
-// the token and ask which pool to use, for a question the button already answered.
+// Pool, side and range are all fixed by the position being added to, so the button asks
+// only for the amount -- no rediscovery, no wizard.
 assert.ok(!/continueAddlp/.test(posadd), 'Add Liquidity dari posisi tak boleh memindai pool ulang');
-assert.equal((posadd.match(/renderStrategyStep\(ctx, flow, false\)/g) ?? []).length, 2,
-  'kedua protokol harus mendarat langsung di langkah strategi');
+assert.ok(!/renderStrategyStep/.test(posadd), 'Add Liquidity tak boleh melewati langkah strategi lagi');
+assert.equal((posadd.match(/renderTopUpAmount\(ctx, ctx\.from!\.id\)/g) ?? []).length, 2,
+  'kedua protokol harus langsung menanyakan nominal');
+// The deposit lands in the SAME position, which is what increaseLiquidity means.
+assert.ok(/increaseLiquidityV4\(t\.id/.test(idx) && /increaseLiquidityV3\(t\.id/.test(idx),
+  'kedua protokol harus menambah ke posisi yang sama, bukan membuka posisi baru');
+// Single-sided only works outside the range; in range it must refuse, not revert on chain.
+const v4src = readFileSync('src/uniswapV4.ts', 'utf8');
+const v3src = readFileSync('src/uniswap.ts', 'utf8');
+for (const [name, src] of [['v4', v4src], ['v3', v3src]] as Array<[string, string]>)
+  assert.ok(/is in range, so adding needs BOTH tokens/.test(src), `${name}: posisi in-range harus ditolak dgn alasan`);
 
 // --- unclaimed fees see both protocols, across every chain ---
 assert.ok(/listPositionsV4/.test(fees) && /store\.active\(\)/.test(fees), '/claim_fees harus membaca v3 dan v4');
