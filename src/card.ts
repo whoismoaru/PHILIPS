@@ -249,33 +249,37 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
 // ─────────────────────────────────────────────────────────────────────────────
 export type PnlCardOpts = {
   period: string; // 'Today' | 'Weekly' | 'Monthly' | 'All Time'
-  opened: number;
-  closed: number;
-  net: number; // the headline, in USD; the sign picks the colour
-  netLabel: string; // '+$36.32', already formatted
-  volumeLabel: string; // '$1,204.00'
-  winRateLabel: string; // '90.5%' or '-'
-  positionsLabel: string; // '12'
-  bestLabel: string; // '+$18.42' or '-'
-  bestPositive: boolean;
-  date: string; // '14 September 2026' -- drawn top right, no clock
+  date: string; // '14th September 2026'
+  net: number; // the headline, in USD; its SIGN picks the colour
+  netLabel: string; // '+$324.41', already formatted
+  /** The four supporting figures. `positive` is null where there is nothing to colour. */
+  realized: { label: string; positive: boolean | null };
+  unrealized: { label: string; positive: boolean | null };
+  best: { label: string; positive: boolean | null };
+  winRate: string; // '71.4% · 26 closes'
 };
 
 /**
  * The PnL recap card: one period, one headline figure.
  *
- * Laid out flat and left-aligned against the artwork, with the four supporting
- * figures on a single baseline at the foot. Everything else on the card is a LABEL --
- * only the net is allowed to be large, so the eye lands on the money first.
+ * The whole card is a letterhead — name and date on one line at the top, the result in the
+ * middle, and four supporting figures on two rows at the foot. Everything except the net
+ * is a label, so the eye lands on the money first and nothing competes with it.
  */
 export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> {
   ensureFonts();
   const canvas = createCanvas(Math.round(W * scale), Math.round(H * scale));
   const ctx = canvas.getContext('2d');
   ctx.scale(scale, scale);
-  // Zero is NEITHER a profit nor a loss. Painting a flat period green is the card
-  // telling the owner they made money when they did not.
+  // Zero is NEITHER a profit nor a loss. Painting a flat period green is the card telling
+  // the owner they made money when they did not.
+  const hue = (positive: boolean | null) => (positive === null ? COL.text : positive ? COL.green : COL.red);
   const accent = o.net > 0 ? COL.green : o.net < 0 ? COL.red : COL.text;
+
+  // Rounded corners, clipped once: everything after this is drawn inside the card.
+  ctx.save();
+  roundRect(ctx, 0, 0, W, H, 28);
+  ctx.clip();
 
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, W, H);
@@ -283,12 +287,9 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
   if (img) {
     const s = Math.max(W / img.width, H / img.height);
     ctx.drawImage(img, W - img.width * s, (H - img.height * s) / 2, img.width * s, img.height * s);
-    // Monochrome, then dimmed. The artwork's own colours competed with the only colour
-    // on this card that carries meaning -- the green or red on the net figure. Stripping
-    // the hue out of the art leaves exactly one thing coloured, which is the point.
-    // Done per pixel rather than with a 'saturation' composite: that blend mode left a
-    // sepia cast here, and a card that is meant to have exactly ONE colour on it cannot
-    // afford a second one arriving by accident.
+    // Monochrome, then dimmed. The artwork's own colours competed with the only colour on
+    // this card that carries meaning — the green or red on the figures. Done per pixel
+    // rather than with a 'saturation' composite, which left a sepia cast here.
     const px = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const d = px.data;
     for (let i = 0; i < d.length; i += 4) {
@@ -296,108 +297,97 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
       d[i] = d[i + 1] = d[i + 2] = y;
     }
     ctx.putImageData(px, 0, 0);
-    ctx.fillStyle = 'rgba(0,0,0,0.34)';
+    ctx.fillStyle = 'rgba(0,0,0,0.30)';
     ctx.fillRect(0, 0, W, H);
   }
-  // A far heavier veil than the profit card carries: this card's text runs the full
-  // height, and the artwork's own bright areas were washing out the figures.
+  // The text column, veiled so it stays legible over ANY backdrop -- the owner can swap
+  // the image at any time, so nothing may be assumed about what sits behind the words.
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(0, 0);
-  ctx.lineTo(760, 0);
-  ctx.lineTo(680, H);
+  ctx.lineTo(700, 0);
+  ctx.lineTo(620, H);
   ctx.lineTo(0, H);
   ctx.closePath();
   ctx.clip();
-  const veil = ctx.createLinearGradient(0, 0, 700, 0);
-  veil.addColorStop(0, 'rgba(4,6,10,0.97)');
-  veil.addColorStop(0.6, 'rgba(6,9,14,0.86)');
-  veil.addColorStop(1, 'rgba(10,14,22,0)');
+  const veil = ctx.createLinearGradient(0, 0, 650, 0);
+  veil.addColorStop(0, 'rgba(0,0,0,0.97)');
+  veil.addColorStop(0.6, 'rgba(0,0,0,0.88)');
+  veil.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = veil;
-  ctx.fillRect(0, 0, 760, H);
+  ctx.fillRect(0, 0, 700, H);
   ctx.restore();
+  // A scrim along the top and the foot, for the same reason: the date and the right-hand
+  // figures sit over the artwork.
+  const strip = (y: number, h: number, from: number, to: number) => {
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, `rgba(0,0,0,${from})`);
+    g.addColorStop(1, `rgba(0,0,0,${to})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, y, W, h);
+  };
+  strip(0, 180, 0.95, 0);
+  strip(H - 210, 210, 0, 0.93);
 
-  const X = 88;
-  // The bot's name heads the text column, not the artwork: over the picture it fought
-  // whatever happened to be bright there, and a backdrop the owner can swap at any time
-  // is no place to put a fixed label.
-  masthead(ctx, X, 74);
-  // The date sits opposite the masthead, on the same line: the two together read as a
-  // letterhead, and the foot of the card is left to the figures.
-  //
-  // A scrim across the top first. The backdrop is the owner's to change, so no assumption
-  // holds about what is behind this corner -- against bright artwork the date vanished.
-  const top = ctx.createLinearGradient(0, 0, 0, 118);
-  top.addColorStop(0, 'rgba(4,6,10,0.86)');
-  top.addColorStop(1, 'rgba(4,6,10,0)');
-  ctx.fillStyle = top;
-  ctx.fillRect(0, 0, W, 118);
+  const X = 72;
+  // ── The letterhead: mark, name, date.
+  ctx.fillStyle = COL.brand;
+  roundRect(ctx, X, 74, 42, 42, 11);
+  ctx.fill();
+  ctx.fillStyle = '#08111C';
+  ctx.font = '27px PhSansB';
+  ctx.fillText('P', X + 13, 105);
   ctx.fillStyle = COL.text;
-  ctx.font = '17px PhMono';
+  ctx.font = '31px PhSansB';
+  ctx.fillText('PHILIPS', X + 60, 106);
+  ctx.fillStyle = COL.text;
+  ctx.font = '23px PhSans';
   ctx.textAlign = 'right';
-  ctx.fillText(o.date, W - 64, 74);
+  ctx.fillText(o.date, W - X, 104);
   ctx.textAlign = 'left';
 
-  const label = (t: string, y: number) => {
-    ctx.fillStyle = COL.muted;
-    ctx.font = '17px PhMono';
-    ctx.fillText(t.toUpperCase(), X, y);
-  };
-
-  label('period', 118);
+  // ── The headline.
   ctx.fillStyle = COL.text;
-  ctx.font = '58px PhSansB';
-  ctx.fillText(o.period, X, 182);
-
-  // Activity counts. Coloured ONLY when something actually happened -- an accent on
-  // "0 opened · 0 closed" is colour that means nothing.
-  ctx.fillStyle = o.opened + o.closed > 0 ? COL.amber : COL.muted;
-  ctx.font = '19px PhSansB';
-  ctx.fillText(`${o.opened} OPENED · ${o.closed} CLOSED`, X, 216);
-
-  ctx.fillStyle = COL.text;
-  ctx.font = '58px PhSansB';
-  ctx.fillText('Realized PnL', X, 290);
-
-  label('profit (usd)', 334);
-  // The headline. It shrinks itself rather than running under the artwork.
-  let npx = 86;
+  ctx.font = '45px PhSans';
+  ctx.fillText(`PnL (${o.period})`, X, 300);
+  // It shrinks itself rather than running under the artwork.
+  let npx = 88;
   ctx.font = `${npx}px PhSansB`;
-  while (npx > 44 && ctx.measureText(o.netLabel).width > 470) {
+  while (npx > 44 && ctx.measureText(o.netLabel).width > 500) {
     npx -= 3;
     ctx.font = `${npx}px PhSansB`;
   }
   ctx.fillStyle = accent;
-  ctx.fillText(o.netLabel, X, 410);
+  ctx.fillText(o.netLabel, X, 420);
 
-  // The four supporting figures, spread across the full width on one baseline: they
-  // are context for the headline, not competitors to it.
+  // ── Four supporting figures, two per row: label left, figure right within its half.
   const cells: Array<{ label: string; value: string; colour: string }> = [
-    { label: 'volume', value: o.volumeLabel, colour: COL.text },
-    { label: 'win rate', value: o.winRateLabel, colour: COL.text },
-    { label: 'positions', value: o.positionsLabel, colour: COL.text },
-    // '-' is not a win, so it stays neutral; only a real figure takes the colour.
-    { label: 'biggest win', value: o.bestLabel, colour: o.bestLabel === '-' ? COL.muted : o.bestPositive ? COL.green : COL.red },
+    { label: 'Realized', value: o.realized.label, colour: hue(o.realized.positive) },
+    { label: 'Unrealized', value: o.unrealized.label, colour: hue(o.unrealized.positive) },
+    { label: 'Biggest Win', value: o.best.label, colour: hue(o.best.positive) },
+    { label: 'Win Rate', value: o.winRate, colour: COL.text },
   ];
-  // A dark band under the row so the two right-hand cells stay legible over the artwork.
-  const band = ctx.createLinearGradient(0, H - 160, 0, H);
-  band.addColorStop(0, 'rgba(4,6,10,0)');
-  band.addColorStop(0.45, 'rgba(4,6,10,0.82)');
-  band.addColorStop(1, 'rgba(4,6,10,0.94)');
-  ctx.fillStyle = band;
-  ctx.fillRect(0, H - 160, W, 160);
   cells.forEach((c, i) => {
-    const cx = 150 + i * 300; // centre of the cell
-    ctx.fillStyle = COL.muted;
-    ctx.font = '17px PhMono';
-    ctx.fillText(c.label.toUpperCase(), cx - ctx.measureText(c.label.toUpperCase()).width / 2, H - 84);
+    const y = 538 + Math.floor(i / 2) * 58;
+    const left = i % 2 === 0 ? X : 640;
+    const right = i % 2 === 0 ? 560 : W - X;
+    ctx.fillStyle = COL.text;
+    ctx.font = '26px PhSansB';
+    ctx.fillText(c.label, left, y);
     ctx.fillStyle = c.colour;
-    ctx.font = '28px PhSansB';
-    ctx.fillText(c.value, cx - ctx.measureText(c.value).width / 2, H - 46);
+    ctx.textAlign = 'right';
+    // The figure shrinks before it can collide with its own label.
+    let f = 26;
+    ctx.font = `${f}px PhSansB`;
+    while (f > 16 && ctx.measureText(c.value).width > right - left - ctx.measureText(c.label).width - 24) {
+      f -= 1;
+      ctx.font = `${f}px PhSansB`;
+    }
+    ctx.fillText(c.value, right, y);
+    ctx.textAlign = 'left';
   });
 
-  // Centred under the stats row and a size down from the labels: it is a timestamp, the
-  // quietest thing on the card, and left-aligned it read as a fifth column.
+  ctx.restore();
   return canvas.toBuffer('image/png');
 }
 
