@@ -694,17 +694,17 @@ export function msgPnlPicker(chains: Array<{ label: string; trades: number; scor
   // "All chains" is a total, not a chain -- it sits apart, after the per-chain list.
   const all = chains.find((c) => c.label === 'All chains');
   const per = chains.filter((c) => c !== all);
-  const out = [bold('P&L RECAP'), ''];
+  const out = [`\u{1F9FE} ${bold('PnL RECAP')}`, ''];
   if (per.length) {
     out.push(
-      `\u{1F9FE} Pick a chain to recap its closed trades :`,
-      ...per.map((c) => `- ${esc(c.label)}: ${bold(String(count(c)))} positions`),
+      'Pick a chain to recap its closed trades :',
+      ...per.map((c, i) => `${i === per.length - 1 ? '└' : '├'} ${esc(c.label)}: ${bold(String(count(c)))} positions`),
     );
   } else {
     out.push('No closed trades yet.');
   }
   if (all) out.push('', `${bold('All chains')}: ${bold(String(count(all)))} positions`);
-  out.push('', note(`LIVE \u00B7 ${nowWib()}`));
+  out.push('', note(nowWib()));
   return out.join('\n');
 }
 
