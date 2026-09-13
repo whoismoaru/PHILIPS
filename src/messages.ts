@@ -1081,6 +1081,8 @@ export function msgPositionCard(opts: {
   /** The pool's own depth and activity. `onchain` marks a TVL measured from the pool
    *  contract itself rather than the index -- real, but with no volume or APR behind it. */
   pool?: { tvl: string; vol?: string; apr?: string; onchain?: boolean };
+  /** How far price must still move before this position starts filling. '0%' in range. */
+  fillsLabel?: string;
   ladder?: {
     legIndex: number; legCount: number; shape: string; groupInvest?: string;
     // A summary of the WHOLE ladder, which is the point of the bid-ask feature.
@@ -1117,67 +1119,41 @@ export function msgPositionCard(opts: {
       ? `Your liquidity is not active yet. It converts to ${base} and starts earning fees once ${sym} ${bold('rises')} into your range (${range}).`
       : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${range}).`;
 
+  // Same tree block as the v4 card: one protocol must not read differently from the
+  // other for the same position shape.
+  const fields: string[] = [
+    `Fee: ${opts.feeIsTickSpacing ? `ts ${opts.fee}, dynamic` : feeLabel(opts.fee)}${opts.chain ? ` \u00B7 ${esc(opts.chain)}` : ''}`,
+    // An on-chain TVL carries no volume behind it, so that column is left off rather than
+    // filled with a question mark.
+    `TVL: ${opts.pool ? `${esc(opts.pool.tvl)}${opts.pool.onchain ? ' (on-chain)' : ''}` : '—'}`,
+    `Fills: ${esc(opts.fillsLabel ?? '—')}`,
+    `Volume: ${opts.pool && !opts.pool.onchain ? esc(opts.pool.vol ?? '$0') : '—'} (24h)`,
+    `Liquidity: ${bold(`${esc(opts.invest)} ${investUnit}`)}`,
+    `Range: ${esc(opts.mcRange ?? opts.range)}`,
+  ];
   return [
     // Same header the list card uses, so the card you land on is recognisably the row
     // you tapped: state emoji, pair, id, protocol.
     `${opts.inRange ? '🟢' : opts.converted ? '🟡' : '🔴'} ${bold(`$${esc(posPair(`${base} / ${sym}`, base))}`)} | #${esc(opts.tokenId)} (V3)`,
-    '',
-    `Fee: ${italic(opts.feeIsTickSpacing ? `ts ${opts.fee}, dynamic` : feeLabel(opts.fee))}${opts.chain ? ` \u00B7 ${esc(opts.chain)}` : ''}`,
-    // The POOL's own figures: how deep it is and how hard it trades decides whether this
-    // position keeps earning. An on-chain TVL carries no volume, so those columns are
-    // left off rather than filled with question marks.
-    ...(opts.pool
-      ? [
-          opts.pool.onchain
-            ? `TVL: ${esc(opts.pool.tvl)} ${italic('(read on-chain)')}`
-            : `TVL: ${esc(opts.pool.tvl)} / Vol 24h: ${esc(opts.pool.vol ?? '?')} / APR: ${esc(opts.pool.apr ?? '?')}`,
-        ]
-      : []),
-    `Strategy: ${strategy}${isLeg ? `, ${bold(`${opts.ladder!.shape === 'bidask' ? 'bid-ask' : 'spot'} ladder`)}` : ''}`,
-    // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
-    // Shaped so a bid-ask position reads the same across both protocols.
+    ...fields.map((f, i) => `${i === fields.length - 1 ? '└' : '├'} ${f}`),
     ...(isLeg
       ? [
           '',
-          `\u{1FA9C} ${bold(`LADDER, ${opts.ladder!.legCount} legs`)}`,
-          ...(opts.ladder!.groupInvest ? [`Deposit: ${bold(`${esc(opts.ladder!.groupInvest)} ${investUnit}`)}`] : []),
-          ...(opts.ladder!.ladderValue
-            ? [
-                `Value now: ${bold(esc(opts.ladder!.ladderValue))}`,
-                ...(opts.ladder!.ladderFees ? [note(`incl. fees ${esc(opts.ladder!.ladderFees)}`)] : []),
-              ]
-            : []),
+          bold(`LADDER, ${opts.ladder!.legCount} legs`),
+          ...(opts.ladder!.groupInvest ? [`Deposit: ${esc(opts.ladder!.groupInvest)} ${investUnit}`] : []),
+          ...(opts.ladder!.ladderValue ? [`Value now: ${esc(opts.ladder!.ladderValue)}`] : []),
           ...(opts.ladder!.ladderPnl ? [`Ladder PnL: ${esc(opts.ladder!.ladderPnl)}`] : []),
-          ...(opts.ladder!.ladderMcRange ? [`Ladder range: ${esc(opts.ladder!.ladderMcRange)}`] : []),
           ...(opts.ladder!.filled !== undefined
-            ? [
-                `Rungs: ${opts.ladder!.filled} filled, ${opts.ladder!.active} active, ${opts.ladder!.waiting} waiting` +
-                  (opts.ladder!.unread ? `, ${opts.ladder!.unread} unreadable` : ''),
-              ]
+            ? [`Rungs: ${opts.ladder!.filled} filled, ${opts.ladder!.active} active, ${opts.ladder!.waiting} waiting`]
             : []),
-          '',
           note(
             `leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount}` +
               (opts.ladder!.sharePct !== undefined ? `, ${opts.ladder!.sharePct.toFixed(1)}% of ladder capital` : ''),
           ),
-          `Leg value: ${bold(`${esc(opts.ladder!.legValue ?? opts.invest)}${opts.ladder!.legValue ? '' : ` ${investUnit}`}`)}`,
-          ...(opts.ladder!.legFees ? [note(`incl. fees ${esc(opts.ladder!.legFees)}`)] : []),
         ]
-      : [`Principal: ${bold(`${esc(opts.invest)} ${investUnit}`)}`]),
-    `${isLeg ? 'Leg range' : 'Target range'}: ${range} ${italic('from current price')}`,
-    // "now" only needs saying once, on the Ladder Range line.
-    ...(opts.mcRange ? [note(`market cap ${esc(isLeg ? opts.mcRange.replace(/ · now .*$/, '') : opts.mcRange)}`)] : []),
-    `${isLeg ? 'Leg PnL' : 'PnL'}: ${esc(opts.pnlText)}`,
-    `Status: ${opts.inRange ? '🟢' : opts.converted && isLeg ? '🟡' : '🔴'} ${
-      opts.converted && isLeg ? `${bold('LEG FILLED')}, bought, ladder still running` : status
-    }`,
+      : []),
     '',
-    // explain already contains <b> tags and escaped text, so do NOT run it through
-    // italic() (which escapes again and shows the user a raw "&lt;b&gt;").
-    `<i>${explain}</i>`,
-    '',
-    note(`age ${esc(opts.age)} \u00B7 ${nowWib()}`),
-    // DRY RUN is still named -- it changes what the whole card means.
+    note(`${opts.age ? `age ${esc(opts.age)} | ` : ''}${nowWib()}`),
     ...(opts.dryRun ? [modeLabel(true)] : []),
   ].join('\n');
 }
