@@ -155,7 +155,7 @@ const n2 = (v: number, _unit: string): string =>
  * book (most trades) becomes the headline figure; the rest go in the stats row.
  */
 /**
- * Where the period starts. '1 Month' means 30 WHOLE WIB days so the figure does not
+ * Where the period starts. 'Monthly' means 30 WHOLE WIB days so the figure does not
  * drift each time the card opens; 1d and 1w stay rolling, because "the last day"
  * really does mean the last 24 hours.
  */
@@ -222,7 +222,7 @@ function pnlCaption(chain: string, key: journal.PeriodKey, s: journal.PeriodStat
 async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh = false) {
   const p = journal.PERIODS[key];
   // chain === ALL means statsFor runs unfiltered. Books still split by unit, so no
-  // USDG is ever added to ETH; only the chain coverage is combined. '1 Month' means
+  // USDG is ever added to ETH; only the chain coverage is combined. 'Monthly' means
   // 30 WHOLE WIB days, so the figure does not drift each time the card opens; 1d and
   // 1w stay rolling, because "the last day" really does mean the last 24 hours.
   const since = sinceOf(key);

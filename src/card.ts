@@ -248,7 +248,7 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
 
 // ─────────────────────────────────────────────────────────────────────────────
 export type PnlCardOpts = {
-  period: string; // 'Today' | '1 Week' | 'All Time'
+  period: string; // 'Today' | 'Weekly' | 'Monthly' | 'All Time'
   opened: number;
   closed: number;
   net: number; // the headline, in USD; the sign picks the colour

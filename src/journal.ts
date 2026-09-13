@@ -502,9 +502,12 @@ export function chainsWithHistory(): Array<{ key: string; trades: number }> {
 }
 
 export const PERIODS = {
-  '1d': { label: '1 Day', ms: 24 * 3600_000 },
-  '1w': { label: '1 Week', ms: 7 * 24 * 3600_000 },
-  '1m': { label: '1 Month', ms: 30 * 24 * 3600_000 },
+  // The labels name the RECAP, not the arithmetic behind it. The windows themselves are
+  // unchanged: 'Today' is still the last 24 hours rolling, 'Monthly' still 30 whole WIB
+  // days -- see monthStartMs and sinceOf.
+  '1d': { label: 'Today', ms: 24 * 3600_000 },
+  '1w': { label: 'Weekly', ms: 7 * 24 * 3600_000 },
+  '1m': { label: 'Monthly', ms: 30 * 24 * 3600_000 },
   all: { label: 'All Time', ms: 0 },
 } as const;
 export type PeriodKey = keyof typeof PERIODS;
