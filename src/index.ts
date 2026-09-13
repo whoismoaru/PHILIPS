@@ -2658,24 +2658,75 @@ bot.action(/^leg:(\d+)$/, async (ctx) => {
 bot.action(/^posadd:(\d+)$/, async (ctx: any) => {
   const id = ctx.match[1];
   await ctx.answerCbQuery();
+  resetFlows(ctx.from!.id); // a new deposit: drop whatever half-finished flow was open
+
+  // The pool is ALREADY known -- it is the one this position sits in. Rediscovering it
+  // would re-screen the token, re-rank every pool of the pair, and then ask which one to
+  // use, for a question the button already answered.
   const rec = store.get(id);
-  let ca = rec?.ca ?? null;
-  let chainKey = rec?.chain ?? null;
-  if (!ca) {
-    // v4 positions are not in the store: find the one that owns this id, and read the
-    // token side straight off its pool key.
-    for (const c of Object.values(CHAINS).filter((x) => v4Supported(x))) {
-      const hit = (await listPositionsV4(c).catch(() => [])).find((x) => x.tokenId === id);
-      if (!hit) continue;
-      const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === c.wethAddress.toLowerCase();
-      const isStable = (a: string) => c.bases.some((b) => isStableBase(b.kind) && b.address.toLowerCase() === a.toLowerCase());
-      ca = [hit.poolKey.currency0, hit.poolKey.currency1].find((a) => !isEth(a) && !isStable(a)) ?? null;
-      chainKey = c.key;
-      break;
-    }
+  if (rec) {
+    const cc = getChain(rec.chain);
+    const base = baseOf(cc, rec.baseKind ?? 'weth');
+    const flow: AddFlow = {
+      token: rec.ca,
+      chain: cc.key,
+      pools: [],
+      selected: {
+        protocol: 'v3',
+        base: base.kind,
+        baseSymbol: base.symbol,
+        otherSymbol: rec.symbol,
+        fee: rec.fee,
+        tvlUsd: 0,
+      },
+      base: base.kind,
+      fee: rec.fee,
+      // Not re-screened: the wallet is already IN this pool, so an audit verdict now
+      // would be a warning about a decision already made. The deposit guards still run.
+      screenBahaya: false,
+      screenFailed: false,
+      startedAt: Date.now(),
+    };
+    flows.set(ctx.from!.id, flow);
+    return renderStrategyStep(ctx, flow, false);
   }
-  if (!ca) return ctx.reply(msg.msgError('add', 'could not tell which token this position holds.'), html);
-  return continueAddlp(ctx, ethers.getAddress(ca), chainKey ?? getChain().key, null);
+
+  // v4 positions are not in the store: find the one that owns this id and rebuild its
+  // pool straight from the pool key it already carries.
+  for (const c of Object.values(CHAINS).filter((x) => v4Supported(x))) {
+    const p = (await listPositionsV4(c).catch(() => [])).find((x) => x.tokenId === id);
+    if (!p) continue;
+    const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === c.wethAddress.toLowerCase();
+    const stable = (a: string) => c.bases.find((b) => isStableBase(b.kind) && b.address.toLowerCase() === a.toLowerCase());
+    const token = [p.poolKey.currency0, p.poolKey.currency1].find((a) => !isEth(a) && !stable(a));
+    if (!token) break;
+    const baseCur = [p.poolKey.currency0, p.poolKey.currency1].find((a) => a !== token)!;
+    const baseAsset = stable(baseCur);
+    const flow: AddFlow = {
+      token: ethers.getAddress(token),
+      chain: c.key,
+      pools: [],
+      selected: {
+        protocol: 'v4',
+        base: baseAsset ? baseAsset.kind : 'weth',
+        baseSymbol: baseAsset ? baseAsset.symbol : c.nativeSymbol,
+        otherSymbol: [p.sym0, p.sym1].find((x) => x !== (baseAsset?.symbol ?? c.nativeSymbol)) ?? 'token',
+        fee: p.fee,
+        tvlUsd: 0,
+        poolKey: p.poolKey,
+        baseIsCurrency0: baseCur.toLowerCase() === p.poolKey.currency0.toLowerCase(),
+      },
+      base: baseAsset ? baseAsset.kind : 'weth',
+      fee: p.fee,
+      // Not re-screened: see the v3 branch above.
+      screenBahaya: false,
+      screenFailed: false,
+      startedAt: Date.now(),
+    };
+    flows.set(ctx.from!.id, flow);
+    return renderStrategyStep(ctx, flow, false);
+  }
+  return ctx.reply(msg.msgError('add', 'could not tell which pool this position sits in.'), html);
 });
 
 bot.action('pool:refresh', async (ctx: any) => {
