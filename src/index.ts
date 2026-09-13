@@ -1965,7 +1965,7 @@ async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
   const rows = RANGE_OPTIONS.map((o) => [
     Markup.button.callback(`${up ? '📈 +' : '📉 -'}${o.pct}% ${o.label}`, `rng:${o.pct}`),
   ]);
-  rows.push([Markup.button.callback('⬅️ Back', 'back:amount'), Markup.button.callback('❌ Cancel', 'cancel')]);
+  rows.push([Markup.button.callback('⬅️ Back', 'back:strategy'), Markup.button.callback('❌ Cancel', 'cancel')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   const text = msg.msgRangeStep(flow.strategy === 'token');
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
@@ -2011,7 +2011,12 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   const a = amountCtx(flow);
   const rows: any[] = [];
   rows.push(...pctPresets.chunkButtons(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `amt:${p}`))));
-  rows.push([Markup.button.callback('⬅️ Back', 'back:strategy')], [Markup.button.callback('❌ Cancel', 'cancel')]);
+  // Back goes to whichever step really precedes the amount now: the leg picker on a
+  // ladder, the range picker otherwise.
+  rows.push(
+    [Markup.button.callback('⬅️ Back', flow.shape === 'bidask' && (flow.legs ?? 1) > 1 ? 'back:legs' : 'back:range')],
+    [Markup.button.callback('❌ Cancel', 'cancel')],
+  );
   // Balance (1 RPC; on failure '?' — never block this step).
   const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
   const raw = await rawBalanceFor(flow).catch(() => null);
@@ -2079,8 +2084,29 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
 
   flow.awaitingAmount = false;
   flow.ethAmount = ethers.formatUnits(wei, dec);
-  await renderRangeStep(ctx, flow, false);
+  await planThenOpen(ctx, flow);
 });
+
+
+/**
+ * The deposit amount is the LAST question, so setting it opens the position.
+ *
+ * The plan is still computed and shown -- it carries the range, the legs and the cost --
+ * but as the card the progress then overwrites, not as a screen waiting for a second tap.
+ * Every guard the Confirm button used to sit in front of still runs inside execAdd.
+ */
+async function planThenOpen(ctx: any, flow: AddFlow) {
+  try {
+    await renderPlanStep(ctx, flow, false);
+  } catch (err) {
+    return void (await ctx.reply(msg.msgError('plan', (err as Error).message), html));
+  }
+  if (config.safety.dryRun) return; // the plan card IS the output in a dry run
+  // execAdd is written for a button press; give it the one callback-only method it uses.
+  const auto: any = Object.create(ctx);
+  auto.answerCbQuery = async () => {};
+  return execAdd(auto);
+}
 
 /** Step 4/4 — compute and show the plan, then confirm. */
 async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
@@ -2511,7 +2537,9 @@ bot.action(/^strat:(base|token)$/, async (ctx) => {
     );
   }
   await ctx.answerCbQuery();
-  await renderAmountStep(ctx, flow, true);
+  // Range first, amount last: the amount is what fires the deposit now, so it has to be
+  // the final question rather than one asked three screens before anything happens.
+  await renderRangeStep(ctx, flow, true);
 });
 
 bot.action('back:strategy', async (ctx) => {
@@ -2542,12 +2570,8 @@ bot.action(/^rng:(\d+)$/, async (ctx) => {
   }
   flow.shape = 'spot';
   flow.legs = 1;
-  await ctx.answerCbQuery('Calculating preview…');
-  try {
-    await renderPlanStep(ctx, flow, true);
-  } catch (err) {
-    await ctx.reply(msg.msgError('plan', (err as Error).message), html);
-  }
+  await ctx.answerCbQuery();
+  await renderAmountStep(ctx, flow, true);
 });
 
 
@@ -2583,12 +2607,8 @@ bot.action(/^shape:(spot|bidask)$/, async (ctx) => {
     return renderLegStep(ctx, flow, true);
   }
   flow.legs = 1;
-  await ctx.answerCbQuery('Calculating preview…');
-  try {
-    await renderPlanStep(ctx, flow, true);
-  } catch (err) {
-    await ctx.reply(msg.msgError('plan', (err as Error).message), html);
-  }
+  await ctx.answerCbQuery();
+  await renderAmountStep(ctx, flow, true);
 });
 
 bot.action(/^leg:(\d+)$/, async (ctx) => {
@@ -2598,12 +2618,8 @@ bot.action(/^leg:(\d+)$/, async (ctx) => {
   flow.legs = Math.max(2, Math.min(69, Number(ctx.match[1])));
   flow.plan = undefined;
   flow.ladderPlans = undefined;
-  await ctx.answerCbQuery('Calculating preview…');
-  try {
-    await renderPlanStep(ctx, flow, true);
-  } catch (err) {
-    await ctx.reply(msg.msgError('plan', (err as Error).message), html);
-  }
+  await ctx.answerCbQuery();
+  await renderAmountStep(ctx, flow, true);
 });
 
 // Re-read the pools for the token this flow is on, into the same bubble.
@@ -2688,13 +2704,19 @@ bot.action('back:amount', async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow || flow.strategy === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
   flow.ethAmount = undefined;
-  flow.rangePct = undefined;
+  // The range is picked BEFORE the amount now, so stepping back here must leave it alone;
+  // clearing it would drop the user into a flow with no range and no way to see that.
   flow.plan = undefined;
   await ctx.answerCbQuery();
   await renderAmountStep(ctx, flow, true);
 });
 
-bot.action('addok', async (ctx) => {
+/**
+ * Open the position the flow describes. Registered as the Confirm button, and called
+ * straight after the deposit amount is set -- one implementation, so the confirmed path
+ * and the direct one cannot drift apart.
+ */
+async function execAdd(ctx: any) {
   const flow = getFlow(ctx);
   // --- v4 LADDER path (batched modifyLiquidities: N legs in 1 atomic tx) ---
   if (flow?.selected?.protocol === 'v4' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1) {
@@ -3020,6 +3042,11 @@ bot.action('addok', async (ctx) => {
   } finally {
     store.endMoneyOp();
   }
+}
+
+bot.action('addok', async (ctx: any) => {
+  await ctx.answerCbQuery();
+  return execAdd(ctx);
 });
 
 /** The close-position confirmation card. Execution: remove + collect + cash out to ETH via Relay. */
@@ -5195,7 +5222,7 @@ bot.on(message('text'), async (ctx) => {
     if (num > cap) return ctx.reply(msg.msgOverLimit(capLabel), html);
     flow.awaitingAmount = false;
     flow.ethAmount = ethers.formatUnits(w, dec); // sudah dinormalisasi (desimal dipotong)
-    await renderRangeStep(ctx, flow, false);
+    await planThenOpen(ctx, flow);
     return;
   }
 
