@@ -400,6 +400,8 @@ export function msgV4Position(p: {
   pool?: { tvl: string; vol?: string; apr: string };
   /** True when the pool index has no entry for this pool yet (new pools are missing). */
   poolUnindexed?: boolean;
+  /** How far price must still move before this position starts filling. '0%' in range. */
+  fillsLabel?: string;
 }): string {
   // Match the V3 card's layout (msgPositionCard): one fact per line, status on its
   // own line, with a strategy and an explanation of the money.
@@ -437,63 +439,48 @@ export function msgV4Position(p: {
           : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${esc(p.rangeLabel)}).`;
 
   const isLeg = p.ladder && p.ladder.legCount > 1;
+  // One tree block: the pool's own numbers first, then this position's, then the range
+  // read as market cap. Status is carried by the header's emoji, so it is not repeated
+  // as a line of its own.
+  const fields: string[] = [
+    `Fee: ${esc(p.feeLabel)}`,
+    // The pool figures are absent, not zero, when the index has not picked this pool up.
+    // Printing "$0" would describe a dead pool, which is a different thing entirely.
+    `TVL: ${p.pool ? esc(p.pool.tvl) : '—'}`,
+    `Fills: ${esc(p.fillsLabel ?? '—')}`,
+    `Volume: ${p.pool?.vol ? esc(p.pool.vol) : '—'}`,
+    `Liquidity: ${esc(p.valueLabel)}`,
+    ...(p.feesLabel ? [`Fees: ${esc(p.feesLabel)}`] : []),
+    ...(p.pnlText ? [`PnL: ${esc(p.pnlText)}`] : []),
+    `Range: ${esc(p.mcRange ?? p.rangeLabel)}`,
+  ];
   const lines = [
     // Same header the list card uses, so the card you land on is recognisably the row
     // you tapped: state emoji, pair, id, protocol.
     `${statusEmoji} ${bold(`$${esc(posPair(p.pair, p.baseSymbol))}`)} | #${esc(p.tokenId)} (V4)`,
-    '',
-    `Fee: ${esc(p.feeLabel)}${p.chain ? ` \u00B7 ${esc(p.chain)}` : ''}`,
-    // The POOL's own figures, not the position's: how deep it is and how hard it trades
-    // decides whether this position keeps earning. Absent when the lookup failed --
-    // inventing a TVL would be worse than leaving the line out.
-    ...(p.pool
-      ? [`TVL: ${esc(p.pool.tvl)} / Vol 24h: ${esc(p.pool.vol ?? '?')} / APR: ${esc(p.pool.apr)}`]
-      : p.poolUnindexed
-        // Said, not silently dropped: an absent line on one card and present on the next
-        // reads as a bug, and the reason matters (a brand-new pool is not a dead one).
-        ? [note('pool depth not indexed yet, too new')]
-        : []),
-    `Strategy: ${base} Side (buy the dip)${isLeg ? `, ${bold(`${p.ladder!.shape === 'bidask' ? 'bid-ask' : 'spot'} ladder`)}` : ''}`,
-    // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
+    ...fields.map((f, i) => `${i === fields.length - 1 ? '└' : '├'} ${f}`),
     ...(isLeg
       ? [
           '',
-          `🪜 ${bold(`LADDER · ${p.ladder!.legCount} legs`)}`,
-          ...(p.ladder!.groupDeposit ? [`💰 ${bold('Deposit:')} ${esc(p.ladder!.groupDeposit)} ${base}`] : []),
-          ...(p.ladder!.valueLabel
-            ? [
-                `💰 ${bold('Value now:')} ${esc(p.ladder!.valueLabel)}`,
-                ...(p.ladder!.feesLabel ? [italic(`↳ incl. fees ${esc(p.ladder!.feesLabel)}`)] : []),
-                ...(p.ladder!.exitNote ? [italic(`↳ ${esc(p.ladder!.exitNote)}`)] : []),
-              ]
-            : []),
-          ...(p.ladder!.pnlText ? [`📈 ${bold('Ladder PnL:')} ${esc(p.ladder!.pnlText)}`] : []),
-          ...(p.ladder!.mcRange ? [`📉 ${bold('Ladder Range:')} ${italic(esc(p.ladder!.mcRange))}`] : []),
+          bold(`LADDER, ${p.ladder!.legCount} legs`),
+          ...(p.ladder!.groupDeposit ? [`Deposit: ${esc(p.ladder!.groupDeposit)} ${base}`] : []),
+          ...(p.ladder!.valueLabel ? [`Value now: ${esc(p.ladder!.valueLabel)}`] : []),
+          ...(p.ladder!.pnlText ? [`Ladder PnL: ${esc(p.ladder!.pnlText)}`] : []),
           ...(p.ladder!.filled !== undefined
-            ? [`🎚 ${bold('Rungs:')} ${p.ladder!.filled} filled · ${p.ladder!.active} active · ${p.ladder!.waiting} waiting`]
+            ? [`Rungs: ${p.ladder!.filled} filled, ${p.ladder!.active} active, ${p.ladder!.waiting} waiting`]
             : []),
-          '',
-          `${italic(`— leg ${p.ladder!.legIndex + 1} of ${p.ladder!.legCount}${p.ladder!.sharePct !== undefined ? `, ${p.ladder!.sharePct.toFixed(1)}% of ladder capital` : ''} —`)}`,
+          note(`leg ${p.ladder!.legIndex + 1} of ${p.ladder!.legCount}${p.ladder!.sharePct !== undefined ? `, ${p.ladder!.sharePct.toFixed(1)}% of ladder capital` : ''}`),
         ]
       : []),
-    `💰 ${bold(isLeg ? 'Leg Value:' : 'Value:')} ${esc(p.valueLabel)}`,
-    ...(p.feesLabel ? [italic(`↳ incl. fees ${esc(p.feesLabel)}`)] : []),
-    `📉 ${bold(isLeg ? 'Leg Range:' : 'Target Range:')} ${esc(p.rangeLabel)} ${italic('from current price')}`,
-    ...(p.mcRange ? [italic(`↳ market cap ${esc(isLeg ? p.mcRange.replace(/ · now .*$/, '') : p.mcRange)}`)] : []),
-    ...(p.pnlText ? [`📈 ${bold(isLeg ? 'Leg PnL:' : 'Current PnL:')} ${esc(p.pnlText)}`] : []),
-    `${statusEmoji} ${bold('Status:')} ${status}`,
   ];
+  void status;
+  void explain;
   if (p.priceWarn) lines.push('', `⚠️ ${bold('Thin pool')} — ${esc(p.priceWarn)}`);
   // The explanatory sentence closes the card's content, leaving the timestamp as the
   // last trace. The "Uniswap v4 · managed by the bot" line was dropped: the protocol
   // is already implied by the card's contents, and the line only added length without
   // supporting a decision.
-  lines.push(
-    '',
-    `<i>${explain}</i>`,
-    '',
-    `⏱️ <i>${p.age ? `Age ${esc(p.age)} · ` : ''}updated ${nowWib()}</i>`,
-  );
+  lines.push('', note(`${p.age ? `age ${esc(p.age)} \u00B7 ` : ''}${nowWib()}`));
   if (!p.tracked) lines.push(note('read-only — opened outside the bot'));
   return lines.join('\n');
 }
