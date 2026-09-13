@@ -516,9 +516,56 @@ bot.action('history', async (ctx) => {
   await ctx.answerCbQuery();
   return cmdHistory(ctx);
 });
-bot.action('closeall_confirm', async (ctx) => {
+/**
+ * Close EVERY open position, one after another.
+ *
+ * Each one goes through the SAME executor as its own Close button -- journal entry, PnL
+ * card, sweeps and all -- so closing twenty positions cannot record them differently
+ * from closing one. They run sequentially on purpose: they share a wallet, and two
+ * closes in flight collide on the nonce.
+ *
+ * A failure on one position does not stop the rest; it is counted and named at the end.
+ */
+bot.action('closeall_confirm', async (ctx: any) => {
   await ctx.answerCbQuery();
-  return cmdCloseAll(ctx);
+  const v3 = store.active();
+  const v4: Array<{ id: string; chain: ChainCtx }> = [];
+  for (const c of Object.values(CHAINS).filter((x) => v4Supported(x))) {
+    for (const p of await listPositionsV4(c).catch(() => [])) v4.push({ id: p.tokenId, chain: c });
+  }
+  const total = v3.length + v4.length;
+  if (total === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
+
+  const prog = await ctx.reply(msg.msgProgress(`closing ${total} position${total === 1 ? '' : 's'}…`), html);
+  const edit = (t: string) => ctx.telegram.editMessageText(ctx.chat.id, prog.message_id, undefined, t, html).catch(() => {});
+  let done = 0;
+  const failed: string[] = [];
+  // Each executor edits the card it was tapped on; here that is the progress bubble.
+  const shim = (id: string) => {
+    const c: any = Object.create(ctx);
+    c.match = ['', id];
+    c.answerCbQuery = async () => {};
+    c.editMessageText = async (t: string, extra?: any) =>
+      ctx.telegram.editMessageText(ctx.chat.id, prog.message_id, undefined, t, extra).catch(() => {});
+    return c;
+  };
+  for (const rec of v3) {
+    try {
+      await execCloseV3(shim(rec.tokenId));
+      done++;
+    } catch (e) {
+      failed.push(`#${rec.tokenId}: ${(e as Error).message.slice(0, 60)}`);
+    }
+  }
+  for (const p of v4) {
+    try {
+      await execCloseV4(shim(p.id));
+      done++;
+    } catch (e) {
+      failed.push(`#${p.id}: ${(e as Error).message.slice(0, 60)}`);
+    }
+  }
+  await edit(msg.msgCloseAllDone(done, total, failed));
 });
 bot.action('help', async (ctx) => {
   await ctx.answerCbQuery();
@@ -4670,7 +4717,8 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
   }
 }
 
-bot.action(/^close:(\d+)$/, async (ctx) => {
+/** Close ONE v3 position. Registered as the Close button, and reused by Close All. */
+async function execCloseV3(ctx: any) {
   const tokenId = ctx.match[1];
   const tappedRec = store.get(tokenId);
   // Ladder: menutup satu leg = menutup SELURUH grup (satu posisi logis). Tutup tiap
@@ -4743,7 +4791,9 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
     closingInFlight.delete(tokenId);
     store.endMoneyOp();
   }
-});
+}
+
+bot.action(/^close:(\d+)$/, execCloseV3);
 
 /** Remove + collect, then swap every LP asset to ETH (tokens via Relay, WETH unwrapped). */
 
@@ -4927,7 +4977,8 @@ bot.action(/^closev4:(\d+)$/, async (ctx) => {
   });
 });
 
-bot.action(/^closev4go:(\d+)$/, async (ctx) => {
+/** Close ONE v4 position. Registered as the Close button, and reused by Close All. */
+async function execCloseV4(ctx: any) {
   const tokenId = ctx.match[1];
   // Ladder v4: tutup SELURUH grup dalam 1 tx batch (BURN×N + TAKE_PAIR).
   const trk = v4store.getV4(tokenId);
@@ -5083,7 +5134,9 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
     closingInFlight.delete(key);
     store.endMoneyOp();
   }
-});
+}
+
+bot.action(/^closev4go:(\d+)$/, execCloseV4);
 
 // Cancel applies to every flow (the /add wizard and close confirmations alike).
 bot.action('cancel', async (ctx) => {

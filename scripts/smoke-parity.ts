@@ -36,4 +36,17 @@ const exec = idx.slice(idx.indexOf('async function execAdd('), idx.indexOf('asyn
 assert.ok(/protocol === 'v4'/.test(exec), 'execAdd harus menangani v4');
 assert.ok(/renderPlanStepV4/.test(idx), 'rencana v4 harus punya jalurnya sendiri');
 
+// --- Close All runs the SAME executor as a single close, for both protocols ---
+// Closing twenty positions must record them exactly as closing one does: journal entry,
+// PnL card, sweeps. A separate loop that "just closes" would silently skip all of that.
+assert.equal((idx.match(/async function execCloseV3\(/g) ?? []).length, 1, 'execCloseV3 harus tunggal');
+assert.equal((idx.match(/async function execCloseV4\(/g) ?? []).length, 1, 'execCloseV4 harus tunggal');
+const all = idx.slice(idx.indexOf("bot.action('closeall_confirm'"), idx.indexOf("bot.action('help'"));
+assert.ok(/execCloseV3\(shim\(/.test(all) && /execCloseV4\(shim\(/.test(all), 'Close All harus lewat kedua eksekutor');
+assert.ok(/Object\.values\(CHAINS\)\.filter\(\(x\) => v4Supported\(x\)\)/.test(all), 'Close All harus menyapu semua chain v4');
+// Sequential, not Promise.all: they share one wallet and would collide on the nonce.
+assert.ok(!/Promise\.all|mapLimit/.test(all), 'Close All harus berurutan, bukan paralel');
+// One failure must not stop the rest.
+assert.ok(/failed\.push/.test(all), 'kegagalan satu posisi harus dicatat, bukan menghentikan sisanya');
+
 console.log('ok: kartu, tombol, dan alur setara antara v3 & v4 di semua chain');
