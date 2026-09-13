@@ -448,12 +448,12 @@ export function msgV4Position(p: {
     // Printing "$0" would describe a dead pool, which is a different thing entirely.
     `TVL: ${p.pool ? esc(p.pool.tvl) : '—'}`,
     `Fills: ${esc(p.fillsLabel ?? '—')}`,
-    // Named 24h explicitly: an unlabelled "Volume" beside a TVL invites reading it as
-    // all-time, which would make a young pool look far busier than it is.
-    `Volume 24h: ${p.pool?.vol ? esc(p.pool.vol) : '—'}`,
+    // The window is named: an unlabelled "Volume" beside a TVL invites reading it as
+    // all-time, which would make a young pool look far busier than it is. A pool the
+    // index has not picked up reads '—', never '$0' -- unknown is not the same as idle.
+    `Volume: ${p.pool ? esc(p.pool.vol ?? '$0') : '—'} (24h)`,
+    // The POSITION's own capital, against the pool's TVL above it.
     `Liquidity: ${esc(p.valueLabel)}`,
-    ...(p.feesLabel ? [`Fees: ${esc(p.feesLabel)}`] : []),
-    ...(p.pnlText ? [`PnL: ${esc(p.pnlText)}`] : []),
     `Range: ${esc(p.mcRange ?? p.rangeLabel)}`,
   ];
   const lines = [
@@ -482,7 +482,7 @@ export function msgV4Position(p: {
   // last trace. The "Uniswap v4 · managed by the bot" line was dropped: the protocol
   // is already implied by the card's contents, and the line only added length without
   // supporting a decision.
-  lines.push('', note(`${p.age ? `age ${esc(p.age)} \u00B7 ` : ''}${nowWib()}`));
+  lines.push('', note(`${p.age ? `age ${esc(p.age)} | ` : ''}${nowWib()}`));
   if (!p.tracked) lines.push(note('read-only — opened outside the bot'));
   return lines.join('\n');
 }
