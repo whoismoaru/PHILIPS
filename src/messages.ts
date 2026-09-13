@@ -1296,8 +1296,17 @@ export function msgPositionsList(opts: {
       : anyConverted
         ? 'Part of your liquidity has fully converted and stopped earning fees, the rest is still waiting to enter range.'
         : 'Your liquidity is not active yet. It starts earning fees once the token price moves into your range.';
-  void tail;
-  out.push('', note(nowWib()));
+  // A one-line summary of the whole list. These four figures were computed by the caller
+  // and then thrown away by this card: totals are the one thing a per-position list
+  // cannot show, and "how much is deployed" is the question the list is opened with.
+  const inRange = shown.filter((r) => r.inRange).length;
+  const summary = [
+    `${opts.activeCount} position${opts.activeCount === 1 ? '' : 's'}`,
+    ...(opts.totalInvestLabel ? [`${esc(opts.totalInvestLabel)} deployed`] : []),
+    ...(opts.totalFeesLabel ? [`fees ${esc(opts.totalFeesLabel)}`] : []),
+    `${inRange}/${shown.length} in range`,
+  ].join(' \u00B7 ');
+  out.push('', summary, tail, '', note(nowWib()));
   return out.join('\n');
 }
 
