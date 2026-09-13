@@ -238,9 +238,9 @@ function cockpitLines(dryRun: boolean): string[] {
     bold('Move funds :'),
     ...grp([
       ['/claim_fees', 'harvest fees, the position stays open'],
-      ['/sell', 'swap a token you hold'],
+      ['/swap', 'swap a token you hold'],
       ['/bridge', 'move funds across chains'],
-      ['/send', 'withdraw to another address'],
+      ['/withdraw', 'withdraw to another address'],
     ]),
     '',
     bold('Setup :'),

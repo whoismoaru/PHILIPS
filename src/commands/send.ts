@@ -74,6 +74,8 @@ export async function cmdSend(ctx: any) {
     ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'positions_back')]]),
   });
 }
+// /withdraw is the name on the menu; /send stays alive as a hidden alias.
+bot.command('withdraw', cmdSend);
 bot.command('send', cmdSend);
 
 // Back = ask for the address again, which is the step before this one. cmdSend clears
@@ -162,7 +164,7 @@ bot.action(/^snd:(\w+):(native|0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const addr = ctx.match[2] === 'native' ? null : ctx.match[2].toLowerCase();
   const list = await assetsOn(cc).catch(() => []);
   const a = list.find((x) => (x.address?.toLowerCase() ?? 'native') === (addr ?? 'native'));
-  if (!a) return ctx.editMessageText(msg.msgError('send', 'That balance is gone — start again with /send.'), html);
+  if (!a) return ctx.editMessageText(msg.msgError('send', 'That balance is gone — start again with /withdraw.'), html);
   flow.chainKey = cc.key;
   flow.asset = { address: a.address, symbol: a.symbol, decimals: a.decimals };
   flow.isContract = (await cc.provider.getCode(flow.to).catch(() => '0x')) !== '0x';

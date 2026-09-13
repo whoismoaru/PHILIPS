@@ -122,16 +122,17 @@ then, so the number you enter is the one that goes on chain.
 | `/pnl` | Pick a chain, then a period: the recap renders as a picture card |
 | paste a contract address | Audit the token, then open a position, buy, or sell |
 | `/claim_fees` | Take the fees, leave the position running |
-| `/sell` | **Swap** a token you hold, via the best available route |
+| `/swap` | Swap a token you hold, via the best available route |
 | `/bridge` | Move funds between chains |
-| `/send` | **Withdraw** a token or native to another address |
+| `/withdraw` | Withdraw a token or native to another address |
 | `/gas` | What a transaction costs right now on every chain, in USD and Rupiah |
 | `/settings` | Mode, transaction limits, LP shape, quick percentages |
 | `/alerts` | Which notifications you want |
 
 `/stop`, `/buy` and `/unwrap` still work when typed, but are kept off the menu: closing
 belongs to the position it closes, buying starts from a pasted contract address, and
-stray wrapped native is unwrapped by the monitor every minute.
+stray wrapped native is unwrapped by the monitor every minute. `/sell` and `/send` are
+the old names for `/swap` and `/withdraw`, kept alive as hidden aliases.
 
 **Nothing asks twice.** Swapping, bridging, withdrawing and opening an LP all execute on
 the amount you enter, and **Close Position** and **Close All** execute on the tap. Every step still has

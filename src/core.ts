@@ -279,10 +279,10 @@ export const START_GRID: Array<[label: string, data: string]> = [
   // No Unwrap either: sweepStuckWeth unwraps stray WETH on every chain each minute, and
   // recoverStrayWeth fires the moment an add or close fails. /unwrap stays as a typed
   // command for the rare case both are unavailable; it does not need a button.
-  ['🎯 Claim Fees', 'cmd:claim_fees'], ['💱 Swap', 'cmd:sell'], ['🌉 Bridge', 'cmd:bridge'],
+  ['🎯 Claim Fees', 'cmd:claim_fees'], ['💱 Swap', 'cmd:swap'], ['🌉 Bridge', 'cmd:bridge'],
   // Withdraw, not Send: it runs /send, but "withdraw" is what moving funds out to your
   // own address is called, and it reads as the exit from the bot rather than a transfer.
-  ['📤 Withdraw', 'cmd:send'], ['⛽ Gas', 'cmd:gas'], ['🔔 Alerts', 'cmd:alerts'],
+  ['📤 Withdraw', 'cmd:withdraw'], ['⛽ Gas', 'cmd:gas'], ['🔔 Alerts', 'cmd:alerts'],
   ['⚙️ Settings', 'cmd:settings'], ['📖 Help', 'help'],
 ];
 

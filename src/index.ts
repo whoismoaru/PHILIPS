@@ -354,7 +354,7 @@ bot.use((ctx: any, next: any) => {
 // Read-only commands (/status /positions /pools /help) are deliberately let through:
 // watching without a wallet is legitimate, and those cards already mark themselves
 // "not connected".
-const NEEDS_WALLET = /^\/(add_lp|stop|claim_fees|buy|sell|unwrap|bridge|send)\b/;
+const NEEDS_WALLET = /^\/(add_lp|stop|claim_fees|buy|sell|swap|unwrap|bridge|send|withdraw)\b/;
 // Buttons that ACTUALLY send a tx. Guarding commands alone is not enough: a flow can
 // start with a wallet connected and then be disconnected, leaving the button still
 // tappable — and what appears then is not "connect your wallet" but a raw VoidSigner error.
@@ -362,7 +362,7 @@ const NEEDS_WALLET = /^\/(add_lp|stop|claim_fees|buy|sell|unwrap|bridge|send)\b/
 // typing /buy, or an old start card left in the chat becomes a way around the guard
 // after the wallet is disconnected.
 const NEEDS_WALLET_CB =
-  /^(addok|tswapok|close:|closev4go:|claim:|rmok:|unwrap:go|br:go|sndgo|cmd:(stop|claim_fees|buy|sell|unwrap|bridge|send)$)/;
+  /^(addok|tswapok|close:|closev4go:|claim:|rmok:|unwrap:go|br:go|sndgo|cmd:(stop|claim_fees|buy|sell|swap|unwrap|bridge|send|withdraw)$)/;
 bot.use((ctx: any, next: any) => {
   const t = ctx.message?.text ?? '';
   const cb = ctx.callbackQuery?.data ?? '';
@@ -433,8 +433,10 @@ const GRID_ACTIONS: Record<string, (ctx: any) => Promise<unknown>> = {
   stop: cmdCloseAll,
   buy: cmdBuy,
   sell: cmdSell,
+  swap: cmdSell,
   bridge: cmdBridge,
   send: cmdSend,
+  withdraw: cmdSend,
   unwrap: cmdUnwrap,
   alerts: cmdAlerts,
   settings: cmdSettings,
@@ -3989,6 +3991,9 @@ async function cmdSell(ctx: any) {
   tswapFlows.set(ctx.from.id, flow);
   return editProgress(ctx, prog, msg.msgSellList(list.length), { ...html, ...sellListKb(list, multiChain) });
 }
+// /swap is the name on the menu; /sell stays alive as a hidden alias so older
+// muscle memory and any pinned message still work.
+bot.command('swap', cmdSell);
 bot.command('sell', cmdSell);
 // The "💱 Quick Sell" button on the /status card.
 bot.action('sell:start', async (ctx) => {
@@ -5348,9 +5353,9 @@ const BOT_COMMANDS = [
   // LP
   { command: 'claim_fees', description: 'Collect fees without closing' },
   // Trade & move funds
-  { command: 'sell', description: 'Swap a token you hold (best route)' },
+  { command: 'swap', description: 'Swap a token you hold (best route)' },
   { command: 'bridge', description: 'Move funds across chains' },
-  { command: 'send', description: 'Withdraw funds to another address' },
+  { command: 'withdraw', description: 'Withdraw funds to another address' },
   // Wallet and settings
   { command: 'gas', description: 'Current gas cost per chain (USD & IDR)' },
   { command: 'settings', description: 'Wallet & transaction preferences' },
@@ -5362,14 +5367,15 @@ const BOT_COMMANDS = [
  * Aliases DELIBERATELY kept out of the menu. The menu guard stays strict for everything
  * else — this list simply stops an intentional alias reading as a forgotten registration.
  */
-// Hidden aliases: /status is the old name for /portfolio; /add_lp is still the only door
+// Hidden aliases: /status is the old name for /portfolio, /sell for /swap and /send for
+// /withdraw; /add_lp is still the only door
 // to the top-pool picker (with no CA), so its handler stays alive.
 //
 // /stop, /buy and /unwrap are hidden on purpose too: the menu mirrors the /start grid,
 // and none of them has a button there. Closing belongs to the position it closes in
 // /positions, buying starts from a pasted CA, and stray wrapped native is unwrapped by
 // the monitor every minute. All three still work when typed.
-const HIDDEN_COMMANDS = new Set(['status', 'add_lp', 'stop', 'buy', 'unwrap']);
+const HIDDEN_COMMANDS = new Set(['status', 'add_lp', 'stop', 'buy', 'unwrap', 'sell', 'send']);
 
 function assertMenuComplete(): void {
   const inMenu = new Set(BOT_COMMANDS.map((c) => c.command));
