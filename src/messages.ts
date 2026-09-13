@@ -1425,23 +1425,35 @@ export function msgPoolStep(
 }
 
 /** Step 2/5 — choose the deposit side. */
-export function msgStrategyStep(pair: string, baseSym: string, tokenSym: string, price: string | null): string {
+export function msgStrategyStep(
+  pair: string,
+  baseSym: string,
+  tokenSym: string,
+  price: string | null,
+  /** The pool that was just picked, so the choice is visible on the next screen too. */
+  pool?: { ver: string; feeLabel: string; tvl: string; vol?: string; apr: string; tight: string },
+): string {
   return [
-    bold('OPEN LP · Step [2/5] Select Strategy'),
+    bold('OPEN LP | Select Strategy'),
     '',
-    `🔗 ${bold('Selected Pair:')} ${esc(pair)}`,
-    ...(price ? [`💱 ${bold('Market Price:')} 1 ${esc(tokenSym)} = ${esc(price)} ${esc(baseSym)}`] : []),
+    `Pool: ${bold(esc(pair))}${pool ? ` (${esc(pool.ver)}, ${esc(pool.feeLabel)} fee)` : ''}`,
+    // The numbers from the pool you tapped, carried forward. Three pools of the same
+    // pair differ ONLY by these, so without them the next screen cannot tell you which
+    // one you are about to deposit into.
+    ...(pool ? [`TVL: ${esc(pool.tvl)} / Vol 24h: ${esc(pool.vol ?? '?')} / APR: ${esc(pool.apr)} / fills≤${esc(pool.tight)}`] : []),
+    ...(price ? [`Price: 1 ${esc(tokenSym)} = ${esc(price)} ${esc(baseSym)}`] : []),
     '',
     'Choose your single-side deposit strategy :',
     '',
-    `🟢 ${bold(`${baseSym} Side (Buy the Dip)`)}`,
-    `• You deposit ${bold(baseSym)}. It converts to ${esc(tokenSym)} and earns fees when the price ${bold('drops')} into your range.`,
+    `🟢 ${bold(`${baseSym} Side (buy the dip)`)}`,
+    `You deposit ${bold(baseSym)}. It converts to ${esc(tokenSym)} and earns fees when the price ${bold('drops')} into your range.`,
     '',
-    `🔵 ${bold('Token Side (Sell the Rip)')}`,
-    `• You deposit ${bold(tokenSym)}. It converts to ${esc(baseSym)} and earns fees when the price ${bold('rises')} into your range.`,
+    `🔵 ${bold('Token Side (sell the rip)')}`,
+    `You deposit ${bold(tokenSym)}. It converts to ${esc(baseSym)} and earns fees when the price ${bold('rises')} into your range.`,
     '',
     // The condition that decides whether the second button is usable at all.
-    note(`Token Side requires you to already hold ${tokenSym} — buy it with /buy first if you do not.`),
+    note(`Token Side requires you to already hold ${tokenSym} — swap for it first if you do not.`),
+    note(nowWib()),
   ].join('\n');
 }
 
