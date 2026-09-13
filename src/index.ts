@@ -332,7 +332,7 @@ bot.use((ctx, next) => {
   // Ignore silently: replying to a stranger confirms this bot exists and can be made
   // to answer. Groups are refused too (a balance card would be readable by everyone).
   if (ctx.from?.id !== config.telegram.allowedUserId || (ctx.chat && ctx.chat.type !== 'private')) {
-    console.log('[guard] tolak', ctx.from?.id, ctx.chat?.type);
+    console.log(`[guard] ignored an update from id ${ctx.from?.id} (chat ${ctx.chat?.type}); TELEGRAM_ALLOWED_USER_ID is ${config.telegram.allowedUserId}`);
     return;
   }
   return next();

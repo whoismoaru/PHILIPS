@@ -68,6 +68,64 @@ function clone_repo() {
   ok "Code ready."
 }
 
+
+# -- Telegram check -----------------------------------------------------------
+# The two commonest installs that "work" but stay silent: a token that is fine but
+# already being polled by ANOTHER instance, and an allowed-id that is not the id of
+# the person typing. Neither shows up in the log as an error, so both are checked
+# here, against Telegram itself, before the user is told the install succeeded.
+# grep/sed only: jq is not on a fresh Ubuntu. curl runs WITHOUT -f on purpose: Telegram
+# puts the reason (and the 409) in the body of a 4xx, which -f would throw away.
+function tg_field() { sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" <<<"$1" | head -1; }
+
+function check_token() { # $1 = token -> prints @username
+  local r; r="$(curl -sS --max-time 15 "https://api.telegram.org/bot$1/getMe" 2>/dev/null)"
+  if [[ "$r" != *'"ok":true'* ]]; then
+    warn "Telegram rejected that token$( [ -n "$r" ] && echo ": $(tg_field "$r" description)" )."
+    warn "Open @BotFather -> /mybots -> your bot -> API Token, and copy the whole line."
+    return 1
+  fi
+  ok "Token belongs to @$(tg_field "$r" username)."
+}
+
+function check_delivery() { # $1 = token, $2 = id, $3 = text
+  local r; r="$(curl -sS --max-time 15 -X POST "https://api.telegram.org/bot$1/sendMessage" \
+      --data-urlencode "chat_id=$2" --data-urlencode "text=$3" 2>/dev/null)"
+  if [[ "$r" == *'"ok":true'* ]]; then ok "Test message delivered to id $2. Check Telegram."; return 0; fi
+  local d; d="$(tg_field "$r" description)"
+  warn "Telegram would not deliver to id $2${d:+: $d}"
+  case "$d" in
+    *"chat not found"*) warn "Either the id is wrong, or you have never messaged the bot. Open the bot, send /start, then run this again." ;;
+    *"blocked"*)        warn "You blocked this bot. Unblock it in Telegram, then run this again." ;;
+    *)                  warn "Check TELEGRAM_ALLOWED_USER_ID: it is YOUR numeric id from @userinfobot, not the bot's." ;;
+  esac
+  return 1
+}
+
+# A webhook and long polling are mutually exclusive: with a webhook set, the bot polls
+# forever and receives NOTHING. Deterministic, unlike racing getUpdates for a 409.
+function check_webhook() { # $1 = token
+  local r u; r="$(curl -sS --max-time 15 "https://api.telegram.org/bot$1/getWebhookInfo" 2>/dev/null)"
+  u="$(tg_field "$r" url)"
+  [ -z "$u" ] && return 0
+  warn "A webhook is set on this token ($u), so long polling receives nothing."
+  ask "Remove the webhook now? (Y/n)" "Y"
+  [[ "$REPLY_VAL" =~ ^[Nn]$ ]] && return 0
+  curl -sS --max-time 15 "https://api.telegram.org/bot$1/deleteWebhook" >/dev/null 2>&1
+  ok "Webhook removed."
+}
+
+# One token can only be POLLED by one process. The loser gets a 409 and sees nothing,
+# which looks exactly like a broken bot. The bot logs that 409 itself, so the journal is
+# the honest place to read it -- racing getUpdates here would steal a poll from a healthy
+# instance and still answer at random.
+function warn_if_conflicting() {
+  sudo journalctl -u "$SERVICE" --since "-2 min" --no-pager 2>/dev/null | grep -qiE "409|terminated by other getUpdates" || return 0
+  warn "The log shows a 409: this token is ALREADY being polled by another instance."
+  warn "Two bots cannot share one token. Stop the other one, or create a second bot"
+  warn "with @BotFather and put its token in .env (option 3)."
+}
+
 # -- 3. Configuration -----------------------------------------------
 function setup_env() {
   local f="$APP_DIR/.env"
@@ -85,6 +143,11 @@ function setup_env() {
   [ -n "$TOKEN" ] || { warn "The token cannot be empty."; return 1; }
   ask "TELEGRAM_ALLOWED_USER_ID" ""; local UID_TG="$REPLY_VAL"
   [ -n "$UID_TG" ] || { warn "The Telegram id cannot be empty."; return 1; }
+  [[ "$UID_TG" =~ ^[0-9]+$ ]] || { warn "The Telegram id is digits only (get it from @userinfobot)."; return 1; }
+  # Checked against Telegram NOW, not after a service has been built on top of it.
+  check_token "$TOKEN" || return 1
+  check_webhook "$TOKEN"
+  check_delivery "$TOKEN" "$UID_TG" "PHILIPS: token and id confirmed. Setup continues." || return 1
 
   echo
   echo "  --- Primary chain ---"
@@ -217,7 +280,14 @@ EOF
   sudo systemctl daemon-reload
   sudo systemctl enable "$SERVICE" >/dev/null 2>&1
   sudo systemctl restart "$SERVICE"
-  verify_running "The bot is running. Open Telegram and send /start to it."
+  verify_running "The bot is running." || return 1
+  # The install is only finished when a message actually ARRIVES. Sending it from here
+  # means a silent bot is caught now rather than after the user has waited for one.
+  local f="$APP_DIR/.env"
+  local T I; T="$(grep -m1 '^TELEGRAM_BOT_TOKEN=' "$f" | cut -d= -f2-)"; I="$(grep -m1 '^TELEGRAM_ALLOWED_USER_ID=' "$f" | cut -d= -f2-)"
+  check_delivery "$T" "$I" "PHILIPS is installed and running in DRY RUN. Send /start to begin." \
+    || warn "The service is up but Telegram would not deliver. Fix the reason above and pick 5."
+  warn_if_conflicting
 }
 
 function verify_running() {
