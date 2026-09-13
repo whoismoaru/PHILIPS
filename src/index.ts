@@ -60,7 +60,7 @@ import * as krystal from './krystal.js';
 import { awaitingSecret, handleSecret } from './commands/wallet.js';
 import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import { cmdClaimFees } from './commands/feesAndRemove.js';
-import { tokenSymbol as v4TokenSymbol, poolDepthV4 } from './uniswapV4.js';
+import { tokenSymbol as v4TokenSymbol, poolDepthV4, poolIdV4 } from './uniswapV4.js';
 import { cmdBridge } from './commands/bridge.js';
 import { cmdSend } from './commands/send.js';
 import { cmdUnwrap } from './commands/unwrap.js';
@@ -1379,7 +1379,25 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
         Number(x.poolKey.tickSpacing) === Number(p.poolKey.tickSpacing) &&
         same(x.poolKey.hooks, p.poolKey.hooks),
     );
-    if (!hit) return null; // known miss: the index has this token but not this pool
+    if (!hit) {
+      // The Uniswap index carries v4 on Robinhood only partially, so a live pool can be
+      // missing from it entirely. DexScreener keys its v4 pairs by pool id, which is an
+      // exact match -- without this the card read "TVL: —" on a pool holding real money.
+      const dex = await explore.poolStatsV4Dex(cc, tokenAddr, poolIdV4(p.poolKey)).catch(() => null);
+      if (!dex) return null; // known miss: neither source has this pool
+      return {
+        tvl: msg.usdCompact(dex.tvlUsd),
+        vol: dex.vol24hUsd != null ? msg.usdCompact(dex.vol24hUsd) : undefined,
+        // Fees over TVL, annualised, the same way the index computes it: 24h fees are
+        // volume * fee. A dynamic fee makes this an estimate, hence '?' when unknown.
+        apr: (() => {
+          const feeFrac = Number(p.poolKey.fee) / 1e6;
+          if (!dex.vol24hUsd || !dex.tvlUsd || !isFinite(feeFrac) || feeFrac <= 0) return '?';
+          const a = ((dex.vol24hUsd * feeFrac) / dex.tvlUsd) * 365 * 100;
+          return `~${a >= 100 ? Math.round(a) : a.toFixed(1)}%`;
+        })(),
+      };
+    }
     return {
       tvl: msg.usdCompact(hit.tvlUsd),
       vol: hit.vol24hUsd != null && hit.vol24hUsd > 0 ? msg.usdCompact(hit.vol24hUsd) : undefined,

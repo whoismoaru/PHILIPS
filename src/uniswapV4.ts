@@ -1079,10 +1079,23 @@ export async function currentTickV4(cc: ChainCtx, pk: PoolKeyV4): Promise<number
 }
 
 /** Read a v4 pool's slot0: current tick and sqrtPriceX96. */
+/**
+ * The v4 pool id: keccak of the PoolKey. It is the pool's identity everywhere -- the
+ * PoolManager's storage slots AND DexScreener's pairAddress, which is what lets the
+ * detail card read TVL and volume for a pool the Uniswap index does not carry.
+ */
+export function poolIdV4(pk: PoolKeyV4): string {
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ['tuple(address,address,uint24,int24,address)'],
+      [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]],
+    ),
+  );
+}
+
 async function readPoolState(cc: ChainCtx, pk: PoolKeyV4): Promise<{ tick: number; sqrtPriceX96: bigint }> {
   const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
-  const coder = ethers.AbiCoder.defaultAbiCoder();
-  const poolId = ethers.keccak256(coder.encode(['tuple(address,address,uint24,int24,address)'], [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]]));
+  const poolId = poolIdV4(pk);
   const slot = ethers.keccak256(ethers.concat([poolId, ethers.zeroPadValue(ethers.toBeHex(6n), 32)]));
   const raw = BigInt(await mgr.extsload(slot));
   const sqrtPriceX96 = raw & ((1n << 160n) - 1n);
@@ -1122,8 +1135,7 @@ export async function poolDepthV4(cc: ChainCtx, pk: PoolKeyV4): Promise<bigint |
 
 async function readPoolLiquidity(cc: ChainCtx, pk: PoolKeyV4): Promise<bigint> {
   const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
-  const coder = ethers.AbiCoder.defaultAbiCoder();
-  const poolId = ethers.keccak256(coder.encode(['tuple(address,address,uint24,int24,address)'], [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]]));
+  const poolId = poolIdV4(pk);
   const base = BigInt(ethers.keccak256(ethers.concat([poolId, ethers.zeroPadValue(ethers.toBeHex(6n), 32)])));
   const slot = ethers.zeroPadValue(ethers.toBeHex(base + 3n), 32);
   const raw = BigInt(await mgr.extsload(slot));
@@ -1142,8 +1154,7 @@ async function readPoolLiquidity(cc: ChainCtx, pk: PoolKeyV4): Promise<bigint> {
  */
 export async function readFeeGrowth(cc: ChainCtx, pk: PoolKeyV4): Promise<{ g0: bigint; g1: bigint }> {
   const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
-  const coder = ethers.AbiCoder.defaultAbiCoder();
-  const poolId = ethers.keccak256(coder.encode(['tuple(address,address,uint24,int24,address)'], [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]]));
+  const poolId = poolIdV4(pk);
   const base = BigInt(ethers.keccak256(ethers.concat([poolId, ethers.zeroPadValue(ethers.toBeHex(6n), 32)])));
   const at = async (off: bigint) => BigInt(await mgr.extsload(ethers.zeroPadValue(ethers.toBeHex(base + off), 32)));
   return { g0: await at(1n), g1: await at(2n) };
@@ -1161,9 +1172,7 @@ async function readPoolAndFees(
   const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], [
     'function extsload(bytes32[]) view returns (bytes32[])',
   ], cc.provider);
-  const coder = ethers.AbiCoder.defaultAbiCoder();
-  const poolId = ethers.keccak256(coder.encode(['tuple(address,address,uint24,int24,address)'],
-    [[pk.currency0, pk.currency1, pk.fee, pk.tickSpacing, pk.hooks]]));
+  const poolId = poolIdV4(pk);
   const h = (x: bigint) => ethers.zeroPadValue(ethers.toBeHex(x), 32);
   const base = BigInt(ethers.keccak256(ethers.concat([poolId, h(6n)])));
   const tickSlot = (t: number) => BigInt(ethers.keccak256(ethers.concat([

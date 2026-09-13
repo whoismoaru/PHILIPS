@@ -327,6 +327,41 @@ type DexPair = {
   symByAddr: Record<string, string>;
 };
 
+/**
+ * TVL and 24h volume for ONE v4 pool, from DexScreener.
+ *
+ * The Uniswap gateway indexes v4 on Robinhood only partially: topV4Pools comes back empty
+ * for tokens that plainly have live v4 pools, which is why the detail card read "TVL: —"
+ * and "Volume: —" on a position that was earning fees. DexScreener does carry them, and
+ * its pairAddress for a v4 pair IS the pool id, so the match is exact rather than by
+ * fee/symbol guesswork. null when the pool is not there either.
+ */
+export async function poolStatsV4Dex(
+  ctx: ChainCtx,
+  tokenAddress: string,
+  poolId: string,
+): Promise<{ tvlUsd: number; vol24hUsd?: number } | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  try {
+    const res = await fetch(`${DEXSCREENER_TOKENS}/${tokenAddress}`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const json: any = await res.json();
+    const want = poolId.toLowerCase();
+    const hit = (json?.pairs ?? []).find(
+      (p: any) => p?.chainId === ctx.dexKey && String(p?.pairAddress ?? '').toLowerCase() === want,
+    );
+    if (!hit) return null;
+    const tvl = Number(hit?.liquidity?.usd ?? 0);
+    const vol = Number(hit?.volume?.h24 ?? 0);
+    return { tvlUsd: tvl, vol24hUsd: vol > 0 ? vol : undefined };
+  } catch {
+    return null; // a stats line is never worth failing a card over
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function dexPairs(ctx: ChainCtx, tokenAddress: string): Promise<DexPair[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15_000);
