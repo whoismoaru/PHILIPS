@@ -60,7 +60,7 @@ import * as krystal from './krystal.js';
 import { awaitingSecret, handleSecret } from './commands/wallet.js';
 import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import { cmdClaimFees } from './commands/feesAndRemove.js';
-import { tokenSymbol as v4TokenSymbol } from './uniswapV4.js';
+import { tokenSymbol as v4TokenSymbol, poolDepthV4 } from './uniswapV4.js';
 import { cmdBridge } from './commands/bridge.js';
 import { cmdSend } from './commands/send.js';
 import { cmdUnwrap } from './commands/unwrap.js';
@@ -1330,6 +1330,10 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       apr: hit.aprPct == null ? '?' : `~${hit.aprPct >= 100 ? Math.round(hit.aprPct) : hit.aprPct.toFixed(1)}%`,
     };
   })();
+  // The pool's own depth at the current price, in base units. Read from the chain, so it
+  // is there even while the index has no entry for this pool.
+  const depthWei = await poolDepthV4(cc, p.poolKey);
+  const depthLabel = depthWei === null ? undefined : `${msg.cleanUnits(depthWei, dec)} ${p.base ?? ''}`.trim();
   const text = msg.msgV4Position({
     tokenId: p.tokenId,
     pair: `${p.sym0} / ${p.sym1}`,
@@ -1346,6 +1350,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     age: tracked ? msg.fmtAge(Date.now() - tracked.openedAt) : undefined,
     pool: poolRow ?? undefined,
     poolUnindexed: poolRow === null,
+    poolDepth: depthLabel,
     // In range = already filling, so 0%. Otherwise the distance to the NEARER end of the
     // range: that is how far the price still has to travel before this position does
     // anything at all.
