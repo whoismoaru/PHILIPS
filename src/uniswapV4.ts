@@ -13,6 +13,10 @@ const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 const V4_POOL_MANAGER: Record<string, string> = {
   robinhood: '0x8366a39CC670B4001A1121B8F6A443A643e40951',
   bsc: '0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF',
+  // Verified on-chain before adding: both contracts carry code on Base, and the
+  // PositionManager's own poolManager() returns exactly this address -- so the pair is
+  // matched rather than two addresses that merely look right.
+  base: '0x498581fF718922c3f8e6A244956aF099B2652b2b',
 };
 // Extra v4 actions (add).
 const MINT_POSITION = 0x02;
@@ -32,6 +36,7 @@ const SWEEP = 0x14;
 const V4_PM: Record<string, string> = {
   robinhood: '0x58daec3116aae6D93017bAAea7749052E8a04fA7',
   bsc: '0x7A4a5c919aE2541AeD11041A1AEeE68f1287f95b',
+  base: '0x7C5f5A4bBd8fD63184577525326123B519429bDc',
 };
 
 /**
