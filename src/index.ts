@@ -931,9 +931,9 @@ async function buildPositionCard(
     // both protocols on every chain.
     ...Markup.inlineKeyboard([
       [Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`)],
-      // The one irreversible action keeps its own row, and ⛔ is the vocabulary's stop
-      // marker -- ❌ reads as "failed", which this is not.
-      [Markup.button.callback('⛔ Close Position', `stop:${rec.tokenId}`)],
+      // Straight to the executor, no confirmation card -- the same shape as swap, bridge
+      // and withdraw. `stop:` (which asks first) stays registered for older cards.
+      [Markup.button.callback('⛔ Close Position', `close:${rec.tokenId}`)],
       [Markup.button.callback('⬅️ Positions', 'positions')],
     ]),
   };
@@ -1382,7 +1382,8 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     ...html,
     ...Markup.inlineKeyboard([
       [Markup.button.callback('🔄 Refresh', `posv4:${p.tokenId}`)],
-      [Markup.button.callback('⛔ Close Position', `closev4:${p.tokenId}`)],
+      // Straight to the executor, as on the v3 card. `closev4:` still asks, for older cards.
+      [Markup.button.callback('⛔ Close Position', `closev4go:${p.tokenId}`)],
       [Markup.button.callback('⬅️ Positions', 'positions_refresh')],
     ]),
   };
