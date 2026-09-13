@@ -448,7 +448,9 @@ export function msgV4Position(p: {
     // Printing "$0" would describe a dead pool, which is a different thing entirely.
     `TVL: ${p.pool ? esc(p.pool.tvl) : '—'}`,
     `Fills: ${esc(p.fillsLabel ?? '—')}`,
-    `Volume: ${p.pool?.vol ? esc(p.pool.vol) : '—'}`,
+    // Named 24h explicitly: an unlabelled "Volume" beside a TVL invites reading it as
+    // all-time, which would make a young pool look far busier than it is.
+    `Volume 24h: ${p.pool?.vol ? esc(p.pool.vol) : '—'}`,
     `Liquidity: ${esc(p.valueLabel)}`,
     ...(p.feesLabel ? [`Fees: ${esc(p.feesLabel)}`] : []),
     ...(p.pnlText ? [`PnL: ${esc(p.pnlText)}`] : []),
