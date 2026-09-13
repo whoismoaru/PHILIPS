@@ -80,7 +80,8 @@ from the Uniswap gateway, Krystal, and on-chain scans.
 - **Token side.** You deposit the token itself. The position waits *above* the
   price. A limit sell that earns fees while it waits.
 
-**Step 3. Pick how wide the range is.** From conservative to extreme.
+**Step 3. Pick how wide the range is.** Five buttons, **Tightest** (±10%) through
+**Widest** (±90%).
 
 **The shape is a setting, not a step.** `/settings` → **LP Shape** decides how every
 base-side entry is laid out, so the wizard never asks.
@@ -96,6 +97,9 @@ base-side entry is laid out, so the wizard never asks.
   PnL, and how many rungs are filled, active, or still waiting then the one leg you
   tapped. A leg that fills is doing its job, so it is marked filled rather than
   flagged as a position gone wrong.
+
+**Step 3b. How many legs** — only when LP shape is BID-ASK. The choices come from
+`/settings` → **Ladder legs**, and anything from 15 up is marked as needing a paid RPC.
 
 **Step 4. How much.** Tap a percentage of your balance, or type an exact number.
 Percentages are taken from your *usable* balance: the gas reserve is set aside
@@ -115,7 +119,7 @@ then, so the number you enter is the one that goes on chain.
 | `/start` · `/help` | Menu and bot mode |
 | `/portfolio` | Total equity, and what you hold on each chain |
 | `/positions` | Your live positions; tap one for full detail |
-| `/pnl` | Profit recap from closed trades, as a picture card |
+| `/pnl` | Pick a chain, then a period: the recap renders as a picture card |
 | paste a contract address | Audit the token, then open a position, buy, or sell |
 | `/claim_fees` | Take the fees, leave the position running |
 | `/sell` | **Swap** a token you hold, via the best available route |
@@ -148,7 +152,7 @@ what was removed is the second tap, not the guards.
 ├ PnL: +2,4%
 └ Status: Active (in range), 30m
 
-🟢 $VYNEX/USDG | #1234568 (V4)
+🟢 $VYNEX/USDG ◣×8 | #1234568 (V4)
 ├ Chain: Robinhood
 ├ Strategy: USDG Side (buy the dip)
 ├ Invested: 199,0800 USDG
@@ -241,7 +245,8 @@ wallet's real transactions over 14 days, not a textbook estimate, because a v4
 `modifyLiquidities` burns more than 260k and that is the operation you use most.
 The Rupiah column uses Indodax, the rate you actually face selling crypto locally.
 
-`/pnl` sums up the trades you have closed, per chain and per period:
+`/pnl` asks which chain first (or all of them), then sums up the trades you closed in
+that period — All time, 1 day, 1 week, 1 month, switchable in place:
 
 ![Lifetime PnL recap](assets/pnl-recap.jpg)
 
@@ -291,15 +296,17 @@ so on the card rather than staying quiet.
 
 Every amount step shows percentage buttons. You decide what they are.
 
-`/settings` → **Buy %**, **Sell %**, **Add LP %**, **Withdraw %**, **Bridge %**,
-and **Ladder legs** (how many rungs a bid-ask ladder offers, 2 to 69).
+`/settings` → **Buy %**, **Swap %**, **Add LP %**, **Close LP %**, **Bridge %**,
+**Withdraw %**, plus **LP shape** and **Ladder legs** (how many rungs a bid-ask ladder
+offers, 2 to 69).
 Each one opens a small card with the current numbers and an **Edit** button. Type up
 to four numbers `10 25 50 90`, `10,25,50`, or `10/25/50` all work and they become
 the buttons for that flow. **Reset** puts the defaults back.
 
-Withdraw is the one exception: 100% is not allowed there, because taking everything
-out closes the position, and that has its own button. Ladder legs takes counts
-rather than percentages, so its range is 2 to 69.
+**Close LP %** is the one exception: 100% is not allowed there, because taking
+everything out closes the position, and that has its own button. **Ladder legs** takes
+counts rather than percentages, so its range is 2 to 69, and **LP shape** is a toggle
+between SPOT and BID-ASK rather than a list of numbers.
 
 Your choices live in `data/pctpresets.json` and survive restarts.
 
@@ -338,9 +345,9 @@ a hot wallet, not a vault.
   stray WETH by itself, once a minute.
 - **There is no stop-loss.** A position that moves against you keeps running until
   you close it. Alerts tell you; they don't act.
-- **Closing cashes out your whole bag.** `/stop` doesn't stop at the position's own
-  output. It swaps **every** unit of that token in the wallet. If you hold the same
-  token outside the LP, move it elsewhere first.
+- **Closing sells what the position produced, and only that.** The token balance you
+  already held before the close is read first and held back, so a spot bag in the same
+  token is not swept into the cash-out. What the LP itself returns is sold.
 - **Per-transaction caps** (`MAX_ETH_PER_TX`, `MAX_STABLE_PER_TX`) can be raised in
   `.env`, or switched off with `off`. Leaving them empty does *not* remove them
   it falls back to the built-in defaults, so a typo can't quietly open the wallet.
