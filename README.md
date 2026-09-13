@@ -49,8 +49,9 @@ on your server (`data/keystore.json`, scrypt + AES, file mode 600).
 **3.** Send `/portfolio`. Your balances should appear. If they do, the bot can read
 the chain correctly.
 
-**4.** Try `/add_lp` and walk through the wizard without confirming. The bot starts
-in **DRY RUN**, so it simulates everything and sends no transactions.
+**4.** Paste a token's contract address and walk through the wizard. The bot starts in
+**DRY RUN**, so it simulates everything and sends no transactions — and in that mode the
+plan card is shown instead of a deposit being made.
 
 **5.** When all of that looks right, run `bash philips.sh` again and pick
 **option 6** to switch to LIVE. Start with a small amount.
@@ -100,8 +101,9 @@ Percentages are taken from your *usable* balance: the gas reserve is set aside
 first, so the largest button never leaves you unable to pay for the transaction.
 The buttons themselves are yours to change see **Quick percentages** below.
 
-**Step 5. Review and confirm.** The card shows the real price range, what you're
-depositing, and the estimated gas. Nothing is signed until you tap confirm.
+**The amount is the last question, and answering it opens the position.** There is no
+confirmation card in between: the range, the shape and the pool are already chosen by
+then, so the number you enter is the one that goes on chain.
 
 ---
 
@@ -115,17 +117,22 @@ depositing, and the estimated gas. Nothing is signed until you tap confirm.
 | `/pnl` | Profit recap from closed trades, as a picture card |
 | paste a contract address | Audit the token, then open a position, buy, or sell |
 | `/claim_fees` | Take the fees, leave the position running |
-| `/stop` | List your positions with a close button on each |
-| `/buy` · `/sell` | Swap a token via the best available route |
-| `/unwrap` | Turn stuck wrapped native back into gas, on every chain at once |
+| `/sell` | Swap a token you hold, via the best available route |
 | `/bridge` | Move funds between chains |
-| `/send` | Send a token or native to another address |
+| `/send` | Withdraw a token or native to another address |
 | `/gas` | What a transaction costs right now on every chain, in USD and Rupiah |
-| `/settings` | Wallet, transaction limits, quick percentages |
+| `/settings` | Mode, transaction limits, LP shape, quick percentages |
 | `/alerts` | Which notifications you want |
 
-Every step has **Back** and **Cancel**. Anything that moves money takes one
-explicit confirmation tap and is guarded against double-taps.
+`/stop`, `/buy` and `/unwrap` still work when typed, but are kept off the menu: closing
+belongs to the position it closes, buying starts from a pasted contract address, and
+stray wrapped native is unwrapped by the monitor every minute.
+
+**Nothing asks twice.** Swapping, bridging, withdrawing and opening an LP all execute on
+the amount you enter, and **Close Position** executes on the tap. Every step still has
+**Back**, every money path is guarded against double-taps, and every one of them checks
+your balance, the per-transaction limit and the gas reserve *before* anything is sent —
+what was removed is the second tap, not the guards.
 
 `/positions` lists what is open, one block per position:
 
@@ -253,7 +260,7 @@ All figures on this page are examples, not anyone's real history.
 
 ## Closing a position
 
-`/stop` lists what you have open and puts a close button on each one. Tapping close
+`/positions` lists what you have open and puts a close button on each one. Tapping close
 on any leg of a ladder closes the whole ladder in one batched transaction. Either
 way the bot withdraws the liquidity, collects the fees, swaps the token side back to
 what you deposited, and sends you a result card: deposit, received, how long you held
@@ -263,9 +270,11 @@ The artwork behind that card is just a file. Drop your own `data/PHILIPS ANIME.j
 in and every card uses it instead. Wide images with the subject on one side work
 best; the text sits on the other.
 
-The result is always reported in **the asset you deposited**. Deposit USDG, get the
-answer in USDG. Converting it to dollars would fold the base asset's own price swing
-into a number that is supposed to measure the position alone.
+The result is reported **in dollars**, each side priced at its own moment: the deposit at
+the rate stored when the position opened, the proceeds at the rate now. For a stablecoin
+base both rates are 1, so nothing is folded in. For a native base the figure does include
+the base asset's own move — which is what your money actually did. If neither rate can be
+read, the card falls back to the deposited asset rather than inventing a dollar number.
 
 Withdrawals carry a price floor, on v3 and v4 alike. If someone pushes the pool
 while your transaction is in flight, it reverts instead of filling at whatever price

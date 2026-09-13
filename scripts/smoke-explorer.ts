@@ -15,13 +15,13 @@ assert.ok(/Mozilla/.test(EXPLORER_HEADERS['user-agent']), 'User-Agent tak dikena
 
 // Setiap pemanggil explorer WAJIB memakai header itu — satu yang lupa cukup untuk
 // mengembalikan 403 di jalur tersebut saja, dan itu paling sulit dilacak.
-for (const [file, needle] of [
-  ['src/uniswapV4.ts', 'headers: EXPLORER_HEADERS'],
-  ['src/index.ts', 'headers: EXPLORER_HEADERS'],
-  ['src/screening.ts', 'headers: EXPLORER_HEADERS'],
-] as const) {
+// Matched on the IMPORT plus any use, not one exact spelling: uniswapV4 spreads the
+// headers into a wider object ({ ...EXPLORER_HEADERS, 'content-type': ... }), which the
+// old literal check read as "no header at all".
+for (const file of ['src/uniswapV4.ts', 'src/index.ts', 'src/screening.ts']) {
   const s = readFileSync(join(process.cwd(), file), 'utf8');
-  assert.ok(s.includes(needle), `${file} memanggil explorer tanpa header`);
+  assert.ok(/EXPLORER_HEADERS/.test(s), `${file} tak mengimpor header explorer`);
+  assert.ok(/headers: (\{ \.\.\.)?EXPLORER_HEADERS/.test(s), `${file} memanggil explorer tanpa header`);
 }
 
 console.log('OK — explorer: semua pemanggil mengirim User-Agent, 403 tak terulang.');
