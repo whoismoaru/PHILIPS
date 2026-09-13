@@ -7,7 +7,7 @@ import { join } from 'node:path';
  *
  * 28 Aug 2026: the BSC RPC dropped while closing an 8-leg ladder. `positions()`
  * failed for every leg, `catch {}` swallowed all of it, the multicall list came out empty,
- * dan alurnya tetap melapor "LADDER CLOSED · Total cashed out 0 USDT". Tak satu
+ * and the flow still reported "LADDER CLOSED · Total cashed out 0 USDT". Not one
  * and the transaction went out anyway: 214 USDT stayed alive on chain while the bot
  * erased it from its own records. The two guards below keep that from happening again.
  */

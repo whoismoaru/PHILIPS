@@ -173,7 +173,7 @@ export type AddPlan = {
   priceLower: string;
   priceUpper: string;
   baseAmountWei: bigint; // pokok base (WETH 18-dec / USDG 6-dec)
-  otherAmountWei: bigint; // idealnya ~0 (single-sided)
+  otherAmountWei: bigint; // ideally ~0, since this is single-sided
   otherSymbol: string;
   currentPrice: string; // the token's current price, denominated in the base
   pctLow: number; // the far end as a % of the current price (the most negative)
@@ -1192,8 +1192,8 @@ export type PositionDetail = {
   valueBaseWei: bigint; // the position's principal value, in the base: WETH or USDG
   feesBaseWei: bigint; // unclaimed fees, in the base
   side: 'above' | 'in' | 'below'; // the token price against the range: above means not started, below means fully converted
-  baseAmountWei: bigint; // komposisi pokok: sisi base
-  otherAmountWei: bigint; // komposisi pokok: sisi token (raw, desimal token)
+  baseAmountWei: bigint; // the principal's composition: the base side
+  otherAmountWei: bigint; // the principal's composition: the token side (raw, token decimals)
   otherDecimals: number;
   otherAddress: string; // alamat token non-base
   baseIsToken0: boolean;

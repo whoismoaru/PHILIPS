@@ -166,7 +166,7 @@ console.log(out.join('\n'));
 const all = out.join('\n');
 const bad = all.match(/&lt;(b|i|code|pre|blockquote)&gt;/g);
 if (bad) {
-  console.error('\n❌ DOUBLE-ESCAPE terdeteksi:', [...new Set(bad)].join(' '));
+  console.error('\n❌ DOUBLE-ESCAPE detected:', [...new Set(bad)].join(' '));
   process.exit(1);
 }
 const opens = (all.match(/<(b|i|code|pre|blockquote)>/g) ?? []).length;

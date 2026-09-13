@@ -588,7 +588,7 @@ export async function closeLadderV4(
     try {
       const wbal: bigint = await cc.weth.balanceOf(cc.wallet.address);
       if (wbal > 0n) await (await cc.weth.withdraw(wbal)).wait();
-    } catch { /* biarkan WETH */ }
+    } catch { /* leave the WETH as it is */ }
   }
   const afterWei = await readBase();
   const baseOutWei = afterWei > beforeWei ? afterWei - beforeWei : 0n;

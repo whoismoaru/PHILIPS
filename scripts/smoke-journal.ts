@@ -43,4 +43,4 @@ for (const e of journal.read(Number.MAX_SAFE_INTEGER)) {
 const dupes = [...seen].filter(([, rs]) => rs.length > 1);
 assert.equal(dupes.length, 0, `the same position was journalled twice: ${JSON.stringify(dupes)}`);
 
-console.log('OK — akuntansi jurnal waras');
+console.log('ok: the journal accounting is sane');

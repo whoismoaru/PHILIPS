@@ -20,7 +20,7 @@ assert.ok(!/native ETH/.test(stable), 'a stablecoin close must not claim it unwr
 assert.match(stable, /swapped into <b>USDT<\/b>/);
 assert.match(stable, /POSITION CLOSED/);
 
-// Native non-ETH: satuannya ikut chain.
+// A non-ETH native: the unit follows the chain.
 const bnb = msgCashOut({ ...base, ethOut: '0.91 BNB', baseSymbol: 'BNB', native: true });
 assert.match(bnb, /native BNB/, 'a non-ETH chain must name its own native asset');
 assert.ok(!/native ETH/.test(bnb));

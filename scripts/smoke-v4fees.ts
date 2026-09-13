@@ -61,7 +61,7 @@ for (const chainKey of Object.keys(PM)) {
 
     assert.ok(p.feesBaseWei !== null, `#${p.tokenId}: feesBaseWei null`);
     const drift = Number(gotBase - totalCard) / Number(totalCard || 1n);
-    console.log(`  #${p.tokenId}: prinsipal ${p.valueBaseWei} + fee ${p.feesBaseWei} · simulasi base ${gotBase} · drift ${(drift * 100).toFixed(2)}%`);
+    console.log(`  #${p.tokenId}: principal ${p.valueBaseWei} + fees ${p.feesBaseWei} · simulated base ${gotBase} · drift ${(drift * 100).toFixed(2)}%`);
     assert.ok(Math.abs(drift) < 0.01, `#${p.tokenId}: card vs simulation differ by ${(drift * 100).toFixed(2)}%, over 5%`);
     checked++;
   }

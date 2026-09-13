@@ -42,4 +42,4 @@ for (const f of ['buy', 'sell', 'add', 'stop', 'bridge', 'legs'] as p.PctFlow[])
   assert.ok(p.sanitize(p.defaultsFor(f), f), `the ${f} defaults fail their own validation`);
 }
 
-console.log('OK — pctPresets: validasi & parsing persen di /settings.');
+console.log('ok: pctPresets validates and parses the percentages in /settings.');

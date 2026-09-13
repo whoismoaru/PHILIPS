@@ -392,7 +392,7 @@ const aprOf = (vol24h: number, fee: number, tvl: number): number | null =>
  * DexScreener is used only to fill in 24h volume so an APR can be computed.
  */
 async function poolsForTokenDex(ctx: ChainCtx, token: string): Promise<TokenPool[]> {
-  // Volume per pool (best-effort) — kegagalannya tak boleh menghilangkan pool.
+  // Per-pool volume, best effort: a failure here must never drop the pool.
   const volByPool = new Map<string, number>();
   const symByAddr: Record<string, string> = {};
   try {
@@ -464,7 +464,7 @@ async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePo
     // USDT/WBNB, so sorting by liquidity fills the list with stablecoins and the tokens
     // actually being traded never reach the candidates.
     .sort((a, b) => b.vol24hUsd - a.vol24hUsd)
-    .slice(0, 25); // batasi verifikasi on-chain
+    .slice(0, 25); // cap how many are verified on-chain
   const pools: ExplorePool[] = [];
   await Promise.all(
     cand.map(async (p) => {

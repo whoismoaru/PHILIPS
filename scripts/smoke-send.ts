@@ -44,7 +44,7 @@ assert.ok(!/=== \(addr \?\? 'native'\)[\s\S]{0,40}getAddress/.test(src), 'the ca
 
 // The shared ERC20_ABI has NO transfer, since this bot normally goes through a router, so
 // /send has to use an ABI that carries it, or every send dies on "transfer is not a function"
-// baru muncul SETELAH user menekan Confirm. Terjadi 28 Agu 2026.
+// only surfaced AFTER the user tapped Confirm. It happened on 28 Aug 2026.
 const fnNames = (abi: readonly string[]) =>
   new ethers.Interface(abi as string[]).fragments.filter((f) => f.type === 'function').map((f: any) => f.name);
 const sendAbi = [...ERC20_ABI, 'function transfer(address to, uint256 amount) returns (bool)'];
