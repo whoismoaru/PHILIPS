@@ -2903,7 +2903,7 @@ async function execAdd(ctx: any) {
         });
       }
       invalidateV4ListCache(); // posisi baru → /positions harus segar
-      await ctx.editMessageText(msg.msgLadderOpened(r.tokenIds.length, legs.length, `${selected.baseSymbol} / ${selected.otherSymbol}`, ethAmount), html);
+      await ctx.editMessageText(msg.msgLadderOpened(r.tokenIds.length, legs.length, `$${msg.posPair(`${selected.baseSymbol} / ${selected.otherSymbol}`, selected.baseSymbol)}`, ethAmount), html);
       // The first leg's card already summarises the WHOLE ladder (see ladderSum in
       // buildV4Card), so one card is enough — same as the v3 ladder path.
       await replyV4Card(ctx, cc, r.tokenIds[0]);
@@ -2969,6 +2969,7 @@ async function execAdd(ctx: any) {
           sizeEth: `${ethAmount} ${base.symbol}`,
           rangeLabel: `single-sided ${base.symbol} · range ~${rangePct}%`,
           txHash: r.txHash,
+          pair: `$${msg.posPair(`${base.symbol} / ${selected.otherSymbol}`, base.symbol)}`,
           dryRun: false,
         }),
         html,
@@ -3035,7 +3036,7 @@ async function execAdd(ctx: any) {
         });
         opened.push(tokenIds[i]);
       }
-      await ctx.editMessageText(msg.msgLadderOpened(opened.length, usable.length, `${legPlans[0].baseSymbol} / ${legPlans[0].otherSymbol}`, flow.ethAmount), html);
+      await ctx.editMessageText(msg.msgLadderOpened(opened.length, usable.length, `$${msg.posPair(`${legPlans[0].baseSymbol} / ${legPlans[0].otherSymbol}`, legPlans[0].baseSymbol)}`, flow.ethAmount), html);
       const first = opened[0] ? store.get(opened[0]) : undefined;
       if (first) await renderPositionCard(ctx, first, false).catch(() => {});
     } catch (err) {
@@ -3134,7 +3135,7 @@ async function execAdd(ctx: any) {
         ? [plan.priceLower, plan.priceUpper]
         : [plan.priceUpper, plan.priceLower];
     await ctx.editMessageText(
-      msg.msgLpOpened(tokenId, notes, `${plan.baseSymbol} / ${plan.otherSymbol}`, `${pLo} — ${pHi}`),
+      msg.msgLpOpened(tokenId, notes, `$${msg.posPair(`${plan.baseSymbol} / ${plan.otherSymbol}`, plan.baseSymbol)}`, `${pLo} — ${pHi}`),
       html,
     );
     const rec = store.get(tokenId);
