@@ -1,18 +1,3 @@
-/**
- * What a Uniswap V4 hook is PERMITTED to do, read from its own address.
- *
- * V4 encodes a hook's permissions in the low 14 bits of the hook address — the
- * PoolManager itself dispatches off those bits, so they cannot lie: a hook whose
- * AFTER_SWAP bit is clear will never have afterSwap called, whatever its source
- * code says.
- *
- * This is arithmetic on an address we already hold. No API, no key, no network,
- * no credits, and it keeps answering when a paid audit is down, out of credits,
- * or has simply never seen the hook. It is a PERMISSIONS read, not an audit: it
- * says what the hook MAY do, never whether it does it honestly.
- */
-
-/** Bit -> name, index = bit position. Order is fixed by the V4 spec. */
 const FLAGS = [
   'afterRemoveLiquidityReturnDelta',
   'afterAddLiquidityReturnDelta',
@@ -35,14 +20,6 @@ export type HookPower = {
   /** true = can cost the LP money or block an exit. */ severe: boolean;
 };
 
-/**
- * The powers that matter TO AN LP, not to a trader.
- *
- * `beforeRemoveLiquidity` is the one that ends positions: a hook holding it can
- * refuse the burn, and the money is simply stuck. The *ReturnDelta bits are the
- * skim — they let the hook keep part of the amount that would otherwise be paid
- * out. Everything else is disclosed but not flagged.
- */
 const MEANING: Partial<Record<(typeof FLAGS)[number], HookPower>> = {
   beforeRemoveLiquidity: { label: 'can block/condition your EXIT', severe: true },
   afterRemoveLiquidityReturnDelta: { label: 'can skim your withdrawal', severe: true },
