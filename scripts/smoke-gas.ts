@@ -28,8 +28,7 @@ assert.match(
 assert.ok(!/\$0\.00\b/.test(card), 'ada ongkos $0.00 — RPC/harga gagal tapi kartu mengaku tahu');
 for (const op of ['SWAP', 'OPEN LP', 'CLOSE LP', 'WITHDRAW &amp; APPROVE'])
   assert.ok(card.includes(`<b>${op}</b>`), `seksi ${op} hilang`);
-// The rank is the ORDER now, drawn as a tree rather than numbered.
-assert.ok(/├ \w[^\n]*: <b>\$/.test(card), 'baris teratas tak berharga USD');
+assert.ok(/1\. \w[^\n]*: <b>\$/.test(card), 'peringkat #1 tak berharga USD');
 // "$0" for a cost that really is paid is a lie, and the cheapest section is where
 // it happens first.
 assert.ok(!/= <b>\$0<\/b>/.test(card), 'ada ongkos yang dicetak "$0" padahal gasnya dibayar');
@@ -39,9 +38,8 @@ assert.ok(!/= <b>\$0<\/b>/.test(card), 'ada ongkos yang dicetak "$0" padahal gas
 const plain = card.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&');
 for (const op of ['SWAP', 'OPEN LP', 'CLOSE LP', 'WITHDRAW & APPROVE']) {
   const blok = plain.split(op + '\n')[1].split('\n\n')[0].split('\n');
-  // Tree glyphs, and the last row of each section closes it.
-  assert.ok(blok.every((l) => /^[├└] /.test(l)), `seksi ${op} bukan blok pohon`);
-  assert.ok(/^└ /.test(blok[blok.length - 1]), `seksi ${op} tak ditutup └`);
+  // Numbered, and the numbers run 1..n in order — the rank is the point of this card.
+  blok.forEach((l, i) => assert.ok(l.startsWith(`${i + 1}. `), `seksi ${op} baris ${i + 1} tak bernomor urut`));
   const angka = blok.map((l) => Number((l.match(/\$([\d.]+)/) ?? [])[1])).filter((n) => isFinite(n));
   assert.ok(angka.length >= 2, `seksi ${op} kosong`);
   for (let i = 1; i < angka.length; i++)
