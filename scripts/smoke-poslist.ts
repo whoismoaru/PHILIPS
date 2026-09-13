@@ -45,7 +45,9 @@ for (const [nama, pola] of [
 // getChain() there asks the default chain about another chain's id: ownerOf reverts
 // NOT_MINTED and a close reports failure for a position it never touched.
 for (const [nama, pola] of [
-  ['close v4', /closev4go:\(\\d\+\)\$\/[\s\S]{0,900}?v4ChainOf\(tokenId\)/],
+  // The close handler became a named executor (reused by Close All), so the anchor is
+  // the function rather than its registration line.
+  ['close v4', /async function execCloseV4\(ctx: any\) \{[\s\S]{0,900}?v4ChainOf\(tokenId\)/],
   ['refresh kartu v4', /posv4:\(\\d\+\)\$\/[\s\S]{0,200}?v4ChainOf\(ctx\.match\[1\]\)/],
   ['detail v4', /Object\.values\(CHAINS\)\.filter\(\(x\) => v4Supported\(x\)\)/],
 ] as const)
