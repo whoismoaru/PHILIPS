@@ -384,7 +384,7 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
   // Centred under the stats row and a size down from the labels: it is a timestamp, the
   // quietest thing on the card, and left-aligned it read as a fifth column.
   ctx.fillStyle = COL.muted;
-  ctx.font = '15px PhMono';
+  ctx.font = '10px PhMono';
   ctx.fillText(o.footer, W / 2 - ctx.measureText(o.footer).width / 2, H - 16);
 
   return canvas.toBuffer('image/png');
