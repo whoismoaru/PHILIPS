@@ -30,7 +30,7 @@ for (const row of ['Mint Authority', 'Freeze Authority', 'LP Status', 'Honeypot'
 
 // Every tree section closes with exactly one └, and nothing follows it.
 for (const block of card.split('\n\n').filter((b) => b.includes('├')))
-  assert.equal(block.split('\n').filter((l) => l.startsWith('└')).length, 1, `pohon rusak:\n${block}`);
+  assert.equal(block.split('\n').filter((l) => l.startsWith('└')).length, 1, `the tree is malformed:\n${block}`);
 
 assert.match(card, /Age: 1h 45m/, 'the pool age must be hours and minutes, not rounded to the hour');
 assert.match(card, /\$452\.5K/, 'a mcap in the K range carries one decimal');

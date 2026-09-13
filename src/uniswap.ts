@@ -1113,7 +1113,7 @@ export type PoolOption = {
   base: BaseKind; // 'weth' | 'usdg'
   baseSymbol: string;
   baseDecimals: number;
-  baseReserve: bigint; // base tersimpan di pool (proksi kedalaman likuiditas)
+  baseReserve: bigint; // the base held in the pool, a proxy for liquidity depth
 };
 
 /** base/token pools across every fee tier, deepest (by base reserve) first. */

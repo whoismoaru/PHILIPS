@@ -24,7 +24,7 @@ export type ChainCtx = {
   dexKey: string; // chainId versi DexScreener
   dexLabel: string; // the DEX a position is opened on ('Uniswap' | 'PancakeSwap')
   venue?: string; // a non-default DEX on this chain (e.g. 'uniswapv3' on BSC); empty means the default
-  blockscout: string | null; // base URL API explorer (null = tak tersedia)
+  blockscout: string | null; // the explorer API base URL; null means none is available
   provider: ethers.Provider; // a JsonRpcProvider, or a FallbackProvider where backup RPCs exist
   /** The active signer. A VoidSigner (address 0x0) when no wallet is connected. */
   wallet: ethers.Wallet | ethers.VoidSigner;

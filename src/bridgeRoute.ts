@@ -54,7 +54,7 @@ export async function bestBridgeQuote(
   return ok[0];
 }
 
-/** Eksekusi bridge lewat penyedia terpilih; quote diminta ulang & dijaga minOut. */
+/** Execute a bridge through the chosen provider: the quote is re-requested and held to minOut. */
 export async function executeBridgeVia(
   provider: BridgeProvider,
   from: ChainCtx,

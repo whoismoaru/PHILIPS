@@ -43,8 +43,8 @@ const s = journal.statsFor(0, undefined, () => 1);
 const b = s.books[0]!;
 
 assert.equal(s.count, 9, 'count stays the number of ENTRIES');
-assert.equal(s.known, 2, `ladder + solo = 2 trade berskor, dapat ${s.known}`);
-assert.equal(b.wins, 2, `ladder menang sbg satu kesatuan (+$0,40 > $0,10), dapat ${b.wins} menang`);
+assert.equal(s.known, 2, `a ladder plus a solo makes 2 scored trades, got ${s.known}`);
+assert.equal(b.wins, 2, `the ladder wins as a single unit (+$0.40 > $0.10), got ${b.wins} wins`);
 assert.equal(b.flats, 0, 'no leg may fall through as dust once the group is formed');
 assert.ok(Math.abs(b.net - 5.4) < 1e-9, `net should be 8x0.05 + 5 = 5.4, got ${b.net}`);
 

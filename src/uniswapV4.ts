@@ -70,7 +70,7 @@ export function v4BaseDecimals(cc: ChainCtx, base: 'ETH' | 'USDG' | null): numbe
   return base === 'USDG' ? (stableOf(cc)?.decimals ?? 6) : 18;
 }
 
-const DYNAMIC_FEE_FLAG = 0x800000; // v4: fee bertanda dynamic
+const DYNAMIC_FEE_FLAG = 0x800000; // v4: the flag marking a dynamic fee
 
 /**
  * Probe for the automatic retry: has an operation ALREADY landed on chain?

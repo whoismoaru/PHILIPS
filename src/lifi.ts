@@ -100,10 +100,10 @@ export async function swapViaLifi(
   // PINNED: the transaction target and the spender MUST be this chain's official diamond.
   // Anything else means the API is compromised or wrong -- abort before signing.
   if (!tr?.to || !isAllowed(ctx.chainId, tr.to)) {
-    throw new Error(`LI.FI target tak dikenal (${tr?.to}) — ditolak demi keamanan`);
+    throw new Error(`unknown LI.FI target (${tr?.to}), refused for safety`);
   }
   if (fromAddr !== NATIVE && !isAllowed(ctx.chainId, spender)) {
-    throw new Error(`LI.FI spender tak dikenal (${spender}) — ditolak demi keamanan`);
+    throw new Error(`unknown LI.FI spender (${spender}), refused for safety`);
   }
   const txHashes: string[] = [];
   // Approve the EXACT amount to the diamond, never MaxUint256. Native needs no approval.
@@ -161,15 +161,15 @@ export async function lifiBridgeQuote(
   if (!q) throw new Error('the LI.FI bridge quote failed');
   const tr = q.transactionRequest;
   if (!tr?.to || !isAllowed(from.chainId, tr.to)) {
-    throw new Error(`LI.FI bridge target tak dikenal (${tr?.to}) — ditolak`);
+    throw new Error(`unknown LI.FI bridge target (${tr?.to}), refused`);
   }
   // For an ERC20 the spender must be the diamond too. The approval happens in
   // executeBridgeVia -- a native bridge needs none, a token does -- so it is pinned here.
   if ((opts.originCurrency ?? NATIVE) !== NATIVE && !isAllowed(from.chainId, q.estimate?.approvalAddress)) {
-    throw new Error(`LI.FI bridge spender tak dikenal (${q.estimate?.approvalAddress}) — ditolak`);
+    throw new Error(`unknown LI.FI bridge spender (${q.estimate?.approvalAddress}), refused`);
   }
   const outWei = BigInt(q.estimate?.toAmount ?? '0');
-  if (outWei <= 0n) throw new Error('LI.FI bridge out 0 — rute tak terpakai');
+  if (outWei <= 0n) throw new Error('the LI.FI bridge quotes 0 out, so the route is unusable');
   // Decimals and symbol come from the token LI.FI returned. Never assume 18.
   const inTok = q.action?.fromToken ?? {};
   const outTok = q.action?.toToken ?? {};

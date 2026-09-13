@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 /**
  * v4 on more than one chain. Two things used to be hard-coded and broke the moment BSC
- * dinyalakan: base stablecoin ('USDG' harfiah) dan desimalnya (6). Di BSC
+ * was switched on: the stablecoin base (the literal 'USDG') and its decimals (6). On BSC
  * whose base is USDT with 18 decimals.
  */
 for (const cc of Object.values(CHAINS)) {

@@ -5,7 +5,7 @@ import { CHAINS, basesFor, isStableBase } from '../src/chains.js';
  * The native balance appears in the /sell list, recorded under the wrapped-native address.
  * If the sell destination is also native, from == to: a swap into itself, which always
  * comes back as "No route (thin pool/liquidity)". Native has to be sold into
- * STABLECOIN; token biasa dijual ke native.
+ * a STABLECOIN, while an ordinary token sells into native.
  */
 for (const cc of Object.values(CHAINS)) {
   const weth = cc.wethAddress.toLowerCase();

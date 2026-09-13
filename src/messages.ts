@@ -1086,7 +1086,7 @@ export function msgPositionCard(opts: {
   baseSymbol?: string; // WETH (the default, and older positions) | USDG
   side?: 'base' | 'token'; // the side deposited; empty means base, an older position
   converted?: boolean; // the price crossed the whole range, so the position is 100% the other asset
-  feeIsTickSpacing?: boolean; // Velodrome Slipstream: `fee` = tickSpacing (fee-nya dinamis)
+  feeIsTickSpacing?: boolean; // Velodrome Slipstream: `fee` is the tickSpacing, since its fee is dynamic
   /** The pool's own depth and activity. `onchain` marks a TVL measured from the pool
    *  contract itself rather than the index -- real, but with no volume or APR behind it. */
   pool?: { tvl: string; vol?: string; apr?: string; onchain?: boolean };

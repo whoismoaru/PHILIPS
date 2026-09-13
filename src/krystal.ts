@@ -48,7 +48,7 @@ const poolIdBufferHex = (c0: string, c1: string, ts: number, h: string): string 
 // That makes resolution survive a passing API outage: once proven, never repeated.
 const pkCache = new Map<string, PoolKeyV4>();
 
-/** Detail 1 pool: list memberi tickSpacing 0, detail memberi tickSpacing & hooks asli. */
+/** One pool's detail: the list returns tickSpacing 0, the detail returns the real tickSpacing and hooks. */
 async function krystalDetail(cid: number, poolId: string): Promise<{ tickSpacing: number; hooks: string; feeTier: number } | null> {
   const d = await fetchJson(`${API}/pools/${cid}/${poolId}`).catch(() => null);
   if (!d || d.tickSpacing == null) return null;

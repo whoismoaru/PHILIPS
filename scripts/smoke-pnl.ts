@@ -10,7 +10,7 @@ assert.equal(baseDecimalsOf(undefined, 'weth'), 18, 'no chain means the primary 
 
 const raw = ethers.parseUnits('48', baseDecimalsOf('bsc', 'usdt'));
 const shown = Number(ethers.formatUnits(raw, baseDecimalsOf('bsc', 'usdt')));
-assert.equal(shown, 48, `48 USDT BSC terbaca ${shown}`);
+assert.equal(shown, 48, `48 USDT on BSC reads as ${shown}`);
 const wrong = Number(ethers.formatUnits(raw, 6));
 assert.ok(wrong > 4.7e13, 'proves that using 6 really does shift it by 10^12');
 

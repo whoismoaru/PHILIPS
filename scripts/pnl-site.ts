@@ -200,7 +200,7 @@ footer{color:var(--muted);font-size:12px;margin-top:40px;border-top:1px solid va
   <div class="card"><b>Profit factor</b><span>${pf === null ? '—' : pf.toFixed(2)}</span></div>
   <div class="card"><b>Gross profit</b><span class="up">${plain(grossWin)}</span></div>
   <div class="card"><b>Gross loss</b><span class="dn">${plain(Math.abs(grossLoss))}</span></div>
-  <div class="card"><b>Impas</b><span>${flats}</span></div>
+  <div class="card"><b>Break-even</b><span>${flats}</span></div>
 </div>
 
 <h2>Kurva kumulatif</h2>
@@ -212,7 +212,7 @@ ${sparkline()}
 ${tabel('Per chain', perChain, chainLabel)}
 ${tabel('Per token', perToken, (k) => k, 40)}
 
-<h2>50 trade terakhir</h2>
+<h2>Last 50 trades</h2>
 <table><thead><tr><th>Time (WIB)</th><th>Token</th><th>Chain</th><th class="r">PnL</th></tr></thead><tbody>
 ${terbaru
   .map(
