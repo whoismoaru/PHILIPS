@@ -167,7 +167,7 @@ assert.ok(!/USDG book|ETH book|HYPE book/.test(kartuUsd), 'masih ada buku per sa
 if (mainUsd) {
   // The count on the card must be the SCORED one -- the same number the chain picker
   // shows, or the two screens disagree about how many trades exist.
-  assert.match(kartuUsd, new RegExp(`Trade = <b>${mainUsd.known}</b>`), 'jumlah trade di kartu bukan angka berskor');
+  assert.match(kartuUsd, new RegExp(`Trade: <b>${mainUsd.known}</b>`), 'jumlah trade di kartu bukan angka berskor');
 }
 
 console.log('smoke-pnlaudit: total USD OK');
@@ -204,7 +204,7 @@ const kartu = msgPnl({
 // really collapses everything into a single book. Unconverted native units would split
 // the stats in two and the card would silently report the first half as the whole.
 assert.equal(usd.books.length <= 1, true, 'kartu baca books[0] saja — konversi USD harus menyisakan satu buku');
-assert.match(kartu, new RegExp(`Trade = <b>${main0?.known ?? 0}</b>`), 'kartu tak memakai jumlah berskor bukunya');
+assert.match(kartu, new RegExp(`Trade: <b>${main0?.known ?? 0}</b>`), 'kartu tak memakai jumlah berskor bukunya');
 assert.match(kartu, /Win Rate/, 'winrate hilang dari kartu');
 void berskor;
 
@@ -216,9 +216,9 @@ const picker = msgPnlPicker([
   { label: 'Robinhood', trades: 480, scored: 161 },
   { label: 'Ink', trades: 0, scored: 0 },
 ]);
-assert.match(picker, /Robinhood = <b>161<\/b> positions/, 'picker harus pakai angka berskor');
+assert.match(picker, /Robinhood: <b>161<\/b> positions/, 'picker harus pakai angka berskor');
 assert.ok(!/480/.test(picker), 'total mentah tak boleh muncul — tak cocok dgn kartu rekap');
-assert.match(picker, /Ink = <b>0<\/b> positions/, 'chain kosong tetap didaftar');
+assert.match(picker, /Ink: <b>0<\/b> positions/, 'chain kosong tetap didaftar');
 // The total is a total, not a chain: it belongs below the list, not inside it.
 assert.ok(
   picker.indexOf('All chains') > picker.indexOf('Robinhood'),

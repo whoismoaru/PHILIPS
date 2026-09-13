@@ -225,7 +225,7 @@ function balanceFields(gasEth: string): Array<[string, string]> {
 
 // The cockpit body shared by /start and /help: VIEW/EXECUTION/EMERGENCY in a tree.
 function cockpitLines(dryRun: boolean): string[] {
-  const grp = (rows: Array<[string, string]>) => rows.map(([c, d], i) => `${i + 1}. ${c} = ${esc(d)}`);
+  const grp = (rows: Array<[string, string]>) => rows.map(([c, d], i) => `${i + 1}. ${c}: ${esc(d)}`);
   return [
     bold('View :'),
     ...grp([
@@ -687,12 +687,12 @@ export function msgPnlPicker(chains: Array<{ label: string; trades: number; scor
   if (per.length) {
     out.push(
       `\u{1F9FE} Pick a chain to recap its closed trades :`,
-      ...per.map((c) => `- ${esc(c.label)} = ${bold(String(count(c)))} positions`),
+      ...per.map((c) => `- ${esc(c.label)}: ${bold(String(count(c)))} positions`),
     );
   } else {
     out.push('No closed trades yet.');
   }
-  if (all) out.push('', `${bold('All chains')} = ${bold(String(count(all)))} positions`);
+  if (all) out.push('', `${bold('All chains')}: ${bold(String(count(all)))} positions`);
   out.push('', note(`LIVE \u00B7 ${nowWib()}`));
   return out.join('\n');
 }
@@ -725,11 +725,11 @@ export function msgPnl(opts: {
   } else {
     out.push(
       `${esc(opts.periodLabel)} ${bold('Statistics :')}`,
-      `1. Trade = ${bold(String(opts.trades))} Positions`,
-      `2. Profit = ${bold(usd(opts.grossWin))}`,
-      `3. Loss = ${bold(usd(opts.grossLoss))}`,
+      `1. Trade: ${bold(String(opts.trades))} Positions`,
+      `2. Profit: ${bold(usd(opts.grossWin))}`,
+      `3. Loss: ${bold(usd(opts.grossLoss))}`,
       '',
-      `${bold('Win Rate')} = ${bold(`${Math.round(opts.winratePct)}%`)}`,
+      `${bold('Win Rate')}: ${bold(`${Math.round(opts.winratePct)}%`)}`,
     );
   }
   out.push('', note(opts.dryRun ? 'DRY RUN' : 'LIVE'));
@@ -1112,26 +1112,26 @@ export function msgPositionCard(opts: {
   return [
     `\u{1F50D} ${bold(`POSITION #${esc(opts.tokenId)}`)}`,
     '',
-    `Pair = ${bold(`$${sym}`)} / ${base} ${italic(opts.feeIsTickSpacing ? `(ts ${opts.fee}, dynamic fee)` : `(${feeLabel(opts.fee)} fee)`)}${opts.chain ? ` on ${esc(opts.chain)}` : ''}`,
-    `Strategy = ${strategy}${isLeg ? `, ${bold(`${opts.ladder!.shape === 'bidask' ? 'bid-ask' : 'spot'} ladder`)}` : ''}`,
+    `Pair: ${bold(`$${sym}`)} / ${base} ${italic(opts.feeIsTickSpacing ? `(ts ${opts.fee}, dynamic fee)` : `(${feeLabel(opts.fee)} fee)`)}${opts.chain ? ` on ${esc(opts.chain)}` : ''}`,
+    `Strategy: ${strategy}${isLeg ? `, ${bold(`${opts.ladder!.shape === 'bidask' ? 'bid-ask' : 'spot'} ladder`)}` : ''}`,
     // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
     // Shaped so a bid-ask position reads the same across both protocols.
     ...(isLeg
       ? [
           '',
           `\u{1FA9C} ${bold(`LADDER, ${opts.ladder!.legCount} legs`)}`,
-          ...(opts.ladder!.groupInvest ? [`Deposit = ${bold(`${esc(opts.ladder!.groupInvest)} ${investUnit}`)}`] : []),
+          ...(opts.ladder!.groupInvest ? [`Deposit: ${bold(`${esc(opts.ladder!.groupInvest)} ${investUnit}`)}`] : []),
           ...(opts.ladder!.ladderValue
             ? [
-                `Value now = ${bold(esc(opts.ladder!.ladderValue))}`,
+                `Value now: ${bold(esc(opts.ladder!.ladderValue))}`,
                 ...(opts.ladder!.ladderFees ? [note(`incl. fees ${esc(opts.ladder!.ladderFees)}`)] : []),
               ]
             : []),
-          ...(opts.ladder!.ladderPnl ? [`Ladder PnL = ${esc(opts.ladder!.ladderPnl)}`] : []),
-          ...(opts.ladder!.ladderMcRange ? [`Ladder range = ${esc(opts.ladder!.ladderMcRange)}`] : []),
+          ...(opts.ladder!.ladderPnl ? [`Ladder PnL: ${esc(opts.ladder!.ladderPnl)}`] : []),
+          ...(opts.ladder!.ladderMcRange ? [`Ladder range: ${esc(opts.ladder!.ladderMcRange)}`] : []),
           ...(opts.ladder!.filled !== undefined
             ? [
-                `Rungs = ${opts.ladder!.filled} filled, ${opts.ladder!.active} active, ${opts.ladder!.waiting} waiting` +
+                `Rungs: ${opts.ladder!.filled} filled, ${opts.ladder!.active} active, ${opts.ladder!.waiting} waiting` +
                   (opts.ladder!.unread ? `, ${opts.ladder!.unread} unreadable` : ''),
               ]
             : []),
@@ -1140,15 +1140,15 @@ export function msgPositionCard(opts: {
             `leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount}` +
               (opts.ladder!.sharePct !== undefined ? `, ${opts.ladder!.sharePct.toFixed(1)}% of ladder capital` : ''),
           ),
-          `Leg value = ${bold(`${esc(opts.ladder!.legValue ?? opts.invest)}${opts.ladder!.legValue ? '' : ` ${investUnit}`}`)}`,
+          `Leg value: ${bold(`${esc(opts.ladder!.legValue ?? opts.invest)}${opts.ladder!.legValue ? '' : ` ${investUnit}`}`)}`,
           ...(opts.ladder!.legFees ? [note(`incl. fees ${esc(opts.ladder!.legFees)}`)] : []),
         ]
-      : [`Principal = ${bold(`${esc(opts.invest)} ${investUnit}`)}`]),
-    `${isLeg ? 'Leg range' : 'Target range'} = ${range} ${italic('from current price')}`,
+      : [`Principal: ${bold(`${esc(opts.invest)} ${investUnit}`)}`]),
+    `${isLeg ? 'Leg range' : 'Target range'}: ${range} ${italic('from current price')}`,
     // "now" only needs saying once, on the Ladder Range line.
     ...(opts.mcRange ? [note(`market cap ${esc(isLeg ? opts.mcRange.replace(/ · now .*$/, '') : opts.mcRange)}`)] : []),
-    `${isLeg ? 'Leg PnL' : 'PnL'} = ${esc(opts.pnlText)}`,
-    `Status = ${opts.inRange ? '🟢' : opts.converted && isLeg ? '🟡' : '🔴'} ${
+    `${isLeg ? 'Leg PnL' : 'PnL'}: ${esc(opts.pnlText)}`,
+    `Status: ${opts.inRange ? '🟢' : opts.converted && isLeg ? '🟡' : '🔴'} ${
       opts.converted && isLeg ? `${bold('LEG FILLED')}, bought, ladder still running` : status
     }`,
     '',
@@ -1196,13 +1196,13 @@ export function msgPositionDetail(opts: {
   return [
     `\u{1F4C4} ${bold(`FULL DETAILS #${esc(opts.tokenId)}`)}`,
     '',
-    `Pair = ${bold(`$${esc(opts.symbol)}`)} / ${esc(base)} (${feeLabel(opts.fee)} fee)`,
-    `Protocol = Uniswap v3${opts.chain ? ` on ${esc(opts.chain)}` : ''}`,
-    `Status = ${opts.inRange ? '🟢' : '🔴'} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`,
+    `Pair: ${bold(`$${esc(opts.symbol)}`)} / ${esc(base)} (${feeLabel(opts.fee)} fee)`,
+    `Protocol: Uniswap v3${opts.chain ? ` on ${esc(opts.chain)}` : ''}`,
+    `Status: ${opts.inRange ? '🟢' : '🔴'} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`,
     '',
-    `Assets = ${esc(opts.composition)}`,
-    `Value = ${bold(esc(opts.value))}`,
-    `Unclaimed fees = ${bold(esc(opts.fees))}`,
+    `Assets: ${esc(opts.composition)}`,
+    `Value: ${bold(esc(opts.value))}`,
+    `Unclaimed fees: ${bold(esc(opts.fees))}`,
     '',
     note(nowWib()),
   ].join('\n');
@@ -1260,12 +1260,12 @@ export function msgPositionsList(opts: {
         : 'Waiting (out of range)';
     const pnl = r.pnlPct === null ? `— ${italic('(entry unknown)')}` : fmtPct(r.pnlPct);
     const fields = [
-      ...(r.chain ? [`Chain = ${esc(r.chain)}`] : []),
-      `Strategy = ${esc(side)}`,
-      `Invested = ${esc(r.investLabel)}`,
-      `Total Fees = ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
-      `PnL = ${pnl}`,
-      `Status = ${esc(status)}, ${esc(r.age)}`,
+      ...(r.chain ? [`Chain: ${esc(r.chain)}`] : []),
+      `Strategy: ${esc(side)}`,
+      `Invested: ${esc(r.investLabel)}`,
+      `Total Fees: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
+      `PnL: ${pnl}`,
+      `Status: ${esc(status)}, ${esc(r.age)}`,
     ];
     return [
       `${r.inRange ? '🟢' : '🔴'} ${bold(`$${esc(pair)}`)} | #${esc(r.id)}${r.protocol ? ` (${esc(r.protocol)})` : ''}`,
@@ -1457,7 +1457,7 @@ export function msgLegStep(tokenSym: string, rangePct: number): string {
   return [
     bold('OPEN LP · Bid-Ask · How many legs?'),
     '',
-    `More legs = smoother ladder across the −${rangePct}% range, more ${esc(tokenSym)} bought as it dips.`,
+    `More legs means a smoother ladder across the −${rangePct}% range, more ${esc(tokenSym)} bought as it dips.`,
     'All legs open in one batched transaction (auto-split if large).',
     '',
     `${bold('8–10 = sweet spot')} (free-tier RPC). ~95% of the Bid-Ask benefit, fast /positions.`,
@@ -1860,7 +1860,7 @@ export function msgNoFees(): string {
 
 export function msgClaimPick(rows: Array<{ symbol: string; id: string; label: string }>): string {
   const out = [`\u{1F4B5} ${bold('UNCLAIMED FEES')}`, '', 'Fees on your active positions :'];
-  rows.forEach((r, i) => out.push(`${i + 1}. ${bold(`$${esc(r.symbol)}`)} / #${esc(r.id)} = ${bold(esc(r.label))}`));
+  rows.forEach((r, i) => out.push(`${i + 1}. ${bold(`$${esc(r.symbol)}`)} / #${esc(r.id)}: ${bold(esc(r.label))}`));
   out.push('', note('fees go straight to wallet and your LP position stays open.'));
   return out.join('\n');
 }
@@ -1894,8 +1894,8 @@ export function msgRemoveConfirm(id: string, symbol: string, pct: number, est: s
     `\u2796 ${bold('REMOVE LIQUIDITY REVIEW')}`,
     '',
     `${bold(`${pct}%`)} of ${bold(`$${esc(symbol)}`)} / #${esc(id)}`,
-    `Estimated out = ${bold(esc(est))} plus any unclaimed fees`,
-    `Left in the pool = ${bold(`${100 - pct}%`)}, still earning`,
+    `Estimated out: ${bold(esc(est))} plus any unclaimed fees`,
+    `Left in the pool: ${bold(`${100 - pct}%`)}, still earning`,
     '',
     // The cost basis shrinks along with a partial removal -- without this note, the
     // smaller PnL afterwards reads like a sudden loss.
@@ -1932,11 +1932,11 @@ export function msgStopConfirm(opts: {
   return [
     `\u26D4 ${bold(`CLOSE POSITION #${esc(opts.tokenId)}`)}`,
     '',
-    `Pair = ${bold(`$${esc(opts.symbol)}`)} / ${esc(opts.baseSymbol)} (${feeLabel(opts.fee)} fee)`,
-    `Age = ${esc(opts.age)}`,
-    `Fees = ${bold(esc(opts.feeText))}`,
-    `Out = ${bold(`${esc(opts.baseAmt)} ${esc(opts.baseSymbol)}`)} + ${esc(opts.otherAmt)} ${esc(opts.symbol)}`,
-    `PnL = ${bold(esc(opts.pnlText))}`,
+    `Pair: ${bold(`$${esc(opts.symbol)}`)} / ${esc(opts.baseSymbol)} (${feeLabel(opts.fee)} fee)`,
+    `Age: ${esc(opts.age)}`,
+    `Fees: ${bold(esc(opts.feeText))}`,
+    `Out: ${bold(`${esc(opts.baseAmt)} ${esc(opts.baseSymbol)}`)} + ${esc(opts.otherAmt)} ${esc(opts.symbol)}`,
+    `PnL: ${bold(esc(opts.pnlText))}`,
     '',
     // This one keeps its confirm step: closing burns the position and cannot be undone.
     note(`closing removes the liquidity and swaps everything to ${esc(opts.baseSymbol)}. This cannot be undone.`),
@@ -1985,7 +1985,7 @@ export function msgCashOut(opts: {
     `\u2705 ${bold('POSITION CLOSED')}`,
     '',
     `#${esc(opts.tokenId)}${ladder ? ` \u00B7 ladder, ${opts.legs} legs` : ''}`,
-    `Received = ${bold(esc(opts.ethOut))}`,
+    `Received: ${bold(esc(opts.ethOut))}`,
   ];
 
   // The steps that were ACTUALLY executed, straight from the executor. Each hash on its
@@ -2385,7 +2385,7 @@ export function msgSwept(o: {
   return [
     `\u267B\uFE0F ${bold('LEFTOVER SWEPT')}`,
     '',
-    `${bold(`$${esc(o.symbol)}`)} / #${esc(o.tokenId)} = ${bold(`+${esc(o.amountLabel)}`)}`,
+    `${bold(`$${esc(o.symbol)}`)} / #${esc(o.tokenId)}: ${bold(`+${esc(o.amountLabel)}`)}`,
     'recovered from a closed position, and added to its PnL.',
     '',
     // Chain and route stay in the service log: neither changes what the reader does
