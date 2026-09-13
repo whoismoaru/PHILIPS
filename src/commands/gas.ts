@@ -176,15 +176,21 @@ type Chain = NonNullable<Awaited<ReturnType<typeof costsOf>>>;
 function section(op: string, chains: Chain[], rate: number | null): string[] {
   const withUsd = chains.filter((c) => c.rows.get(op)!.usd !== null).sort((a, b) => a.rows.get(op)!.usd! - b.rows.get(op)!.usd!);
   const noUsd = chains.filter((c) => c.rows.get(op)!.usd === null);
-  const lines = withUsd.map((c, i) => {
-    const r = c.rows.get(op)!;
-    return `${i + 1}. ${esc(c.label)} = ${bold(usd(r.usd!))} / ${bold(rate ? idr(r.usd! * rate) : '—')}`;
-  });
-  for (const c of noUsd) {
-    const r = c.rows.get(op)!;
-    lines.push(`— ${esc(c.label)} = ${bold(`${r.native.toFixed(6)} ${r.sym}`)} ${italic('(no USD price)')}`);
-  }
-  return [bold(op.toUpperCase()), ...lines];
+  const rows = [
+    ...withUsd.map((c) => {
+      const r = c.rows.get(op)!;
+      return `${esc(c.label)}: ${bold(usd(r.usd!))} / ${bold(rate ? idr(r.usd! * rate) : '—')}`;
+    }),
+    // A chain with no native price is left OUT of the ranking -- ordering it would need
+    // the very USD figure we lack -- and listed last in native units instead.
+    ...noUsd.map((c) => {
+      const r = c.rows.get(op)!;
+      return `${esc(c.label)}: ${bold(`${r.native.toFixed(6)} ${r.sym}`)} ${italic('(no USD price)')}`;
+    }),
+  ];
+  // Cheapest first, drawn as a tree: the rank is the ORDER, so a number in front of each
+  // line only repeats what the position already says.
+  return [bold(op.toUpperCase()), ...rows.map((l, i) => `${i === rows.length - 1 ? '└' : '├'} ${l}`)];
 }
 
 /** The whole card. Exported so it can be tested without Telegram (scripts/smoke-gas.ts). */
