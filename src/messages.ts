@@ -2412,7 +2412,9 @@ export function msgTopUpAmount(symbol: string, tokenId: string, balanceLabel: st
     '',
     `\u{1F4BC} ${bold('Balance')} = ${bold(esc(balanceLabel))}`,
     '',
-    italic(`tap a percentage below to add more ${esc(baseSym)} at this position's own range.`),
+    italic(`tap a percentage below, or type the exact amount of ${esc(baseSym)} in the chat.`),
+    '',
+    italic(`it goes into this position's own range \u2014 the side and range do not change.`),
     '',
     note(nowWib()),
   ].join('\n');

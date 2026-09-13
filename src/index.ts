@@ -5303,6 +5303,35 @@ bot.on(message('text'), async (ctx) => {
     }
   }
 
+  // A top-up into an existing position is waiting for a typed amount. Checked BEFORE the
+  // /add wizard: both wait on a number, and the top-up is the one that was opened last.
+  {
+    const t = topUps.get(ctx.from.id);
+    if (t) {
+      if (isStaleFlow(t.at)) {
+        topUps.delete(ctx.from.id);
+        return ctx.reply(msg.msgSessionExpired(), html);
+      }
+      const wei = parseAmt(raw, t.base.decimals);
+      if (wei === null) return ctx.reply(msg.msgInvalidAmount(), html);
+      const cc = getChain(t.chainKey);
+      const held = await (t.base.wrappable
+        ? cc.provider.getBalance(cc.wallet.address)
+        : (new ethers.Contract(t.base.address, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address) as Promise<bigint>)
+      ).catch(() => 0n);
+      // A native base pays gas out of the same balance, so the reserve comes off the top.
+      const usable = t.base.wrappable ? held - (await gasBuffer(cc)) : held;
+      if (wei > usable) {
+        const sym = t.base.wrappable ? cc.nativeSymbol : t.base.symbol;
+        return ctx.reply(
+          msg.msgOverLimit(`${msg.cleanUnits(usable > 0n ? usable : 0n, t.base.decimals)} ${sym}`),
+          html,
+        );
+      }
+      return execTopUp(ctx, ctx.from.id, wei);
+    }
+  }
+
   // Wizard /add menunggu ketikan nominal.
   const flow = getFlow(ctx);
   if (flow?.awaitingAmount && isStaleFlow(flow.startedAt)) {
