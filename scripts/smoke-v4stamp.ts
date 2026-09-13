@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CHAINS, isStableBase, baseOf } from '../src/chains.js';
+import { CHAINS, isStableBase } from '../src/chains.js';
 import { v4Supported, v4BaseSymbol } from '../src/uniswapV4.js';
 import { allV4 } from '../src/v4store.js';
 
@@ -21,7 +21,9 @@ for (const cc of Object.values(CHAINS).filter(v4Supported)) {
   const sym = v4BaseSymbol(cc, 'USDG');
   assert.notEqual(sym, cc.nativeSymbol, `${cc.key}: the stable base resolves to the native symbol`);
   assert.ok(sym.length > 0, `${cc.key}: no stable base symbol`);
-  assert.ok(isStableBase(baseOf(cc, 'usdt').kind) || isStableBase(baseOf(cc, 'usdg').kind), `${cc.key}: no stable base at all`);
+  // ANY stable base counts, not just usdt/usdg: Base's stablecoin is USDC, and checking
+  // only two names reported a chain as having no stablecoin while it had one.
+  assert.ok(cc.bases.some((b) => isStableBase(b.kind)), `${cc.key}: no stable base at all`);
 }
 
 // Live records: a stable-based position must carry entryEthUsd = 1. Anything else

@@ -49,4 +49,15 @@ assert.ok(!/Promise\.all|mapLimit/.test(all), 'Close All harus berurutan, bukan 
 // One failure must not stop the rest.
 assert.ok(/failed\.push/.test(all), 'kegagalan satu posisi harus dicatat, bukan menghentikan sisanya');
 
+// --- every v4 chain must have BOTH contracts, and a stablecoin base ---
+// Half a configuration is worse than none: a PositionManager with no PoolManager reads
+// as "v4 supported" right up to the moment a deposit is attempted.
+const v4src2 = readFileSync('src/uniswapV4.ts', 'utf8');
+const keysOf = (name: string) => {
+  const blk = v4src2.slice(v4src2.indexOf(`const ${name}: Record<string, string> = {`));
+  return [...blk.slice(0, blk.indexOf('};')).matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]).sort();
+};
+assert.deepEqual(keysOf('V4_PM'), keysOf('V4_POOL_MANAGER'),
+  'daftar PositionManager & PoolManager v4 harus mencakup chain yang sama persis');
+
 console.log('ok: kartu, tombol, dan alur setara antara v3 & v4 di semua chain');
