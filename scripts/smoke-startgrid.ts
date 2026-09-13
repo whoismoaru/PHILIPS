@@ -26,7 +26,7 @@ for (const b of grid.filter((g) => g.startsWith('cmd:'))) {
 
 // Money buttons must sit behind the same guard that protects the typed command.
 const guard = src.match(/const NEEDS_WALLET_CB =\s*([\s\S]*?);/)![1];
-for (const m of ['stop', 'claim_fees', 'buy', 'sell', 'unwrap', 'bridge', 'send']) {
+for (const m of ['stop', 'claim_fees', 'buy', 'sell', 'swap', 'unwrap', 'bridge', 'send', 'withdraw']) {
   assert.ok(guard.includes(m), `cmd:${m} moves money but is not covered by NEEDS_WALLET_CB`);
 }
 
