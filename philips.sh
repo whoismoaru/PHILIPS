@@ -40,6 +40,20 @@ function install_node() {
   ok "Node $(node -v) installed."
 }
 
+# git and curl are NOT on a minimal Ubuntu image, and the first thing that needs them is
+# a clone that would otherwise die with "command not found" halfway through the install.
+function install_tools() {
+  local missing=()
+  for t in git curl; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
+  [ ${#missing[@]} -eq 0 ] && return 0
+  info "Installing ${missing[*]}..."
+  sudo apt-get update -qq && sudo apt-get install -y "${missing[@]}"
+  for t in "${missing[@]}"; do
+    command -v "$t" >/dev/null 2>&1 || { warn "$t could not be installed. Install it by hand, then run this again."; return 1; }
+  done
+  ok "${missing[*]} installed."
+}
+
 # -- 2. Fetch the code ----------------------------------------------
 function clone_repo() {
   if [ -d "$APP_DIR/.git" ]; then
@@ -251,10 +265,14 @@ function go_live() {
 }
 
 function install_all() {
-  install_node
-  clone_repo
-  setup_env
-  
+  install_tools || return 1
+  install_node  || return 1
+  clone_repo    || return 1
+  # A refused .env (an empty token, say) must stop the install HERE. Carrying on would
+  # create a systemd service with nothing to read, and the first thing the user sees is
+  # a bot that will not start.
+  setup_env    || { warn "Configuration not written, so no service was created. Pick 1 again."; return 1; }
+
   if ! setup_service; then
     echo
     warn "Installation stopped here. Fix the cause above, then:"
@@ -265,8 +283,8 @@ function install_all() {
   echo
   ok "Done. Next steps, in Telegram:"
   echo "      1. /start"
-  echo "      2. /settings -> Connect Wallet -> tempel private key / seed"
-  echo "      3. /status, to confirm the balances read correctly"
+  echo "      2. /settings -> Connect Wallet -> paste a private key or seed phrase"
+  echo "      3. /portfolio, to confirm the balances read correctly"
   echo "      4. come back here and pick 6 when you are ready to go LIVE"
 }
 
