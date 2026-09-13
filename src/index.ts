@@ -1863,11 +1863,15 @@ async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
 async function renderStrategyStep(ctx: any, flow: AddFlow, edit: boolean) {
   const sel = flow.selected;
   const base = wizardBase(flow);
+  // The SAME summary row the pool picker showed, for the pool actually chosen -- built
+  // from one formatter so the two screens cannot disagree about a pool's numbers.
+  const selSummary = sel ? poolSummaries([sel])[0] : undefined;
   const text = msg.msgStrategyStep(
-    sel ? `${sel.baseSymbol}/${sel.otherSymbol}` : '?',
+    sel ? `$${sel.otherSymbol}/${sel.baseSymbol}` : '?',
     base.symbol,
     sel?.otherSymbol ?? 'token',
     flow.plan?.currentPrice ? String(flow.plan.currentPrice) : null,
+    selSummary,
   );
   const extra = {
     ...html,
