@@ -1812,18 +1812,21 @@ export function msgSettings(
 ): string {
   // Wallet, chain and the quick-% list are deliberately NOT here: the first two already
   // head the WELCOME card, and each percentage is shown by the button that changes it.
+  const fields = [
+    `Tx limit: ${esc(maxPerTx)}`,
+    `Gas: auto-fetched${gasCeiling ? `, ceiling ${esc(gasCeiling)}/tx` : ', no ceiling'}`,
+    // These match what the code ACTUALLY does: a swap steps 1% -> 2% -> 3% and never
+    // beyond, while an LP mint is a separate, far tighter figure.
+    'Swap slippage: 1%, retried at 2% then 3%',
+    'LP mint slippage: 0.5%',
+    ...(lpShape ? [`LP shape: ${bold(lpShape === 'bidask' ? 'BID-ASK ladder' : 'SPOT')}`] : []),
+  ];
   return [
     `\u2699\uFE0F ${bold('SETTINGS')}`,
     '',
     `${bold('Mode')} : ${bold(dryRun ? 'DRY RUN' : 'LIVE')}  ${dryRun ? '\u26AA' : '\u{1F7E2}'}`,
     '',
-    `${bold('Tx limit')} : ${esc(maxPerTx)}`,
-    `${bold('Gas')} : auto-fetched${gasCeiling ? `, ceiling ${esc(gasCeiling)}/tx` : ', no ceiling'}`,
-    // These match what the code ACTUALLY does: a swap steps 1% -> 2% -> 3% and never
-    // beyond, while an LP mint is a separate, far tighter figure.
-    `${bold('Swap slippage')} : 1%, retried at 2% then 3%`,
-    `${bold('LP mint slippage')} : 0.5%`,
-    ...(lpShape ? [`${bold('LP shape')} : ${bold(lpShape === 'bidask' ? 'BID-ASK ladder' : 'SPOT')}`] : []),
+    ...fields.map((f, i) => `${i === fields.length - 1 ? '└' : '├'} ${f}`),
     '',
     note(nowWib()),
   ].join('\n');
