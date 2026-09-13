@@ -924,31 +924,19 @@ async function buildPositionCard(
     feeIsTickSpacing: cc.slipstream,
     ladder,
   });
-  // The explorer link points at the position NFT (Blockscout: /token/<pm>/instance/<id>)
-  // rather than just the wallet address — that is what "view this position" really means.
-  const explorer = cc.blockscout?.replace(/\/api\/v2\/?$/, '') ?? null;
   const extra = {
     ...html,
+    // The same four buttons as the v4 card: one position card, one set of actions,
+    // whichever protocol it sits on. Fees are harvested from /claim_fees, which covers
+    // both protocols on every chain.
     ...Markup.inlineKeyboard([
-      [
-        Markup.button.callback('📄 Full Details', `detail:${rec.tokenId}`),
-        Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`),
-      ],
-      // "Remove Liquidity", not "Withdraw": withdrawing now means sending funds out to an
-      // address, and this pulls part of an LP back into the wallet.
-      [
-        Markup.button.callback('💵 Harvest Fees', `claim:${rec.tokenId}`),
-        Markup.button.callback('➖ Remove Liquidity', `rm:${rec.tokenId}`),
-      ],
-      // The one irreversible action here keeps its own row, and ⛔ is the vocabulary's
-      // stop marker -- ❌ reads as "failed", which this is not.
+      [Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`)],
+      // The one irreversible action keeps its own row, and ⛔ is the vocabulary's stop
+      // marker -- ❌ reads as "failed", which this is not.
       [Markup.button.callback('⛔ Close Position', `stop:${rec.tokenId}`)],
-      explorer
-        ? [Markup.button.url('🔗 Explorer', `${explorer}/token/${cc.pmAddress}/instance/${rec.tokenId}`),
-           Markup.button.callback('⬅️ Positions', 'positions')]
-        : [Markup.button.callback('⬅️ Positions', 'positions')],
+      [Markup.button.callback('⬅️ Positions', 'positions')],
       [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
-    ].filter((r) => r.length)),
+    ]),
   };
   return { text, extra };
 }
