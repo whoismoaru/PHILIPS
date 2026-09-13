@@ -935,7 +935,6 @@ async function buildPositionCard(
       // marker -- ❌ reads as "failed", which this is not.
       [Markup.button.callback('⛔ Close Position', `stop:${rec.tokenId}`)],
       [Markup.button.callback('⬅️ Positions', 'positions')],
-      [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
     ]),
   };
   return { text, extra };
@@ -1385,7 +1384,6 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       [Markup.button.callback('🔄 Refresh', `posv4:${p.tokenId}`)],
       [Markup.button.callback('⛔ Close Position', `closev4:${p.tokenId}`)],
       [Markup.button.callback('⬅️ Positions', 'positions_refresh')],
-      [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
     ]),
   };
   return { text, extra };

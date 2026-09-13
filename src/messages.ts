@@ -482,7 +482,7 @@ export function msgV4Position(p: {
   // last trace. The "Uniswap v4 · managed by the bot" line was dropped: the protocol
   // is already implied by the card's contents, and the line only added length without
   // supporting a decision.
-  lines.push('', note(`${p.age ? `age ${esc(p.age)} | ` : ''}${nowWib()}`));
+  lines.push('', note(nowWib()));
   if (!p.tracked) lines.push(note('read-only — opened outside the bot'));
   return lines.join('\n');
 }
@@ -1155,7 +1155,7 @@ export function msgPositionCard(opts: {
         ]
       : []),
     '',
-    note(`${opts.age ? `age ${esc(opts.age)} | ` : ''}${nowWib()}`),
+    note(nowWib()),
     ...(opts.dryRun ? [modeLabel(true)] : []),
   ].join('\n');
 }
