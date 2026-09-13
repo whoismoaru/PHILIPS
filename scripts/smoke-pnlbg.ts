@@ -10,7 +10,7 @@ import { BG_CUSTOM, customBackground, invalidateBackground, renderPnlCard } from
  */
 const opts = {
   period: 'Today', opened: 0, closed: 0, net: 0, netLabel: '+$0.00', volumeLabel: '$0.00',
-  winRateLabel: '-', positionsLabel: '0', bestLabel: '-', bestPositive: true, footer: 'test',
+  winRateLabel: '-', positionsLabel: '0', bestLabel: '-', bestPositive: true, date: '14 September 2026',
 };
 // An existing custom backdrop belongs to the owner: move it aside, never delete it.
 const saved = existsSync(BG_CUSTOM) ? readFileSync(BG_CUSTOM) : null;

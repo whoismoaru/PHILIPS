@@ -195,6 +195,20 @@ export function nowWib(): string {
 }
 
 
+/**
+ * "14 September 2026" -- the date spelled out, no clock.
+ *
+ * The PnL card covers a whole period, so a minute-precise stamp on it says nothing: what
+ * matters is the DAY the recap was taken. Built the same way as nowWib (UTC shifted by 7)
+ * rather than through a locale, which on a server set to another zone silently returns
+ * yesterday.
+ */
+export function dateWibLong(): string {
+  const d = new Date(Date.now() + 7 * 3_600_000);
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
 function footerMode(dryRun?: boolean): string {
   if (dryRun === undefined) return nowWib();
   return `${modeLabel(dryRun)} · ${nowWib()}`;

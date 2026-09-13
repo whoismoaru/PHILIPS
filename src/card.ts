@@ -258,7 +258,7 @@ export type PnlCardOpts = {
   positionsLabel: string; // '12'
   bestLabel: string; // '+$18.42' or '-'
   bestPositive: boolean;
-  footer: string; // the timestamp, nothing else
+  date: string; // '14 September 2026' -- drawn top right, no clock
 };
 
 /**
@@ -322,6 +322,21 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
   // whatever happened to be bright there, and a backdrop the owner can swap at any time
   // is no place to put a fixed label.
   masthead(ctx, X, 74);
+  // The date sits opposite the masthead, on the same line: the two together read as a
+  // letterhead, and the foot of the card is left to the figures.
+  //
+  // A scrim across the top first. The backdrop is the owner's to change, so no assumption
+  // holds about what is behind this corner -- against bright artwork the date vanished.
+  const top = ctx.createLinearGradient(0, 0, 0, 118);
+  top.addColorStop(0, 'rgba(4,6,10,0.86)');
+  top.addColorStop(1, 'rgba(4,6,10,0)');
+  ctx.fillStyle = top;
+  ctx.fillRect(0, 0, W, 118);
+  ctx.fillStyle = COL.text;
+  ctx.font = '17px PhMono';
+  ctx.textAlign = 'right';
+  ctx.fillText(o.date, W - 64, 74);
+  ctx.textAlign = 'left';
 
   const label = (t: string, y: number) => {
     ctx.fillStyle = COL.muted;
@@ -383,14 +398,6 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
 
   // Centred under the stats row and a size down from the labels: it is a timestamp, the
   // quietest thing on the card, and left-aligned it read as a fifth column.
-  ctx.fillStyle = COL.muted;
-  ctx.font = '12px PhMono';
-  // Centred by the canvas itself rather than by subtracting half a measured width: the
-  // mono face reports a trailing advance that pushed the line a few pixels left.
-  ctx.textAlign = 'center';
-  ctx.fillText(o.footer, W / 2, H - 16);
-  ctx.textAlign = 'left';
-
   return canvas.toBuffer('image/png');
 }
 

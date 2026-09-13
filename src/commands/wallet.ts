@@ -166,7 +166,7 @@ export async function handleBgPhoto(ctx: any, fileId: string): Promise<void> {
     const png = await renderPnlCard({
       period: 'Preview', opened: 0, closed: 0, net: 0, netLabel: '+$0.00',
       volumeLabel: '$0.00', winRateLabel: '-', positionsLabel: '0', bestLabel: '-',
-      bestPositive: true, footer: `preview · ${msg.nowWib()}`,
+      bestPositive: true, date: msg.dateWibLong(),
     }).catch(() => null);
     if (png) await ctx.replyWithDocument(Input.fromBuffer(png, 'pnl-preview.png'));
   } catch (e) {

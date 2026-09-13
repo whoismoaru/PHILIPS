@@ -9,7 +9,7 @@ import { renderPnlCard } from '../src/card.js';
  */
 const base = {
   period: 'Today', opened: 0, closed: 0, volumeLabel: '$0.00', winRateLabel: '-',
-  positionsLabel: '0', bestLabel: '-', bestPositive: true, footer: 'LIVE · 00:00 WIB',
+  positionsLabel: '0', bestLabel: '-', bestPositive: true, date: '14 September 2026',
 };
 /** The average colour of the headline figure's row, read off the rendered PNG. */
 async function headline(net: number, netLabel: string) {
