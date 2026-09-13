@@ -1226,6 +1226,7 @@ export function msgPositionsList(opts: {
     pnlPct: number | null;
     inRange: boolean;
     protocol?: string | null; // 'V3' | 'V4'
+    chain?: string | null; // chain label — a list can span chains, and the card must say which
     rangeLabel?: string | null;
     feesLabel?: string | null;
     feesUsdLabel?: string | null; // fee dalam USD; jatuh ke feesLabel bila harga tak terbaca
@@ -1258,13 +1259,17 @@ export function msgPositionsList(opts: {
         ? `Fully converted (out of range) → ${r.convertedInto ?? 'token'}`
         : 'Waiting (out of range)';
     const pnl = r.pnlPct === null ? `— ${italic('(entry unknown)')}` : fmtPct(r.pnlPct);
+    const fields = [
+      ...(r.chain ? [`Chain = ${esc(r.chain)}`] : []),
+      `Strategy = ${esc(side)}`,
+      `Invested = ${esc(r.investLabel)}`,
+      `Total Fees = ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
+      `PnL = ${pnl}`,
+      `Status = ${esc(status)}, ${esc(r.age)}`,
+    ];
     return [
       `${r.inRange ? '🟢' : '🔴'} ${bold(`$${esc(pair)}`)} | #${esc(r.id)}${r.protocol ? ` (${esc(r.protocol)})` : ''}`,
-      `- Strategy = ${esc(side)}`,
-      `- Invested = ${esc(r.investLabel)}`,
-      `- Status = ${esc(status)}, ${esc(r.age)}`,
-      `- Fees = ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
-      `- PnL = ${pnl}`,
+      ...fields.map((f, i) => `${i === fields.length - 1 ? '└' : '├'} ${f}`),
     ].join('\n');
   });
 
@@ -1291,7 +1296,8 @@ export function msgPositionsList(opts: {
       : anyConverted
         ? 'Part of your liquidity has fully converted and stopped earning fees, the rest is still waiting to enter range.'
         : 'Your liquidity is not active yet. It starts earning fees once the token price moves into your range.';
-  out.push('', tail, '', note(nowWib()));
+  void tail;
+  out.push('', note(nowWib()));
   return out.join('\n');
 }
 

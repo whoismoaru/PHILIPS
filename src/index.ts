@@ -1320,6 +1320,7 @@ type PosRow = {
   pnlPct: number | null;
   inRange: boolean;
   protocol?: string | null; // 'V3' | 'V4' — ditulis di judul baris
+  chain?: string | null;    // label chain — daftar bisa lintas chain
   wethEq: number; // setara-WETH utk total invest (USDG→WETH via ethUsd)
   strategy?: string | null;
   baseSymbol?: string | null; // aset yang disetor — label sisi ikut ini, bukan 'ETH' kaku
@@ -1436,6 +1437,7 @@ async function cmdPositions(ctx: any, edit = false) {
         groupId: rec.groupId ?? null,
         legShape: rec.shape ?? null,
         pair: pairLabel(d.baseSymbol, rec.symbol),
+        chain: cc.label,
         protocol: 'V3',
         investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${d.baseSymbol}`,
         age: msg.fmtAge(Date.now() - rec.openedAt),
@@ -1530,6 +1532,7 @@ async function cmdPositions(ctx: any, edit = false) {
       legShape: tracked?.shape ?? null,
       pair: `${p.sym0} / ${p.sym1}`,
       protocol: 'V4',
+      chain: pcc.label,
       investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${sym}`,
       age: tracked ? msg.fmtAge(Date.now() - tracked.openedAt) : '—',
       pnlUsd,
