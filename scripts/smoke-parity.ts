@@ -73,9 +73,12 @@ assert.equal((idx.match(/t\.base\.wrappable \? held - \(await gasBuffer\(cc\)\)|
 // Increasing an existing position also pays out its accrued fees, so one side ends up
 // owed TO the wallet. SETTLE_PAIR demands a debt on both and reverted with
 // DeltaNotNegative(0x3351b260) on the credited side; CLOSE_CURRENCY handles either sign.
-const inc = v4src.slice(v4src.indexOf('export async function increaseLiquidityV4'), v4src.indexOf('export async function increaseLiquidityV4') + 3600);
+const incAt = v4src.indexOf('export async function increaseLiquidityV4');
+const inc = v4src.slice(incAt, v4src.indexOf('\nexport ', incAt + 20));
 assert.ok(/CLOSE_CURRENCY, CLOSE_CURRENCY/.test(inc), 'increase v4 harus menutup tiap currency satu per satu');
-assert.ok(!/SETTLE_PAIR/.test(inc), 'increase v4 tak boleh memakai SETTLE_PAIR — sisi berpiutang akan revert');
+// Checked against the ACTIONS array, not the file: the comment above it names SETTLE_PAIR
+// to explain why it is wrong here.
+assert.ok(!/Uint8Array\(\[[^\]]*SETTLE_PAIR/.test(inc), 'increase v4 tak boleh memakai SETTLE_PAIR — sisi berpiutang akan revert');
 assert.ok(/staticCall/.test(inc), 'increase v4 wajib disimulasikan sebelum dikirim');
 
 console.log('ok: kartu, tombol, dan alur setara antara v3 & v4 di semua chain');
