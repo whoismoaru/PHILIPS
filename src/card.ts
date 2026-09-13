@@ -305,10 +305,12 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
   ctx.restore();
 
   const X = 88;
-  // The bot's name, centred over the artwork the way a masthead sits.
+  // The bot's name heads the text column, not the artwork: over the picture it fought
+  // whatever happened to be bright there, and a backdrop the owner can swap at any time
+  // is no place to put a fixed label.
   ctx.fillStyle = COL.muted;
   ctx.font = '21px PhMono';
-  ctx.fillText('PHILIPS', W * 0.63 - ctx.measureText('PHILIPS').width / 2, 52);
+  ctx.fillText('PHILIPS', X, 74);
 
   const label = (t: string, y: number) => {
     ctx.fillStyle = COL.muted;
