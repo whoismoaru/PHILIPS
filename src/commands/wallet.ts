@@ -80,7 +80,7 @@ export async function cmdSettings(ctx: any) {
   rows.push([Markup.button.callback('🪜 Ladder legs', 'pct:legs')]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
-  rows.push([Markup.button.callback('🏠 Menu', 'positions_back')]);
+  rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, gasCeil), {
     ...html,
     ...Markup.inlineKeyboard(rows),
