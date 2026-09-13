@@ -2096,41 +2096,29 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
  * Every guard the Confirm button used to sit in front of still runs inside execAdd.
  */
 async function planThenOpen(ctx: any, flow: AddFlow) {
-  // The plan card is SENT here, and its id is captured: execAdd is written for a button
-  // press and edits the card it was tapped on. Coming from a typed amount there is no
-  // such card, so without this the progress and result edits land nowhere and the
-  // deposit finishes invisibly.
-  let planMsgId: number | null = null;
-  const capture: any = Object.create(ctx);
-  capture.reply = async (text: string, extra?: any) => {
-    const m = await ctx.reply(text, extra);
-    planMsgId = m?.message_id ?? null;
-    return m;
-  };
+  // No confirmation card: the amount IS the confirmation. One progress bubble is sent,
+  // and every card execAdd writes from here on lands in it.
+  const prog = await ctx.reply(msg.msgProgress('preparing the position…'), html);
+  const point: any = Object.create(ctx);
+  point.answerCbQuery = async () => {};
+  point.editMessageText = async (text: string, extra?: any) =>
+    ctx.telegram.editMessageText(ctx.chat.id, prog.message_id, undefined, text, extra).catch(() => {});
+  point.editMessageReplyMarkup = async (markup?: any) =>
+    ctx.telegram.editMessageReplyMarkup(ctx.chat.id, prog.message_id, undefined, markup).catch(() => {});
   try {
-    await renderPlanStep(capture, flow, false);
+    // Silent: the plan is still computed and stored on the flow -- execAdd needs the
+    // range, the legs and the v4 leg list -- it is simply not shown as a card to tap.
+    await renderPlanStep(point, flow, false, true);
   } catch (err) {
-    return void (await ctx.reply(msg.msgError('plan', (err as Error).message), html));
+    return void (await point.editMessageText(msg.msgError('plan', (err as Error).message), html));
   }
-  if (config.safety.dryRun) return; // the plan card IS the output in a dry run
-
-  const auto: any = Object.create(ctx);
-  auto.answerCbQuery = async () => {};
-  auto.editMessageText = async (text: string, extra?: any) => {
-    if (planMsgId === null) return ctx.reply(text, extra);
-    return ctx.telegram.editMessageText(ctx.chat.id, planMsgId, undefined, text, extra).catch(() => {});
-  };
-  // Same for the reply markup: execAdd clears the buttons off the card it edits.
-  auto.editMessageReplyMarkup = async (markup?: any) =>
-    planMsgId === null
-      ? undefined
-      : ctx.telegram.editMessageReplyMarkup(ctx.chat.id, planMsgId, undefined, markup).catch(() => {});
-  return execAdd(auto);
+  if (config.safety.dryRun) return void (await point.editMessageText(msg.msgDryRunAddDone(), html));
+  return execAdd(point);
 }
 
 /** Step 4/4 — compute and show the plan, then confirm. */
-async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
-  if (flow.selected?.protocol === 'v4') return renderPlanStepV4(ctx, flow, edit);
+async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean, silent = false) {
+  if (flow.selected?.protocol === 'v4') return renderPlanStepV4(ctx, flow, edit, silent);
   const cc = wizardCtx(flow);
   const base = baseOf(cc, flow.base ?? 'weth');
   const isLadder = flow.strategy === 'base' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1;
@@ -2202,6 +2190,7 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean) {
       [Markup.button.callback('⬅️ Back', isLadder ? 'back:legs' : 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
     ]),
   };
+  if (silent) return; // the plan is computed and stored; the caller shows its own card
   await (edit ? ctx.editMessageText(fullText, extra) : ctx.reply(fullText, extra));
 }
 
@@ -2220,7 +2209,7 @@ const v4AmountWei = (flow: AddFlow): bigint =>
   ethers.parseUnits(flow.ethAmount!, wizardBase(flow).decimals);
 
 /** Step 4/4, the v4 version — a dry-run staticCall to validate, plus a range preview. */
-async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
+async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean, silent = false) {
   const cc = getChain(flow.chain);
   const pool = flow.selected!;
   const pk = pool.poolKey!;
@@ -2272,6 +2261,7 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean) {
       [Markup.button.callback('⬅️ Back', isLadder ? 'back:legs' : 'back:range'), Markup.button.callback('❌ Cancel', 'cancel')],
     ]),
   };
+  if (silent) return; // the plan is computed and stored; the caller shows its own card
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 

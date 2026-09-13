@@ -36,13 +36,16 @@ assert.ok(/await planThenOpen\(ctx, flow\)/.test(idx), 'jumlah deposit harus mem
 assert.equal((idx.match(/await planThenOpen\(ctx, flow\)/g) ?? []).length, 2,
   'kedua jalur nominal (tombol persen & ketik manual) harus memicu hal yang sama');
 const plan = idx.slice(idx.indexOf('async function planThenOpen'), idx.indexOf('async function planThenOpen') + 1800);
+// No confirmation card between the amount and the deposit: the plan is computed silently
+// so execAdd still has the range, the legs and the v4 leg list to work from.
+assert.ok(/renderPlanStep\(point, flow, false, true\)/.test(plan), 'rencana harus dihitung diam-diam, bukan ditampilkan');
+assert.ok(/msgProgress/.test(plan), 'harus ada satu gelembung progres sebagai sasaran edit');
 assert.ok(/config\.safety\.dryRun/.test(plan), 'dry run tak boleh ikut membuka posisi');
-assert.ok(/return execAdd\(auto\)/.test(plan), 'pembukaan harus lewat execAdd, bukan salinannya');
+assert.ok(/return execAdd\(point\)/.test(plan), 'pembukaan harus lewat execAdd, bukan salinannya');
 // execAdd edits the card it was tapped on. A typed amount has no such card, so the plan
 // card's id must be captured and every edit pointed at it -- otherwise the deposit runs
 // but its progress and result are never shown.
-assert.ok(/planMsgId/.test(plan), 'id kartu rencana harus ditangkap untuk jadi sasaran edit');
-assert.ok(/auto\.editMessageText/.test(plan), 'edit harus diarahkan ke kartu rencana');
+assert.ok(/point\.editMessageText/.test(plan), 'edit harus diarahkan ke gelembung progres');
 
 // Order: strategy -> range -> (legs) -> amount. Stepping back to the amount must not
 // wipe the range, which is now chosen before it.
