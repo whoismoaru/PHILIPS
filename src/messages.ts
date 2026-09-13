@@ -1276,7 +1276,13 @@ export function msgPositionsList(opts: {
       : r.converted
         ? `Fully converted (out of range) → ${r.convertedInto ?? 'token'}`
         : 'Waiting (out of range)';
-    const pnl = r.pnlPct === null ? `— ${italic('(entry unknown)')}` : fmtPct(r.pnlPct);
+    // Percent alone hides the size: +2.8% on a 350 USDG leg and on a 3 ETH one read the
+    // same. The dollar figure rides alongside, compact, and is dropped (not faked as $0)
+    // when the price could not be read.
+    const pnl =
+      r.pnlPct === null
+        ? `— ${italic('(entry unknown)')}`
+        : fmtPct(r.pnlPct) + (r.pnlUsd === null ? '' : ` / ${usdCompact(r.pnlUsd)}`);
     const fields = [
       ...(r.chain ? [`Chain: ${esc(r.chain)}`] : []),
       `Strategy: ${esc(side)}`,
