@@ -1,5 +1,6 @@
 import { createCanvas, loadImage, GlobalFonts, type Image, type SKRSContext2D } from '@napi-rs/canvas';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 
 /**
  * Renders the "key moment" PNG card, the profit card at close. It is pure presentation,
@@ -31,14 +32,33 @@ function ensureFonts() {
  * decoration.
  */
 const BG_FILE = join(process.cwd(), 'data', 'PHILIPS ANIME.jpg');
+/** The owner's own backdrop, sent to the bot as a photo. It WINS over the shipped one. */
+export const BG_CUSTOM = join(process.cwd(), 'data', 'pnl-bg.jpg');
+
+export function customBackground(): boolean {
+  return existsSync(BG_CUSTOM);
+}
+
+/** Drop the decoded image so the next card picks up a backdrop that has just changed. */
+export function invalidateBackground(): void {
+  bgImg = undefined;
+  bgFrom = '';
+}
+
 let bgImg: Image | null | undefined;
+let bgFrom = ''; // which file the cached image came from
 async function background(): Promise<Image | null> {
-  if (bgImg !== undefined) return bgImg;
+  const file = customBackground() ? BG_CUSTOM : BG_FILE;
+  // The cache is keyed on the FILE, not just on "already loaded": swapping the backdrop
+  // and still drawing the old one is the one bug this feature can have.
+  if (bgImg !== undefined && bgFrom === file) return bgImg;
   try {
-    bgImg = await loadImage(BG_FILE);
+    bgImg = await loadImage(file);
+    bgFrom = file;
   } catch (e) {
     bgImg = null;
-    console.error(`[card] the background could not be read (${BG_FILE}), falling back to a gradient:`, (e as Error).message);
+    bgFrom = file;
+    console.error(`[card] the background could not be read (${file}), falling back to a gradient:`, (e as Error).message);
   }
   return bgImg;
 }

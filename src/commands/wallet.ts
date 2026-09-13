@@ -1,4 +1,6 @@
-import { Markup } from 'telegraf';
+import { Markup, Input } from 'telegraf';
+import { rmSync, writeFileSync } from 'node:fs';
+import { loadImage } from '@napi-rs/canvas';
 import { config } from '../config.js';
 import { bot, html, editProgress, maxEthLabel, registerFlowReset, startKeyboard, startCard } from '../core.js';
 import { getChain, rebuildChains, gasFeeCapLabel, CHAINS } from '../chains.js';
@@ -6,6 +8,7 @@ import * as walletStore from '../walletStore.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
+import { BG_CUSTOM, customBackground, invalidateBackground, renderPnlCard } from '../card.js';
 
 /**
  * The wallet: /settings, with connect and disconnect as buttons on its card.
@@ -85,6 +88,11 @@ export async function cmdSettings(ctx: any) {
     Markup.button.callback(`${sh === 'bidask' ? '◣' : '▬'} LP shape: ${sh === 'bidask' ? 'BID-ASK' : 'SPOT'}`, 'lpshape'),
     Markup.button.callback('🪜 Ladder legs', 'pct:legs'),
   ]);
+  // The PnL card's backdrop. The label says which one is in use, so the state is visible
+  // without opening anything.
+  rows.push([
+    Markup.button.callback(`🖼 PnL background: ${customBackground() ? 'custom' : 'default'}`, 'pnlbg'),
+  ]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
@@ -104,6 +112,68 @@ bot.action('lpshape', async (ctx: any) => {
   return cmdSettings(ctx);
 });
 
+// ---------- the PnL card's backdrop, set by sending a photo ----------
+/** Owners waiting to send their backdrop. The photo handler in index.ts checks this. */
+export const awaitingBg = new Set<number>();
+
+bot.action('pnlbg', async (ctx: any) => {
+  awaitingBg.add(ctx.from.id);
+  await ctx.answerCbQuery();
+  const rows = [
+    ...(customBackground() ? [[Markup.button.callback('♻️ Restore the default', 'pnlbg:reset')]] : []),
+    [Markup.button.callback('❌ Cancel', 'pnlbg:cancel')],
+  ];
+  return ctx.reply(msg.msgPnlBgPrompt(customBackground()), { ...html, ...Markup.inlineKeyboard(rows) });
+});
+
+bot.action('pnlbg:cancel', async (ctx: any) => {
+  awaitingBg.delete(ctx.from.id);
+  await ctx.answerCbQuery('Cancelled');
+  await ctx.editMessageText(msg.msgCancelled(), html);
+});
+
+bot.action('pnlbg:reset', async (ctx: any) => {
+  awaitingBg.delete(ctx.from.id);
+  rmSync(BG_CUSTOM, { force: true });
+  invalidateBackground();
+  await ctx.answerCbQuery('Default restored');
+  await ctx.editMessageText(msg.msgPnlBgReset(), html);
+});
+
+/**
+ * Store a photo sent during the flow as the PnL backdrop.
+ *
+ * Telegram is asked for the LARGEST size it kept: the card renders at 2400x1260 and a
+ * thumbnail stretched over that is the one outcome nobody wants. The file is written only
+ * after it decodes, so a broken download can never replace a working backdrop.
+ */
+export async function handleBgPhoto(ctx: any, fileId: string): Promise<void> {
+  awaitingBg.delete(ctx.from.id);
+  const prog = await ctx.reply(msg.msgProgress('saving the backdrop…'), html);
+  try {
+    const link = await ctx.telegram.getFileLink(fileId);
+    const res = await fetch(link.href ?? String(link));
+    if (!res.ok) throw new Error(`download ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    // Decode BEFORE writing: an unreadable file saved here would break every PnL card
+    // until someone noticed and reset it.
+    await loadImage(buf);
+    writeFileSync(BG_CUSTOM, buf);
+    invalidateBackground();
+    await editProgress(ctx, prog, msg.msgPnlBgSaved(), html);
+    // A preview, rendered from the real card, so the choice is judged on the thing
+    // itself rather than on a promise that it will look fine.
+    const png = await renderPnlCard({
+      period: 'Preview', opened: 0, closed: 0, net: 0, netLabel: '+$0.00',
+      volumeLabel: '$0.00', winRateLabel: '-', positionsLabel: '0', bestLabel: '-',
+      bestPositive: true, footer: `preview · ${msg.nowWib()}`,
+    }).catch(() => null);
+    if (png) await ctx.replyWithDocument(Input.fromBuffer(png, 'pnl-preview.png'));
+  } catch (e) {
+    await editProgress(ctx, prog, msg.msgError('background', (e as Error).message), html);
+  }
+}
+
 // Any command cancels a percentage prompt left hanging -- otherwise the next amount typed
 // is swallowed as an answer to it. awaitingSecret is cleared here too: without that, the
 // generic Cancel button (and anything else calling resetFlows) left the connect prompt
@@ -111,6 +181,7 @@ bot.action('lpshape', async (ctx: any) => {
 registerFlowReset((uid) => {
   pctPresets.clearEdit(uid);
   awaitingSecret.delete(uid);
+  awaitingBg.delete(uid);
 });
 
 /** One flow's unit, limits and special notes, shared by all three settings cards. */

@@ -1812,6 +1812,41 @@ export function msgAlreadyConnected(addr: string): string {
   ].join('\n');
 }
 
+/** The prompt that waits for a photo to use as the PnL card's backdrop. */
+export function msgPnlBgPrompt(hasCustom: boolean): string {
+  return [
+    `\u{1F5BC}\uFE0F ${bold('PNL BACKGROUND')}`,
+    '',
+    'Send a photo now and it becomes the backdrop of every PnL card.',
+    '',
+    `Currently: ${bold(hasCustom ? 'your own image' : 'the default artwork')}`,
+    note('landscape works best, around 1200x630; the card draws it from the right edge'),
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
+
+export function msgPnlBgSaved(): string {
+  return [
+    `\u2705 ${bold('BACKGROUND SAVED')}`,
+    '',
+    'Every PnL card from now on uses this image.',
+    note('change it again, or restore the default, from /settings'),
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
+
+export function msgPnlBgReset(): string {
+  return [
+    `\u267B\uFE0F ${bold('DEFAULT RESTORED')}`,
+    '',
+    'The PnL card is back to the artwork it ships with.',
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
+
 export function msgSettings(
   dryRun: boolean,
   maxPerTx: string,

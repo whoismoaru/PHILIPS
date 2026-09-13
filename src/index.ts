@@ -65,7 +65,7 @@ import { cmdBridge } from './commands/bridge.js';
 import { cmdSend } from './commands/send.js';
 import { cmdUnwrap } from './commands/unwrap.js';
 import { cmdAlerts } from './commands/alerts.js';
-import { cmdSettings, cmdConnect } from './commands/wallet.js';
+import { cmdSettings, cmdConnect, awaitingBg, handleBgPhoto } from './commands/wallet.js';
 import { gasCard, gasKeyboard } from './commands/gas.js';
 import './commands/feesAndRemove.js';
 import './commands/alerts.js';
@@ -5192,6 +5192,23 @@ function looksLikeSecret(t: string): boolean {
     return false;
   }
 }
+
+// A photo is only ever meaningful while the PnL-backdrop flow is waiting for one.
+// Anything else sent as a photo is left alone rather than answered with an error.
+bot.on(message('photo'), async (ctx: any) => {
+  if (!awaitingBg.has(ctx.from.id)) return;
+  // Telegram lists the sizes smallest first; the card needs the biggest one there is.
+  const largest = ctx.message.photo[ctx.message.photo.length - 1];
+  return handleBgPhoto(ctx, largest.file_id);
+});
+
+// The same photo sent WITHOUT compression arrives as a document. It is the better source
+// of the two, so refusing it would be backwards.
+bot.on(message('document'), async (ctx: any) => {
+  if (!awaitingBg.has(ctx.from.id)) return;
+  if (!/^image\//.test(ctx.message.document.mime_type ?? '')) return;
+  return handleBgPhoto(ctx, ctx.message.document.file_id);
+});
 
 bot.on(message('text'), async (ctx) => {
   const raw = (ctx.message.text || '').trim();
