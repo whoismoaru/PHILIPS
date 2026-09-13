@@ -175,11 +175,11 @@ export type AddPlan = {
   baseAmountWei: bigint; // pokok base (WETH 18-dec / USDG 6-dec)
   otherAmountWei: bigint; // idealnya ~0 (single-sided)
   otherSymbol: string;
-  currentPrice: string; // harga token sekarang dalam base
-  pctLow: number; // % ujung terjauh dari harga sekarang (paling negatif)
-  pctHigh: number; // % ujung terdekat dari harga sekarang
-  side: 'base' | 'token'; // aset yang disetor
-  tokenAmountWei: bigint; // setoran sisi token (0 pada sisi base)
+  currentPrice: string; // the token's current price, denominated in the base
+  pctLow: number; // the far end as a % of the current price (the most negative)
+  pctHigh: number; // the near end as a % of the current price
+  side: 'base' | 'token'; // the asset being deposited
+  tokenAmountWei: bigint; // the token-side deposit (0 on the base side)
   tokenDecimals: number;
   position: TPosition;
 };
@@ -838,7 +838,7 @@ export async function executeRemoveBatch(
               : `Ladder close batch would revert (${built.live} legs): ${emsg.slice(0, 140)}`,
           );
         }
-        console.log(`[close batch] lantai harga terlewat (percobaan ${attempt}/${MAX_REBUILD}) — hitung ulang`);
+        console.log(`[close batch] the price floor was missed (attempt ${attempt}/${MAX_REBUILD}), rebuilding`);
         built = await build();
       }
     }
@@ -853,7 +853,7 @@ export async function executeRemoveBatch(
 
 export type PositionInfo = {
   tokenId: string;
-  token0: string; // alamat (untuk deteksi base/ca saat sinkron)
+  token0: string; // the address, used to detect base/ca during a sync
   token1: string;
   token0Symbol: string;
   token1Symbol: string;
@@ -1016,7 +1016,7 @@ async function withdrawMins(
     // old floor did. It only runs when the pool read has failed three times running.
     const [a0, a1] = await positionManager.decreaseLiquidity.staticCall({ tokenId, liquidity, amount0Min: 0n, amount1Min: 0n, deadline });
     const longgar = (v: bigint) => (BigInt(v) * (10_000n - WITHDRAW_FALLBACK_BPS)) / 10_000n;
-    console.log(`[withdraw] harga pool tak terbaca, pakai lantai longgar dari staticCall (#${tokenId})`);
+    console.log(`[withdraw] the pool price could not be read, using the loose staticCall floor (#${tokenId})`);
     return { amount0Min: longgar(a0), amount1Min: longgar(a1), unprotected: false };
   } catch {
     // Genuinely uncomputable: do not block the withdrawal (the user's funds outrank
@@ -1024,7 +1024,7 @@ async function withdrawMins(
     // used to go to the server log alone, so positions were closed without anyone
     // knowing that round was unprotected. `unprotected` is carried up so it lands on
     // the close card.
-    console.log(`[withdraw] ⚠️ lantai slippage TAK tersedia (#${tokenId}) — tarik tanpa proteksi harga`);
+    console.log(`[withdraw] ⚠️ no slippage floor available (#${tokenId}), withdrawing without price protection`);
     return { amount0Min: 0n, amount1Min: 0n, unprotected: true };
   }
 }
@@ -1186,18 +1186,18 @@ export type PositionDetail = {
   baseKind: BaseKind;
   baseSymbol: string;
   baseDecimals: number;
-  currentPrice: string; // harga token sekarang dalam base (formula sama dgn AddPlan.currentPrice → basis alert anjlok)
-  priceLower: string; // batas bawah rentang (harga token dalam base)
-  priceUpper: string; // batas atas rentang
-  valueBaseWei: bigint; // nilai pokok posisi (dalam base: WETH/USDG)
-  feesBaseWei: bigint; // fee belum diklaim (dalam base)
-  side: 'above' | 'in' | 'below'; // harga token vs rentang (above=belum mulai, below=terkonversi penuh)
+  currentPrice: string; // the token's current price in the base; the same formula as AddPlan.currentPrice, which the drop alert builds on
+  priceLower: string; // the lower bound of the range, as a token price in the base
+  priceUpper: string; // the upper bound of the range
+  valueBaseWei: bigint; // the position's principal value, in the base: WETH or USDG
+  feesBaseWei: bigint; // unclaimed fees, in the base
+  side: 'above' | 'in' | 'below'; // the token price against the range: above means not started, below means fully converted
   baseAmountWei: bigint; // komposisi pokok: sisi base
   otherAmountWei: bigint; // komposisi pokok: sisi token (raw, desimal token)
   otherDecimals: number;
   otherAddress: string; // alamat token non-base
   baseIsToken0: boolean;
-  currentTick: number; // tick pool saat ini (utk hitung jarak range live)
+  currentTick: number; // the pool's current tick, used for the live range distance
   tickLower: number;
   tickUpper: number;
 };

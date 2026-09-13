@@ -67,8 +67,8 @@ async function pnlChains(): Promise<Array<{ key: string; label: string; trades: 
     .map((key) => ({ key, label: chainLabel(key), ...statOf(key) }))
     .sort((a, b) => b.trades - a.trades || a.label.localeCompare(b.label));
   // All chains combined sits on top: the first question is usually "what's the total".
-  const semua = statOf(undefined);
-  return semua.trades > 0 ? [{ key: ALL, label: 'All chains', ...semua }, ...per] : per;
+  const all = statOf(undefined);
+  return all.trades > 0 ? [{ key: ALL, label: 'All chains', ...all }, ...per] : per;
 }
 
 /** Pseudo-key for the cross-chain total. */
@@ -160,7 +160,7 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   // the columns fit without colliding with the artwork. Profit factor and average
   // win/loss moved to the caption and text card, where there is room.
   const stats: Array<{ label: string; value: string }> = [
-    { label: 'trades', value: `${main.known} (${main.wins}W/${main.losses}L)` }, // posisi, bukan leg
+    { label: 'trades', value: `${main.known} (${main.wins}W/${main.losses}L)` }, // positions, not legs
     { label: 'profit', value: n2(main.grossWin, main.unit) },
     { label: 'loss', value: n2(main.grossLoss, main.unit) },
   ];
@@ -243,7 +243,7 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
     .editMessageMedia({ type: 'document', media: doc, caption, parse_mode: 'HTML' }, kb)
     .catch((e: Error) => {
       if (/not modified/i.test(e.message)) return;
-      return swap(ctx, text, { ...html, ...kb }); // media tak bisa di-edit → teks saja
+      return swap(ctx, text, { ...html, ...kb }); // media cannot be edited, so text only
     });
 }
 

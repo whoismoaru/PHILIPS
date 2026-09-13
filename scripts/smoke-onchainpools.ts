@@ -53,33 +53,33 @@ const { onchainV4Pools } = await import('../src/onchainPools.js');
 const { CHAINS } = await import('../src/chains.js');
 
 const pools = await onchainV4Pools(CHAINS.robinhood, RSTR);
-assert.equal(pools.length, 1, 'pool ETH-native wajib lolos, bukan dibuang');
+assert.equal(pools.length, 1, 'an ETH-native pool must pass, not be dropped');
 const p = pools[0];
 assert.equal(p.protocol, 'v4');
-assert.equal(p.base, 'weth', 'ETH native (0x0) harus dikenali sebagai sisi base');
+assert.equal(p.base, 'weth', 'native ETH (0x0) must be recognised as the base side');
 assert.equal(p.poolKey!.hooks, HOOK);
 assert.equal(p.poolKey!.tickSpacing, 200);
 assert.equal(p.fee, 0);
-assert.equal(p.aprPct, null, 'fee 0 = biaya dipungut hook; APR 0% akan jadi kebohongan');
+assert.equal(p.aprPct, null, 'a zero fee means the hook collects it, so a 0% APR would be a lie');
 assert.equal(p.baseIsCurrency0, true);
 
 // The poolKey must reproduce the poolId it was fetched under.
 const id = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
   ['tuple(address,address,uint24,int24,address)'],
   [[p.poolKey!.currency0, p.poolKey!.currency1, p.poolKey!.fee, p.poolKey!.tickSpacing, p.poolKey!.hooks]]));
-assert.equal(id.toLowerCase(), POOL_ID, 'keccak poolKey wajib sama dgn poolId');
+assert.equal(id.toLowerCase(), POOL_ID, 'the keccak of the poolKey must equal the poolId');
 
 // A log whose key hashes to something else must be REFUSED, never handed to the
 // mint path. It needs an UNCACHED poolId: a cached key has already been verified,
 // so the cache legitimately short-circuits the check.
-const LAIN = '0x' + 'ab'.repeat(32);
-const PALSU = JSON.parse(JSON.stringify(LOG));
-PALSU.result[0].topics[1] = LAIN;
+const OTHER = '0x' + 'ab'.repeat(32);
+const FAKE = JSON.parse(JSON.stringify(LOG));
+FAKE.result[0].topics[1] = OTHER;
 const PAIRS2 = JSON.parse(JSON.stringify(PAIRS));
-PAIRS2.pairs[0].pairAddress = LAIN;
+PAIRS2.pairs[0].pairAddress = OTHER;
 globalThis.fetch = (async (u: string) => ({
-  ok: true, status: 200, json: async () => (String(u).includes('dexscreener') ? PAIRS2 : PALSU),
+  ok: true, status: 200, json: async () => (String(u).includes('dexscreener') ? PAIRS2 : FAKE),
 })) as any;
-assert.deepEqual(await onchainV4Pools(CHAINS.robinhood, RSTR), [], 'poolKey yang tak cocok wajib ditolak');
+assert.deepEqual(await onchainV4Pools(CHAINS.robinhood, RSTR), [], 'a poolKey that does not match must be rejected');
 
 console.log('smoke-onchainpools OK');

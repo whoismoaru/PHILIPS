@@ -1,28 +1,27 @@
 import { execFile } from 'node:child_process';
 
 /**
- * Pengisi CELAH data screening dari GMGN OpenAPI.
+ * Fills the GAPS in screening data, from the GMGN OpenAPI.
  *
- * Kenapa lewat CLI, bukan HTTP langsung: endpoint GMGN meminta tanda tangan
- * private key (header X-Signature) yang skemanya hanya ada di bundle gmgn-cli.
- * Membuat ulang skema itu dari bundle terminifikasi akan pecah begitu GMGN
- * mengubahnya. CLI-nya sudah terpasang, sudah menangani auth, dan responsnya
- * ~0.6 detik — cukup cepat.
+ * Why through the CLI rather than plain HTTP: GMGN's endpoints want a private-key
+ * signature (the X-Signature header) whose scheme exists only inside the gmgn-cli bundle.
+ * Rebuilding that scheme from a minified bundle would break the moment GMGN changed it.
+ * The CLI is already installed, already handles auth, and answers in about 0.6 s.
  *
- * SEMUA kegagalan fail-open (null): GMGN adalah data TAMBAHAN. Kalau ia mati,
- * screening PHILIPS tetap jalan dengan sumbernya sendiri dan kartu menulis '?'.
- * Data hiasan tak boleh menghalangi keputusan.
+ * EVERY failure fails open with null: GMGN is supplementary. If it goes down, screening
+ * still runs on its own sources and the card prints '?'. Decoration must never stand in
+ * the way of a decision.
  */
 
-// Jalur biner tak boleh dipatok ke satu mesin: default cari di PATH, boleh
-// ditimpa lewat GMGN_CLI_BIN kalau npm global bin tak ada di PATH service.
+// The binary path must not be pinned to one machine: look it up on PATH by default, and
+// allow GMGN_CLI_BIN to override when npm's global bin is not on the service's PATH.
 const BIN = process.env.GMGN_CLI_BIN || 'gmgn-cli';
-// 4 dtk: GMGN dipakai di jalur kritis harga (getEthUsd/mcap). Timeout lama bikin
-// command Telegram nge-freeze saat GMGN lambat; 4 dtk cukup buat respons normal
-// (~0.5s) dan cepat mundur ke DexScreener kalau ngadat.
+// Four seconds: GMGN sits on the price-critical path (getEthUsd and market cap). A long
+// timeout freezes Telegram commands whenever GMGN is slow; four seconds is ample for its
+// usual ~0.5 s response and falls back to DexScreener quickly when it stalls.
 const TIMEOUT_MS = 4_000;
 
-/** PHILIPS key → nama chain GMGN. Tak ada di peta = GMGN tak mendukung chain itu. */
+/** Our chain key -> GMGN's chain name. Absent from the map means GMGN has no such chain. */
 const CHAIN: Record<string, string> = { robinhood: 'robinhood', bsc: 'bsc' };
 
 export type GmgnExtra = {
@@ -38,10 +37,10 @@ export type GmgnExtra = {
   renounced: boolean | null;
   openSource: boolean | null;
   top10Pct: number | null;
-  /** Nama privilege/flag owner yang terdeteksi (pausable, cooldown, dst).
-   *  null = payload security tak terbaca; [] = terbaca & tak ada satupun. */
+  /** Owner privileges or flags detected (pausable, cooldown and so on).
+   *  null means the security payload could not be read; [] means read, and there are none. */
   privileges: string[] | null;
-  /** true bila angka tag (dev/insiders/sniper/bundler) hanya dari 100 holder terbesar */
+  /** true when the tag counts (dev/insiders/sniper/bundler) cover only the top 100 holders */
   tagsFromTop100: boolean;
 };
 
@@ -93,8 +92,8 @@ function run(args: string[]): Promise<any | null> {
     execFile(
       BIN,
       [...args, '--raw'],
-      // JANGAN oper process.env: itu menyerahkan PRIVATE_KEY & token bot ke
-      // proses pihak ketiga. gmgn-cli hanya butuh api key + PATH/HOME.
+      // NEVER pass process.env along: that hands PRIVATE_KEY and the bot token to
+      // a third-party process. gmgn-cli only needs the API key plus PATH and HOME.
       {
         timeout: TIMEOUT_MS,
         maxBuffer: 8 << 20,
@@ -116,14 +115,14 @@ function run(args: string[]): Promise<any | null> {
   });
 }
 
-/** Chain yang GMGN `token info` dukung untuk HARGA. hyperevm/ink TAK ada → DexScreener. */
+/** Chains whose PRICE GMGN's `token info` supports. HyperEVM and Ink are absent: DexScreener. */
 const PRICE_CHAIN: Record<string, string> = { robinhood: 'robinhood', bsc: 'bsc', base: 'base' };
 const priceCache = new Map<string, { t: number; v: { priceUsd: number; mcapUsd: number | null } | null }>();
 
 /**
- * Harga & market cap dari GMGN `token info` (realtime). null = GMGN tak dukung
- * chain / gagal / harga 0 → pemanggil WAJIB fallback ke DexScreener. mcap = harga
- * × circulating supply (GMGN kembalikan keduanya).
+ * Live price and market cap from GMGN's `token info`. null means GMGN does not cover the
+ * chain, the call failed, or the price came back 0 -- and the caller MUST fall back to
+ * DexScreener. Market cap is price x circulating supply; GMGN returns both.
  */
 export async function gmgnPrice(ca: string, chainKey: string): Promise<{ priceUsd: number; mcapUsd: number | null } | null> {
   const chain = PRICE_CHAIN[chainKey];
@@ -142,7 +141,7 @@ export async function gmgnPrice(ca: string, chainKey: string): Promise<{ priceUs
   return v;
 }
 
-/** Rasio GMGN datang sebagai 0..1 ("0.1672"). Kartu memakai persen. */
+/** GMGN ratios arrive as 0..1 ("0.1672"); the card wants percentages. */
 const ratioToPct = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n * 100 : null;
@@ -162,8 +161,8 @@ const boolOf = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : nul
  */
 export function tagStats(list: any[]): Pick<GmgnExtra, 'devPct' | 'insidersPct' | 'bundlerPct' | 'sniperCount'> {
   const tagged = (h: any, tags: readonly string[]): boolean => {
-    const punya = [...(h.tags ?? []), ...(h.maker_token_tags ?? [])];
-    return tags.some((t) => punya.includes(t));
+    const holderTags = [...(h.tags ?? []), ...(h.maker_token_tags ?? [])];
+    return tags.some((t) => holderTags.includes(t));
   };
   const sumPct = (tags: readonly string[]): number =>
     list.filter((h) => tagged(h, tags)).reduce((s, h) => s + (Number(h.amount_percentage) || 0), 0) * 100;
@@ -179,9 +178,9 @@ export async function gmgnExtra(ca: string, chainKey: string): Promise<GmgnExtra
   const chain = CHAIN[chainKey];
   if (!chain || !process.env.GMGN_API_KEY) return EMPTY;
 
-  // WAJIB huruf kecil: endpoint token/holders mengembalikan {list:[]} untuk alamat
-  // ber-checksum (huruf campur), sementara token/security menerimanya. Terbukti
-  // dengan membandingkan kedua bentuk pada CA yang sama.
+  // MUST be lowercase: the token/holders endpoint returns {list:[]} for a checksummed
+  // (mixed-case) address, while token/security accepts one. Confirmed by sending both
+  // forms of the same address.
   const addr = ca.toLowerCase();
   const key = `${chain}:${addr}`;
   const hit = cache.get(key);
@@ -206,20 +205,20 @@ export async function gmgnExtra(ca: string, chainKey: string): Promise<GmgnExtra
     out.renounced = boolOf(sec.is_renounced);
     out.openSource = boolOf(sec.is_open_source);
     out.top10Pct = ratioToPct(sec.top_10_holder_rate);
-    // privileges/flags bisa berisi string atau objek — ambil apa pun yang bisa dibaca
-    // sebagai nama. Array kosong itu JAWABAN ('tak ada privilege'), bukan 'tak tahu'.
+    // privileges/flags may hold strings or objects, so take whatever reads as a name. An
+    // empty array is an ANSWER ("no privileges"), not "unknown".
     const names = [...(sec.privileges ?? []), ...(sec.flags ?? [])]
       .map((x: any) => String(typeof x === 'string' ? x : (x?.name ?? x?.type ?? x?.key ?? '')).toLowerCase())
       .filter(Boolean);
     out.privileges = names;
-    // Burnt: burn_ratio saja sering '0' walau LP dikirim ke blackhole, jadi
-    // jumlahkan juga bagian lock yang alamatnya blackhole.
+    // burn_ratio alone often reads '0' even when the LP was sent to a burn address, so the
+    // locked share held at a burn address is counted too.
     const burn = ratioToPct(sec.burn_ratio);
     const holeLock = (sec.lock_summary?.lock_detail ?? [])
       .filter((d: any) => d?.is_blackhole)
       .reduce((s: number, d: any) => s + (Number(d.percent) || 0), 0);
     out.burntPct = burn !== null || holeLock > 0 ? (burn ?? 0) + holeLock * 100 : null;
-    // LP Locked: total semua lock (termasuk blackhole — LP di blackhole tetap terkunci).
+    // LP Locked: the sum of every lock, blackhole included, since LP in a blackhole is still locked.
     const allLock = (sec.lock_summary?.lock_detail ?? []).reduce(
       (s: number, d: any) => s + (Number(d.percent) || 0),
       0,

@@ -12,45 +12,45 @@ const src = readFileSync('src/index.ts', 'utf8');
 
 // One implementation. A second copy of the money path is how the auto and confirmed
 // routes start behaving differently.
-assert.equal((src.match(/async function execTSwap\(/g) ?? []).length, 1, 'execTSwap harus tunggal');
-assert.ok(/bot\.action\('tswapok', execTSwap\)/.test(src), 'tombol Confirm harus memanggil fungsi yang sama');
+assert.equal((src.match(/async function execTSwap\(/g) ?? []).length, 1, 'execTSwap must exist exactly once');
+assert.ok(/bot\.action\('tswapok', execTSwap\)/.test(src), 'the Confirm button must call the same function');
 
 const auto = src.slice(src.indexOf('if (!tflow.buy && !shortLabel'), src.indexOf('const kb = shortLabel'));
-assert.ok(/return execTSwap\(auto\)/.test(auto), 'jalur otomatis harus lewat execTSwap');
-assert.ok(/!shortLabel/.test(auto), 'saldo kurang harus tetap berhenti sebelum kirim');
-assert.ok(/!config\.safety\.dryRun/.test(auto), 'dry run tak boleh ikut mengirim');
-assert.ok(/!tflow\.buy/.test(auto), 'hanya swap yang otomatis — beli tetap minta konfirmasi');
+assert.ok(/return execTSwap\(auto\)/.test(auto), 'the automatic path must go through execTSwap');
+assert.ok(/!shortLabel/.test(auto), 'a shortfall must still stop before anything is sent');
+assert.ok(/!config\.safety\.dryRun/.test(auto), 'a dry run must never send');
+assert.ok(/!tflow\.buy/.test(auto), 'only swaps run automatically; buying still asks');
 
 // The floor the fill is held to is set BEFORE the auto branch runs; without it the
 // execution has no number to refuse a bad fill against.
 assert.ok(
   src.indexOf('tflow.quotedOutWei = q.out;') < src.indexOf('if (!tflow.buy && !shortLabel'),
-  'quotedOutWei harus sudah terisi sebelum eksekusi otomatis',
+  'quotedOutWei must be set before the automatic execution',
 );
-assert.ok(/quotedOutWei/.test(src.slice(src.indexOf('async function execTSwap('))), 'eksekusi harus memakai lantai quote');
+assert.ok(/quotedOutWei/.test(src.slice(src.indexOf('async function execTSwap('))), 'the execution must hold the fill to the quoted floor');
 
 // --- the same rule for /bridge, which is the harder case: it cannot be undone ---
 const br = readFileSync('src/commands/bridge.ts', 'utf8');
-assert.equal((br.match(/async function execBridge\(/g) ?? []).length, 1, 'execBridge harus tunggal');
-assert.ok(/bot\.action\('br:go'/.test(br), 'tombol Confirm bridge harus tetap terdaftar');
+assert.equal((br.match(/async function execBridge\(/g) ?? []).length, 1, 'execBridge must exist exactly once');
+assert.ok(/bot\.action\('br:go'/.test(br), 'the bridge Confirm button must stay registered');
 const brAuto = br.slice(br.indexOf('if (!config.safety.dryRun) {'), br.indexOf('await editProgress(\n      ctx,\n      prog,\n      msg.msgBridgeConfirm'));
-assert.ok(/return execBridge\(auto\)/.test(brAuto), 'bridge otomatis harus lewat execBridge');
+assert.ok(/return execBridge\(auto\)/.test(brAuto), 'the automatic bridge must go through execBridge');
 // minOutWei is the floor the fill is held to; it must be set before the auto branch.
 assert.ok(
   br.indexOf('flow.minOutWei = (q.outWei * 99n) / 100n;') < br.indexOf('if (!config.safety.dryRun) {'),
-  'minOutWei harus terisi sebelum eksekusi otomatis',
+  'minOutWei must be set before the automatic execution',
 );
-assert.ok(/minOutWei/.test(br.slice(br.indexOf('async function execBridge('))), 'eksekusi bridge harus memakai lantai itu');
+assert.ok(/minOutWei/.test(br.slice(br.indexOf('async function execBridge('))), 'the bridge execution must hold that floor');
 
 // --- and /send, which is the only path that moves money OUT of the wallet ---
 const sd = readFileSync('src/commands/send.ts', 'utf8');
-assert.equal((sd.match(/async function execSend\(/g) ?? []).length, 1, 'execSend harus tunggal');
-assert.ok(/bot\.action\('sndgo'/.test(sd), 'tombol Confirm withdraw harus tetap terdaftar (dipakai dry run)');
+assert.equal((sd.match(/async function execSend\(/g) ?? []).length, 1, 'execSend must exist exactly once');
+assert.ok(/bot\.action\('sndgo'/.test(sd), 'the withdraw Confirm button must stay registered; the dry run still uses it');
 const sdAuto = sd.slice(sd.indexOf('if (!config.safety.dryRun) {'), sd.indexOf('return ctx.reply(\n    msg.msgSendConfirm'));
-assert.ok(/return execSend\(auto\)/.test(sdAuto), 'withdraw otomatis harus lewat execSend');
+assert.ok(/return execSend\(auto\)/.test(sdAuto), 'the automatic withdrawal must go through execSend');
 // The ceiling is checked before confirm() is ever called; without it an auto-send could
 // leave the wallet unable to pay for its own gas.
-assert.ok(/wei > usableNow/.test(sd), 'jumlah harus dibandingkan dgn saldo yang boleh dikirim');
-assert.ok(/nativeReserve|GAS|usable/.test(sd), 'cadangan gas harus tetap disisihkan');
+assert.ok(/wei > usableNow/.test(sd), 'the amount must be checked against what may actually be sent');
+assert.ok(/nativeReserve|GAS|usable/.test(sd), 'the gas reserve must still be set aside');
 
-console.log('ok: swap, bridge & withdraw otomatis lewat satu jalur eksekusi, dengan lantai quote & guard saldo');
+console.log('ok: swap, bridge and withdraw all run through one executor, with a quoted floor and balance guards');

@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import type { BaseKind } from './chains.js';
 
 /**
- * Tulis JSON atomik: file sementara → rename (atomik di POSIX).
- * Mati/OOM saat write tak bisa lagi memotong file tujuan.
+ * Atomic JSON writes: write a temporary file, then rename, which is atomic on POSIX.
+ * A crash or an OOM mid-write can no longer truncate the real file.
  */
 export function writeJson(file: string, data: unknown): void {
   mkdirSync(join(process.cwd(), 'data'), { recursive: true });
@@ -13,45 +13,45 @@ export function writeJson(file: string, data: unknown): void {
 }
 
 /**
- * Penyimpanan posisi LP sederhana (file JSON).
- * Dipakai untuk PnL, status ACTIVE/STOPPED, dan auto-monitor.
+ * Simple LP position storage, in a JSON file.
+ * It backs PnL, the ACTIVE/STOPPED status, and the automatic monitor.
  */
 
 export type PosRecord = {
   tokenId: string;
-  chain?: string; // kunci chain ('robinhood' dst); kosong = robinhood (posisi lama)
-  venue?: string; // DEX non-bawaan chain (mis. 'uniswapv3' di BSC); kosong = DEX bawaan
+  chain?: string; // the chain key ('robinhood' and so on); empty means robinhood, an older position
+  venue?: string; // a non-default DEX on the chain ('uniswapv3' on BSC); empty means the default
   ca: string; // alamat token (non-base)
   fee: number;
   symbol: string;
-  baseKind?: BaseKind; // aset pasangan; kosong = weth (posisi lama)
-  initialWethWei: string; // modal awal (base disetor) dalam unit base (WETH 18-dec / USDG 6-dec)
-  nominalEth?: string; // nominal yang dipilih user (tampilan bersih)
-  rangeLowPct?: number; // % ujung terjauh dari harga saat buka
+  baseKind?: BaseKind; // the paired asset; empty means weth, an older position
+  initialWethWei: string; // the capital deposited, in base units (WETH 18-dec, USDG 6-dec)
+  nominalEth?: string; // the amount the user picked, for a clean display
+  rangeLowPct?: number; // the far end as a % of the price at open
   rangeHighPct?: number; // % ujung terdekat
   openedAt: number; // epoch ms
   status: 'ACTIVE' | 'STOPPED';
-  lastInRange?: boolean; // untuk notifikasi auto-monitor
-  entryPrice?: string; // harga token dalam base saat buka (untuk alert anjlok); kosong = posisi lama
-  entryMcap?: number; // market cap USD saat buka — batas mcap kartu dipatok ke sini (biar diam)
-  entryEthUsd?: number; // harga base(USD) saat buka — PnL USD ala LP Agent dipatok ke sini (weth: harga ETH; stable: 1)
-  convertedAlerted?: boolean; // sudah kirim alert terkonversi penuh? (reset saat in range lagi)
-  ilAlerted?: boolean; // sudah kirim alert rugi bersih? (reset saat pulih)
-  dropAlerted?: boolean; // LAMA: sudah kirim alert anjlok? (dimigrasi ke dropTier)
-  dropTier?: number; // berapa anak tangga anjlok yang sudah dialerti (0 = belum)
+  lastInRange?: boolean; // for the auto-monitor notifications
+  entryPrice?: string; // the token price in the base at open, for the drop alert; empty means an older position
+  entryMcap?: number; // the USD market cap at open; the card's mcap bounds anchor here so they stay still
+  entryEthUsd?: number; // the base price in USD at open; LP-Agent-style USD PnL anchors here (ETH's price for weth, 1 for a stable)
+  convertedAlerted?: boolean; // has the fully-converted alert been sent? reset once back in range
+  ilAlerted?: boolean; // has the net-loss alert been sent? reset on recovery
+  dropAlerted?: boolean; // LEGACY: has the drop alert been sent? migrated into dropTier
+  dropTier?: number; // how many drop rungs have already alerted (0 means none)
   stoppedAt?: number;
-  resultEthWei?: string; // ETH diterima saat stop (untuk PnL final)
-  imported?: boolean; // ditemukan on-chain (bukan dibuka via bot) → entry tak diketahui
-  leftoverWei?: string; // sisa token dari posisi ini yang belum ke-cash-out (batas jual auto-sweep — lindungi bag spot)
-  side?: 'base' | 'token'; // sisi setoran saat buka; kosong = base (posisi lama)
-  nominalToken?: string; // nominal token yang disetor (sisi token)
-  groupId?: string; // ladder Bid-Ask/Spot: N leg berbagi groupId = 1 posisi logis; kosong = posisi tunggal
-  legIndex?: number; // urutan leg dalam grup (0 = terdekat harga)
-  legCount?: number; // total leg dalam grup
-  shape?: 'spot' | 'bidask'; // bentuk distribusi modal ladder
+  resultEthWei?: string; // the ETH received at stop, for the final PnL
+  imported?: boolean; // found on chain rather than opened by the bot, so its entry is unknown
+  leftoverWei?: string; // tokens from this position not yet cashed out; it caps what auto-sweep may sell, protecting a spot bag
+  side?: 'base' | 'token'; // the side deposited at open; empty means base, an older position
+  nominalToken?: string; // the token amount deposited, on the token side
+  groupId?: string; // a bid-ask or spot ladder: N legs sharing a groupId make one logical position; empty means a single position
+  legIndex?: number; // the leg's order within the group (0 is nearest the price)
+  legCount?: number; // the total number of legs in the group
+  shape?: 'spot' | 'bidask'; // how the ladder distributes its capital
 };
 
-/** Semua leg dalam satu grup ladder (urut legIndex). groupId kosong = array kosong. */
+/** Every leg of one ladder group, ordered by legIndex. An empty groupId returns an empty array. */
 export function group(groupId: string): PosRecord[] {
   return records.filter((r) => r.groupId === groupId).sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
 }
@@ -65,15 +65,15 @@ function load(): PosRecord[] {
     if (!existsSync(FILE)) return [];
     return JSON.parse(readFileSync(FILE, 'utf8')) as PosRecord[];
   } catch (e) {
-    // Mulai KOSONG = bunuh diri: monitor memanggil update() dalam 60 detik pertama,
-    // dan persist() menimpa satu-satunya salinan modal awal (initialWethWei), entry
-    // price, dan status semua posisi. Sisihkan file rusaknya lalu BERHENTI — biar
-    // systemd me-restart dengan berisik daripada mengamputasi posisi diam-diam.
+    // Starting EMPTY would be suicide: the monitor calls update() within the first 60
+    // seconds, and persist() would overwrite the only copy of every position's deposit
+    // (initialWethWei), entry price and status. Set the damaged file aside and STOP -- far
+    // better to let systemd restart noisily than to amputate positions in silence.
     const aside = `${FILE}.corrupt-${Date.now()}`;
     try {
       renameSync(FILE, aside);
     } catch {
-      /* tak bisa dipindah pun, tetap jangan lanjut */
+      /* even if it cannot be moved aside, do not carry on */
     }
     console.error(`[store] positions.json rusak (${(e as Error).message}) — disisihkan ke ${aside}`);
     throw e;
@@ -85,15 +85,16 @@ function persist() {
 }
 
 /**
- * tokenId yang sedang ditutup (nilai = epoch mulai) — dibaca monitor & guard double-tap.
- * Di sini (bukan index.ts) agar monitor.ts bisa ikut melihatnya.
+ * Token ids currently being closed, valued by the epoch the close began. Read by the
+ * monitor and by the double-tap guard. It lives here rather than in index.ts so monitor.ts
+ * can see it too.
  */
 export const closing = new Map<string, number>();
 
 /**
- * Operasi uang yang sedang berjalan (add/close/swap/bridge). Monitor tak boleh
- * menyapu/unwrap saat >0: dua tx dari satu wallet = tabrakan nonce, dan
- * sweepStuckWeth bisa menelan WETH yang baru di-wrap untuk mint.
+ * Money operations in flight (add, close, swap, bridge). The monitor must not sweep or
+ * unwrap while this is above zero: two transactions from one wallet collide on the nonce,
+ * and sweepStuckWeth could swallow WETH that was just wrapped for a mint.
  */
 let moneyOps = 0;
 export const beginMoneyOp = (): void => {
@@ -108,7 +109,7 @@ export const all = (): PosRecord[] => records;
 export const active = (): PosRecord[] => records.filter((r) => r.status === 'ACTIVE');
 export const get = (tokenId: string): PosRecord | undefined => records.find((r) => r.tokenId === tokenId);
 
-/** Impor posisi yang ditemukan on-chain (bukan dibuka via bot). No-op bila sudah ada. */
+/** Import a position found on chain rather than opened here. A no-op if it already exists. */
 export function addImported(rec: {
   tokenId: string;
   chain: string;
@@ -145,7 +146,7 @@ export function update(tokenId: string, patch: Partial<PosRecord>) {
   persist();
 }
 
-/** Keluarkan posisi dari store live (history sudah pindah ke jurnal). */
+/** Drop a position from the live store; its history already moved to the journal. */
 export function remove(tokenId: string) {
   const before = records.length;
   records = records.filter((r) => r.tokenId !== tokenId);

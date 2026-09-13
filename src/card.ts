@@ -2,8 +2,8 @@ import { createCanvas, loadImage, GlobalFonts, type Image, type SKRSContext2D } 
 import { join } from 'node:path';
 
 /**
- * Render kartu PNG "momen kunci" (profit card saat close). Murni presentasi —
- * dipanggil SETELAH aksi on-chain selesai; gagal render TAK boleh mengganggu
+ * Renders the "key moment" PNG card, the profit card at close. It is pure presentation,
+ * called AFTER the on-chain work is done; a failed render must never disturb
  * alur (pemanggil membungkus try/catch). Font: DejaVu (offline, di sistem).
  */
 
@@ -15,7 +15,7 @@ function ensureFonts() {
     try {
       GlobalFonts.registerFromPath(`${DEJAVU}/${file}`, alias);
     } catch {
-      /* fallback ke default canvas bila font tak ada */
+      /* fall back to the canvas default when the font is missing */
     }
   };
   reg('DejaVuSans.ttf', 'PhSans');
@@ -25,10 +25,10 @@ function ensureFonts() {
 }
 
 /**
- * Latar kartu: artwork di data/. Di-decode SEKALI lalu di-cache — close bisa
- * beruntun dan decode JPEG tiap kali itu sia-sia.
- * File hilang/rusak → null, kartu jatuh ke latar gradient (close TAK boleh gagal
- * gara-gara hiasan).
+ * The card's backdrop, an image in data/. Decoded ONCE and cached: closes can come
+ * back-to-back and decoding the JPEG each time is wasted work. A missing or corrupt file
+ * returns null and the card falls back to a gradient -- a close must never fail over
+ * decoration.
  */
 const BG_FILE = join(process.cwd(), 'data', 'PHILIPS ANIME.jpg');
 let bgImg: Image | null | undefined;
@@ -38,7 +38,7 @@ async function background(): Promise<Image | null> {
     bgImg = await loadImage(BG_FILE);
   } catch (e) {
     bgImg = null;
-    console.error(`[card] latar tak terbaca (${BG_FILE}) — pakai gradient:`, (e as Error).message);
+    console.error(`[card] the background could not be read (${BG_FILE}), falling back to a gradient:`, (e as Error).message);
   }
   return bgImg;
 }
@@ -71,18 +71,17 @@ function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: numbe
 export type ProfitCardOpts = {
   pair: string; // 'WETH / PONS'
   positive: boolean;
-  pnlBig: string; // '+$1.42' atau '+0.0182 ETH'
+  pnlBig: string; // '+$1.42' or '+0.0182 ETH'
   pnlPct: string; // '+7.8%'
   stats: Array<{ label: string; value: string }>; // ≤4
   footerLeft: string; // '#199367 · 19 Jul 2026 17:08 UTC'
-  shape?: 'spot' | 'bidask'; // badge di kanan pair; kosong = tak digambar
+  shape?: 'spot' | 'bidask'; // a badge to the right of the pair; empty means it is not drawn
 };
 
 /**
- * scale: kelipatan resolusi keluaran. Seluruh tata letak tetap ditulis dalam
- * satuan logis (W x H) — ctx.scale yang membesarkannya, jadi tak ada koordinat
- * yang perlu diubah. Teks jadi tajam saat di-zoom; artwork sumbernya 1280x720
- * sehingga di atas ~1.9x ia mulai melunak.
+ * `scale` multiplies the output resolution. The whole layout stays written in logical
+ * units (W x H) and ctx.scale does the enlarging, so no coordinate has to change. Text
+ * stays sharp when zoomed; the source artwork is 1280x720, so past about 1.9x it softens.
  */
 export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Buffer> {
   ensureFonts();
@@ -93,8 +92,8 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
 
   const img = await background();
   if (img) {
-    // Cover RATA KANAN, bukan crop tengah: komposisi artwork menaruh karakter di
-    // kanan dan ruang kosong di kiri — persis tempat teks kartu ini.
+    // Cover anchored RIGHT rather than centre-cropped: the artwork puts its character on
+    // the right and leaves empty space on the left, exactly where this card's text goes.
     const s = Math.max(W / img.width, H / img.height);
     ctx.drawImage(img, W - img.width * s, (H - img.height * s) / 2, img.width * s, img.height * s);
   } else {
@@ -105,10 +104,10 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
     ctx.fillRect(0, 0, W, H);
   }
 
-  // ── Selubung gelap MIRING yang memudar habis, bukan panel bertepi. Artwork
-  // menembus sampai ke area teks; peralihannya tak berbatas garis.
-  // Gradasi WAJIB mencapai nol (760) SEBELUM tepi kliping paling kiri (800),
-  // kalau tidak sisa kegelapan di garis potong terbaca sebagai garis tegak.
+  // ── An ANGLED dark veil that fades out completely, not a panel with an edge. The
+  // artwork carries through into the text area and the transition has no visible border.
+  // The gradient MUST reach zero (760) before the leftmost clip edge (800), or the
+  // leftover darkness at the cut reads as a vertical line.
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(0, 0);
@@ -138,9 +137,10 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   ctx.font = '29px PhSansB';
   ctx.fillText(o.pair, X, 128);
 
-  // Badge bentuk posisi, tepat di kanan pair. Warnanya NETRAL (bukan hijau/merah):
-  // ini keterangan, bukan hasil — memakai warna hasil akan bersaing dengan angka
-  // besar di bawahnya. Tingginya mengikuti tinggi huruf pair, bukan angka mati.
+  // The position-shape badge, immediately right of the pair. Its colour is NEUTRAL rather
+  // than green or red: this is a description, not a result, and using result colours would
+  // compete with the large figure below. Its height follows the pair's cap height rather
+  // than a fixed number.
   if (o.shape) {
     const label = o.shape === 'bidask' ? 'BID-ASK' : 'SPOT';
     const pairW = ctx.measureText(o.pair).width;
@@ -162,18 +162,18 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
     ctx.fillText(label, bx + padX, by + bh - 8);
   }
 
-  // Label hasil + garis bawah selebar KATANYA SENDIRI (LOSS lebih pendek dari
-  // PROFIT; lebar mati akan menyisakan garis menggantung).
+  // The result label and a rule as wide as the word itself -- LOSS is shorter than PROFIT,
+  // and a fixed width would leave the rule hanging.
   const word = o.positive ? 'PROFIT' : 'LOSS';
   ctx.fillStyle = accent;
   ctx.font = '19px PhSansB';
   ctx.fillText(word, X, 208);
   ctx.fillRect(X, 216, ctx.measureText(word).width, 2);
 
-  // Nominal + persen ikut warna hasil. Satuan ('USDT') dipisah dan digambar
-  // lebih kecil: yang membuat '-138.61 USDT' jauh lebih panjang dari '+$18.42'
-  // adalah satuannya, bukan angkanya — dipisah begini kedua kartu seukuran.
-  // Angkanya tetap MENGECIL sendiri kalau ekstrem panjang (jaring pengaman).
+  // The amount and percentage take the result colour. The unit ('USDT') is split off and
+  // drawn smaller: what makes '-138.61 USDT' so much longer than '+$18.42' is the unit,
+  // not the number, and splitting them keeps the two cards the same size. The figure still
+  // shrinks itself if it runs extremely long, as a safety net.
   const sp = o.pnlBig.indexOf(' ');
   const num = sp < 0 ? o.pnlBig : o.pnlBig.slice(0, sp);
   const unit = sp < 0 ? '' : o.pnlBig.slice(sp + 1);
@@ -193,7 +193,7 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   ctx.font = '40px PhSansB';
   ctx.fillText(o.pnlPct, X, 366);
 
-  // Statistik 2x2 — tanpa kotak, cuma jarak.
+  // A 2x2 stats block: no boxes, just spacing.
   o.stats.slice(0, 4).forEach((s, i) => {
     const y = 424 + Math.floor(i / 2) * 82;
     const x = X + (i % 2) * 250;
@@ -225,7 +225,7 @@ export type PositionsCardOpts = {
   netLabel: string; // 'Net +$4.73'
   netPositive: boolean | null; // null = tak diketahui → warna netral
   footer: string; // 'LIVE · 17:42 WIB'
-  moreCount: number; // baris yang tak muat
+  moreCount: number; // the rows that did not fit
 };
 
 export function renderPositionsCard(o: PositionsCardOpts): Buffer {
@@ -267,8 +267,8 @@ export function renderPositionsCard(o: PositionsCardOpts): Buffer {
   };
   hr(tableTop - 30);
 
-  // Lebar kolom diukur dari isi sebenarnya — inilah yang membuat kolom lurus
-  // tanpa perlu font monospace.
+  // Column widths are measured from the actual content, which is what keeps the columns
+  // aligned without needing a monospace font.
   const wOf = (font: string, list: string[]): number => {
     ctx.font = font;
     return Math.max(...list.map((s) => ctx.measureText(s).width));
@@ -283,7 +283,7 @@ export function renderPositionsCard(o: PositionsCardOpts): Buffer {
   const wPnl = wOf(F_NUM, o.rows.map((r) => r.pnlLabel));
   const wAge = wOf(F_NUM, o.rows.map((r) => r.age));
 
-  // Kolom kanan disimpan sebagai TEPI KANAN: dengan textAlign='right', fillText(s, X)
+  // The right column is stored as its RIGHT EDGE: with textAlign='right', fillText(s, X)
   // menaruh ujung kanan teks tepat di X.
   const xId = PADX;
   const xPair = xId + wId + 28;
@@ -324,7 +324,7 @@ export function renderPositionsCard(o: PositionsCardOpts): Buffer {
     ctx.fillStyle = COL.muted;
     ctx.fillText(r.age, rAge, y);
 
-    // Titik status: lingkaran, bukan emoji — ukurannya pasti di semua sistem.
+    // The status dot is a circle rather than an emoji: its size is certain everywhere.
     ctx.beginPath();
     ctx.arc(xDot, y - 10, 9, 0, Math.PI * 2);
     ctx.fillStyle = r.inRange ? COL.green : COL.red;

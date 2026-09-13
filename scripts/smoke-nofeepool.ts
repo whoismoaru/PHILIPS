@@ -25,22 +25,22 @@ const NORMAL = { // USDG/RSTR fee 5% — no hook, accrues normally
 };
 
 const a = await readFeeGrowth(cc, HOOKED);
-assert.equal(a.g0, 0n, 'pool ber-hook: feeGrowth0 harus nol');
-assert.equal(a.g1, 0n, 'pool ber-hook: feeGrowth1 harus nol');
+assert.equal(a.g0, 0n, 'a hooked pool must have feeGrowth0 at zero');
+assert.equal(a.g1, 0n, 'a hooked pool must have feeGrowth1 at zero');
 
 const h = await poolHealthV4(cc, HOOKED);
-assert.equal(h.paysLps, false, 'pool ber-hook wajib ditandai tak membayar LP');
-assert.ok(h.liquidity > 0n, 'pool-nya hidup — bukan itu alasan ia dibuang');
+assert.equal(h.paysLps, false, 'a hooked pool must be flagged as paying LPs nothing');
+assert.ok(h.liquidity > 0n, 'the pool is alive, so that is not why it was dropped');
 
 // The control: a hookless pool on the SAME token must still pass, or the filter
 // would be condemning every pool rather than the ones that take the fee.
 const b = await readFeeGrowth(cc, NORMAL);
-assert.ok(b.g0 > 0n || b.g1 > 0n, 'pool tanpa hook harus punya fee growth');
+assert.ok(b.g0 > 0n || b.g1 > 0n, 'a pool without hooks must have fee growth');
 
 // The source guard: the drop must require volume, or a brand-new honest pool
 // (which also reads zero) would be thrown away for never having traded yet.
 const src = await import('node:fs/promises').then((f) => f.readFile('src/index.ts', 'utf8'));
 assert.ok(/!h\.paysLps && \(p\.vol24hUsd \?\? 0\) >= NO_FEE_VOL_USD/.test(src),
-  'pembuangan wajib menuntut volume, bukan feeGrowth nol saja');
+  'dropping a pool must require volume, not just a zero feeGrowth');
 
 console.log('smoke-nofeepool OK');

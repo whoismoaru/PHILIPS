@@ -6,15 +6,16 @@ import { lifiBridgeQuote, lifiSupports } from './lifi.js';
 export type BridgeAssets = { originCurrency?: string; destinationCurrency?: string };
 
 /**
- * Pemilih rute BRIDGE otomatis antar penyedia agregator (Relay & LI.FI/Jumper).
- * Kriteria: output tertinggi (nilai terdalam) dulu; bila selisih ≤0,5% pilih ETA
- * tercepat. Eksekusi MEMINTA QUOTE ULANG dari penyedia terpilih (calldata bridge
- * berumur pendek) dan menolak bila turun di bawah minimum yang dikonfirmasi user.
+ * Picks a BRIDGE route automatically between the aggregators (Relay and LI.FI/Jumper).
+ * The highest output wins, since that is the deepest value; within 0.5% they are treated as
+ * a tie and the faster ETA takes it. Execution REQUESTS A FRESH QUOTE from the chosen
+ * provider -- bridge calldata is short-lived -- and refuses anything below the minimum the
+ * user confirmed.
  */
 
 export type BridgeProvider = 'relay' | 'lifi';
 
-/** Adu quote kedua penyedia, kembalikan yang terbaik. Lempar bila tak ada rute. */
+/** Race both providers and return the better quote. Throws when neither has a route. */
 export async function bestBridgeQuote(
   from: ChainCtx,
   to: ChainCtx,
@@ -34,7 +35,7 @@ export async function bestBridgeQuote(
     throw new Error(why.join(' | ') || 'no bridge route available');
   }
   ok.sort((a, b) => {
-    // Output tertinggi dulu; dalam 0,5% dianggap seri → ETA lebih cepat menang.
+    // Highest output first; within 0.5% counts as a tie, and the faster ETA wins.
     const hi = a.quote.outWei > b.quote.outWei ? a : b;
     const near = (hi.quote.outWei - (a === hi ? b : a).quote.outWei) * 1000n <= hi.quote.outWei * 5n;
     if (near) {
@@ -44,9 +45,9 @@ export async function bestBridgeQuote(
     }
     return b.quote.outWei > a.quote.outWei ? 1 : b.quote.outWei < a.quote.outWei ? -1 : 0;
   });
-  // LI.FI = penyedia UTAMA, sama seperti sisi swap: didahulukan selama output-nya tak
-  // lebih jelek dari Relay di luar toleransi. Tanpa ini bridge murni "output tertinggi",
-  // sehingga selisih sepersekian persen sudah cukup memindahkannya ke Relay.
+  // LI.FI is the PRIMARY provider here too, as on the swap side: it goes first while its
+  // output is no worse than Relay's beyond the tolerance. Without this the bridge would be
+  // purely "highest output", and a fraction of a percent would be enough to move it.
   const lifi = ok.find((o) => o.provider === 'lifi');
   const relay = ok.find((o) => o.provider === 'relay');
   if (lifi && (!relay || lifiPreferred(lifi.quote.outWei, relay.quote.outWei))) return lifi;
@@ -62,19 +63,19 @@ export async function executeBridgeVia(
   minOutWei: bigint,
   assets: BridgeAssets = {},
 ): Promise<{ txHashes: string[]; outWei: bigint }> {
-  // Relay menyertakan langkah approve token di step-nya sendiri.
+  // Relay includes the token approval as a step of its own.
   if (provider === 'relay') return executeBridge(from, to, amountWei, minOutWei, assets);
-  // LI.FI: quote ulang (target & spender sudah dipin ke diamond di lifiBridgeQuote), cek minOut.
+  // LI.FI: re-quote (target and spender are already pinned to the diamond in lifiBridgeQuote) and check minOut.
   const fresh = await lifiBridgeQuote(from, to, amountWei, assets);
   if (fresh.outWei < minOutWei) {
     throw new Error(`Route moved: now ${fresh.outLabel}, below the confirmed minimum. Nothing was sent — try again.`);
   }
   const txHashes: string[] = [];
   const origin = assets.originCurrency ?? NATIVE;
-  // Token ERC20: approve EXACT-amount ke diamond (spender sudah diverifikasi dipin).
+  // ERC20 tokens: approve the EXACT amount to the diamond, whose spender is already verified as pinned.
   if (origin !== NATIVE) {
     const spender = fresh.steps[0]?.approvalAddress;
-    if (!spender) throw new Error('LI.FI tak mengembalikan spender untuk approve token');
+    if (!spender) throw new Error('LI.FI returned no spender to approve the token to');
     const erc = new ethers.Contract(
       ethers.getAddress(origin),
       ['function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'],

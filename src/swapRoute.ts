@@ -5,16 +5,17 @@ import { NATIVE, SLIP_MAX_PCT, lifiPreferred, relayQuoteOut, slipLadder, swapTok
 import { lifiQuoteOut, swapViaLifi } from './lifi.js';
 
 /**
- * Swap generik EXACT-IN `from`→`to` (ERC20→ERC20) lewat RUTE TERBAIK:
- *   1. Quote Uniswap (pool ter-likuid) & Relay (agregator) → pilih output tertinggi.
- *   2. Eksekusi rute terpilih; bila gagal, fallback ke rute lain.
- * Invariant keselamatan §8: minOut dari quoter (floor slippage, TAK pernah minOut=0),
- * verifikasi saldo benar-benar berubah, fallback penuh. Dipakai fitur /swap (sisi BELI
- * base→token). Sisi JUAL token→base tetap pakai swapTokenTo{Eth,Usdg}Robust yang teruji.
+ * A generic exact-in swap from -> to (ERC20 -> ERC20) over the BEST route:
+ *   1. Quote Uniswap (its deepest pool) and Relay (an aggregator), take the higher output.
+ *   2. Execute that route; if it fails, fall through to the others.
+ *
+ * The safety rules hold throughout: minOut comes from the quoter and is never 0, the
+ * balance is verified to have really moved, and the fallback chain is complete. This is
+ * the BUY side (base -> token); the sell side keeps the proven swapTokenTo{Eth,Usdg}Robust.
  */
 
-// Bentuk struct ikut chain: PancakeSwap (SwapRouter v3 asli) memakai `deadline`,
-// SwapRouter02 Uniswap tidak. Bentuk salah = revert tanpa data.
+// The struct shape follows the chain: PancakeSwap (the original v3 SwapRouter) takes a
+// `deadline`, Uniswap's SwapRouter02 does not. The wrong shape reverts with no data.
 const ROUTER_ABI = [
   'function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
 ];
@@ -29,21 +30,21 @@ const bal = (token: string, ctx: ChainCtx): Promise<bigint> =>
   new ethers.Contract(token, ['function balanceOf(address) view returns (uint256)'], ctx.provider)
     .balanceOf(ctx.wallet.address) as Promise<bigint>;
 
-// LI.FI = router UTAMA. Dipakai selama rate-nya tak lebih jelek dari alternatif
-// terbaik lebih dari LIFI_TOL, dan quote-nya tak kelamaan (LIFI_TIMEOUT_MS).
-// Kalau jelek/lambat → mundur ke Relay/Uniswap (best-of).
+// LI.FI is the PRIMARY router. It is used as long as its rate is no worse than the best
+// alternative by more than LIFI_TOL, and its quote arrives inside LIFI_TIMEOUT_MS. Worse
+// or slower, and the best-of between Relay and Uniswap takes over.
 const LIFI_TIMEOUT_MS = 12_000;
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
 }
-/** Quote Uniswap exact-in di pool from/to ter-likuid. null bila tak ada pool/quoter gagal. */
+/** An exact-in Uniswap quote in the deepest from/to pool. null when there is no pool. */
 export async function quoteUniswap(
   fromAddr: string,
   toAddr: string,
   amountInWei: bigint,
   ctx: ChainCtx = getChain(),
 ): Promise<{ out: bigint; fee: number } | null> {
-  // Pilih fee-tier dgn reserve `to` terbesar (paling likuid).
+  // Pick the fee tier holding the largest `to` reserve, which is the deepest one.
   const toC = new ethers.Contract(toAddr, ['function balanceOf(address) view returns (uint256)'], ctx.provider);
   let bestFee = 0;
   let bestReserve = -1n;
@@ -58,7 +59,7 @@ export async function quoteUniswap(
           bestFee = fee;
         }
       } catch {
-        /* pool tak ada di fee ini */
+        /* no pool at this fee tier */
       }
     }),
   );
@@ -79,7 +80,7 @@ export async function quoteUniswap(
   }
 }
 
-/** Output terbaik antar Uniswap, Relay & LI.FI (untuk kartu konfirmasi). null bila semua kosong. */
+/** The best output across Uniswap, Relay and LI.FI, for the preview card. null if none quote. */
 export async function previewSwapOut(
   fromAddr: string,
   toAddr: string,
@@ -95,7 +96,7 @@ export async function previewSwapOut(
   const rOut = relay ?? 0n;
   const lOut = lifi ?? 0n;
   const bestOther = uniOut > rOut ? uniOut : rOut;
-  // LI.FI utama: dipakai selama rate-nya tak jelek. Kalau jelek/lambat → best-of lain.
+  // LI.FI leads while its rate holds up; worse or slower, the best-of takes over.
   if (lifiPreferred(lOut, bestOther)) return { route: 'lifi', out: lOut };
   const cands: Array<{ route: 'uniswap' | 'relay' | 'lifi'; out: bigint }> = [
     { route: 'uniswap' as const, out: uniOut },
@@ -174,8 +175,8 @@ async function lifiExec(
 }
 
 /**
- * Eksekusi swap `from`→`to` (ERC20→ERC20) rute terbaik. slip% floor dari quoter Uniswap.
- * Keduanya diverifikasi (saldo). Lempar hanya bila SEMUA rute gagal.
+ * Execute a from -> to swap over the best route. The slippage floor comes from Uniswap's
+ * quoter, every route is verified against the balance, and this throws only if they all fail.
  */
 export async function swapExactInBest(
   fromAddr: string,
@@ -208,16 +209,17 @@ export async function swapExactInBest(
   // number shown on the confirmation card.
   const uniSlips = slipLadder(maxSlipPct);
   const uniSteps = uniSlips.map((s) => () => tryUni(s));
-  // Urutkan penyedia menurut output quote (tertinggi dulu = likuiditas terdalam).
-  // Rute yg quote-nya 0/null dibuang: tak ada gunanya dicoba. Uniswap dgn quote>0
-  // membawa seluruh tangga slipp-nya; Relay & LI.FI satu percobaan masing-masing.
+  // Providers are ordered by quoted output, highest first, which is the deepest liquidity.
+  // A route quoting 0 or nothing is dropped: there is no point attempting it. Uniswap with
+  // a positive quote brings its whole slippage ladder; Relay and LI.FI get one attempt each.
   const providers: Array<{ out: bigint; steps: Array<() => Promise<{ outWei: bigint; txHashes: string[]; route: string }>> }> = [
     { out: uniOut, steps: uniOut > 0n ? uniSteps : [] },
     { out: rOut, steps: rOut > 0n ? [tryRelay] : [] },
     { out: lOut, steps: lOut > 0n ? [tryLifi] : [] },
   ].sort((a, b) => (b.out > a.out ? 1 : b.out < a.out ? -1 : 0));
-  // LI.FI = router UTAMA: kalau rate-nya tak jelek (dalam toleransi) & sempat quote,
-  // dahulukan di depan urutan; sisanya jadi cadangan. Kalau jelek/lambat → best-of biasa.
+  // LI.FI is the PRIMARY router: if its rate is within tolerance and it quoted in time, it
+  // moves to the front and the rest become fallbacks. Worse or slower, the ordinary
+  // best-of order stands.
   const bestOther = uniOut > rOut ? uniOut : rOut;
   if (lifiPreferred(lOut, bestOther)) {
     const idx = providers.findIndex((p) => p.out === lOut && p.steps.length && p.steps[0] === tryLifi);
@@ -231,10 +233,10 @@ export async function swapExactInBest(
       return await step();
     } catch (e) {
       const why = (e as Error).message.slice(0, 70);
-      // Rute yang gagal lalu ditambal rute berikutnya tetap harus terlihat — kalau
-      // hanya dilaporkan saat SEMUA gagal, kegagalan berulang yang "tertolong"
-      // fallback tak pernah muncul di journal sampai jadi kegagalan total.
-      console.log(`[swap] rute gagal, coba berikutnya: ${why}`);
+      // A route that fails and is covered by the next one still has to be visible. Reported
+      // only when they ALL fail, a repeated failure that the fallback keeps rescuing never
+      // shows up in the log until the day it becomes a total failure.
+      console.log(`[swap] route failed, trying the next one: ${why}`);
       errors.push(why);
     }
   }

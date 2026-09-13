@@ -1,7 +1,7 @@
 {
   "name": "philips-lp-bot",
   "version": "0.1.0",
-  "description": "Bot Telegram untuk mengelola likuiditas single-sided ETH di Uniswap v3 pada Robinhood Chain",
+  "description": "Telegram bot for managing single-sided Uniswap v3/v4 liquidity across Robinhood, BSC, Base and HyperEVM",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",

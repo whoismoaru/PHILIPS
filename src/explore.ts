@@ -1,15 +1,16 @@
 /**
- * EXPLORE — Top pool by APR, sinkron REAL-TIME dgn Uniswap.
+ * EXPLORE -- top pools by APR, in step with Uniswap itself.
  *
- * Sumber data = gateway resmi Uniswap (interface.gateway.uniswap.org) — persis
- * yang menyalakan app.uniswap.org/explore. Ambil topV3Pools + topV4Pools (protocol
- * v3 & v4) lalu SARING pool yang bisa di-LP single-sided oleh bot:
- * salah satu sisi harus base kita (ETH/WETH atau USDG). APR bukan field bawaan →
- * dihitung dgn rumus Explore: fee 1D disetahunkan / TVL.
+ * The data comes from Uniswap's own gateway (interface.gateway.uniswap.org), the same one
+ * behind app.uniswap.org/explore. It takes topV3Pools and topV4Pools, then keeps only the
+ * pools the bot can LP single-sided: one side has to be one of our bases. APR is not a
+ * field the API returns, so it is computed with Explore's own formula -- one day of fees,
+ * annualised, over TVL:
  *
- *   APR = volume1D × (feeTier / 1e6) × 365 / TVL
+ *   APR = volume1D x (feeTier / 1e6) x 365 / TVL
  *
- * Read-only murni: tak menyentuh wallet/on-chain. Aman gagal (throw → kartu error).
+ * Purely read-only: it touches no wallet and no chain, and failing is safe (it throws and
+ * the caller shows an error card).
  */
 import { getChain, venueCtx, venuesFor, type BaseKind, type ChainCtx } from './chains.js';
 import { gmgnPrice } from './gmgn.js';
@@ -19,17 +20,17 @@ import { ethers } from 'ethers';
 
 const GATEWAY = 'https://interface.gateway.uniswap.org/v1/graphql';
 
-// key chain internal → nama enum Chain di API Uniswap.
-// Chain yang daftar pool-nya diambil dari gateway Uniswap. BSC SENGAJA tak ada:
-// posisi di sana dibuka di PancakeSwap, dan gateway Uniswap tak memuat pool Pancake
-// sama sekali — chain di luar peta ini memakai jalur DexScreener di bawah.
+// Our chain key -> the Chain enum name in Uniswap's API.
+// These are the chains whose pool lists come from Uniswap's gateway. BSC is absent on
+// purpose: positions there are opened on PancakeSwap, and the gateway carries no Pancake
+// pools at all. Any chain outside this map uses the DexScreener path below.
 const UNISWAP_CHAIN: Record<string, string> = {
   robinhood: 'ROBINHOOD',
   ethereum: 'ETHEREUM',
   base: 'BASE',
 };
 
-// Ambil banyak lalu saring & urut sendiri (API urut by TVL, kita mau by APR).
+// Fetch plenty, then filter and sort here: the API sorts by TVL, and we want APR.
 const FETCH_N = 100;
 // Lantai TVL: cegah pool debu ($ receh, 1 swap) memalsukan APR ribuan %.
 const MIN_TVL_USD = 1_000;
@@ -41,10 +42,10 @@ export type ExplorePool = {
   tvlUsd: number;
   vol1dUsd: number;
   apr: number; // persen
-  otherAddr?: string; // CA sisi non-base → tombol "➕ LP <TOKEN>"
-  chain?: string; // key chain asal — WAJIB saat daftar menggabung banyak chain
+  otherAddr?: string; // the non-base side's CA, for the "➕ LP <TOKEN>" button
+  chain?: string; // the source chain key; REQUIRED once a list mixes several chains
   chainLabel?: string; // label tampilan chain asal
-  vol1hUsd?: number; // volume 1 jam. undefined = tak terbaca.
+  vol1hUsd?: number; // the 1h volume; undefined means it could not be read
   mcapUsd?: number; // kapitalisasi pasar sisi token. undefined = tak terbaca.
 };
 
@@ -72,7 +73,7 @@ const QUERY = `query TopPools($chain: Chain!, $n: Int!) {
   }
 }`;
 
-/** true bila token ini salah satu base yang bisa di-LP single-sided (ETH/WETH/USDG). */
+/** true when this token is one of the bases the bot can LP single-sided. */
 function isBase(sym: string | undefined | null, addr: string | undefined | null, ctx: ChainCtx): boolean {
   const s = (sym ?? '').toUpperCase();
   const a = (addr ?? '').toLowerCase();
@@ -85,7 +86,7 @@ function isBase(sym: string | undefined | null, addr: string | undefined | null,
   return false;
 }
 
-/** Ambil top pool by APR yang bisa di-LP single-sided (ETH/WETH/USDG), sinkron Uniswap. */
+/** The top pools by APR that can be LP'd single-sided (ETH/WETH/USDG), in sync with Uniswap. */
 export async function fetchTopPools(
   ctx: ChainCtx = getChain(),
   limit = 5,
@@ -118,8 +119,8 @@ export async function fetchTopPools(
 
   const raw: ApiPool[] = [
     ...(json?.data?.topV3Pools ?? []),
-    // v4 hanya di chain yang bot dukung PENUH — di chain lain posisi v4 tak bisa
-    // dipantau atau ditutup, jadi jangan dipajang sebagai peluang.
+    // v4 only on chains the bot fully supports. Elsewhere a v4 position could be neither
+    // monitored nor closed, so it must not be offered as an opportunity.
     ...(v4Supported(ctx) ? (json?.data?.topV4Pools ?? []) : []),
   ];
   const out: ExplorePool[] = [];
@@ -127,7 +128,7 @@ export async function fetchTopPools(
     const t0 = p.token0,
       t1 = p.token1;
     if (!t0 || !t1) continue;
-    // Wajib bisa single-sided: tepat/minimal satu sisi = base kita.
+    // It has to work single-sided: at least one side must be one of our bases.
     const base0 = isBase(t0.symbol, t0.address, ctx);
     const base1 = isBase(t1.symbol, t1.address, ctx);
     if (!base0 && !base1) continue;
@@ -159,26 +160,26 @@ export async function fetchTopPools(
   return out.slice(0, limit).map((p) => ({ ...p, chain: ctx.key, chainLabel: ctx.label }));
 }
 
-// ─── discovery per-token (untuk /add) ──────────────────────────────
+// --- per-token discovery, for /add ---------------------------------
 
-/** Kandidat pool untuk 1 token — dipakai wizard /add. Cerminan app.uniswap.org. */
+/** Candidate pools for one token, used by the /add wizard. Mirrors app.uniswap.org. */
 export type TokenPool = {
   protocol: 'v3' | 'v4';
-  base: BaseKind; // sisi base bot (WETH/ETH, USDG, atau USDT)
-  baseSymbol: string; // 'ETH' | 'WETH' | 'USDG' (apa adanya dari Uniswap)
+  base: BaseKind; // the bot's base side: WETH/ETH, USDG or USDT
+  baseSymbol: string; // 'ETH' | 'WETH' | 'USDG', exactly as Uniswap reports it
   otherSymbol: string; // simbol token target
   fee: number;
   tvlUsd: number;
-  vol24hUsd?: number; // volume 24 jam (USD) — untuk ranking "terbesar" & tampilan
-  vol1hUsd?: number; // volume 1 jam (USD) — Krystal stats1h; untuk daftar "lagi rame"
-  aprPct?: number | null; // fee 24 jam disetahunkan; null = volume tak terbaca
-  otherAddr?: string; // alamat sisi token — dibutuhkan tombol "Add LP" di daftar lintas-chain
-  venue?: string; // DEX non-bawaan chain (mis. 'uniswapv3' di BSC); kosong = bawaan
+  vol24hUsd?: number; // the 24h volume in USD, used for the "largest" ranking and the display
+  vol1hUsd?: number; // the 1h volume in USD, from Krystal's stats1h, for the "busy right now" list
+  aprPct?: number | null; // 24h fees annualised; null means the volume could not be read
+  otherAddr?: string; // the token side's address, which the "Add LP" button needs in a cross-chain list
+  venue?: string; // a non-default DEX on the chain ('uniswapv3' on BSC); empty means the default
   poolKey?: PoolKeyV4; // v4 saja — currency0/1, fee, tickSpacing, hooks
   baseIsCurrency0?: boolean; // v4 saja
 };
 
-// Query pool untuk 1 token (v3 + v4) via tokenFilter — persis sumber Explore.
+// Query the pools for one token, v3 and v4, through tokenFilter: exactly Explore's own source.
 const TOKEN_POOL_FIELDS = `
     protocolVersion
     feeTier
@@ -195,8 +196,8 @@ const TOKEN_QUERY = `query PoolsForToken($chain: Chain!, $n: Int!, $t: String!) 
   }
 }`;
 
-/** Sisi base sebuah token dalam pool, dicocokkan ke daftar base CHAIN ini
- *  (WETH/WBNB, USDG, USDT). null = bukan aset base. */
+/** A pool token's base side, matched against THIS chain's base list
+ *  (WETH/WBNB, USDG, USDT). null means it is not a base asset. */
 export const baseKindOf = (
   sym: string | null | undefined,
   addr: string | null | undefined,
@@ -208,16 +209,18 @@ export const baseKindOf = (
     if (a && a === b.address.toLowerCase()) return b.kind;
     if (s && s === b.symbol.toUpperCase()) return b.kind;
   }
-  // ETH-native (v4 currency0 = 0x0) memakai simbol 'ETH', bukan simbol wrapped-nya.
+  // Native ETH (v4 currency0 = 0x0) uses the symbol 'ETH', not its wrapped symbol.
   if (s === 'ETH' && ctx.hasWethBase) return 'weth';
   return null;
 };
 
 /**
- * Semua pool (v3 + v4) yang memuat `token` dan bisa di-LP single-sided (satu sisi
- * base ETH/WETH/USDG), urut TVL menurun. Cerminan langsung app.uniswap.org.
- * Pool v4 BER-HOOK di-skip (hook bisa ubah fee/behavior — riskan utk auto-LP).
- * Throw bila gateway gagal → pemanggil bisa fallback ke discovery on-chain v3.
+ * Every pool (v3 and v4) holding `token` that can be LP'd single-sided -- one side has to
+ * be a base -- sorted by TVL descending. A direct mirror of app.uniswap.org.
+ *
+ * v4 pools WITH HOOKS are skipped: a hook can change the fee or the behaviour, which is
+ * not something to hand an automatic LP. Throws when the gateway fails, so the caller can
+ * fall back to on-chain v3 discovery.
  */
 export async function poolsForToken(ctx: ChainCtx, token: string): Promise<TokenPool[]> {
   const chain = UNISWAP_CHAIN[ctx.key];
@@ -253,22 +256,22 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
     if (!t0 || !t1) return;
     const b0 = baseKindOf(t0.symbol, t0.address, ctx);
     const b1 = baseKindOf(t1.symbol, t1.address, ctx);
-    // Wajib TEPAT satu sisi base (single-sided-able); skip base/base atau non-base.
+    // EXACTLY one base side is required for single-sided entry; skip base/base and non-base pairs.
     if ((b0 && b1) || (!b0 && !b1)) return;
     const fee = p.feeTier ?? 0;
     const tvl = p.totalLiquidity?.value ?? 0;
     if (fee <= 0) return;
     if (protocol === 'v4' && p.hook) return; // ber-hook → skip (aman)
-    // v4 hanya di chain yang bot dukung PENUH (V4_PM + Blockscout utk enumerasi).
-    // Di chain lain gateway tetap mengembalikan pool v4, tapi posisi yang dibuka
-    // takkan bisa dipantau atau ditutup — jangan tawarkan sama sekali.
+    // v4 only where the bot fully supports it. Elsewhere the gateway still returns v4
+    // pools, but a position opened in one could never be monitored or closed -- so do not
+    // offer it at all.
     if (protocol === 'v4' && !v4Supported(ctx)) return;
 
     const baseIsCurrency0 = !!b0;
     const base = (b0 ?? b1)!;
     const baseSymbol = (baseIsCurrency0 ? t0.symbol : t1.symbol) ?? (base === 'usdg' ? 'USDG' : 'ETH');
     const otherSymbol = (baseIsCurrency0 ? t1.symbol : t0.symbol) ?? '?';
-    // APR = fee 24 jam disetahunkan (rumus sama dengan kartu /pools).
+    // APR is 24h fees annualised, the same formula as the /pools card.
     const vol = p.cumulativeVolume?.value ?? 0;
     const aprPct = tvl > 0 && vol > 0 ? ((vol * (fee / 1e6) * 365) / tvl) * 100 : null;
     const tp: TokenPool = { protocol, base, baseSymbol, otherSymbol, fee, tvlUsd: tvl, vol24hUsd: vol, aprPct };
@@ -281,7 +284,7 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
         hooks: ethers.ZeroAddress,
       };
       tp.baseIsCurrency0 = baseIsCurrency0;
-      if (!tp.poolKey.tickSpacing) return; // tanpa tickSpacing tak bisa dibuka
+      if (!tp.poolKey.tickSpacing) return; // without a tickSpacing it cannot be opened
     }
     out.push(tp);
   };
@@ -291,18 +294,18 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
   return out;
 }
 
-// ─── sumber alternatif: DexScreener (chain tanpa gateway Uniswap, mis. BSC) ──
+// ─── the alternative source: DexScreener, for chains with no Uniswap gateway ──
 //
-// DexScreener memberi likuiditas & volume 24 jam per PAIR, tapi TIDAK memberi fee
-// tier. Fee dibaca on-chain dari pool-nya, sekaligus dipakai membuktikan pool itu
-// benar milik factory chain ini (fork lain punya alamat pool berbeda untuk pasangan
-// yang sama) — jadi angka yang dipakai membuka posisi tetap datang dari chain.
+// DexScreener gives liquidity and 24h volume per PAIR, but no fee tier. The fee is read
+// from the pool on chain, which doubles as proof that the pool really belongs to this
+// chain's factory -- a fork has different pool addresses for the same pair. So the numbers
+// a position is opened on still come from the chain itself.
 
 const DEXSCREENER_TOKENS = 'https://api.dexscreener.com/latest/dex/tokens';
 const ERC20_SYM_ABI = ['function symbol() view returns (string)'];
 const ERC20_BAL_ABI = ['function balanceOf(address) view returns (uint256)'];
 
-/** Harga USD wrapped-native chain ini (untuk menilai sisi base). null = tak terbaca. */
+/** This chain's wrapped-native price in USD, for valuing the base side. null when unread. */
 async function getBaseUsd(ctx: ChainCtx): Promise<number | null> {
   const { getEthUsd } = await import('./screening.js');
   return getEthUsd(ctx.wethAddress, ctx).catch(() => null);
@@ -318,9 +321,9 @@ type DexPair = {
   liquidityUsd: number;
   vol24hUsd: number;
   vol1hUsd?: number;
-  /** alamat(lowercase) → simbol. DexScreener memakai base/quote miliknya sendiri,
-   *  yang TIDAK selalu sama urutannya dengan token0/token1 pool — jadi simbol
-   *  harus dicocokkan lewat alamat, bukan lewat posisi. */
+  /** lowercase address -> symbol. DexScreener has its own idea of base and quote, which
+   *  does not always match the pool's token0/token1 order -- so symbols must be matched by
+   *  address, never by position. */
   symByAddr: Record<string, string>;
 };
 
@@ -338,9 +341,10 @@ async function dexPairs(ctx: ChainCtx, tokenAddress: string): Promise<DexPair[]>
   const out: DexPair[] = [];
   for (const p of json?.pairs ?? []) {
     if (p?.chainId !== ctx.dexKey) continue;
-    if (!(p?.labels ?? []).includes('v3')) continue; // v2 tak punya rentang → bukan single-side
-    // liquidity.usd BOLEH kosong: DexScreener kadang tak mengisinya untuk pool v3
-    // yang sah. Membuangnya di sini pernah membuat pool nyata dilaporkan 'tak ada'.
+    if (!(p?.labels ?? []).includes('v3')) continue; // v2 has no range, so it cannot be single-sided
+    // liquidity.usd is allowed to be empty: DexScreener sometimes leaves it out for a
+    // perfectly real v3 pool. Dropping those here once made existing pools report as
+    // "no pool found".
     const liq = Number(p?.liquidity?.usd ?? 0);
     if (!p.pairAddress) continue;
     const symByAddr: Record<string, string> = {};
@@ -358,7 +362,7 @@ async function dexPairs(ctx: ChainCtx, tokenAddress: string): Promise<DexPair[]>
   return out;
 }
 
-/** Baca fee & pasangan pool on-chain, lalu BUKTIKAN pool itu milik factory chain ini. */
+/** Read the pool's fee and pair on chain, and PROVE it belongs to this chain's factory. */
 async function verifyPool(
   pairAddress: string,
   ctx: ChainCtx,
@@ -369,7 +373,7 @@ async function verifyPool(
     const feeNum = Number(fee);
     if (!ctx.feeTiers.includes(feeNum)) return null;
     const expect: string = await ctx.factory.getPool(token0, token1, feeNum);
-    if (expect.toLowerCase() !== pairAddress.toLowerCase()) return null; // pool DEX lain
+    if (expect.toLowerCase() !== pairAddress.toLowerCase()) return null; // a pool on another DEX
     return { fee: feeNum, token0, token1 };
   } catch {
     return null;
@@ -380,13 +384,12 @@ const aprOf = (vol24h: number, fee: number, tvl: number): number | null =>
   tvl > 0 && vol24h > 0 ? ((vol24h * (fee / 1e6) * 365) / tvl) * 100 : null;
 
 /**
- * Pool untuk 1 token di chain tanpa gateway Uniswap.
+ * Pools for one token on a chain with no Uniswap gateway.
  *
- * SUMBER UTAMA = factory on-chain (getPool per base × per fee tier), bukan
- * DexScreener: terbukti DexScreener bisa mengembalikan pair v3 yang sah dengan
- * `liquidity: undefined` (token 黄金时代/USDT), dan menyaringnya membuat pool yang
- * benar-benar ada dilaporkan "tak ada". DexScreener hanya dipakai MELENGKAPI
- * volume 24 jam supaya APR bisa dihitung.
+ * The PRIMARY source is the on-chain factory (getPool per base, per fee tier), not
+ * DexScreener: it demonstrably returns valid v3 pairs with `liquidity: undefined` (the
+ * 黄金时代/USDT token did), and filtering those out reported existing pools as missing.
+ * DexScreener is used only to fill in 24h volume so an APR can be computed.
  */
 async function poolsForTokenDex(ctx: ChainCtx, token: string): Promise<TokenPool[]> {
   // Volume per pool (best-effort) — kegagalannya tak boleh menghilangkan pool.
@@ -398,17 +401,17 @@ async function poolsForTokenDex(ctx: ChainCtx, token: string): Promise<TokenPool
       Object.assign(symByAddr, p.symByAddr);
     }
   } catch {
-    /* tanpa DexScreener: pool tetap ketemu, APR-nya saja yang '?' */
+    /* without DexScreener the pools are still found; only their APR reads '?' */
   }
 
   const tokenC = new ethers.Contract(token, ERC20_SYM_ABI, ctx.provider);
   const otherSymbol = symByAddr[token.toLowerCase()] ?? (await tokenC.symbol().catch(() => '?'));
   const nativeUsd = await getBaseUsd(ctx);
 
-  // Sapu SEMUA DEX yang bot punya kontraknya di chain ini: bawaan (undefined) +
-  // tiap venue. Tanpa ini, di BSC hanya PancakeSwap yang terlihat, padahal Uniswap
-  // v3 juga hidup di sana dengan factory sendiri — dan untuk sebagian token justru
-  // hanya Uniswap yang punya pool.
+  // Sweep EVERY DEX the bot has contracts for on this chain: the default one, plus each
+  // venue. Without this, only PancakeSwap was visible on BSC even though Uniswap v3 also
+  // runs there with its own factory -- and for some tokens Uniswap is the only one with a
+  // pool at all.
   const venues: Array<string | undefined> = [undefined, ...venuesFor(ctx.key)];
   const found = await Promise.all(
     venues.flatMap((venue) => {
@@ -420,9 +423,9 @@ async function poolsForTokenDex(ctx: ChainCtx, token: string): Promise<TokenPool
             if (!pool || pool === ethers.ZeroAddress) return null;
             const baseC = new ethers.Contract(base.address, ERC20_BAL_ABI, vctx.provider);
             const reserve: bigint = await baseC.balanceOf(pool);
-            if (reserve <= 0n) return null; // pool terdaftar tapi kosong
+            if (reserve <= 0n) return null; // the pool is listed but empty
             const amt = Number(ethers.formatUnits(reserve, base.decimals));
-            // TVL ≈ 2× sisi base (pool seimbang secara nilai). Stablecoin = $1.
+            // TVL is roughly 2x the base side, since a pool balances by value. A stablecoin is $1.
             const usdPerBase = base.kind === 'weth' ? nativeUsd : 1;
             const tvlUsd = usdPerBase !== null ? amt * usdPerBase * 2 : 0;
             const vol = volByPool.get(pool.toLowerCase()) ?? 0;
@@ -449,7 +452,7 @@ async function poolsForTokenDex(ctx: ChainCtx, token: string): Promise<TokenPool
   return out;
 }
 
-/** Top pool chain (by APR) via DexScreener: pair paling likuid dari tiap aset base. */
+/** A chain's top pools by APR via DexScreener: the deepest pair for each base asset. */
 async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePool[]> {
   const lists = await Promise.all(ctx.bases.map((b) => dexPairs(ctx, b.address).catch(() => [])));
   const seen = new Set<string>();
@@ -457,9 +460,9 @@ async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePo
     .flat()
     .filter((p) => (seen.has(p.pairAddress.toLowerCase()) ? false : seen.add(p.pairAddress.toLowerCase())))
     .filter((p) => p.liquidityUsd >= MIN_TVL_USD && p.vol24hUsd > 0)
-    // Urut by volume 24 jam, bukan likuiditas: pool TERLIKUID di BSC selalu
-    // USDT/WBNB, jadi memilih by likuiditas membuat daftar habis oleh stablecoin
-    // dan token yang benar-benar ramai tak pernah sampai ke kandidat.
+    // Sorted by 24h volume rather than liquidity: the deepest pool on BSC is always
+    // USDT/WBNB, so sorting by liquidity fills the list with stablecoins and the tokens
+    // actually being traded never reach the candidates.
     .sort((a, b) => b.vol24hUsd - a.vol24hUsd)
     .slice(0, 25); // batasi verifikasi on-chain
   const pools: ExplorePool[] = [];
@@ -475,7 +478,7 @@ async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePo
       const bothBase = !!b0 && !!b1;
       const otherAddr = bothBase ? undefined : b0 ? v.token1 : v.token0;
       const symOf = (a: string) => p.symByAddr[a.toLowerCase()] ?? '?';
-      // Base ditaruh BELAKANG supaya terbaca "TOKEN/BASE", sama seperti jalur gateway.
+      // The base goes LAST so it reads "TOKEN/BASE", just as the gateway path does.
       const pair = bothBase
         ? `${symOf(v.token0)}/${symOf(v.token1)}`
         : b0
@@ -497,18 +500,18 @@ async function fetchTopPoolsDex(ctx: ChainCtx, limit: number): Promise<ExplorePo
   return pools.slice(0, limit).map((p) => ({ ...p, chain: ctx.key, chainLabel: ctx.label }));
 }
 
-// ─── kapitalisasi pasar (utk menerjemahkan rentang harga jadi rentang MC) ──
+// --- market cap, for translating a price range into an mcap range ---------
 
 const mcapCache = new Map<string, { t: number; v: number | null }>();
-// 30 dtk (dulu 120). Jalur utama kartu posisi kini MENURUNKAN mcap dari harga pool
-// yang dibaca tiap refresh, jadi cache ini tinggal melayani jalur cadangan &
-// penjelajahan token — di sana 2 menit terlalu basi untuk token yang bergerak cepat.
+// 30 seconds, down from 120. The main position-card path now derives market cap from the
+// pool price it reads on every refresh, so this cache only serves the fallback path and
+// token exploration -- where two minutes is too stale for a fast-moving token.
 const MCAP_TTL_MS = 30_000;
 
 /**
- * Kapitalisasi pasar token dari DexScreener. null = tak terbaca (JANGAN 0 — nol
- * terbaca sebagai fakta "token tak bernilai"). Di-cache 2 menit: kartu posisi
- * bisa di-refresh berkali-kali dan MC tak berubah secepat itu.
+ * A token's market cap from DexScreener. null means unread -- never 0, which reads as the
+ * fact that the token is worthless. Cached briefly: a position card can be refreshed many
+ * times and the market cap does not move that fast.
  */
 export async function tokenMarketCap(ctx: ChainCtx, token: string): Promise<number | null> {
   const key = `${ctx.dexKey}:${token.toLowerCase()}`;
@@ -529,9 +532,9 @@ export async function tokenMarketCap(ctx: ChainCtx, token: string): Promise<numb
       }
     }
   } catch {
-    /* gagal → null, kartu menulis '?' */
+    /* a failure returns null and the card prints '?' */
   }
-  // FALLBACK: DexScreener kosong/down → GMGN (mcap = harga × supply).
+  // FALLBACK: when DexScreener is empty or down, GMGN (mcap = price x supply).
   if (v === null) {
     const g = await gmgnPrice(token, ctx.key).catch(() => null);
     if (g && g.mcapUsd && g.mcapUsd > 0) v = g.mcapUsd;
@@ -540,7 +543,7 @@ export async function tokenMarketCap(ctx: ChainCtx, token: string): Promise<numb
   return v;
 }
 
-/** Angka USD ringkas: $1.2M / $340K / $820. */
+/** A compact USD figure: $1.2M / $340K / $820. */
 export function usdShort(n: number): string {
   const a = Math.abs(n);
   if (a >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';

@@ -11,7 +11,7 @@ const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
 ];
 const BAL_ABI = ['function balanceOf(address) view returns (uint256)'];
-const FEE_TIERS = [100, 500, 2500, 3000, 10000]; // gabungan Uniswap + PancakeSwap; pool yang tak ada dilewati
+const FEE_TIERS = [100, 500, 2500, 3000, 10000]; // Uniswap and PancakeSwap combined; pools that do not exist are skipped
 type SellStatus = 'ok' | 'blocked' | 'costly' | 'unknown';
 
 /**
@@ -59,7 +59,7 @@ async function simulateSellPath(
       });
       tokenOut = BigInt(q[0]);
     } catch {
-      return { status: 'unknown', flag: null }; // gagal quote BELI → jangan blokir
+      return { status: 'unknown', flag: null }; // a failed BUY quote must not block
     }
     if (tokenOut === 0n) return { status: 'unknown', flag: null };
 
@@ -114,15 +114,15 @@ export type ScreenResult = {
   buys24h: number | null;
   sells24h: number | null;
   priceUsd: string | null;
-  marketCapUsd: number | null; // dari DexScreener (marketCap, fallback fdv)
+  marketCapUsd: number | null; // from DexScreener: marketCap, falling back to fdv
   pairAgeHours: number | null;
-  dexName: string | null; // 'uniswap' | 'pancakeswap' | … dari DexScreener
-  renounced: boolean | null; // null = tak bisa ditentukan (owner() tak ada / RPC gagal)
-  gmgn: GmgnExtra | null; // pengisi celah dari GMGN; null = tak dipanggil/gagal
-  insightx: InsightXMetrics | null; // klaster holder InsightX; null = chain tak didukung/gagal
-  goplus: GoPlusInfo | null; // penambal BSC (chain tanpa Blockscout); null = tak dipakai/gagal
-  scamFlag: boolean; // token ditandai scam oleh explorer
-  sellPath: SellStatus; // simulasi jalur jual (exit-liquidity)
+  dexName: string | null; // 'uniswap' | 'pancakeswap' | … from DexScreener
+  renounced: boolean | null; // null means undeterminable: no owner(), or the RPC failed
+  gmgn: GmgnExtra | null; // gap filler from GMGN; null means it was not called, or it failed
+  insightx: InsightXMetrics | null; // InsightX holder clusters; null means the chain is unsupported, or it failed
+  goplus: GoPlusInfo | null; // the BSC patch, for a chain with no Blockscout; null means unused, or failed
+  scamFlag: boolean; // the explorer has flagged this token as a scam
+  sellPath: SellStatus; // a simulated sell path, to test exit liquidity
   flags: Flag[];
   verdict: 'AMAN' | 'HATI-HATI' | 'BAHAYA';
 };
@@ -153,7 +153,7 @@ async function fetchJson(url: string): Promise<any | null> {
   const hit = _jsonCache.get(url);
   if (hit && Date.now() - hit.t < JSON_TTL) return hit.v;
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 10_000); // cap worst-case; fail-open (null) sudah ditangani
+  const t = setTimeout(() => ctrl.abort(), 10_000); // a worst-case cap; failing open with null is already handled
   try {
     const res = await fetch(url, { headers: EXPLORER_HEADERS, signal: ctrl.signal });
     if (!res.ok) return null;
@@ -189,7 +189,7 @@ async function readRenounced(addr: string, ctx: ChainCtx): Promise<boolean | nul
       /* try the next name */
     }
   }
-  return null; // tak ada owner() yang bisa dibaca
+  return null; // there is no readable owner()
 }
 
 export async function screenToken(
@@ -198,7 +198,7 @@ export async function screenToken(
 ): Promise<ScreenResult> {
   const addr = ethers.getAddress(tokenAddress);
   const flags: Flag[] = [];
-  const bs = ctx.blockscout; // null = explorer tak tersedia (mis. BSC)
+  const bs = ctx.blockscout; // null means no explorer is available, as on BSC
 
   // Fire every request at once, including the on-chain sell-path simulation.
   const [tokenInfo, holders, contract, dex, sell, renounced, gmgn, insightx, goplus, counters] = await Promise.all([
@@ -218,7 +218,7 @@ export async function screenToken(
   const dexBase = (dex?.pairs ?? []).find(
     (p: any) => p.chainId === ctx.dexKey && (p.baseToken?.address || '').toLowerCase() === addr.toLowerCase(),
   )?.baseToken;
-  const name = tokenInfo?.name ?? dexBase?.name ?? 'Tidak diketahui';
+  const name = tokenInfo?.name ?? dexBase?.name ?? 'Unknown';
   const symbol = tokenInfo?.symbol ?? dexBase?.symbol ?? '???';
   // Total holders: /counters is fresher than the token payload (5311 against 5223
   // measured on the same CA); GoPlus fills in for BSC, which has no explorer.
@@ -292,7 +292,7 @@ export async function screenToken(
   let priceUsd: string | null = null;
   let marketCapUsd: number | null = null;
   let pairAgeHours: number | null = null;
-  let dexName: string | null = null; // venue pair terlikuid — baris Liquidity menyebutnya
+  let dexName: string | null = null; // the deepest pair's venue, which the Liquidity row names
 
   // Same-chain pairs only (a token address can exist on several chains).
   const pairs: any[] = (dex?.pairs ?? []).filter((p: any) => p.chainId === ctx.dexKey);
@@ -566,11 +566,11 @@ export function formatScreen(
   // pool into sounding twice as mature as it is.
   const age = (h: number | null): string => {
     if (h === null) return UNK;
-    const menit = Math.round(h * 60);
-    if (menit < 60) return `${menit}m`;
-    const hari = Math.floor(menit / 1440);
-    const jam = Math.floor((menit % 1440) / 60);
-    return hari > 0 ? `${hari}d ${jam}h` : `${jam}h ${menit % 60}m`;
+    const minutes = Math.round(h * 60);
+    if (minutes < 60) return `${minutes}m`;
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    return days > 0 ? `${days}d ${hours}h` : `${hours}h ${minutes % 60}m`;
   };
   const venue = s.dexName ? ` (${esc(s.dexName.replace(/^\w/, (c) => c.toUpperCase()))})` : '';
 

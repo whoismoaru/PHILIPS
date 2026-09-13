@@ -8,34 +8,34 @@ import * as store from '../store.js';
 import * as msg from '../messages.js';
 
 /**
- * /unwrap — kembalikan WETH nyangkut ke ETH native, on demand.
+ * /unwrap -- turn stuck wrapped native back into native, on demand.
  *
- * Monitor sudah menyapu WETH otomatis, tapi cuma tiap 1 menit dan hanya saat
- * tak ada operasi uang berjalan — jadi tepat setelah close/open yang separuh
- * gagal, saldonya nongkrong sebagai WETH sampai sapuan berikutnya. Ini jalur
- * manualnya: baca saldo, konfirmasi, satu tx withdraw().
+ * The monitor already sweeps it automatically, but only once a minute and only while no
+ * money operation is running -- so right after a half-failed open or close, the balance
+ * sits as wrapped native until the next sweep. This is the manual path: read the balance,
+ * confirm, one withdraw() transaction.
  */
 
-// Sama dengan ambang debu monitor: di bawah ini gas unwrap > nilainya.
+// The same dust threshold the monitor uses: below this, unwrapping costs more than it returns.
 const WETH_DUST = 10_000_000_000_000n; // 0.00001 WETH
 
 const unwrapping = new Set<string>(); // anti double-tap: tx kedua unwrap 0 & buang gas
 
-/** Simbol wrapped & native chain ini (WETH/ETH, WBNB/BNB). */
+/** This chain's wrapped and native symbols (WETH/ETH, WBNB/BNB). */
 const symbolsOf = (cc: ReturnType<typeof getChain>) => ({
   wrapped: cc.bases.find((b) => b.kind === 'weth')?.symbol ?? 'WETH',
   native: cc.nativeSymbol,
 });
 
 /**
- * Semua chain yang punya wrapped-native NYANGKUT di atas ambang debu.
+ * Every chain holding stuck wrapped native above the dust threshold.
  *
- * Dulu perintah ini cuma melihat `getChain()` — chain yang sedang aktif. WBNB
- * nyangkut di BSC saat kamu sedang di Robinhood terbaca "tak ada yang perlu
- * di-unwrap", padahal ada. Sapuan otomatis monitor memang sudah melintasi semua
- * chain; jalur manualnya yang tertinggal.
+ * This command used to look only at `getChain()`, the active chain. WBNB stuck on BSC while
+ * you were pointed at Robinhood read as "nothing to unwrap" when there plainly was. The
+ * monitor's automatic sweep already crossed every chain; it was the manual path that had
+ * been left behind.
  */
-/** Label chain yang benar-benar diperiksa — dipakai kartu "tak ada yang nyangkut". */
+/** The chains actually checked, named by the "nothing stuck" card. */
 const scannedChains = (): string[] =>
   Object.values(CHAINS).filter((cc) => cc.hasWethBase).map((cc) => cc.label);
 
@@ -91,17 +91,17 @@ bot.command('unwrap', cmdUnwrap);
 
 bot.action('unwrap:go', async (ctx) => {
   const { wrapped, native } = symbolsOf(getChain());
-  // Satu tx per chain, jadi kunci anti double-tap juga per chain.
-  // Saldo dibaca ULANG di sini: kartu konfirmasi bisa saja sudah lama, dan
-  // withdraw() dengan angka basi = revert + gas hangus.
+  // One transaction per chain, so the double-tap lock is per chain too. The balance is read
+  // AGAIN here: the confirmation card may be old, and withdraw() on a stale figure reverts
+  // and burns the gas.
   const stuck = (await stuckEverywhere().catch(() => [])).filter((x) => !unwrapping.has(x.cc.key));
   if (stuck.length === 0) {
     await ctx.answerCbQuery('Processing…');
     return void (await ctx.editMessageText(msg.msgUnwrapNone(`${msg.fmtEth(WETH_DUST)} ${wrapped}`, wrapped, native, scannedChains()), html));
   }
   for (const x of stuck) unwrapping.add(x.cc.key);
-  // Monitor tak boleh ikut menyapu wrapped-native yang sama di tengah tx ini
-  // (tabrakan nonce).
+  // The monitor must not sweep the same wrapped native in the middle of this transaction:
+  // they would collide on the nonce.
   store.beginMoneyOp();
   try {
     await ctx.answerCbQuery('Processing…');
@@ -124,9 +124,9 @@ bot.action('unwrap:go', async (ctx) => {
         done.push(`${cc.label}: ${msg.fmtEth(bal)} ${s.wrapped}`);
         console.log(`[unwrap] ${ethers.formatEther(bal)} ${s.wrapped} → ${s.native} (${cc.key}) tx ${lastHash}`);
       } catch (e) {
-        // Satu chain gagal TIDAK boleh membatalkan sisanya — dananya terpisah.
+        // One chain failing must not cancel the rest: the money is separate.
         failed.push(`${cc.label}: ${(e as Error).message.slice(0, 80)}`);
-        console.log(`[unwrap] ${cc.key} gagal: ${(e as Error).message.slice(0, 120)}`);
+        console.log(`[unwrap] ${cc.key} failed: ${(e as Error).message.slice(0, 120)}`);
       }
     }
     if (done.length) {

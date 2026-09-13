@@ -10,13 +10,14 @@ import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
 
 /**
- * /claim_fees — panen fee tanpa menutup posisi.
- * Tarik sebagian — 25/50/75% (posisi tetap hidup) atau 100% (dialihkan ke jalur
- * /stop yang sudah menangani burn + jurnal + cashout). Masuknya lewat tombol
- * "🗑️ Withdraw" di kartu posisi; command /remove_lp sudah dihapus.
+ * /claim_fees -- harvest fees without closing the position.
+ *
+ * Partial removal takes 25/50/75% and leaves the position alive; 100% is routed to the
+ * close path, which already handles the burn, the journal entry and the cash-out. It is
+ * reached from the Remove Liquidity button on a position card.
  */
 
-// ---------- /claim_fees — panen fee tanpa menutup posisi ----------
+// ---------- /claim_fees: harvest fees without closing the position ----------
 /** One claimable position, from either protocol. */
 type Claimable = { id: string; chainKey: string; symbol: string; label: string; base: number; v4: boolean };
 
@@ -101,7 +102,7 @@ async function doClaim(ctx: any, proto: string, chainKey: string, id: string) {
   const tag = `${proto}:${id}`;
   const cc = CHAINS[chainKey];
   if (!cc) return void (await ctx.reply(msg.msgError('claim', `Unknown chain ${chainKey}.`), html));
-  store.beginMoneyOp(); // sweep monitor tak boleh mengirim tx dari dompet yang sama
+  store.beginMoneyOp(); // the sweep monitor must not send from the same wallet
   try {
     if (config.safety.dryRun) {
       await ctx.editMessageText(msg.msgClaimDone(id, '(dry run)', null), html);
@@ -165,10 +166,10 @@ bot.action(/^claim:(\d+)$/, async (ctx: any) => {
   return doClaim(ctx, 'v3', rec?.chain ?? ctxOf(rec ?? ({} as any)).key, id);
 });
 
-// ---------- Tarik sebagian likuiditas ----------
-// Command /remove_lp DIHAPUS (28 Agu 2026): isinya cuma daftar posisi dengan satu
-// tombol per posisi menuju pemilih persen di bawah, dan pemilih itu sudah dicapai
-// dari kartu posisi lewat tombol "🗑️ Withdraw" (rm:<id>). Dua pintu, satu ruangan.
+// ---------- Partial liquidity removal ----------
+// The /remove_lp command was removed on 28 Aug 2026: it was nothing but a list of positions
+// with one button each leading to the percentage picker below, and that picker is already
+// reachable from the position card. Two doors into one room.
 bot.action(/^rm:(\d+)$/, async (ctx) => {
   const id = ctx.match[1];
   await ctx.answerCbQuery();
@@ -196,7 +197,7 @@ bot.action(/^rmpct:(\d+):(\d+)$/, async (ctx) => {
     const v = Number(ethers.formatUnits(d.valueBaseWei, d.baseDecimals)) * (pct / 100);
     est = `≈ ${v.toFixed(d.baseDecimals >= 18 ? 5 : 2)} ${d.baseSymbol}`;
   } catch {
-    /* estimasi opsional — jangan blokir penarikan hanya karena RPC baca gagal */
+    /* the estimate is optional: never block a withdrawal because a read failed */
   }
   await ctx.editMessageText(msg.msgRemoveConfirm(id, rec.symbol, pct, est, config.safety.dryRun), {
     ...html,
@@ -215,16 +216,16 @@ bot.action(/^rmok:(\d+):(\d+)$/, async (ctx) => {
   if (!rec) return ctx.answerCbQuery('Position is no longer active.');
   removing.add(id);
   await ctx.answerCbQuery();
-  store.beginMoneyOp(); // idem: penarikan sebagian juga mengirim tx
+  store.beginMoneyOp(); // likewise: a partial withdrawal also sends a transaction
   try {
     if (config.safety.dryRun) {
       await ctx.editMessageText(msg.msgRemoveDone(id, pct, null), html);
       return;
     }
     const { txHash } = await removeLiquidityPct(id, pct, ctxOf(rec));
-    // Modal tercatat harus ikut menyusut. Tanpa ini sisa posisi dibandingkan dengan
-    // modal PENUH: tarik 50% → kartu selamanya menampilkan −50%, dan alert rugi
-    // bersih langsung menyala padahal dananya sudah ada di dompet.
+    // The recorded capital has to shrink with it. Without this the remaining position is
+    // compared against the FULL deposit: pull 50% out and the card reads -50% for good,
+    // while the net-loss alert fires over money that is already in the wallet.
     const kept = 100n - BigInt(pct);
     const keptWei = (BigInt(rec.initialWethWei || '0') * kept) / 100n;
     store.update(id, {

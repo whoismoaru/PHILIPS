@@ -14,7 +14,7 @@ for (const fee of getChain().feeTiers) {
   }
 }
 if (found.length === 0) {
-  console.log('Tidak menemukan pool WETH/USDG. Coba token lain.');
+  console.log('No WETH/USDG pool found. Try another token.');
   process.exit(0);
 }
 

@@ -3,33 +3,33 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Gagal BACA posisi bukan bukti posisi hilang.
+ * Failing to READ a position is not proof the position is gone.
  *
- * 28 Agu 2026: RPC BSC putus saat menutup ladder 8 leg. `positions()` gagal untuk
- * setiap leg, `catch {}` menelan semuanya, daftar panggilan multicall jadi kosong,
+ * 28 Aug 2026: the BSC RPC dropped while closing an 8-leg ladder. `positions()`
+ * failed for every leg, `catch {}` swallowed all of it, the multicall list came out empty,
  * dan alurnya tetap melapor "LADDER CLOSED · Total cashed out 0 USDT". Tak satu
- * transaksi pun dikirim: 214 USDT tetap hidup di chain tapi terhapus dari catatan
- * bot. Dua penjaga di bawah memastikan itu tak terulang.
+ * and the transaction went out anyway: 214 USDT stayed alive on chain while the bot
+ * erased it from its own records. The two guards below keep that from happening again.
  */
 const uni = readFileSync(join(process.cwd(), 'src', 'uniswap.ts'), 'utf8');
 const idx = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8');
 
-// 1. Hanya revert 'Invalid token ID' yang boleh dilewati; sisanya harus dilempar.
+// 1. Only an 'Invalid token ID' revert may be skipped; everything else has to throw.
 const loop = uni.slice(uni.indexOf('export async function executeRemoveBatch'), uni.indexOf('export type PositionInfo'));
-assert.ok(/if \(isGoneErr\(e\)\) return null;/.test(loop), 'leg yang gagal dibaca masih dilewati diam-diam');
-assert.ok(/throw new Error\(\s*`Could not read position/.test(loop), 'gagal baca tak dilempar');
-assert.ok(!/\} catch \{\s*(continue|return null);/.test(loop), 'masih ada catch kosong yang menelan semua error');
+assert.ok(/if \(isGoneErr\(e\)\) return null;/.test(loop), 'a leg that failed to read is still skipped in silence');
+assert.ok(/throw new Error\(\s*`Could not read position/.test(loop), 'a failed read does not throw');
+assert.ok(!/\} catch \{\s*(continue|return null);/.test(loop), 'an empty catch still swallows every error');
 
-// Lantai harga yang terlewat karena harga bergerak: susun ULANG dengan harga baru,
-// jangan menyerah dan jangan melonggarkan lantainya.
-assert.ok(/price slippage check/i.test(loop), 'revert lantai harga tak dikenali');
-assert.ok(/built = await build\(\);/.test(loop), 'tak ada penyusunan ulang saat harga bergerak');
-assert.ok(/Price moved faster than the withdrawal floor/.test(loop), 'pesan gagal tak menjelaskan sebabnya');
+// A price floor missed because the price moved: REBUILD at the new price. Never give
+// up, and never loosen the floor.
+assert.ok(/price slippage check/i.test(loop), 'a price-floor revert is not recognised');
+assert.ok(/built = await build\(\);/.test(loop), 'nothing is rebuilt when the price moves');
+assert.ok(/Price moved faster than the withdrawal floor/.test(loop), 'the failure message does not explain the cause');
 
-// 2. Tanpa tx penarikan, jangan finalisasi apa pun sebagai tertutup.
+// 2. With no withdrawal transaction, nothing may be finalised as closed.
 assert.ok(
   /No withdrawal transaction was sent/.test(idx),
-  'jalur ladder masih bisa melapor sukses tanpa mengirim tx',
+  'the ladder path can still report success without sending a transaction',
 );
 
-console.log('OK — close: gagal baca membatalkan penutupan, bukan menyamar jadi sukses.');
+console.log('ok: a failed read aborts the close instead of posing as a success.');

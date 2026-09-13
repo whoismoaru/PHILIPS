@@ -22,7 +22,7 @@ try {
     cluster_pct: 0, snipers_pct: 0, bundlers_pct: 0, dev_pct: 0, insiders_pct: 0, top10_pct: 0,
   });
   assert.equal(await insightxMetrics('0x1111111111111111111111111111111111111111', 'bsc'), null,
-    'payload semua-nol harus dibaca sebagai TAK ADA DATA');
+    'an all-zero payload has to read as NO DATA');
 
   // 2. Real payload -> parsed. cluster_pct 0 is legitimate here because
   //    top10_pct is populated.
@@ -30,12 +30,12 @@ try {
     cluster_pct: 0, snipers_pct: 0.19, bundlers_pct: 45.9, dev_pct: 0, insiders_pct: 40.7, top10_pct: 33.5,
   });
   const v = await insightxMetrics('0x2222222222222222222222222222222222222222', 'bsc');
-  assert.ok(v, 'payload dengan top10_pct terisi harus terbaca');
-  assert.equal(v.clusterPct, 0, 'cluster 0% yang SAH tak boleh ikut dibuang');
+  assert.ok(v, 'a payload with top10_pct filled in must parse');
+  assert.equal(v.clusterPct, 0, 'a legitimate 0% cluster must not be thrown away with it');
   assert.equal(v.bundlersPct, 45.9);
 
   // 3. Robinhood is unmapped -> no call at all, so no quota burned.
-  globalThis.fetch = (() => assert.fail('robinhood tak boleh memanggil InsightX')) as unknown as typeof fetch;
+  globalThis.fetch = (() => assert.fail('robinhood must never call InsightX')) as unknown as typeof fetch;
   assert.equal(await insightxMetrics('0x3333333333333333333333333333333333333333', 'robinhood'), null);
 
   // 4. No API key -> stays quiet, makes no call.

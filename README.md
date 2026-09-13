@@ -82,7 +82,8 @@ from the Uniswap gateway, Krystal, and on-chain scans.
 
 **Step 3. Pick how wide the range is.** From conservative to extreme.
 
-**Step 3b. Pick the shape** (base side only).
+**The shape is a setting, not a step.** `/settings` → **LP Shape** decides how every
+base-side entry is laid out, so the wizard never asks.
 
 - **Spot.** One position near the price. Simplest, and it harvests the most fees.
 - **Bid-Ask.** A ladder of several positions, with more money placed at the lower
@@ -91,7 +92,7 @@ from the Uniswap gateway, Krystal, and on-chain scans.
   More legs is smoother but needs a paid RPC; on a free endpoint it makes the bot
   slow. All the legs open in one batched transaction and are managed as one position.
 
-  Open any leg and the card shows the ladder first deposit, current value, fees,
+  Open any leg and the card shows the ladder first: deposit, current value, fees,
   PnL, and how many rungs are filled, active, or still waiting then the one leg you
   tapped. A leg that fills is doing its job, so it is marked filled rather than
   flagged as a position gone wrong.
@@ -117,9 +118,9 @@ then, so the number you enter is the one that goes on chain.
 | `/pnl` | Profit recap from closed trades, as a picture card |
 | paste a contract address | Audit the token, then open a position, buy, or sell |
 | `/claim_fees` | Take the fees, leave the position running |
-| `/sell` | Swap a token you hold, via the best available route |
+| `/sell` | **Swap** a token you hold, via the best available route |
 | `/bridge` | Move funds between chains |
-| `/send` | Withdraw a token or native to another address |
+| `/send` | **Withdraw** a token or native to another address |
 | `/gas` | What a transaction costs right now on every chain, in USD and Rupiah |
 | `/settings` | Mode, transaction limits, LP shape, quick percentages |
 | `/alerts` | Which notifications you want |
@@ -129,7 +130,7 @@ belongs to the position it closes, buying starts from a pasted contract address,
 stray wrapped native is unwrapped by the monitor every minute.
 
 **Nothing asks twice.** Swapping, bridging, withdrawing and opening an LP all execute on
-the amount you enter, and **Close Position** executes on the tap. Every step still has
+the amount you enter, and **Close Position** and **Close All** execute on the tap. Every step still has
 **Back**, every money path is guarded against double-taps, and every one of them checks
 your balance, the per-transaction limit and the gas reserve *before* anything is sent —
 what was removed is the second tap, not the guards.
@@ -137,73 +138,68 @@ what was removed is the second tap, not the guards.
 `/positions` lists what is open, one block per position:
 
 ```
-POSITIONS
+📊 POSITIONS
 
-🟢 USDT / PONS (V3)
-- ID: #1234567
-- Strategy: USDT Side (Buy the dip)
-- Invested: 197.2980 USDT
-- Status: Active (In Range) · 30m
-- Uncollected Fees: +$8.48
-- PnL: +2.4%
+🟢 $PONS/USDT | #1234567 (V3)
+├ Chain: BSC
+├ Strategy: USDT Side (buy the dip)
+├ Invested: 197,2980 USDT
+├ Total Fees: +$8,48
+├ PnL: +2,4%
+└ Status: Active (in range), 30m
 
-🟢 USDG / VYNEX  ◣×8 (V4)
-- ID: #1234568
-- Strategy: USDG Side (Buy the dip)
-- Invested: 199.0800 USDG
-- Status: Active (In Range) · 25m
-- Uncollected Fees: +$6.70
-- PnL: +3.1%
+🟢 $VYNEX/USDG | #1234568 (V4)
+├ Chain: Robinhood
+├ Strategy: USDG Side (buy the dip)
+├ Invested: 199,0800 USDG
+├ Total Fees: +$6,70
+├ PnL: +3,1%
+└ Status: Active (in range), 25m
 
 Your liquidity is in range and earning fees.
+
+13 Sep 2026, 14:06 WIB
 ```
 
 Tap one for the full card. A ladder shows the whole ladder first, then the leg you
 opened:
 
 ```
-📊 Position Details: #1234568
+🟢 $VYNEX/USDG | #1234568 (V4)
+├ Fee: 3.01%
+├ TVL: $1.2M
+├ Fills: 0%
+├ Volume: $184.2K (24h)
+├ Liquidity: 12.480,55 USDG
+└ Range: $545,5K ⇄ $49,1K
 
-🔗 Pair: USDG / VYNEX (3.01% Fee) · Robinhood
-🎯 Strategy: USDG Side (Buy the dip) · ◣ Bid-Ask ladder
+LADDER, 8 legs
+Deposit: 199,0807 USDG
+Value now: 204,23 USDG
+Ladder PnL: +$5,15 (+2,6%)
+Rungs: 0 filled, 1 active, 7 waiting
+leg 1 of 8, 2.8% of ladder capital
 
-🪜 LADDER · 8 legs
-💰 Deposit: 199.0807 USDG
-💰 Value now: 204.23 USDG
-↳ incl. fees 5.44 USDG
-📈 Ladder PnL: +$5.15 (+2.6%)
-📉 Ladder Range: $545.5K ⇄ $49.1K · now $457.2K
-🎚 Rungs: 0 filled · 1 active · 7 waiting
-
-— leg 1 of 8, 2.8% of ladder capital —
-💰 Leg Value: 6.16 USDG
-↳ incl. fees 0.91 USDG (+16.4% of capital)
-📉 Leg Range: +19.3% / -11.7% from current price
-↳ market cap $545.5K ⇄ $403.7K
-📈 Leg PnL: +$0.63 (+11.3%)
-🟢 Status: IN RANGE
-
-Your liquidity is active and earning fees. Fees keep accruing as long as VYNEX
-stays inside this range.
+13 Sep 2026, 14:06 WIB
 ```
 
 `/portfolio` answers the other question, where your money actually is:
 
 ```
-PORTFOLIO
+💰 PORTFOLIO
 
-💰 Equity Summary :
-- Total Equity = $1,250.00
-- Unstaked Balance = $850.00 (ETH, USDG, BNB, USDT, HYPE)
-- Active in LP = $400.00 (8 Positions)
+EQUITY :
+├  Total: $1.250,00
+├  In LP: $400,00 · 8 positions
+└  Free: $850,00
 
-📊 Asset Breakdown :
-- Robinhood = 0.3000 ETH ($750.00) | 25.00 USDG ($25.00)
-- BSC = 0.0800 BNB ($56.00) | 12.00 USDT ($12.00)
-- Base = 0.0010 ETH ($2.50)
-- HyperEVM = 0.0500 HYPE ($4.50)
+BY CHAIN :
+├  RH: $775,00 (0.3000 ETH / 25.00 USDG)
+├  BSC: $68,00 (0.0800 BNB / 12.00 USDT)
+├  BASE: $2,50 (0.0010 ETH)
+└  HyperEVM: $4,50 (0.0500 HYPE)
 
-✅ LIVE: 21:50 WIB
+13 Sep 2026, 14:06 WIB
 ```
 
 `/gas` answers the question you ask before every move, which chain is cheapest
@@ -213,33 +209,33 @@ right now:
 ⛽️ GAS FEE
 
 SWAP
-1. HyperEVM = $0.00238 / Rp42
-2. Base = $0.00412 / Rp73
-3. BSC = $0.011 / Rp189
-4. Robinhood = $0.271 / Rp4,760
+├ HyperEVM: $0.00258 / Rp45
+├ Base: $0.00494 / Rp87
+├ BSC: $0.012 / Rp207
+└ Robinhood: $0.070 / Rp1.235
 
 OPEN LP
-1. HyperEVM = $0.00381 / Rp67
-2. Base = $0.00658 / Rp116
-3. BSC = $0.017 / Rp302
-4. Robinhood = $0.432 / Rp7,600
+├ HyperEVM: $0.00351 / Rp62
+├ Base: $0.00672 / Rp118
+├ BSC: $0.016 / Rp282
+└ Robinhood: $0.096 / Rp1.681
 
 CLOSE LP
-1. HyperEVM = $0.00227 / Rp40
-2. Base = $0.00393 / Rp69
-3. BSC = $0.010 / Rp180
-4. Robinhood = $0.258 / Rp4,539
+├ HyperEVM: $0.00236 / Rp41
+├ Base: $0.00452 / Rp79
+├ BSC: $0.011 / Rp190
+└ Robinhood: $0.064 / Rp1.130
 
-SEND & APPROVE
-1. HyperEVM = $0.000392 / Rp7
-2. Base = $0.000678 / Rp12
-3. BSC = $0.00177 / Rp31
-4. Robinhood = $0.044 / Rp782
+WITHDRAW & APPROVE
+├ HyperEVM: $0.000363 / Rp6
+├ Base: $0.000695 / Rp12
+├ BSC: $0.00166 / Rp29
+└ Robinhood: $0.00991 / Rp174
 
-06 Sep 2026 · 22:42:51 UTC+08:00
+13 Sep 2026, 14:06 WIB
 ```
 
-Every section is ranked cheapest first. The gas price comes from each chain's own
+Each section is a tree, ranked cheapest first. The gas price comes from each chain's own
 RPC, the same number the bot pays with. The gas *units* are the median of this
 wallet's real transactions over 14 days, not a textbook estimate, because a v4
 `modifyLiquidities` burns more than 260k and that is the operation you use most.
@@ -253,6 +249,9 @@ A ladder counts as **one** position there, however many legs it was closed in. I
 opens as one deposit and closes in one transaction, so scoring it per leg would
 split the result eight ways and drop every slice under the break-even threshold,
 inflating the trade count while quietly deleting most of the wins and losses.
+
+Thousands are grouped Indonesian-style throughout the bot (`1.268,62`), and every
+figure on a card is converted to dollars rather than left in the asset it was earned in.
 
 All figures on this page are examples, not anyone's real history.
 
@@ -314,7 +313,7 @@ Five are configured out of the box. Turn the extra ones on in `.env`:
 |---|---|---|---|
 | Robinhood | Uniswap v3 + v4 | ETH · USDG | yes (primary) |
 | BSC | PancakeSwap v3 + Uniswap v3 + v4 | BNB · USDT | yes |
-| Base | Uniswap v3 | ETH · USDC | yes |
+| Base | Uniswap v3 + v4 | ETH · USDC | yes |
 | HyperEVM | HyperSwap v3 | HYPE · USDT0 | yes |
 | Ink | Velodrome Slipstream | ETH · USDT0 | no, too quiet to be worth the RPC |
 
@@ -401,7 +400,7 @@ npx tsx scripts/smoke-journal.ts     # accounting sanity
 for f in scripts/smoke-*.ts; do npx tsx "$f"; done   # all of them
 ```
 
-The `smoke-*` scripts stand in for a test suite, 42 of them at the time of writing.
+The `smoke-*` scripts stand in for a test suite, 59 of them at the time of writing.
 They cover the parts where a mistake costs money: slippage ladders, approval amounts,
 withdrawal price floors, sell routing, and PnL accounting. Several are pure maths and
 need no network at all; the rest read live chains but never sign anything.

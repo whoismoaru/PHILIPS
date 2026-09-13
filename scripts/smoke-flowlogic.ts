@@ -1,8 +1,8 @@
 /**
  * Penjaga logika alur output (audit 30 Agu 2026):
- *  1. tiap tombol punya handler — tombol mati = tap yang tak mengerjakan apa pun;
- *  2. tiap handler tombol menjawab callback — kalau tidak, spinner Telegram menggantung;
- *  3. tiap state "menunggu ketikan" ikut resetFlows — prompt yatim menelan ketikan
+ *  1. every button has a handler, because a dead button is a tap that does nothing;
+ *  2. every button handler answers the callback, or Telegram's spinner hangs;
+ *  3. every "waiting for input" state joins resetFlows, or an orphan prompt swallows what is typed
  *     berikutnya (persis bug prompt persen & prompt connect).
  */
 import assert from 'node:assert';
@@ -15,7 +15,7 @@ const walk = (d: string): string[] =>
 const files = walk('src');
 const src = files.map((f) => readFileSync(f, 'utf8')).join('\n');
 
-// 1) tombol yatim
+// 1) orphan buttons
 const emitted = new Set<string>();
 for (const m of src.matchAll(/button\.callback\(\s*(?:`[^`]*`|'[^']*'|"[^"]*")\s*,\s*(['"`])([^'"`$]+)\1/g)) emitted.add(m[2]);
 for (const m of src.matchAll(/callback_data:\s*(['"])([^'"$]+)\1/g)) emitted.add(m[2]);
@@ -26,12 +26,12 @@ for (const m of src.matchAll(/bot\.action\(\s*(\/(?:[^/\\]|\\.)+\/[a-z]*)/g)) {
   handlers.push((s) => new RegExp(body, flags).test(s));
 }
 for (const m of src.matchAll(/bot\.action\(\s*(['"])([^'"]+)\1/g)) handlers.push((s) => s === m[2]);
-assert.ok(emitted.size > 20, 'pemindai tombol tak menemukan apa-apa — polanya berubah');
-const yatim = [...emitted].filter((e) => !handlers.some((h) => h(e))).sort();
-assert.deepEqual(yatim, [], `tombol tanpa handler (tap tak berbuat apa-apa):\n  ${yatim.join('\n  ')}`);
+assert.ok(emitted.size > 20, 'the button scanner found nothing, so the pattern must have changed');
+const orphans = [...emitted].filter((e) => !handlers.some((h) => h(e))).sort();
+assert.deepEqual(orphans, [], `buttons with no handler, where a tap does nothing:\n  ${orphans.join('\n  ')}`);
 
-// 2) handler yang tak menjawab callback
-const bisu: string[] = [];
+// 2) handlers that never answer the callback
+const silent: string[] = [];
 for (const f of files) {
   const lines = readFileSync(f, 'utf8').split('\n');
   lines.forEach((l, i) => {
@@ -39,21 +39,21 @@ for (const f of files) {
     let end = i + 1;
     while (end < lines.length && !/^\}\);/.test(lines[end])) end++;
     const body = lines.slice(i, end).join('\n');
-    if (!/answerCbQuery|editMessageText|deleteMessage/.test(body)) bisu.push(`${f}:${i + 1}`);
+    if (!/answerCbQuery|editMessageText|deleteMessage/.test(body)) silent.push(`${f}:${i + 1}`);
   });
 }
-assert.deepEqual(bisu, [], `handler tombol tanpa jawaban (spinner menggantung):\n  ${bisu.join('\n  ')}`);
+assert.deepEqual(silent, [], `button handlers that never answer, leaving the spinner to hang:\n  ${silent.join('\n  ')}`);
 
 // 3) state penunggu ketikan wajib ikut dibersihkan resetFlows
 const reset = src.match(/registerFlowReset\(\([^)]*\)\s*=>\s*\{[\s\S]*?\n\}\)|registerFlowReset\([^\n]*\)/g)?.join('\n') ?? '';
 for (const state of ['flows.delete', 'tswapFlows.delete', 'hubs.delete', 'awaitingSecret.delete', 'clearEdit'])
-  assert.ok(reset.includes(state), `state "${state}" tak ikut resetFlows — prompt yatim menelan ketikan`);
+  assert.ok(reset.includes(state), `state "${state}" is missing from resetFlows, so an orphan prompt swallows what is typed`);
 
-// Prompt connect yang ditinggalkan tak boleh menelan ketikan yang jelas BUKAN kunci.
+// An abandoned connect prompt must not swallow input that is plainly NOT a key.
 assert.match(
   src,
   /if \(awaitingSecret\.has\(ctx\.from\.id\)\) \{\s*if \(looksLikeSecret\(raw\)\)/,
-  'cabang awaitingSecret harus disaring looksLikeSecret dulu',
+  'the awaitingSecret branch must be filtered through looksLikeSecret first',
 );
 
 console.log('smoke-flowlogic OK');

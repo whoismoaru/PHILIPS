@@ -12,17 +12,17 @@ import { baseDecimalsOf, getChain, CHAINS, type BaseKind } from './chains.js';
 export type JournalEntry = {
   tokenId: string;
   symbol: string;
-  ca?: string; // alamat token (untuk sweep sisa token yang belum ter-swap)
+  ca?: string; // the token address, used to sweep tokens left unswapped
   chain?: string;
-  baseKind?: BaseKind; // denominasi modal & hasil; kosong = weth (entri lama)
+  baseKind?: BaseKind; // the denomination of capital and proceeds; empty means weth, an older entry
   openedAt: number;
   closedAt: number;
   initialWethWei: string;
-  resultEthWei?: string; // kosong = tidak diketahui (posisi gone/burned)
+  resultEthWei?: string; // empty means unknown, a gone or burned position
   pnlEth: number;
   pnlPct: number;
   reason: 'cashed' | 'gone' | 'burned' | 'recovery';
-  wallet?: string; // alamat pemilik (huruf kecil). Kosong = entri sebelum field ini ada.
+  wallet?: string; // the owner's address, lower case. Empty means an entry from before this field existed.
   /** This entry's USD rate per unit AT CLOSE. Absent means an older entry, or an
    *  unreadable rate. */
   usdRate?: number;
@@ -121,7 +121,7 @@ export function record(e: JournalEntry): void {
     };
     appendFileSync(FILE, JSON.stringify(stamped) + '\n');
   } catch (err) {
-    console.error('[journal] gagal menulis:', (err as Error).message);
+    console.error('[journal] write failed:', (err as Error).message);
   }
 }
 
@@ -153,7 +153,7 @@ export function recordClose(
   const pnlEth = has && !modalHilang ? resF - initF : 0;
   const pnlPct = has && initF > 0 ? (pnlEth / initF) * 100 : 0;
   if (modalHilang)
-    console.warn(`[journal] ${rec.symbol} ${rec.tokenId}: hasil terukur tapi modal tak terekam — PnL dilewati`);
+    console.warn(`[journal] ${rec.symbol} ${rec.tokenId}: the proceeds are measured but the capital was never recorded, skipping PnL`);
   record({
     tokenId: rec.tokenId,
     symbol: rec.symbol,
@@ -245,7 +245,7 @@ export type Book = {
   known: number;
   wins: number;
   losses: number;
-  flats: number; // hasil di bawah ambang debu — bukan menang, bukan kalah
+  flats: number; // an outcome below the dust threshold: neither a win nor a loss
   net: number;
   grossWin: number;
   grossLoss: number; // negatif
@@ -254,15 +254,15 @@ export type Book = {
 };
 
 export type PeriodStats = {
-  count: number; // entri jurnal dalam periode (satu ladder = beberapa entri)
+  count: number; // journal entries in the period; one ladder makes several entries
   /**
    * POSITIONS that could be scored — one 8-leg ladder counts ONCE. This is the
    * right denominator for scoring: `positions === known + flats`.
    */
   positions: number;
-  legs: number; // entri yang masuk penilaian (sebelum digabung jadi posisi)
-  known: number; // POSISI berkeputusan (menang/kalah); impas tak dihitung
-  untracked: number; // gone/burned — hasil tak diketahui
+  legs: number; // the entries that were scored, before grouping into positions
+  known: number; // decided POSITIONS, won or lost; break-even is not counted
+  untracked: number; // gone or burned, with an unknown outcome
   excluded: number; // placeholder backfill lama (result 0)
   /**
    * COST never recorded (initialWethWei 0) despite a measurable result. Skipped:
@@ -272,10 +272,10 @@ export type PeriodStats = {
    * profit that CANNOT BE COMPUTED.
    */
   noCapital: number;
-  recovered: number; // entri pemulihan sisa token (masuk net, bukan trade)
-  unconverted: number; // mode USD: entri yang kursnya tak terbaca — DILEWATI, bukan dianggap nol
-  estimated: number; // mode USD: entri lama tanpa cap kurs, dinilai dgn kurs SEKARANG
-  books: Book[]; // urut: paling banyak trade dulu
+  recovered: number; // recovery entries for leftover tokens: they count towards net, but are not trades
+  unconverted: number; // USD mode: entries whose rate could not be read. SKIPPED, never treated as zero
+  estimated: number; // USD mode: older entries with no stamped rate, valued at TODAY's rate
+  books: Book[]; // ordered with the busiest book first
 };
 
 /**
@@ -319,8 +319,8 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
   // Step 1 — value each entry. NET is summed here, per entry: the money does not
   // care how things are grouped, and summing it again through groups would only
   // add another way to get it wrong.
-  type Skor = { e: JournalEntry; unit: string; nilai: number };
-  const skor: Skor[] = [];
+  type Score = { e: JournalEntry; unit: string; value: number };
+  const scores: Score[] = [];
   for (const e of all) {
     if (e.resultEthWei === undefined) { untracked++; continue; }
     if (BigInt(e.resultEthWei) === 0n) { excluded++; continue; }
@@ -344,49 +344,49 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
       if (rate === null) { unconverted++; continue; }
     }
     const unit = usdOf ? 'USD' : native;
-    const nilai = e.pnlEth * (rate ?? 1);
-    bookOf(unit).net += nilai;
+    const value = e.pnlEth * (rate ?? 1);
+    bookOf(unit).net += value;
     // 'recovery' is leftover tokens swept after the position closed. The money is
     // REAL (it belongs in net and profit), but it is not a trade of its own —
     // counting it as one would inflate the trade count and falsify the winrate.
     if (e.reason === 'recovery') {
-      bookOf(unit).grossWin += nilai;
+      bookOf(unit).grossWin += value;
       recovered++;
       continue;
     }
-    skor.push({ e, unit, nilai });
+    scores.push({ e, unit, value });
   }
   // Step 2 — score by POSITION, not by leg. An 8-leg ladder is one trade; scoring
   // it per leg splits the PnL into eighths so each piece falls under the dust
   // threshold and disappears from W/L. In a 705-entry journal, 522 of those were
   // ladder legs: per-leg scoring read 705 trades / 84.5% WR / 454 break-even, when
   // what actually happened was 230 trades / 90.5% WR / 72 break-even.
-  const grup2 = groupOf(skor);
-  for (const grup of grup2) {
-    const unit = grup[0].unit;
+  const groups = groupOf(scores);
+  for (const group of groups) {
+    const unit = group[0].unit;
     const b = bookOf(unit);
-    const nilai = grup.reduce((a, g) => a + g.nilai, 0);
+    const value = group.reduce((a, g) => a + g.value, 0);
     // A trade that is neither a win nor a loss (under ~$0.1) counts as NEITHER; it
     // is simply break-even. `pnlEth >= 0` used to throw it into the win column and
     // inflate the winrate. Its money already went into `net` above — the only thing
     // withheld here is the SCORE.
     const eps = FLAT_EPS[unit] ?? FLAT_EPS_UNKNOWN;
-    if (nilai > eps) { b.wins++; b.grossWin += nilai; }
-    else if (nilai < -eps) { b.losses++; b.grossLoss += nilai; }
+    if (value > eps) { b.wins++; b.grossWin += value; }
+    else if (value < -eps) { b.losses++; b.grossLoss += value; }
     else { b.flats++; continue; }
     known++;
     b.known++;
-    const symbol = grup[0].e.symbol;
-    if (!b.best || nilai > b.best.pnl) b.best = { symbol, pnl: nilai };
-    if (!b.worst || nilai < b.worst.pnl) b.worst = { symbol, pnl: nilai };
+    const symbol = group[0].e.symbol;
+    if (!b.best || value > b.best.pnl) b.best = { symbol, pnl: value };
+    if (!b.worst || value < b.worst.pnl) b.worst = { symbol, pnl: value };
   }
   const books = [...byUnit.values()].sort((a, b) => b.known - a.known);
   // `count` stays the ENTRY count, not the position count: that is what the caption
   // reconciles ("N closed -> M scored") against the journal's length.
   return {
     count: all.length,
-    positions: grup2.length,
-    legs: skor.length,
+    positions: groups.length,
+    legs: scores.length,
     known,
     untracked,
     excluded,
@@ -419,19 +419,19 @@ const LADDER_GAP_MS = 30_000;
  * opposite sides of a bucket boundary.
  */
 function groupOf<T extends { e: JournalEntry }>(items: T[]): T[][] {
-  const kunci = (x: T) => `${x.e.chain ?? 'robinhood'}|${(x.e.ca ?? x.e.symbol).toLowerCase()}`;
-  const urut = [...items].sort(
-    (a, b) => kunci(a).localeCompare(kunci(b)) || a.e.closedAt - b.e.closedAt,
+  const keyOf = (x: T) => `${x.e.chain ?? 'robinhood'}|${(x.e.ca ?? x.e.symbol).toLowerCase()}`;
+  const ordered = [...items].sort(
+    (a, b) => keyOf(a).localeCompare(keyOf(b)) || a.e.closedAt - b.e.closedAt,
   );
   const out: T[][] = [];
   let cur: T[] = [];
-  for (const x of urut) {
+  for (const x of ordered) {
     const prev = cur[cur.length - 1];
     const sama =
       prev !== undefined &&
       (prev.e.groupId !== undefined || x.e.groupId !== undefined
         ? prev.e.groupId === x.e.groupId
-        : kunci(prev) === kunci(x) && x.e.closedAt - prev.e.closedAt <= LADDER_GAP_MS);
+        : keyOf(prev) === keyOf(x) && x.e.closedAt - prev.e.closedAt <= LADDER_GAP_MS);
     if (sama) cur.push(x);
     else {
       if (cur.length) out.push(cur);
@@ -472,7 +472,7 @@ export function chainsWithHistory(): Array<{ key: string; trades: number }> {
   const me = currentWallet();
   const n = new Map<string, number>();
   for (const e of read(Number.MAX_SAFE_INTEGER)) {
-    if (me && e.wallet !== me) continue; // bubble chain ikut wallet yang dipakai
+    if (me && e.wallet !== me) continue; // the chain bubbles follow whichever wallet is in use
     const k = e.chain ?? 'robinhood';
     n.set(k, (n.get(k) ?? 0) + 1);
   }
@@ -509,8 +509,8 @@ export function readMine(limit = 20): JournalEntry[] {
   // owns it. Empty is obviously wrong and visible immediately; a contaminated list
   // looks correct.
   if (!me) return [];
-  const semua = read(Number.MAX_SAFE_INTEGER).filter((e) => e.wallet === me);
-  return semua.slice(0, limit);
+  const all = read(Number.MAX_SAFE_INTEGER).filter((e) => e.wallet === me);
+  return all.slice(0, limit);
 }
 
 /** Read the last N entries (newest first). Does NOT filter by owner — see readMine. */

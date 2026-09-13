@@ -7,23 +7,22 @@ import * as msg from './messages.js';
 import { CHAINS, getChain } from './chains.js';
 
 /**
- * Fondasi bersama semua modul perintah: instance bot, opsi parse HTML, dan
- * utilitas kecil yang dipakai di banyak tempat.
+ * The shared floor every command module stands on: the bot instance, the HTML parse
+ * options, and the small helpers used all over the place.
  *
- * Modul ini TIDAK boleh mengimpor modul perintah mana pun — arah impor selalu
- * commands/* → core, tak pernah sebaliknya. Itu yang menjaga tak ada lingkaran
- * impor saat index.ts dipecah.
+ * This module must NOT import a command module. Imports always run commands/* -> core and
+ * never the other way, which is what keeps the split of index.ts free of import cycles.
  */
 
 export const bot = new Telegraf(config.telegram.botToken);
 
 /**
- * Tanda kepemilikan di kaki SETIAP keluaran.
+ * The ownership mark at the foot of EVERY message.
  *
- * Dipasang di lapisan TELEGRAM, bukan di ~90 fungsi pesan dan bukan pula di
- * middleware ctx: ctx.reply, kartu monitor (bot.telegram.sendMessage langsung),
- * dan watchdog semuanya bermuara di sini. Satu titik berarti pesan baru ikut
- * dapat tanpa harus diingat, dan tak ada jalur yang terlewat.
+ * Applied at the TELEGRAM layer rather than in ~90 message functions or in ctx middleware:
+ * ctx.reply, the monitor's cards (which call bot.telegram.sendMessage directly) and the
+ * watchdog all funnel through here. One place means a new message gets it without anyone
+ * remembering to add it, and no path is missed.
  */
 const SIGNATURE = '<i>Powered by Moaru</i>';
 const TG_TEXT_MAX = 4096;
@@ -31,10 +30,10 @@ const TG_CAPTION_MAX = 1024;
 
 function sign(text: unknown, max: number): unknown {
   if (typeof text !== 'string' || text.length === 0) return text;
-  if (text.includes('Powered by Moaru')) return text; // edit berulang tak menumpuk
+  if (text.includes('Powered by Moaru')) return text; // repeated edits must not stack it up
   const tail = `\n\n${SIGNATURE}`;
-  // Batas Telegram: pesan yang kepanjangan DITOLAK seluruhnya, jadi lebih baik
-  // kehilangan tanda tangannya daripada kehilangan pesannya.
+  // Telegram rejects an over-long message outright, so losing the signature is better
+  // than losing the message.
   return text.length + tail.length > max ? text : text + tail;
 }
 
@@ -50,7 +49,7 @@ function sign(text: unknown, max: number): unknown {
   };
   wrapText('sendMessage', 1, TG_TEXT_MAX);
   wrapText('editMessageText', 3, TG_TEXT_MAX);
-  // Dokumen (kartu PnL) membawa teksnya di caption.
+  // A document, the PnL card, carries its text in the caption.
   for (const [name, i] of [['sendDocument', 2], ['sendPhoto', 2]] as const) {
     const orig = tg[name]?.bind(tg);
     if (!orig) continue;
@@ -71,10 +70,10 @@ function sign(text: unknown, max: number): unknown {
 }
 
 /**
- * Nama tiap command yang benar-benar didaftarkan. Telegraf tak menyimpan daftar
- * ini, padahal tanpa daftar tak ada cara memeriksa menu Telegram sudah lengkap —
- * dan perintah yang hidup tapi absen dari menu praktis tak terlihat user.
- * bot.start() ditambahkan manual: ia bukan bot.command().
+ * The name of every command actually registered. Telegraf keeps no such list, and without
+ * one there is no way to check the Telegram menu is complete -- and a command that is alive
+ * but missing from the menu is effectively invisible. bot.start() is added by hand: it is
+ * not a bot.command().
  */
 export const registeredCommands = new Set<string>(['start']);
 const originalCommand = bot.command.bind(bot);
@@ -88,12 +87,11 @@ const originalCommand = bot.command.bind(bot);
 export const html = { parse_mode: 'HTML' as const };
 
 /**
- * Batas per-transaksi. Mematikannya harus DISENGAJA, bukan efek samping.
+ * The per-transaction limit. Turning it off has to be DELIBERATE, never a side effect.
  *
- * `.env` KOSONG tetap jatuh ke bawaan yang masuk akal — dulu kosong berarti
- * unlimited, dan itu diam-diam: salah ketik satu baris .env membuka wallet tanpa
- * ada yang menahan. Untuk benar-benar mematikan batas, tulis `off` (atau `0`)
- * secara eksplisit; nilai lain dibaca sebagai angka batas.
+ * An empty `.env` falls back to a sensible default. Empty used to mean unlimited, and
+ * silently so: one mistyped line opened the whole wallet with nothing holding it back. To
+ * really remove the limit, write `off` (or `0`) explicitly; anything else is read as a number.
  */
 const DEFAULT_MAX_ETH = 0.1;
 const DEFAULT_MAX_STABLE = 250;
@@ -108,21 +106,21 @@ const parseCap = (raw: string, fallback: number): number => {
 export const maxEth = parseCap(config.safety.maxEthPerTx, DEFAULT_MAX_ETH);
 export const maxStable = parseCap(config.safety.maxStablePerTx, DEFAULT_MAX_STABLE);
 
-/** Label batas yang menyebut satuan aset yang benar (ETH di Robinhood, BNB di BSC). */
+/** The limit, labelled in the right asset for the chain (ETH on Robinhood, BNB on BSC). */
 export const capLabelFor = (cap: number, sym: string) => (cap === Infinity ? 'unlimited' : `${cap} ${sym}`);
 export const maxEthLabel = capLabelFor(maxEth, 'ETH');
 
-/** Posisi sudah di-burn/tak ada di chain (NFT hilang). */
+/** The position was burned, or never existed on chain: its NFT is gone. */
 export const isGoneErr = (e: unknown) => /invalid token id/i.test(String((e as Error)?.message ?? e));
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Kirim tx dengan pemulihan tabrakan NONCE. Operasi write beruntun (mis. Permit2
- * approve → modifyLiquidities, atau rute swap yang gagal lalu diulang) kadang
- * memakai nonce yang sama karena hitungan "pending" RPC telat → "nonce has already
- * been used" dan seluruh langkah gagal. Saat kena error nonce, ambil nonce SEGAR
- * dari chain lalu ulang (bukan NonceManager yang bisa "kejauhan" saat tx gagal).
+ * Send a transaction, recovering from a NONCE collision. Back-to-back writes (a Permit2
+ * approve then modifyLiquidities, or a swap route that failed and is being retried) can
+ * reuse the same nonce when the RPC's "pending" count lags behind, and the whole step dies
+ * with "nonce has already been used". On a nonce error, read a FRESH nonce from the chain
+ * and retry -- rather than a NonceManager, which drifts ahead whenever a transaction fails.
  */
 export async function sendTxNonceSafe(
   wallet: ethers.Wallet,
@@ -145,22 +143,22 @@ export async function sendTxNonceSafe(
   throw new Error('unreachable');
 }
 
-/** Umur maksimum sebuah alur wizard sebelum ketikan lama dianggap kedaluwarsa. */
+/** How long a wizard flow may live before old input counts as expired. */
 export const FLOW_TTL_MS = 15 * 60_000;
 export const isStaleFlow = (startedAt: number): boolean => Date.now() - startedAt > FLOW_TTL_MS;
 
 /**
- * Concurrency saat membangun kartu posisi. 3 dulu dipilih untuk menjaga rate RPC,
- * tapi pengukuran 30 Agu 2026 menunjukkan RPC jauh lebih lapang dari itu (33
- * resolvePoolKeyV4 paralel = 77 ms) sementara satu getPositionDetail makan ~820 ms.
- * Dengan 3, 12 posisi = 4 gelombang ≈ 3,3 dtk sebelum kartu pertama terkirim.
+ * How many position cards are built at once. It was 3, chosen to protect the RPC rate,
+ * but a measurement on 30 Aug 2026 showed the RPC has far more headroom than that (33
+ * parallel resolvePoolKeyV4 calls took 77 ms) while a single getPositionDetail takes about
+ * 820 ms. At 3, twelve positions meant four waves and ~3.3 s before the first card went out.
  */
 export const POS_CARD_CONCURRENCY = 6;
 
 /**
- * Ketikan nominal → wei, atau null bila tak masuk akal. `Number(raw) > 0` saja
- * meloloskan '1e-9' / desimal berlebih yang lalu membuat parseUnits melempar DI LUAR
- * try (kartu ERROR mentah). Desimal berlebih DIPOTONG (tak pernah membesarkan nominal).
+ * A typed amount to wei, or null when it makes no sense. `Number(raw) > 0` alone lets
+ * '1e-9' and over-long decimals through, and parseUnits then throws OUTSIDE the try block,
+ * surfacing as a raw error card. Extra decimals are TRUNCATED, never rounded up.
  */
 export function parseAmt(raw: string, dec: number): bigint | null {
   const t = raw.trim().replace(',', '.');
@@ -170,7 +168,7 @@ export function parseAmt(raw: string, dec: number): bigint | null {
   return wei > 0n ? wei : null;
 }
 
-/** Jalankan fn pada items dengan batas concurrency (jaga rate RPC). */
+/** Run fn over items with a concurrency limit, to stay inside RPC rate limits. */
 export async function mapLimit<T, R>(
   items: T[],
   limit: number,
@@ -191,12 +189,12 @@ export async function mapLimit<T, R>(
 }
 
 /**
- * Seperti mapLimit, tapi mengembalikan SATU promise per item — begitu, urutan
+ * Like mapLimit, but it returns ONE promise per item, so the order
  * pengiriman tetap terjaga sementara pekerjaan tetap jalan di latar.
  *
- * Kartu posisi dulu dibangun semua dulu (`await mapLimit`) BARU dikirim satu per
- * satu, jadi layar diam sepanjang gelombang build terakhir walau kartu pertama
- * sudah lama siap. Dengan ini kartu #1 terkirim segera setelah #1 jadi.
+ * Position cards used to be built in full (`await mapLimit`) and only then sent one by
+ * one, so the screen sat still through the last build wave even though the first card had
+ * been ready for ages. Now card #1 goes out the moment card #1 exists.
  */
 export function mapLimitStream<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R>[] {
   const out: Array<{ resolve: (v: R) => void; reject: (e: unknown) => void; promise: Promise<R> }> = items.map(() => {
@@ -206,8 +204,8 @@ export function mapLimitStream<T, R>(items: T[], limit: number, fn: (item: T, i:
       resolve = res;
       reject = rej;
     });
-    // Tanpa ini, item yang gagal jadi unhandled rejection SEBELUM pemanggil sempat
-    // meng-await-nya (Node membunuh proses) — bot mati gara-gara satu kartu error.
+    // Without this, a failed item becomes an unhandled rejection BEFORE the caller can
+    // await it, and Node kills the process -- the whole bot dying over one bad card.
     promise.catch(() => {});
     return { resolve, reject, promise };
   });
@@ -227,7 +225,7 @@ export function mapLimitStream<T, R>(items: T[], limit: number, fn: (item: T, i:
   return out.map((o) => o.promise);
 }
 
-/** Edit pesan progress existing, atau kirim baru bila gagal/tidak ada. */
+/** Edit the existing progress message, or send a new one if that fails or none exists. */
 export async function editProgress(
   ctx: any,
   prog: { message_id: number } | null | undefined,
@@ -239,16 +237,16 @@ export async function editProgress(
       await ctx.telegram.editMessageText(ctx.chat.id, prog.message_id, undefined, text, extra);
       return prog;
     } catch {
-      /* fallback: kirim bubble baru */
+      /* fallback: send a fresh bubble */
     }
   }
   return ctx.reply(text, extra);
 }
 
 /**
- * Pendaftaran pembersih alur. Tiap modul yang menyimpan state per-user
- * mendaftarkan pembersihnya di sini, supaya resetFlows() tak perlu tahu ada
- * alur apa saja — itulah yang dulu memaksa semuanya tinggal di satu berkas.
+ * Flow-reset registration. Every module holding per-user state registers its own cleaner
+ * here, so resetFlows() needs to know nothing about which flows exist -- which is what used
+ * to force all of them to live in one file.
  */
 const flowResets: Array<(uid: number) => void> = [];
 
@@ -256,7 +254,7 @@ export function registerFlowReset(fn: (uid: number) => void): void {
   flowResets.push(fn);
 }
 
-/** Mulai alur baru = buang sisa alur lama (anti-hijack ketikan). */
+/** Starting a new flow discards the old one, so nothing hijacks the next message. */
 export function resetFlows(uid: number): void {
   for (const fn of flowResets) fn(uid);
 }

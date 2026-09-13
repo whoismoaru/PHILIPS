@@ -6,10 +6,10 @@ import { CHAINS, isStableBase, type ChainCtx, type BaseAsset } from '../chains.j
 import { ERC20_ABI } from '../chain.js';
 
 /**
- * ERC20_ABI bersama sengaja hanya memuat baca + approve — bot ini nyaris tak pernah
- * mentransfer token langsung, semuanya lewat router. /send yang pertama butuh
- * `transfer`, jadi ABI-nya diperluas DI SINI saja, bukan di ABI bersama yang dipakai
- * puluhan pemanggil lain.
+ * The shared ERC20_ABI deliberately carries only reads and approve: this bot almost never
+ * transfers a token directly, everything goes through a router. /send is the first path
+ * that needs `transfer`, so the ABI is widened HERE alone rather than in the shared one
+ * that dozens of other callers use.
  */
 const ERC20_SEND_ABI = [...ERC20_ABI, 'function transfer(address to, uint256 amount) returns (bool)'];
 import { gasBuffer } from '../uniswap.js';
@@ -19,17 +19,17 @@ import * as msg from '../messages.js';
 import { getEthUsd } from '../screening.js';
 
 /**
- * /send — kirim dana ke alamat lain.
+ * /send -- withdraw funds to another address.
  *
- * Alamat EVM TIDAK membawa informasi chain: `0xabc…` yang sama valid di kelima
- * chain, dan tak ada cara menyimpulkan yang mana dari alamatnya saja. Jadi yang
- * "dideteksi" di sini adalah hal yang benar-benar bisa dideteksi:
- *  - di chain mana KAMU punya saldo untuk dikirim, dan berapa,
- *  - apakah alamat tujuan berupa KONTRAK di chain itu (kirim ke kontrak yang tak
- *    menerima transfer = dana hangus, jadi diperingatkan sebelum konfirmasi).
+ * An EVM address carries NO chain information: the same `0xabc...` is valid on every chain,
+ * and nothing about it says which one is meant. So what is "detected" here is what can
+ * genuinely be detected:
+ *  - which chains YOU hold a balance on, and how much,
+ *  - whether the destination is a CONTRACT on that chain (sending to a contract that does
+ *    not accept transfers burns the funds, so it is flagged before anything is signed).
  *
- * Ini jalur satu arah tanpa pembatalan, jadi polanya sama dengan /bridge: pilihan
- * eksplisit, konfirmasi terpisah, kunci in-flight, dan sesi kedaluwarsa.
+ * This is a one-way path with no recall, so it follows /bridge's shape: explicit choices,
+ * in-flight locks, and sessions that expire.
  */
 
 type SendFlow = {
@@ -47,18 +47,18 @@ const flows = new Map<number, SendFlow>();
 const sending = new Set<number>();
 registerFlowReset((uid) => flows.delete(uid));
 
-/** Sisa native yang WAJIB ditinggal untuk gas — kirim habis = tx-nya sendiri gagal. */
+/** Native that MUST be left for gas -- sending everything fails the transaction itself. */
 const fmtAmt = (wei: bigint, dec: number) => Number(ethers.formatUnits(wei, dec)).toLocaleString('id-ID', {
   maximumFractionDigits: dec >= 18 ? 6 : 2,
 });
 
-/** Aset yang benar-benar bisa dikirim dari satu chain: native + tiap base ber-saldo. */
+/** What can actually be sent from one chain: its native asset plus each funded base. */
 async function assetsOn(cc: ChainCtx): Promise<Array<{ address: string | null; symbol: string; decimals: number; wei: bigint }>> {
   const out: Array<{ address: string | null; symbol: string; decimals: number; wei: bigint }> = [];
   const nat = await cc.provider.getBalance(cc.wallet.address).catch(() => 0n);
   if (nat > 0n) out.push({ address: null, symbol: cc.nativeSymbol, decimals: 18, wei: nat });
   for (const b of cc.bases as BaseAsset[]) {
-    if (!isStableBase(b.kind)) continue; // wrapped-native urusan /unwrap, bukan kirim
+    if (!isStableBase(b.kind)) continue; // wrapped-native is /unwrap's business, not a send
     const wei: bigint = await new ethers.Contract(b.address, ERC20_ABI, cc.provider)
       .balanceOf(cc.wallet.address)
       .catch(() => 0n);
@@ -84,7 +84,7 @@ bot.action('snd:back', async (ctx: any) => {
   return cmdSend(ctx);
 });
 
-/** Alamat ditempel → pindai kelima chain, tawarkan yang ada isinya. */
+/** An address is pasted: scan all five chains and offer the ones holding something. */
 export async function handleSendAddress(ctx: any, raw: string): Promise<boolean> {
   const flow = flows.get(ctx.from.id);
   if (!flow?.awaitingAddress) return false;
@@ -103,7 +103,7 @@ export async function handleSendAddress(ctx: any, raw: string): Promise<boolean>
   flow.awaitingAddress = false;
 
   const prog = await ctx.reply(msg.msgProgress('checking where you can send from…'), html);
-  // Alamatnya sama di semua chain, jadi yang dipindai adalah SALDO KAMU per chain.
+  // The address is the same on every chain, so what is scanned is YOUR balance on each.
   const found = await Promise.all(
     Object.values(CHAINS).map(async (cc) => ({
       cc,
@@ -156,9 +156,9 @@ bot.action(/^snd:(\w+):(native|0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const cc = CHAINS[ctx.match[1]];
   if (!cc) return ctx.answerCbQuery('Chain unavailable.');
   await ctx.answerCbQuery();
-  // Bandingkan alamat huruf-kecil. Alamat base di chains.ts tak seragam kapitalnya
+  // Compare addresses in lower case: the base addresses in chains.ts are not uniformly cased
   // (USDG Robinhood tersimpan lowercase, sisanya checksummed), jadi membandingkan
-  // string apa adanya membuat aset yang jelas-jelas ada terbaca "hilang".
+  // comparing the strings verbatim makes an asset that plainly exists read as "missing".
   const addr = ctx.match[2] === 'native' ? null : ctx.match[2].toLowerCase();
   const list = await assetsOn(cc).catch(() => []);
   const a = list.find((x) => (x.address?.toLowerCase() ?? 'native') === (addr ?? 'native'));
@@ -170,7 +170,7 @@ bot.action(/^snd:(\w+):(native|0x[0-9a-fA-F]{40})$/, async (ctx) => {
   return renderAmount(ctx, flow, a.wei);
 });
 
-/** Berapa yang benar-benar boleh dikirim: native disisihkan gasnya dulu. */
+/** How much may really be sent: native has its gas reserve taken off first. */
 async function sendableWei(cc: ChainCtx, flow: SendFlow): Promise<bigint> {
   if (flow.asset!.address) {
     return (await new ethers.Contract(flow.asset!.address, ERC20_ABI, cc.provider)
@@ -224,7 +224,7 @@ bot.action(/^sndpct:(\d+)$/, async (ctx) => {
   return confirm(ctx, flow, wei);
 });
 
-/** Ketikan nominal → kartu konfirmasi. Dipanggil penangan teks utama. */
+/** A typed amount becomes the confirmation card. Called from the main text handler. */
 export async function handleSendAmount(ctx: any, raw: string): Promise<boolean> {
   const flow = flows.get(ctx.from.id);
   if (!flow?.awaitingAmount || !flow.asset) return false;
@@ -234,9 +234,9 @@ export async function handleSendAmount(ctx: any, raw: string): Promise<boolean> 
     return true;
   }
   const cc = CHAINS[flow.chainKey!]!;
-  // "0.1%" itu PERSEN, bukan nominal — dan tombolnya cuma menawarkan angka bulat.
-  // parseAmt menolaknya sebagai nominal tak sah; tanpa cabang ini user cuma dapat
-  // "enter a valid amount" tanpa tahu bahwa yang salah adalah tanda persennya.
+  // "0.1%" is a PERCENTAGE, not an amount, and the buttons only offer whole numbers.
+  // parseAmt rejects it as an invalid amount; without this branch the user just gets
+  // "enter a valid amount" with no hint that the percent sign is what went wrong.
   const pctTyped = raw.trim().match(/^(\d+(?:\.\d+)?)\s*%$/);
   const usableNow = await sendableWei(cc, flow);
   if (pctTyped) {
@@ -322,7 +322,7 @@ async function execSend(ctx: any) {
   store.beginMoneyOp();
   const cc = CHAINS[flow.chainKey!]!;
   const { to, asset, amountWei } = flow;
-  flows.delete(uid); // idempotency: hapus SEBELUM eksekusi (double-tap tak kirim dobel)
+  flows.delete(uid); // idempotency: clear it BEFORE executing, so a double-tap cannot send twice
   await ctx.answerCbQuery('Sending…');
   try {
     const label = `${fmtAmt(amountWei, asset.decimals)} ${asset.symbol}`;

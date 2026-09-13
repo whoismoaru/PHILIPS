@@ -17,25 +17,25 @@ import {
  */
 
 export type ChainCtx = {
-  key: string; // id internal — hanya 'robinhood'
+  key: string; // the internal id, e.g. 'robinhood'
   label: string; // tampilan
   chainId: number;
   nativeSymbol: string; // ETH / BNB
   dexKey: string; // chainId versi DexScreener
-  dexLabel: string; // nama DEX tempat posisi dibuka ('Uniswap' | 'PancakeSwap')
-  venue?: string; // DEX non-bawaan di chain ini (mis. 'uniswapv3' di BSC); kosong = bawaan
+  dexLabel: string; // the DEX a position is opened on ('Uniswap' | 'PancakeSwap')
+  venue?: string; // a non-default DEX on this chain (e.g. 'uniswapv3' on BSC); empty means the default
   blockscout: string | null; // base URL API explorer (null = tak tersedia)
-  provider: ethers.Provider; // JsonRpcProvider, atau FallbackProvider bila ada RPC cadangan
+  provider: ethers.Provider; // a JsonRpcProvider, or a FallbackProvider where backup RPCs exist
   /** The active signer. A VoidSigner (address 0x0) when no wallet is connected. */
   wallet: ethers.Wallet | ethers.VoidSigner;
   factory: ethers.Contract;
   positionManager: ethers.Contract;
   weth: ethers.Contract;
-  wethAddress: string; // WETH canonical; ZeroAddress bila chain tak punya WETH (stablecoin-native)
-  hasWethBase: boolean; // apakah WETH boleh jadi base LP di chain ini
-  usdgAddress?: string; // hanya chain yg punya USDG (Global Dollar). undefined = tak ada.
-  usdtAddress?: string; // hanya chain yg punya USDT. undefined = tak ada.
-  usdcAddress?: string; // hanya chain yg punya USDC (mis. Base). undefined = tak ada.
+  wethAddress: string; // canonical WETH; ZeroAddress on a chain with no WETH, i.e. stablecoin-native
+  hasWethBase: boolean; // whether WETH may serve as an LP base on this chain
+  usdgAddress?: string; // only on chains carrying USDG (Global Dollar); undefined means none
+  usdtAddress?: string; // only on chains carrying USDT; undefined means none
+  usdcAddress?: string; // only on chains carrying USDC, Base for instance; undefined means none
   /** LP pairing assets available on this chain. Decimals and symbols belong to the
    *  CHAIN, not to some global constant: USDG on Robinhood has 6 decimals, USDT on
    *  BSC has 18. */
@@ -63,9 +63,9 @@ export type BaseKind = 'weth' | 'usdg' | 'usdt' | 'usdc';
 export type BaseAsset = {
   kind: BaseKind;
   address: string;
-  decimals: number; // WETH 18, USDG/USDT 6 — KRITIS untuk parseUnits, JANGAN parseEther utk stablecoin
+  decimals: number; // WETH 18, USDG/USDT 6: CRITICAL for parseUnits, and never parseEther for a stablecoin
   symbol: string; // 'WETH' | 'USDG' | 'USDT'
-  wrappable: boolean; // WETH: bisa wrap dari ETH native. Stablecoin: ERC20 biasa, harus sudah dipegang.
+  wrappable: boolean; // WETH can be wrapped from native ETH; a stablecoin is a plain ERC20 you must already hold
 };
 
 /** true when this base is a dollar stablecoin (USDG/USDT/USDC ~ $1, non-wrappable). */
@@ -163,18 +163,18 @@ type Def = {
   usdg?: string;
   usdt?: string;
   usdc?: string;
-  usdcDecimals?: number; // default 6 (USDC di semua chain besar)
-  hasWethBase?: boolean; // default true; false utk chain stablecoin-native
+  usdcDecimals?: number; // 6 by default, as USDC is on every major chain
+  hasWethBase?: boolean; // true by default; false on a stablecoin-native chain
   wrappedSymbol?: string; // simbol wrapped-native (default 'WETH'; BSC 'WBNB')
-  usdtSymbol?: string; // simbol token USDT di chain ini (default 'USDT'; HyperEVM 'USDT0')
-  stableDecimals?: number; // desimal USDG/USDT di chain ini (default 6; BSC USDT 18)
+  usdtSymbol?: string; // this chain's USDT symbol ('USDT' by default; 'USDT0' on HyperEVM)
+  stableDecimals?: number; // this chain's USDG/USDT decimals (6 by default; 18 for USDT on BSC)
   feeTiers?: number[]; // default fee tier Uniswap v3
   tickSpacing?: Record<number, number>; // default pemetaan Uniswap v3
-  noBatch?: boolean; // RPC publik yang menolak JSON-RPC batch (mis. bsc-dataseed)
+  noBatch?: boolean; // public RPCs that refuse JSON-RPC batching, bsc-dataseed for one
   slipstream?: boolean; // venue Velodrome Slipstream (ABI int24 tickSpacing + mint sqrtPriceX96)
   routerHasDeadline?: boolean; // default false (SwapRouter02 Uniswap)
-  fallbackRpc?: string[]; // RPC cadangan bila `rpc` utama down (FallbackProvider, prioritas)
-  privateRpc?: string; // relay privat utk broadcast tx (proteksi MEV/sandwich)
+  fallbackRpc?: string[]; // backup RPCs for when the primary `rpc` is down (FallbackProvider, in priority order)
+  privateRpc?: string; // a private relay for broadcasting, which protects against MEV and sandwiching
 };
 
 /** Uniswap v3 defaults, used by any chain that does not state its own. */
@@ -270,7 +270,7 @@ const DEFS: Record<string, Def> = {
           label: 'HyperEVM',
           chainId: 999,
           nativeSymbol: 'HYPE',
-          dexKey: 'hyperevm', // key chain versi DexScreener (BUKAN 'hyperliquid')
+          dexKey: 'hyperevm', // DexScreener's own chain key, NOT 'hyperliquid'
           dexLabel: 'HyperSwap',
           // HyperEVM has no public Blockscout the bot uses: holders/verified
           // screening falls back to GMGN + DexScreener, same as BSC and Base.
@@ -291,7 +291,7 @@ const DEFS: Record<string, Def> = {
           usdtSymbol: 'USDT0',
           // Factory fee tiers: 100/500/3000/10000 with standard Uniswap tick spacing
           // (read from feeAmountTickSpacing), so the UNI_FEES/UNI_SPACING defaults fit.
-          routerHasDeadline: true, // ISwapRouter (bukan SwapRouter02) — struct ber-deadline
+          routerHasDeadline: true, // ISwapRouter, not SwapRouter02: its struct carries a deadline
           fallbackRpc: ['https://rpc.hyperliquid.xyz/evm'],
         },
       }
@@ -380,7 +380,7 @@ function build(key: string, d: Def): ChainCtx {
       try {
         resp = await priv.broadcastTransaction(signedTx);
       } catch (e) {
-        console.log('[mev] broadcast privat gagal, pakai publik:', (e as Error).message.slice(0, 80));
+        console.log('[mev] the private broadcast failed, falling back to public:', (e as Error).message.slice(0, 80));
         return publicBroadcast(signedTx);
       }
       // Track the receipt through the main provider, not the private relay.

@@ -16,12 +16,12 @@ assert.equal(isGoneErr(new Error('execution reverted: invalid token id')), true)
 
 // Mirrors the guard in finalizeClose: only 'gone' is held back, and only while young.
 const GRACE_MS = 60_000;
-const ditahan = (reason: string, umurMs: number) => reason === 'gone' && umurMs < GRACE_MS;
+const held = (reason: string, umurMs: number) => reason === 'gone' && umurMs < GRACE_MS;
 
-assert.equal(ditahan('gone', 664), true, 'posisi umur 664ms harus ditahan — ini bug 9 Sep');
-assert.equal(ditahan('gone', 59_000), true, 'masih dalam masa tenggang');
-assert.equal(ditahan('gone', 61_000), false, 'lewat tenggang: burn sungguhan harus lolos');
-assert.equal(ditahan('cashed', 664), false, 'penutupan manual tak pernah ditahan — ia bawa angka hasil');
-assert.equal(ditahan('burned', 664), false, 'burn eksplisit tak ditahan');
+assert.equal(held('gone', 664), true, 'a 664ms-old position is held back; this is the 9 Sep bug');
+assert.equal(held('gone', 59_000), true, 'still inside the grace period');
+assert.equal(held('gone', 61_000), false, 'past the grace period, a real burn goes through');
+assert.equal(held('cashed', 664), false, 'a manual close is never held back: it carries its own outcome');
+assert.equal(held('burned', 664), false, 'an explicit burn is not held back');
 
-console.log('ok: gone muda ditahan, gone tua & cashed lolos');
+console.log('ok: gone muda held, gone tua & cashed lolos');

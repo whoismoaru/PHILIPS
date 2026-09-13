@@ -11,18 +11,18 @@ import { readFileSync } from 'node:fs';
 const src = readFileSync('src/walletStore.ts', 'utf8');
 
 assert.ok(/export function disconnect\(\)[\s\S]{0,400}writeFileSync\(TOMBSTONE/.test(src),
-  'disconnect() harus meninggalkan penanda, kalau tidak restart memasang ulang kunci .env');
+  'disconnect() must leave a marker, or a restart adopts the .env key all over again');
 
 assert.ok(/function adoptEnvKey\(\)[\s\S]{0,400}existsSync\(TOMBSTONE\)[\s\S]{0,400}return;/.test(src),
-  'adoptEnvKey() harus menolak kunci .env selama penanda cabut masih ada');
+  'adoptEnvKey() must refuse the .env key while the disconnect marker stands');
 
 assert.ok(/function save\([\s\S]{0,300}unlinkSync\(TOMBSTONE\)/.test(src),
-  'connect ulang harus menghapus penanda, kalau tidak dompet baru ikut tertolak');
+  'connecting again must clear the marker, or the new wallet is refused too');
 
 // The owner must be told the .env copy still exists; deleting the keystore does not
 // remove it, and silence here reads as "the key is gone from this machine".
 const m = readFileSync('src/messages.ts', 'utf8');
 assert.ok(/msgDisconnected\(envKeyStillThere/.test(m) && /still in your \.env/i.test(m),
-  'kartu disconnect harus menyebut salinan kunci yang masih ada di .env');
+  'the disconnect card must mention the copy of the key still sitting in .env');
 
-console.log('ok: cabut dompet bertahan setelah restart, dan salinan .env tak disembunyikan');
+console.log('ok: a disconnect survives a restart, and the .env copy is not hidden');

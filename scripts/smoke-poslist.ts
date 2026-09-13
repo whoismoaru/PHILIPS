@@ -12,45 +12,45 @@ import { listPositionsV4, v4Supported } from '../src/uniswapV4.js';
 import { allV4 } from '../src/v4store.js';
 
 const chains = Object.values(CHAINS).filter((c) => v4Supported(c));
-assert.ok(chains.length > 0, 'tak ada chain v4 sama sekali');
+assert.ok(chains.length > 0, 'there are no v4 chains at all');
 
-const terlihat = new Map<string, string>(); // tokenId → chain
+const seen = new Map<string, string>(); // tokenId → chain
 for (const c of chains) {
-  for (const p of await listPositionsV4(c).catch(() => [])) terlihat.set(p.tokenId, c.key);
+  for (const p of await listPositionsV4(c).catch(() => [])) seen.set(p.tokenId, c.key);
 }
-console.log(`chain v4: ${chains.map((c) => c.key).join(', ')} · terenumerasi: ${terlihat.size} posisi`);
+console.log(`chain v4: ${chains.map((c) => c.key).join(', ')} · enumerated: ${seen.size} positions`);
 
 // The point of the test: records off the default chain must NOT go missing.
 const luar = allV4().filter((r) => (r.chain ?? DEFAULT_CHAIN) !== DEFAULT_CHAIN);
 console.log(`v4store di luar ${DEFAULT_CHAIN}: ${luar.length} record`);
 for (const r of luar) {
-  const dimana = terlihat.get(r.tokenId);
+  const where = seen.get(r.tokenId);
   assert.ok(
-    dimana !== undefined,
-    `posisi v4 ${r.tokenId} (${r.chain}) tak terenumerasi — daftar hanya membaca chain default lagi`,
+    where !== undefined,
+    `v4 position ${r.tokenId} (${r.chain}) was not enumerated: the list is reading only the default chain again`,
   );
-  assert.equal(dimana, r.chain, `posisi ${r.tokenId} terbaca di chain ${dimana}, seharusnya ${r.chain}`);
+  assert.equal(where, r.chain, `position ${r.tokenId} was read on chain ${where}, expected ${r.chain}`);
 }
 
 // Source guard: if either path reverts to a single chain, the test above only
 // fails when a cross-chain position happens to be live. This fails right away.
 const src = (await import('node:fs')).readFileSync('src/index.ts', 'utf8');
-for (const [nama, pola] of [
+for (const [name, pattern] of [
   ['/positions', /const v4 = \(\s*\n\s*await Promise\.all\(\s*\n\s*Object\.values\(CHAINS\)/],
   ['/portfolio', /const v4P = Promise\.all\(\s*\n\s*Object\.values\(CHAINS\)/],
 ] as const)
-  assert.match(src, pola, `${nama} tak lagi menyapu semua chain v4`);
+  assert.match(src, pattern, `${name} no longer sweeps every v4 chain`);
 
 // Every path that acts on a single v4 tokenId must resolve the POSITION's chain. Using
 // getChain() there asks the default chain about another chain's id: ownerOf reverts
 // NOT_MINTED and a close reports failure for a position it never touched.
-for (const [nama, pola] of [
+for (const [name, pattern] of [
   // The close handler became a named executor (reused by Close All), so the anchor is
   // the function rather than its registration line.
   ['close v4', /async function execCloseV4\(ctx: any\) \{[\s\S]{0,900}?v4ChainOf\(tokenId\)/],
-  ['refresh kartu v4', /posv4:\(\\d\+\)\$\/[\s\S]{0,200}?v4ChainOf\(ctx\.match\[1\]\)/],
+  ['v4 card refresh', /posv4:\(\\d\+\)\$\/[\s\S]{0,200}?v4ChainOf\(ctx\.match\[1\]\)/],
   ['detail v4', /Object\.values\(CHAINS\)\.filter\(\(x\) => v4Supported\(x\)\)/],
 ] as const)
-  assert.match(src, pola, `${nama} tak lagi menyelesaikan chain posisinya sendiri`);
+  assert.match(src, pattern, `${name} no longer resolves its own position's chain`);
 
 console.log('ok — v4 terbaca lintas chain di /positions, /portfolio, detail, refresh & close');

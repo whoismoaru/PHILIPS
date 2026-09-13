@@ -1,14 +1,14 @@
 import 'dotenv/config';
 
 /**
- * Membaca & memvalidasi konfigurasi dari file .env.
- * Kalau ada yang wajib tapi kosong, program berhenti dengan pesan jelas
- * supaya kita tahu persis apa yang belum diisi.
+ * Reads and validates the configuration in .env.
+ * When something required is missing, the program stops with a clear message naming
+ * exactly what has not been filled in.
  */
 
-// Dulu melempar pada field kosong PERTAMA: pemasang baru harus jalankan-gagal-edit
-// empat kali berturut-turut untuk menemukan keempat field yang kurang. Sekarang
-// semuanya dikumpulkan dan dilaporkan sekali.
+// This used to throw on the FIRST empty field, so a new installation meant
+// run-fail-edit four times over to discover four missing values. They are now collected
+// and reported together.
 const missing: string[] = [];
 
 function required(name: string): string {
@@ -34,8 +34,8 @@ export const config = {
     rpcUrl: required('RPC_URL'),
     chainId: Number(required('CHAIN_ID')),
   },
-  // BSC opsional: kosongkan BSC_ENABLED (atau isi 'false') untuk mematikan chain-nya
-  // sama sekali — bot tetap jalan hanya dengan Robinhood.
+  // BSC is optional: leave BSC_ENABLED empty (or set it to 'false') to switch the chain
+  // off entirely -- the bot runs perfectly well on Robinhood alone.
   bsc: {
     enabled: (process.env.BSC_ENABLED ?? 'false').toLowerCase() === 'true',
     rpcUrl: process.env.BSC_RPC_URL || 'https://bsc-dataseed.binance.org',
@@ -53,8 +53,8 @@ export const config = {
     rpcUrl: process.env.INK_RPC_URL || 'https://rpc-gel.inkonchain.com',
   },
   wallet: {
-    // Opsional sejak /connect ada: dipakai sekali untuk mengadopsi pemasangan
-    // lama jadi keystore terenkripsi (walletStore.ts), lalu boleh dihapus.
+    // Optional since /connect exists: used once to adopt an older installation into the
+    // encrypted keystore (walletStore.ts), and safe to delete afterwards.
     privateKey: optional('PRIVATE_KEY', ''),
   },
   uniswap: {
@@ -65,27 +65,27 @@ export const config = {
     weth: optional('WETH_ADDRESS', ''),
   },
   safety: {
-    maxEthPerTx: optional('MAX_ETH_PER_TX', ''), // kosong = tanpa batas (lihat index.ts)
-    // Batas terpisah utk base stablecoin (USDT/USDG): satuannya dolar, bukan ETH.
-    // Kosong = tanpa batas.
+    maxEthPerTx: optional('MAX_ETH_PER_TX', ''), // empty means no limit (see index.ts)
+    // A separate limit for stablecoin bases (USDT/USDG), denominated in dollars rather
+    // than ETH. Empty means no limit.
     maxStablePerTx: optional('MAX_STABLE_PER_TX', ''),
-    // Atap ONGKOS GAS satu transaksi, dalam aset native chain itu. 'off'/'0' =
-    // tanpa atap; kosong = bawaan (lihat chains.ts). Bukan batas nominal transaksi.
+    // A ceiling on one transaction's GAS COST, in that chain's native asset. 'off' or '0'
+    // means no ceiling; empty falls back to the default in chains.ts. This is not a limit
+    // on the transaction's own amount.
     maxTxFeeNative: optional('MAX_TX_FEE_NATIVE', ''),
     dryRun: optional('DRY_RUN', 'true').toLowerCase() === 'true',
   },
-  // Krystal Cloud API — sumber pool yang jauh lebih lengkap dari gateway Uniswap
-  // (mis. pool ETH/token yang gateway lewatkan). Kosong = fitur mati, jatuh ke gateway.
+  // The Krystal Cloud API: a far more complete pool source than Uniswap's gateway, which
+  // misses deep ETH/token pools. Empty switches it off and falls back to the gateway.
   krystal: {
     apiKey: optional('KRYSTAL_API_KEY', ''),
   },
 };
 
 /**
- * Kode keluar utk galat KONFIGURASI (EX_CONFIG). Unit systemd memakai
- * RestartPreventExitStatus=78, jadi kesalahan yang takkan sembuh dengan menunggu
- * tidak diulang tiap 10 detik selamanya — cukup sekali, lalu berhenti dan
- * menunggu manusia memperbaiki .env.
+ * The exit code for a CONFIGURATION error (EX_CONFIG). The systemd unit sets
+ * RestartPreventExitStatus=78, so a mistake that waiting will never fix is not retried
+ * every ten seconds forever -- it fails once, stops, and waits for a human to fix .env.
  */
 export const EXIT_CONFIG = 78;
 

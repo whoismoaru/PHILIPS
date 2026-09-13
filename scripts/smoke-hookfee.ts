@@ -15,10 +15,10 @@ const src = await import('node:fs/promises').then((f) => f.readFile('src/index.t
 // no hook really is free, and must keep saying so.
 assert.ok(/p\.fee === 0 && !!p\.poolKey\?\.hooks && p\.poolKey\.hooks !== ethers\.ZeroAddress/.test(src),
   'hookFee wajib menuntut fee 0 DAN hook non-zero');
-assert.ok(/feeLabel: hookFee\(p\) \? 'dynamic'/.test(src), "fee 0 + hook harus tertulis 'dynamic', bukan 0.00%");
-assert.ok(/apr: hookFee\(p\) \? 'hook fee'/.test(src), "APR harus menyebut sebabnya, bukan '?'");
+assert.ok(/feeLabel: hookFee\(p\) \? 'dynamic'/.test(src), "a zero fee with a hook reads 'dynamic', never 0.00%");
+assert.ok(/apr: hookFee\(p\) \? 'hook fee'/.test(src), "the APR has to name the reason rather than print '?'");
 // The button carries the same fee text; leaving it at 0.00% would contradict the row.
 assert.ok(/hookFee\(p\) \? 'dynamic' : msg\.feeLabel\(p\.fee\)\}\)`, `pick:/.test(src),
-  'tombol wajib memakai label yang sama dgn barisnya');
+  'the button must carry the same label as its row');
 
 console.log('smoke-hookfee OK');

@@ -12,26 +12,26 @@ import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
 
 /**
- * /bridge — pindahkan dana NATIVE antar chain lewat Relay.
+ * /bridge -- move funds between chains.
  *
- * Jalur uang paling tak bisa dibatalkan di bot ini: begitu terkirim, dana ada di
- * chain lain dan hanya bridge lain yang bisa membawanya kembali. Karena itu:
- *  - arah dipilih eksplisit (tak ada default yang bisa salah tap),
- *  - quote DIMINTA ULANG saat konfirmasi, dengan lantai minimum dari angka yang
- *    benar-benar dilihat user (relay.executeBridge),
- *  - sesi kedaluwarsa dan kunci in-flight seperti alur uang lain.
+ * One of the least reversible money paths here: once sent, the funds are on another chain
+ * and only another bridge brings them back. So:
+ *  - the direction is chosen explicitly, with no default a stray tap could take,
+ *  - the quote is REQUESTED AGAIN at execution, floored at the figure the user actually
+ *    saw (relay.executeBridge),
+ *  - sessions expire and in-flight locks apply, as on every other money path.
  */
 
-// Quote bridge cepat basi; di atas ini kartu wajib dibuat ulang.
+// Bridge quotes go stale fast; past this the card has to be rebuilt.
 const QUOTE_TTL_MS = 120_000;
-/** Sisa gas yang tak boleh ikut dikirim (bridge dibayar di chain asal). */
+/** Gas that must be left behind: the bridge is paid for on the origin chain. */
 const GAS_RESERVE_WEI = ethers.parseEther('0.0005');
 
 type BridgeFlow = {
   fromKey: string;
   toKey: string;
-  kind?: BaseKind; // aset sumber yang dipilih (weth→native, atau stablecoin)
-  originCurrency?: string; // alamat aset dikirim (NATIVE utk native)
+  kind?: BaseKind; // the chosen source asset: weth for native, or a stablecoin
+  originCurrency?: string; // the address of the asset being sent (NATIVE for native)
   destinationCurrency?: string; // alamat aset diterima di chain tujuan
   srcDecimals?: number;
   dstDecimals?: number;
@@ -41,7 +41,7 @@ type BridgeFlow = {
   minOutWei?: bigint;
   inLabel?: string;
   outLabel?: string;
-  provider?: BridgeProvider; // penyedia terpilih (Relay / LI.FI) — dieksekusi ulang saat konfirmasi
+  provider?: BridgeProvider; // the chosen provider, Relay or LI.FI, re-executed at confirmation
   quotedAt?: number;
   startedAt: number;
 };
@@ -49,7 +49,7 @@ const flows = new Map<number, BridgeFlow>();
 const inFlight = new Set<number>();
 registerFlowReset((uid) => flows.delete(uid));
 
-/** Simbol tampilan aset sumber: native pakai simbol native, stablecoin pakai simbolnya. */
+/** How the source asset is labelled: native uses the chain's symbol, a stablecoin its own. */
 const assetLabel = (cc: ChainCtx, kind: BaseKind): string =>
   kind === 'weth' ? cc.nativeSymbol : (cc.bases.find((b) => b.kind === kind)?.symbol ?? kind.toUpperCase());
 
@@ -88,10 +88,10 @@ async function heldLabels(cc: ChainCtx): Promise<Map<BaseKind, string>> {
 }
 
 /**
- * Petakan aset sumber (kind di chain asal) ke aset tujuan di chain tujuan:
- *  - native (weth) → native chain tujuan,
- *  - stablecoin → stablecoin sejenis di tujuan, atau stablecoin pertama yang ada.
- * Lempar bila chain tujuan tak punya penerima yang cocok.
+ * Map the source asset onto its counterpart on the destination chain:
+ *  - native goes to the destination's native,
+ *  - a stablecoin goes to the same stablecoin there, or the first one it has.
+ * Throws when the destination has nothing suitable to receive it.
  */
 function resolveAssets(from: ChainCtx, to: ChainCtx, kind: BaseKind) {
   const srcBase = from.bases.find((b) => b.kind === kind);
@@ -118,7 +118,7 @@ function resolveAssets(from: ChainCtx, to: ChainCtx, kind: BaseKind) {
   };
 }
 
-/** Saldo aset sumber (native atau ERC20), diformat sesuai desimalnya. */
+/** The source asset's balance, native or ERC20, formatted to its own decimals. */
 async function assetBalance(cc: ChainCtx, kind: BaseKind): Promise<{ wei: bigint; label: string }> {
   if (kind === 'weth') {
     const wei = await cc.provider.getBalance(cc.wallet.address).catch(() => 0n);
@@ -130,7 +130,7 @@ async function assetBalance(cc: ChainCtx, kind: BaseKind): Promise<{ wei: bigint
   return { wei, label: `${Number(ethers.formatUnits(wei, b.decimals)).toFixed(4)} ${b.symbol}` };
 }
 
-/** Semua pasangan arah antar chain aktif. Satu chain = tak ada yang bisa dijembatani. */
+/** Every direction between the active chains. With one chain there is nothing to bridge. */
 function routes(): Array<{ from: ChainCtx; to: ChainCtx }> {
   const list = Object.values(CHAINS);
   const out: Array<{ from: ChainCtx; to: ChainCtx }> = [];
@@ -161,8 +161,8 @@ export async function cmdBridge(ctx: any) {
 }
 bot.command('bridge', cmdBridge);
 
-// Setelah rute dipilih → tampilkan bubble ASET yang bisa dijembatani dari chain asal
-// (native + tiap stablecoin yang dimiliki chain itu).
+// Once a route is chosen, offer the assets that can be bridged from the origin chain:
+// its native asset plus each stablecoin it holds.
 bot.action(/^br:(\w+):(\w+)$/, async (ctx) => {
   const [fromKey, toKey] = [ctx.match[1], ctx.match[2]];
   const from = CHAINS[fromKey];
@@ -189,7 +189,7 @@ bot.action(/^br:(\w+):(\w+)$/, async (ctx) => {
   await ctx.editMessageText(msg.msgBridgeAsset(from.label, to.label), { ...html, ...Markup.inlineKeyboard(rows) });
 });
 
-// Aset dipilih → minta nominal.
+// The asset is picked, so ask for the amount.
 bot.action(/^bra:(\w+):(\w+):(\w+)$/, async (ctx) => {
   const [fromKey, toKey, kind] = [ctx.match[1], ctx.match[2], ctx.match[3] as BaseKind];
   const from = CHAINS[fromKey];
@@ -229,12 +229,12 @@ bot.action(/^bra:(\w+):(\w+):(\w+)$/, async (ctx) => {
 });
 
 /**
- * Persen saldo → nominal bridge.
+ * A percentage of the balance, turned into an amount to bridge.
  *
- * Untuk aset NATIVE, persennya dihitung dari saldo yang sudah dikurangi cadangan
- * gas: ongkos bridge dibayar di chain ASAL, jadi 100% dari saldo mentah berarti
- * tak ada sisa untuk membayar transaksinya sendiri. Stablecoin dipakai utuh —
- * gasnya dibayar native, dan kecukupannya dicek terpisah di jalur quote.
+ * For a NATIVE asset the percentage is taken from the balance minus the gas reserve: the
+ * bridge is paid for on the ORIGIN chain, so 100% of the raw balance would leave nothing
+ * to pay for the transaction itself. A stablecoin is used in full -- its gas comes from
+ * native, and that is checked separately on the quote path.
  */
 bot.action(/^brpct:(\d+)$/, async (ctx) => {
   const flow = flows.get(ctx.from!.id);
@@ -262,7 +262,7 @@ bot.action('br:back', async (ctx) => {
   return cmdBridge(ctx);
 });
 
-/** Ketikan nominal → quote + kartu konfirmasi. Dipanggil handler teks index.ts. */
+/** A typed amount becomes a quote plus the confirmation card. Called from the text handler in index.ts. */
 export async function handleBridgeAmount(ctx: any, raw: string): Promise<boolean> {
   const flow = flows.get(ctx.from.id);
   if (!flow?.awaitingAmount) return false;
@@ -284,7 +284,7 @@ export async function handleBridgeAmount(ctx: any, raw: string): Promise<boolean
   return true;
 }
 
-/** Cek saldo + quote + kartu konfirmasi. Dipakai jalur ketik-nominal & tombol persen. */
+/** Check the balance, quote, and build the confirmation card. Shared by the typed amount and the percentage buttons. */
 async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<void> {
   const from = CHAINS[flow.fromKey];
   const to = CHAINS[flow.toKey];
@@ -292,8 +292,9 @@ async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<voi
   const isNative = kind === 'weth';
   const prog = await ctx.reply(msg.msgProgress('requesting bridge quote…'), html);
   try {
-    // Native: sisakan gas (dibayar di chain asal). Stablecoin: cek saldo token cukup,
-    // DAN masih ada native buat bayar gas — kalau tidak, tx-nya sendiri gagal.
+    // Native: keep gas back, since it is paid on the origin chain. A stablecoin: check the
+    // token balance covers it AND that native remains to pay for gas -- without which the
+    // transaction itself fails.
     const nativeBal: bigint = await from.provider.getBalance(from.wallet.address);
     if (isNative) {
       if (wei + GAS_RESERVE_WEI > nativeBal) {
@@ -319,7 +320,7 @@ async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<voi
     flow.awaitingAmount = false;
     flow.amountWei = wei;
     flow.provider = provider;
-    // Lantai minimum = hasil yang BENAR-BENAR dilihat user, dikurangi toleransi 1%.
+    // The floor is what the user ACTUALLY saw, less a 1% tolerance.
     flow.minOutWei = (q.outWei * 99n) / 100n;
     flow.inLabel = q.inLabel;
     flow.outLabel = q.outLabel;
@@ -381,7 +382,7 @@ async function execBridge(ctx: any) {
   if (inFlight.has(uid)) return ctx.answerCbQuery('Processing…');
   inFlight.add(uid);
   const { fromKey, toKey, amountWei, minOutWei, inLabel, outLabel, provider, originCurrency, destinationCurrency } = flow;
-  flows.delete(uid); // idempotency: hapus SEBELUM eksekusi (double-tap tak bridge dobel)
+  flows.delete(uid); // idempotency: clear it BEFORE executing, so a double-tap cannot bridge twice
   const from = CHAINS[fromKey];
   const to = CHAINS[toKey];
   store.beginMoneyOp();
@@ -402,8 +403,8 @@ async function execBridge(ctx: any) {
         fromLabel: from.label,
         toLabel: to.label,
         inLabel: inLabel!,
-        // Pakai label out yang sudah dikonfirmasi (simbol+desimal aset tujuan benar);
-        // outWei mentah tanpa desimal tujuan bisa salah tampil utk stablecoin 6-desimal.
+        // Use the confirmed out label, which already carries the destination asset's symbol
+        // and decimals. Raw outWei without them misprints a 6-decimal stablecoin.
         outLabel: outLabel!,
         txHashes: r.txHashes,
         dryRun: false,

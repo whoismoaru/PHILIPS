@@ -11,17 +11,17 @@ console.log('lifetime:', {
   books: s.books.map((b) => `${b.unit} ${b.net.toFixed(6)} (${b.wins}W/${b.losses}L)`),
 });
 
-assert.equal(s.known + s.excluded <= s.count, true, 'known+excluded tak boleh melebihi total entri');
+assert.equal(s.known + s.excluded <= s.count, true, 'known plus excluded must not exceed the entry total');
 
 assert.equal(
   s.books.reduce((t, b) => t + b.known, 0),
   s.known,
-  'jumlah known tiap buku harus sama dengan known total',
+  'the per-book known counts must add up to the total',
 );
 for (const b of s.books) {
-  assert.equal(b.wins + b.losses, b.known, `${b.unit}: wins+losses harus sama dengan known`);
-  assert.equal(Number.isFinite(b.net), true, `${b.unit}: net harus angka`);
-  assert.equal(b.grossLoss <= 0, true, `${b.unit}: grossLoss harus <= 0`);
+  assert.equal(b.wins + b.losses, b.known, `${b.unit}: wins plus losses must equal known`);
+  assert.equal(Number.isFinite(b.net), true, `${b.unit}: net must be a number`);
+  assert.equal(b.grossLoss <= 0, true, `${b.unit}: grossLoss must be <= 0`);
 }
 
 for (const e of journal.read(50)) {
@@ -41,6 +41,6 @@ for (const e of journal.read(Number.MAX_SAFE_INTEGER)) {
   seen.set(key, [...(seen.get(key) ?? []), e.reason]);
 }
 const dupes = [...seen].filter(([, rs]) => rs.length > 1);
-assert.equal(dupes.length, 0, `posisi yang sama terjurnal dua kali: ${JSON.stringify(dupes)}`);
+assert.equal(dupes.length, 0, `the same position was journalled twice: ${JSON.stringify(dupes)}`);
 
 console.log('OK — akuntansi jurnal waras');

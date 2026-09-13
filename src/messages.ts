@@ -190,8 +190,8 @@ function timeWib(): string {
  */
 export function nowWib(): string {
   const d = new Date(Date.now() + 7 * 3_600_000);
-  const bulan = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${d.getUTCDate()} ${bulan[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${timeWib()}`;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${timeWib()}`;
 }
 
 
@@ -379,17 +379,17 @@ export function msgV4Position(p: {
   pair: string;
   feeLabel: string;
   valueLabel: string; // "$12.34" / "0.02 ETH" / "—"
-  feesLabel?: string; // fee belum diklaim, sudah termasuk di valueLabel
+  feesLabel?: string; // unclaimed fees, already included in valueLabel
   rangeLabel: string; // "+5.2% / -3.1%" / "—"
   inRange: boolean | null;
-  pnlText?: string; // hanya bila dikelola bot (entry diketahui)
+  pnlText?: string; // only when the bot manages it, so the entry is known
   tracked: boolean;
-  priceWarn?: string | null; // pool sekarat: harga on-chain melenceng dari pasar
+  priceWarn?: string | null; // a dying pool: the on-chain price has drifted from the market
   baseSymbol?: string; // ETH | USDG
   tokenSymbol?: string; // sisi token (non-base)
   age?: string;
   chain?: string;
-  mcRange?: string; // rentang yang sama dibaca sebagai kapitalisasi pasar
+  mcRange?: string; // the same range, read as market cap
   converted?: boolean; // out-of-range & 100% token seberang (target tercapai)
   ladder?: { legIndex: number; legCount: number; shape: string; groupDeposit?: string; sharePct?: number; progress?: string;
     // A summary of the WHOLE ladder, which is the point of the bid-ask feature.
@@ -398,7 +398,7 @@ export function msgV4Position(p: {
     valueLabel?: string; feesLabel?: string; pnlText?: string; mcRange?: string;
     // Why "Value now" is not simply the market price — see the note in index.ts.
     exitNote?: string;
-    filled?: number; active?: number; waiting?: number }; // leg dari grup ladder
+    filled?: number; active?: number; waiting?: number }; // the legs of a ladder group
   /** The pool's own depth and activity, read fresh when the card is opened. */
   pool?: { tvl: string; vol?: string; apr: string };
   /** True when the pool index has no entry for this pool yet (new pools are missing). */
@@ -607,9 +607,9 @@ export function msgStatus(opts: {
     usd: number | null;
     stables?: Array<{ symbol: string; amount: string; usd: number | null }>;
   }>;
-  totalUsd: number | null; // null = harga native tak terbaca (JANGAN 0)
-  lpUsd?: number | null; // nilai posisi LP aktif
-  lpFailed?: number; // posisi yang gagal dibaca → total belum lengkap
+  totalUsd: number | null; // null means the native price could not be read; never 0
+  lpUsd?: number | null; // the value of the active LP positions
+  lpFailed?: number; // positions that failed to read, so the total is incomplete
 }): string {
   // An unreadable USD figure becomes '—' (neutral). NEVER '$0.00', which reads as a fact.
   const usdCol = (u: number | null | undefined) => (u === null || u === undefined ? '—' : usdPlain(u));
@@ -653,17 +653,17 @@ export function msgStatus(opts: {
       bold('BY CHAIN :'),
       ...tree(
         held.map((c) => {
-          const aset: string[] = [];
-          if (Number(c.amount) > 0) aset.push(`${esc(c.amount)} ${esc(c.symbol)}`);
-          for (const t of c.stables ?? []) aset.push(`${esc(t.amount)} ${esc(t.symbol)}`);
+          const assets: string[] = [];
+          if (Number(c.amount) > 0) assets.push(`${esc(c.amount)} ${esc(c.symbol)}`);
+          for (const t of c.stables ?? []) assets.push(`${esc(t.amount)} ${esc(t.symbol)}`);
           // A chain's value is native plus every stablecoin on it. One unreadable USD
           // figure makes the WHOLE row '—': quietly summing the rest would show a
           // number smaller than what the wallet really holds.
-          const bagian: Array<number | null | undefined> = [c.usd, ...(c.stables ?? []).map((t) => t.usd)];
-          const nilai = bagian.some((u) => u === null || u === undefined)
+          const parts: Array<number | null | undefined> = [c.usd, ...(c.stables ?? []).map((t) => t.usd)];
+          const value = parts.some((u) => u === null || u === undefined)
             ? '—'
-            : usdPlain(bagian.reduce<number>((a, u) => a + (u ?? 0), 0));
-          return `${bold(esc(SHORT[c.label] ?? c.label))}: ${nilai}${aset.length ? ` ${italic(`(${aset.join(' / ')})`)}` : ''}`;
+            : usdPlain(parts.reduce<number>((a, u) => a + (u ?? 0), 0));
+          return `${bold(esc(SHORT[c.label] ?? c.label))}: ${value}${assets.length ? ` ${italic(`(${assets.join(' / ')})`)}` : ''}`;
         }),
       ),
     );
@@ -790,7 +790,7 @@ export function msgPriceDrop(
   symbol: string,
   dropPct: number,
   baseSymbol = 'WETH',
-  tier?: number, // anak tangga yang baru dilewati — menandai ini alert LANJUTAN
+  tier?: number, // the rung just crossed, which marks this as a FOLLOW-UP alert
 ): string {
   // A second and subsequent alert has to read differently from the first; if they look
   // identical, a deepening drop is easily mistaken for an old notification repeating.
@@ -945,10 +945,10 @@ export function msgTSwapConfirm(o: {
   estOutLabel: string;
   route: string;
   dryRun: boolean;
-  danger?: boolean; // verdikt audit BAHAYA (ikut sampai kartu pengirim tx)
+  danger?: boolean; // a DANGER audit verdict, carried through to the card that sends the transaction
   screenFailed?: boolean;
   balanceLabel?: string;
-  shortLabel?: string | null; // kurang berapa (bila kurang → tombol Konfirmasi tak dirender)
+  shortLabel?: string | null; // how much is missing; when something is missing, the Confirm button is not rendered
 }): string {
   const body: string[] = [
     `${o.buy ? '📈' : '📉'} ${bold(o.buy ? 'Buy Order Preview' : 'Sell Order Preview')}`,
@@ -1078,14 +1078,14 @@ export function msgPositionCard(opts: {
   invest: string;
   pnlText: string;
   range: string;
-  mcRange?: string; // rentang yang sama dibaca sebagai kapitalisasi pasar
+  mcRange?: string; // the same range, read as market cap
   inRange: boolean;
   age: string;
   dryRun: boolean;
   chain?: string;
-  baseSymbol?: string; // WETH (default, posisi lama) | USDG
-  side?: 'base' | 'token'; // sisi setoran; kosong = base (posisi lama)
-  converted?: boolean; // harga menembus seluruh rentang → posisi 100% aset seberang
+  baseSymbol?: string; // WETH (the default, and older positions) | USDG
+  side?: 'base' | 'token'; // the side deposited; empty means base, an older position
+  converted?: boolean; // the price crossed the whole range, so the position is 100% the other asset
   feeIsTickSpacing?: boolean; // Velodrome Slipstream: `fee` = tickSpacing (fee-nya dinamis)
   /** The pool's own depth and activity. `onchain` marks a TVL measured from the pool
    *  contract itself rather than the index -- real, but with no volume or APR behind it. */
@@ -1101,7 +1101,7 @@ export function msgPositionCard(opts: {
     ladderValue?: string; ladderFees?: string; ladderMcRange?: string; ladderPnl?: string;
     sharePct?: number; legValue?: string; legFees?: string;
     filled?: number; active?: number; waiting?: number; unread?: number;
-  }; // leg dari grup ladder
+  }; // the legs of a ladder group
 }): string {
   const base = esc(opts.baseSymbol ?? 'WETH');
   const sym = esc(opts.symbol);
@@ -1235,11 +1235,11 @@ export function posPair(pair: string, baseSymbol?: string | null): string {
 export function msgPositionsList(opts: {
   dryRun: boolean;
   activeCount: number;
-  totalInvestLabel: string | null; // null = posisi tersebar di beberapa denominasi
+  totalInvestLabel: string | null; // null means the positions span several denominations
   totalPnlUsd: number | null;
   outOfRange: number;
   totalFeesLabel?: string | null;
-  listDegraded?: boolean; // indexer gagal → daftar bisa tak lengkap
+  listDegraded?: boolean; // the indexer failed, so the list may be incomplete
   rows: Array<{
     id: string;
     pair: string;
@@ -1252,11 +1252,11 @@ export function msgPositionsList(opts: {
     chain?: string | null; // chain label — a list can span chains, and the card must say which
     rangeLabel?: string | null;
     feesLabel?: string | null;
-    feesUsdLabel?: string | null; // fee dalam USD; jatuh ke feesLabel bila harga tak terbaca
+    feesUsdLabel?: string | null; // fees in USD, falling back to feesLabel when the price cannot be read
     strategy?: string | null;
-    baseSymbol?: string | null; // aset yang DISETOR — dipakai label sisi
-    converted?: boolean; // harga sudah melewati SELURUH rentang → posisi 100% jadi aset seberang
-    convertedInto?: string | null; // simbol aset hasil konversi
+    baseSymbol?: string | null; // the asset DEPOSITED, used for the side label
+    converted?: boolean; // the price has crossed the ENTIRE range, so the position is 100% the other asset
+    convertedInto?: string | null; // the symbol of the asset it converted into
   }>;
 }): string {
   const MAX_ROWS = 12;
@@ -1534,7 +1534,7 @@ export function msgPlanStep(opts: {
   symbol: string;
   fee: number;
   depositAmount: string;
-  depositUsd?: number; // nilai entry USD (estimasi modal masuk)
+  depositUsd?: number; // the entry value in USD, an estimate of the capital going in
   pctHigh: number;
   pctLow: number;
   currentPrice: string;
@@ -1542,7 +1542,7 @@ export function msgPlanStep(opts: {
   needLabel: string;
   balanceLabel: string;
   shortLabel: string | null;
-  costFailed?: boolean; // estimasi biaya gagal → JANGAN klaim saldo cukup
+  costFailed?: boolean; // the cost estimate failed, so never claim the balance is sufficient
   priceLower?: string;
   priceUpper?: string;
   side?: 'base' | 'token';
@@ -1602,7 +1602,7 @@ export function msgPlanStepV4(opts: {
   fee: number;
   tvlUsd: number;
   depositAmount: string;
-  depositUsd?: number; // nilai entry USD (estimasi modal masuk)
+  depositUsd?: number; // the entry value in USD, an estimate of the capital going in
   rangePctHigh: number;
   rangePctLow: number;
   dryRun: boolean;
@@ -1809,7 +1809,7 @@ export function msgAlreadyConnected(addr: string): string {
 export function msgSettings(
   dryRun: boolean,
   maxPerTx: string,
-  gasCeiling?: string | null, // atap ongkos gas per-tx; null = tanpa atap
+  gasCeiling?: string | null, // the per-transaction gas cost ceiling; null means none
   /** Default deposit shape, chosen here instead of on every /add. */
   lpShape?: 'spot' | 'bidask',
 ): string {
@@ -2000,11 +2000,11 @@ export function msgCashOut(opts: {
   notes: string[];
   ethOut: string;
   txHashes: string[];
-  legs?: number; // ladder: jumlah leg yang ditutup bersama
-  baseSymbol?: string; // aset hasil cash-out — menentukan kalimat penutup
-  native?: boolean; // hasil di-unwrap jadi native chain (bukan stablecoin)
-  leftover?: boolean; // masih ada debu token yang belum tersapu
-  pair?: string; // "$富贵/USDG" — label yang sama dgn kartu posisi
+  legs?: number; // for a ladder, how many legs were closed together
+  baseSymbol?: string; // the asset cashed out into, which decides the closing sentence
+  native?: boolean; // the proceeds were unwrapped into the chain's native asset, not a stablecoin
+  leftover?: boolean; // token dust is still left unswept
+  pair?: string; // "$富贵/USDG": the same label the position card uses
   protocol?: 'V3' | 'V4';
 }): string {
   const ladder = (opts.legs ?? 0) > 1;
