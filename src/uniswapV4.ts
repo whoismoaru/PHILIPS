@@ -266,6 +266,7 @@ export async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
 const signExt24 = (v: bigint): number => Number(v >= 1n << 23n ? v - (1n << 24n) : v);
 
 // v4 Actions (v4-periphery libraries/Actions.sol)
+const INCREASE_LIQUIDITY = 0x00;
 const DECREASE_LIQUIDITY = 0x01;
 const BURN_POSITION = 0x03;
 const TAKE_PAIR = 0x11;
@@ -431,6 +432,81 @@ export async function closePositionV4(
     }
   }
   return out;
+}
+
+/**
+ * Add more base into a position that already exists, at its OWN range.
+ *
+ * Single-sided, like every deposit here: the amount goes in as the base currency and the
+ * position keeps the ticks it was opened with. That only works while the price sits
+ * outside the range on the base side -- in range, a mint needs both tokens, and the
+ * caller is told so rather than sending a transaction that reverts.
+ */
+export async function increaseLiquidityV4(
+  tokenId: string,
+  baseAmountWei: bigint,
+  cc: ChainCtx,
+): Promise<{ txHash: string; liquidity: bigint }> {
+  const pmAddr = V4_PM[cc.key];
+  if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
+  const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
+  const owner: string = await pm.ownerOf(tokenId);
+  if (owner.toLowerCase() !== cc.wallet.address.toLowerCase()) {
+    throw new Error(`v4 position #${tokenId} is not owned by this wallet.`);
+  }
+  const [poolKey, info] = await pm.getPoolAndPositionInfo(tokenId);
+  const tickLower = signExt24((BigInt(info) >> 8n) & 0xffffffn);
+  const tickUpper = signExt24((BigInt(info) >> 32n) & 0xffffffn);
+  const pb = pairBase(cc, poolKey.currency0, poolKey.currency1);
+  if (!pb.base) throw new Error('this pool has no base asset the bot can deposit.');
+  const baseIsCurrency0 = pb.baseIsCurrency0;
+
+  // Single-sided only works outside the range, on the base side of it.
+  const { tick } = await readPoolState(cc, poolKey);
+  const inRange = tick >= tickLower && tick < tickUpper;
+  if (inRange) {
+    throw new Error(
+      `#${tokenId} is in range, so adding needs BOTH tokens. Wait until it is out of range, or open a new position instead.`,
+    );
+  }
+
+  const sqrtL = sqrtAtTick(tickLower);
+  const sqrtU = sqrtAtTick(tickUpper);
+  const liquidity = baseIsCurrency0 ? liqForAmount0(sqrtL, sqrtU, baseAmountWei) : liqForAmount1(sqrtL, sqrtU, baseAmountWei);
+  if (liquidity <= 0n) {
+    throw new Error(`the amount is too small for this position's range — increase it.`);
+  }
+
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const amount0Max = baseIsCurrency0 ? baseAmountWei : 0n;
+  const amount1Max = baseIsCurrency0 ? 0n : baseAmountWei;
+  const baseCurrency = baseIsCurrency0 ? poolKey.currency0 : poolKey.currency1;
+  const isNative = baseCurrency === ethers.ZeroAddress;
+
+  const incParam = coder.encode(
+    ['uint256', 'uint256', 'uint128', 'uint128', 'bytes'],
+    [tokenId, liquidity, amount0Max, amount1Max, '0x'],
+  );
+  const settleParam = coder.encode(['address', 'address'], [poolKey.currency0, poolKey.currency1]);
+  const actions = isNative
+    ? ethers.hexlify(new Uint8Array([INCREASE_LIQUIDITY, SETTLE_PAIR, SWEEP]))
+    : ethers.hexlify(new Uint8Array([INCREASE_LIQUIDITY, SETTLE_PAIR]));
+  const params = isNative
+    ? [incParam, settleParam, coder.encode(['address', 'address'], [ethers.ZeroAddress, cc.wallet.address])]
+    : [incParam, settleParam];
+  const unlockData = coder.encode(['bytes', 'bytes[]'], [actions, params]);
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const value = isNative ? baseAmountWei : 0n;
+
+  if (!isNative) await ensurePermit2(cc, baseCurrency, pmAddr, baseAmountWei);
+  // Simulation is mandatory: a revert here costs nothing, a failed send costs gas.
+  await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address, value });
+  const tx = await sendTxNonceSafe(
+    cc.wallet as ethers.Wallet,
+    await pm.modifyLiquidities.populateTransaction(unlockData, deadline, { value }),
+  );
+  const rc = await tx.wait();
+  return { txHash: rc?.hash ?? tx.hash, liquidity };
 }
 
 /**
