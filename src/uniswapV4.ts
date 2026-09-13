@@ -17,6 +17,7 @@ const V4_POOL_MANAGER: Record<string, string> = {
 // Extra v4 actions (add).
 const MINT_POSITION = 0x02;
 const SETTLE_PAIR = 0x0d;
+const CLOSE_CURRENCY = 0x12; // settles a debt OR takes a credit, whichever the delta is
 const SWEEP = 0x14;
 
 /**
@@ -487,13 +488,19 @@ export async function increaseLiquidityV4(
     ['uint256', 'uint256', 'uint128', 'uint128', 'bytes'],
     [tokenId, liquidity, amount0Max, amount1Max, '0x'],
   );
-  const settleParam = coder.encode(['address', 'address'], [poolKey.currency0, poolKey.currency1]);
+  // CLOSE_CURRENCY per side, NOT settle_pair. Increasing an existing position also pays
+  // out the fees it has accrued, so one currency ends up OWED to the wallet -- and
+  // SETTLE_PAIR demands a debt on both, reverting with DeltaNotNegative on the credited
+  // side. CLOSE_CURRENCY settles a debt or takes a credit, whichever the delta turns out
+  // to be, which is exactly the mixed case an increase produces.
+  const close0 = coder.encode(['address'], [poolKey.currency0]);
+  const close1 = coder.encode(['address'], [poolKey.currency1]);
   const actions = isNative
-    ? ethers.hexlify(new Uint8Array([INCREASE_LIQUIDITY, SETTLE_PAIR, SWEEP]))
-    : ethers.hexlify(new Uint8Array([INCREASE_LIQUIDITY, SETTLE_PAIR]));
+    ? ethers.hexlify(new Uint8Array([INCREASE_LIQUIDITY, CLOSE_CURRENCY, CLOSE_CURRENCY, SWEEP]))
+    : ethers.hexlify(new Uint8Array([INCREASE_LIQUIDITY, CLOSE_CURRENCY, CLOSE_CURRENCY]));
   const params = isNative
-    ? [incParam, settleParam, coder.encode(['address', 'address'], [ethers.ZeroAddress, cc.wallet.address])]
-    : [incParam, settleParam];
+    ? [incParam, close0, close1, coder.encode(['address', 'address'], [ethers.ZeroAddress, cc.wallet.address])]
+    : [incParam, close0, close1];
   const unlockData = coder.encode(['bytes', 'bytes[]'], [actions, params]);
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const value = isNative ? baseAmountWei : 0n;
