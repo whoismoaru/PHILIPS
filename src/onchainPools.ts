@@ -1,17 +1,3 @@
-/**
- * v4 pool discovery straight from the chain, for pools every indexer misses.
- *
- * Both upstream sources can be blind at once. $RSTR on Robinhood was live with
- * $86k of liquidity and $1M of daily volume while the Uniswap gateway returned
- * zero pools and Krystal returned zero — so the bot reported "no pools" for a
- * token that plainly had them. An indexer gap is invisible from the outside: it
- * looks exactly like absence.
- *
- * DexScreener names the pools (its `pairAddress` IS the v4 poolId), and the
- * chain itself supplies the PoolKey through the PoolManager's `Initialize` log.
- * Every recovered key is re-hashed and checked against the poolId it came from,
- * so a wrong key can never reach the mint path — same guarantee krystal.ts gives.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import { ethers } from 'ethers';
