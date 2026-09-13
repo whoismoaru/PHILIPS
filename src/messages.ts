@@ -402,6 +402,8 @@ export function msgV4Position(p: {
   poolUnindexed?: boolean;
   /** How far price must still move before this position starts filling. '0%' in range. */
   fillsLabel?: string;
+  /** The POOL's liquidity at the current price, in base units. Read on-chain. */
+  poolDepth?: string;
 }): string {
   // Match the V3 card's layout (msgPositionCard): one fact per line, status on its
   // own line, with a strategy and an explanation of the money.
@@ -452,8 +454,11 @@ export function msgV4Position(p: {
     // all-time, which would make a young pool look far busier than it is. A pool the
     // index has not picked up reads '—', never '$0' -- unknown is not the same as idle.
     `Volume: ${p.pool ? esc(p.pool.vol ?? '$0') : '—'} (24h)`,
-    // The POSITION's own capital, against the pool's TVL above it.
-    `Liquidity: ${esc(p.valueLabel)}`,
+    // The POOL's liquidity at the price, not this position's capital: that is what
+    // decides whether a trade through it moves the price, and it is readable on-chain
+    // even when the index has no TVL for the pool yet.
+    `Liquidity: ${esc(p.poolDepth ?? '—')}`,
+    `Your size: ${esc(p.valueLabel)}`,
     `Range: ${esc(p.mcRange ?? p.rangeLabel)}`,
   ];
   const lines = [

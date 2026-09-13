@@ -1091,6 +1091,30 @@ async function readPoolState(cc: ChainCtx, pk: PoolKeyV4): Promise<{ tick: numbe
  * keccak256(poolId, POOLS_SLOT=6); slot0 at offset 0, liquidity (uint128) at offset
  * 3. Used to detect a dying pool, where the price is unreliable.
  */
+/**
+ * The pool's own liquidity at the current price, valued in its base asset.
+ *
+ * Read straight from the chain, so it is available for pools the Uniswap index has not
+ * picked up yet -- which is every pool for its first hours, and exactly when a position
+ * card would otherwise show nothing at all. It is depth AT the price, not total TVL:
+ * that is the number that decides whether a swap through this pool moves it.
+ */
+export async function poolDepthV4(cc: ChainCtx, pk: PoolKeyV4): Promise<bigint | null> {
+  try {
+    const L = await readPoolLiquidity(cc, pk);
+    if (L <= 0n) return 0n;
+    const { tick } = await readPoolState(cc, pk);
+    // A one-spacing band around the current tick: the liquidity that a trade actually
+    // meets first. A full-range valuation would overstate a concentrated pool wildly.
+    const spacing = Number(pk.tickSpacing) || 1;
+    const lo = Math.floor(tick / spacing) * spacing;
+    const val = await valuePositionV4(cc, pk, lo, lo + spacing, L);
+    return val.valueBaseWei;
+  } catch {
+    return null;
+  }
+}
+
 async function readPoolLiquidity(cc: ChainCtx, pk: PoolKeyV4): Promise<bigint> {
   const mgr = new ethers.Contract(V4_POOL_MANAGER[cc.key], ['function extsload(bytes32) view returns (bytes32)'], cc.provider);
   const coder = ethers.AbiCoder.defaultAbiCoder();
