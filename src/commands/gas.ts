@@ -221,7 +221,8 @@ export async function gasCard(): Promise<string> {
 /** One button: re-read every chain. */
 export const gasKeyboard = () =>
   Markup.inlineKeyboard([
-    [Markup.button.callback('🔄 Refresh', 'gas:refresh'), Markup.button.callback('🏠 Menu', 'positions_back')],
+    [Markup.button.callback('🔄 Refresh', 'gas:refresh')],
+    [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
   ]);
 
 

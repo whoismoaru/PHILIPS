@@ -481,7 +481,7 @@ const helpKeyboard = () =>
     // Close All is the one destructive action in the bot, so it keeps its own row and
     // says what it does. It has no other entry point now that /stop is menu-hidden.
     [Markup.button.callback('⛔ Emergency Close All', 'closeall_confirm')],
-    [Markup.button.callback('🏠 Menu', 'positions_back')],
+    [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
   ]);
 
 bot.command('help', (ctx) =>
@@ -897,7 +897,7 @@ async function buildPositionCard(
         ? [Markup.button.url('🔗 Explorer', `${explorer}/token/${cc.pmAddress}/instance/${rec.tokenId}`),
            Markup.button.callback('⬅️ Positions', 'positions')]
         : [Markup.button.callback('⬅️ Positions', 'positions')],
-      [Markup.button.callback('🏠 Menu', 'positions_back')],
+      [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
     ].filter((r) => r.length)),
   };
   return { text, extra };
@@ -1604,8 +1604,8 @@ async function cmdPositions(ctx: any, edit = false) {
   // away from Refresh.
   kbRows.push([
     Markup.button.callback('🔄 Refresh', 'positions_refresh'),
-    Markup.button.callback('🏠 Menu', 'positions_back'),
   ]);
+  kbRows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   kbRows.push([Markup.button.callback('⛔ Close All Positions', 'closeall_confirm')]);
   const extra = { ...html, ...Markup.inlineKeyboard(kbRows) };
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
@@ -2943,10 +2943,8 @@ async function renderStopConfirm(ctx: any, tokenId: string, edit: boolean) {
     ...Markup.inlineKeyboard([
       // The money button names the position it burns, on its own row.
       [Markup.button.callback(`⛔ Close #${tokenId} for good`, `close:${tokenId}`)],
-      [
-        Markup.button.callback('⬅️ Back', `back:card:${tokenId}`),
-        Markup.button.callback('🏠 Menu', 'positions_back'),
-      ],
+      [Markup.button.callback('⬅️ Back', `back:card:${tokenId}`)],
+      [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
     ]),
   };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));

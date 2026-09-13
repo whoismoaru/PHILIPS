@@ -142,7 +142,8 @@ export async function handleSendAddress(ctx: any, raw: string): Promise<boolean>
       ...html,
       ...Markup.inlineKeyboard([
         ...rows.map((r) => [r]),
-        [Markup.button.callback('⬅️ Back', 'snd:back'), Markup.button.callback('🏠 Menu', 'positions_back')],
+        [Markup.button.callback('⬅️ Back', 'snd:back')],
+        [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
       ]),
     },
   );
@@ -300,7 +301,8 @@ async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
       ...html,
       ...Markup.inlineKeyboard([
         [Markup.button.callback(`✅ Confirm & Withdraw ${fmtAmt(wei, flow.asset!.decimals)} ${flow.asset!.symbol}`, 'sndgo')],
-        [Markup.button.callback('⬅️ Back', 'snd:back'), Markup.button.callback('🏠 Menu', 'positions_back')],
+        [Markup.button.callback('⬅️ Back', 'snd:back')],
+        [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
       ]),
     },
   );
