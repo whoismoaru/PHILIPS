@@ -458,7 +458,6 @@ export function msgV4Position(p: {
     // decides whether a trade through it moves the price, and it is readable on-chain
     // even when the index has no TVL for the pool yet.
     `Liquidity: ${esc(p.poolDepth ?? '—')}`,
-    `Your size: ${esc(p.valueLabel)}`,
     `Range: ${esc(p.mcRange ?? p.rangeLabel)}`,
   ];
   const lines = [
@@ -1090,6 +1089,8 @@ export function msgPositionCard(opts: {
   pool?: { tvl: string; vol?: string; apr?: string; onchain?: boolean };
   /** How far price must still move before this position starts filling. '0%' in range. */
   fillsLabel?: string;
+  /** The POOL's liquidity on the base side, read on-chain. */
+  poolDepth?: string;
   ladder?: {
     legIndex: number; legCount: number; shape: string; groupInvest?: string;
     // A summary of the WHOLE ladder, which is the point of the bid-ask feature.
@@ -1135,7 +1136,9 @@ export function msgPositionCard(opts: {
     `TVL: ${opts.pool ? `${esc(opts.pool.tvl)}${opts.pool.onchain ? ' (on-chain)' : ''}` : '—'}`,
     `Fills: ${esc(opts.fillsLabel ?? '—')}`,
     `Volume: ${opts.pool && !opts.pool.onchain ? esc(opts.pool.vol ?? '$0') : '—'} (24h)`,
-    `Liquidity: ${bold(`${esc(opts.invest)} ${investUnit}`)}`,
+    // The POOL's liquidity, not this position's capital -- the same meaning as on the v4
+    // card. Read on-chain, so it survives a pool the index has not picked up yet.
+    `Liquidity: ${esc(opts.poolDepth ?? '—')}`,
     `Range: ${esc(opts.mcRange ?? opts.range)}`,
   ];
   return [
