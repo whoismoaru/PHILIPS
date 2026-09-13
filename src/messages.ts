@@ -1532,19 +1532,17 @@ export function msgAmountStep(
   balanceLabel?: string,
   example = '0.05',
 ): string {
+  // The balance is shown here on purpose: picking blind and only being told
+  // "INSUFFICIENT" on the plan card wastes a step and a round-trip.
+  void maxLabel; // the per-tx limit lives in /settings; it never changed a choice here
   return [
-    bold('OPEN LP · Step [3/5] Deposit Amount'),
+    bold('OPEN LP | Deposit Amount'),
     '',
-    `💼 ${bold('Your Wallet :')}`,
-    // The balance is shown too: users used to choose blind and only then be told
-    // "INSUFFICIENT" on the plan card, wasting a step and a round-trip.
-    `• Balance -> ${bold(balanceLabel ?? '?')}`,
-    `• Max Tx Limit -> ${bold(maxLabel)}`,
+    `\u{1F4BC} ${bold('Balance')} = ${bold(esc(balanceLabel ?? '?'))}`,
     '',
-    `Tap a percentage below, or type the exact amount of ${bold(symbol)} in the chat.`,
+    italic(`tap a percentage below, or type the exact amount of ${esc(symbol)} in the chat.`),
+    '',
     italic(`Example: ${example}`),
-    '',
-    note('percentages are taken from your usable balance — the gas reserve is kept aside'),
   ].join('\n');
 }
 
