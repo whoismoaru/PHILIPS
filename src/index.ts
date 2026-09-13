@@ -60,6 +60,7 @@ import * as krystal from './krystal.js';
 import { awaitingSecret, handleSecret } from './commands/wallet.js';
 import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import { cmdClaimFees } from './commands/feesAndRemove.js';
+import { tokenSymbol as v4TokenSymbol } from './uniswapV4.js';
 import { cmdBridge } from './commands/bridge.js';
 import { cmdSend } from './commands/send.js';
 import { cmdUnwrap } from './commands/unwrap.js';
@@ -4489,6 +4490,8 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       msg.msgCashOut({
         tokenId: legs[0].tokenId,
         legs: legs.length,
+        pair: `$${msg.posPair(`${baseSym} / ${legs[0].symbol}`, baseSym)}`,
+        protocol: 'V3',
         notes,
         ethOut: outLabel,
         txHashes: sw.txHashes ?? [],
@@ -4564,6 +4567,8 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
     invalidateV4ListCache();
     const dec = v4BaseDecimals(cc, r.base);
     const sym = v4BaseSymbol(cc, r.base);
+    // The token side's symbol, for the pair on the card. A failed read is not fatal.
+    const otherSym = r.other ? await v4TokenSymbol(r.other, cc).catch(() => 'token') : 'token';
     // The same close card as the v3 path. v4 returns no list of steps, so one is assembled
     // here from what actually happened — without it the card loses the "Steps performed"
     // section that makes a close traceable.
@@ -4571,10 +4576,11 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
       msg.msgCashOut({
         tokenId: legs[0].tokenId,
         legs: legs.length,
+        pair: `$${msg.posPair(`${sym} / ${otherSym}`, sym)}`,
+        protocol: 'V4',
         notes: [
           `Close ${legs.length}-leg v4 ladder (batched)`,
           ...(r.cashedOut ? [`Swap: token → ${r.cashedOut}`] : []),
-          `Received ${msg.cleanUnits(r.baseOutWei, dec)} ${sym}`,
         ],
         ethOut: `${msg.cleanUnits(r.baseOutWei, dec)} ${sym}`,
         txHashes: r.txHash ? [r.txHash] : [],
@@ -4707,6 +4713,7 @@ bot.action(/^close:(\d+)$/, async (ctx) => {
 });
 
 /** Remove + collect, then swap every LP asset to ETH (tokens via Relay, WETH unwrapped). */
+
 async function stopAndCashOut(
   tokenId: string,
   cc: ChainCtx = getChain(),
@@ -4823,6 +4830,11 @@ async function stopAndCashOut(
   console.log(`[cashout] #${tokenId}:`, notes.join(' | ')); // rekam ke journal
   const text = msg.msgCashOut({
     tokenId,
+    pair: (() => {
+      const bs = base.wrappable ? cc.nativeSymbol : base.symbol;
+      return `$${msg.posPair(`${bs} / ${store.get(tokenId)?.symbol ?? 'token'}`, bs)}`;
+    })(),
+    protocol: 'V3',
     notes,
     ethOut,
     txHashes,
@@ -4999,15 +5011,17 @@ bot.action(/^closev4go:(\d+)$/, async (ctx) => {
       // look for the same event.
       const dec4 = v4BaseDecimals(cc, r.base);
       const sym4 = v4BaseSymbol(cc, r.base);
+      const otherSym4 = r.other ? await v4TokenSymbol(r.other, cc).catch(() => 'token') : 'token';
       // Unmeasured means inventing nothing: '—' is honest, while '0' reads as a total loss.
       const outLabel4 = measuredOut === undefined ? '—' : `${msg.cleanUnits(measuredOut, dec4)} ${sym4}`;
       await ctx.reply(
         msg.msgCashOut({
           tokenId,
+          pair: `$${msg.posPair(`${sym4} / ${otherSym4}`, sym4)}`,
+          protocol: 'V4',
           notes: [
             `Close v4 position #${tokenId}`,
             ...(r.cashedOut ? [`Swap: token → ${r.cashedOut}`] : []),
-            ...(measuredOut === undefined ? [] : [`Received ${outLabel4}`]),
           ],
           ethOut: outLabel4,
           txHashes: r.txHash ? [r.txHash] : [],

@@ -38,7 +38,11 @@ assert.ok(!/legs/.test(msgCashOut({ ...dasar, ethOut: '1 ETH', legs: 1 })), 'leg
 assert.match(stable, /<code>0xaa11<\/code>/, 'hash dalam notes harus dipisah ke baris sendiri');
 assert.match(stable, /<code>0xbb22<\/code>/, 'hash tambahan harus tercetak');
 assert.ok(!stable.includes('(tx 0xaa11)'), 'hash tak boleh tertinggal di tengah kalimat');
-assert.match(stable, /Steps :/);
+// Steps are numbered now, and the received amount is the last of them rather than a
+// separate line above.
+assert.match(stable, /^1\. /m, 'langkah harus bernomor');
+assert.match(stable, /\d+\. Received /, '"Received" harus jadi langkah terakhir');
+assert.match(stable, /Step by step :/);
 
 // Debu tersisa harus dikatakan, bukan didiamkan.
 assert.match(msgCashOut({ ...dasar, ethOut: '1 ETH', leftover: true }), /dust/i);
