@@ -1437,7 +1437,9 @@ async function cmdPositions(ctx: any, edit = false) {
         groupId: rec.groupId ?? null,
         legShape: rec.shape ?? null,
         pair: pairLabel(d.baseSymbol, rec.symbol),
-        chain: cc.label,
+        // rcc, not cc: this loop walks positions across EVERY chain, so the active
+        // chain's label would be wrong for any position that is not on it.
+        chain: rcc.label,
         protocol: 'V3',
         investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${d.baseSymbol}`,
         age: msg.fmtAge(Date.now() - rec.openedAt),

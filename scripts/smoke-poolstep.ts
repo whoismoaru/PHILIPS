@@ -14,9 +14,11 @@ const pools = [
 const kartu = msgPoolStep('$GG (Robinhood)', pools);
 
 assert.match(kartu, /AVAILABLE POOLS :/);
-const baris = kartu.split('\n').filter((l) => l.startsWith('- '));
+// Rows are numbered now, matching the numbered buttons beside them.
+const baris = kartu.split('\n').filter((l) => /^\d+\. /.test(l));
 assert.equal(baris.length, pools.length, 'satu baris per pool');
 baris.forEach((l, i) => {
+  assert.ok(l.startsWith(`${i + 1}. `), `baris ${i} tak bernomor urut`);
   assert.ok(l.includes(pools[i].ver) && l.includes(pools[i].feeLabel), `baris ${i} tak cocok urutan pool`);
   assert.ok(!l.includes(pools[i].pair), 'pasangan tak diulang di baris (ada di tombol)');
 });
