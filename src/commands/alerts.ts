@@ -5,7 +5,7 @@ import * as msg from '../messages.js';
 
 /** /alerts: the notification switches for in/out of range, a price drop, and a net loss. */
 
-// ---------- /alerts — setelan notifikasi ----------
+// ---------- /alerts: the notification settings ----------
 const DROP_OPTIONS: Array<number | null> = [10, 15, 25, 40, null];
 const IL_OPTIONS: Array<number | null> = [null, 5, 10, 20, 30];
 

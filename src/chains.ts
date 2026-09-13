@@ -194,7 +194,7 @@ const DEFS: Record<string, Def> = {
     router: config.uniswap.swapRouter,
     quoter: config.uniswap.quoter,
     weth: config.uniswap.weth,
-    usdg: '0x5fc5360d0400a0fd4f2af552add042d716f1d168', // Global Dollar (USDG), 6 desimal — terverifikasi on-chain
+    usdg: '0x5fc5360d0400a0fd4f2af552add042d716f1d168', // Global Dollar (USDG), 6 decimals, verified on-chain
     // Alchemy stays primary. The backups take over on 403/503/stall — both have
     // been tested serving eth_call, eth_getCode and eth_getLogs (the old StableChain
     // RPC failed on exactly those, see .env line 40).
@@ -228,7 +228,7 @@ const DEFS: Record<string, Def> = {
           feeTiers: [100, 500, 2500, 10000],
           tickSpacing: { 100: 1, 500: 10, 2500: 50, 10000: 200 },
           noBatch: true,
-          routerHasDeadline: true, // PancakeSwap v3 SwapRouter (diverifikasi staticCall)
+          routerHasDeadline: true, // PancakeSwap v3 SwapRouter, verified with a staticCall
           // Primary RPC is BSC_RPC_URL (Alchemy). If it goes down the public one
           // takes over, and once it recovers the next request returns to it
           // (FallbackProvider re-evaluates priority per request).

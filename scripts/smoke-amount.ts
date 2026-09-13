@@ -19,4 +19,4 @@ for (const bad of ['1e-9', '0', '0.0', '-1', 'abc', '', '  ', '1.2.3', '0.000000
 }
 assert.equal(parseAmt('1e18', 18), null);
 
-console.log('OK — parseAmt waras (potong desimal, tolak notasi ilmiah & nol)');
+console.log('ok: parseAmt is sane -- decimals trimmed, scientific notation and zero rejected');

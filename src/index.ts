@@ -1874,7 +1874,7 @@ bot.action(/^back:card:(\d+)$/, async (ctx) => {
 // ---------- Phase 3: writes (the step-by-step /add wizard) ----------
 
 /** Pool picker keyboard: pair (WETH/USDG) · fee · depth. The callback carries the base. */
-const POOL_PICK_MAX = 3; // TOP 3 by skor kedalaman (lihat poolSize) — sisanya tak ditawarkan
+const POOL_PICK_MAX = 3; // the top 3 by depth score (see poolSize); the rest are not offered
 
 // A pool's tickSpacing: direct on v4; mapped from the standard fee tier on v3.
 function poolSpacing(p: explore.TokenPool, cc: ChainCtx = getChain()): number {
@@ -3183,7 +3183,7 @@ type TSwapFlow = {
   screenBahaya?: boolean;        // /buy: verdict screening = BAHAYA
   previewBack?: string;          // the Back button's action on the Preview and Confirm cards
   sellList?: SellHolding[];      // /sell: the tokens held, indexed by button
-  sellMultiChain?: boolean;      // /sell: holdings tersebar >1 chain → tampilkan label chain
+  sellMultiChain?: boolean;      // /sell: the holdings span more than one chain, so each row names its chain
   fromHub?: boolean;             // entered from the CA hub card, so Back returns to the hub
   tokenBalWei?: bigint;          // /sell: the chosen token's raw balance, for the percentage maths
   tokenBalNum?: number;          // /sell: the chosen token's balance as a number, for the label
@@ -4266,7 +4266,7 @@ async function execTSwap(ctx: any) {
   try {
     if (config.safety.dryRun) {
       await ctx.editMessageText(
-        msg.msgTSwapDone({ buy, tokenSym: tokenSym!, amountInLabel: amountInLabel!, outLabel: flow.outLabel ?? '(estimasi)', dryRun: true }),
+        msg.msgTSwapDone({ buy, tokenSym: tokenSym!, amountInLabel: amountInLabel!, outLabel: flow.outLabel ?? '(estimated)', dryRun: true }),
         html,
       );
       return;
@@ -5446,10 +5446,10 @@ async function registerBotCommands() {
   }
 }
 
-// --- Nyalakan ---
+// --- Start up ---
 // A failed launch() (a 409 conflict during an overlapping deploy, or the network) RETRIES
 // with backoff rather than exiting. A 409 means the old instance is still polling; wait for it.
-// Menyerah setelah maxTries → exit(1), systemd auto-restart.
+// Give up after maxTries with exit(1), and let systemd restart.
 function launchWithRetry(attempt = 1, maxTries = 6) {
   // onLaunch fires when polling STARTS. Its promise only settles when the bot STOPS
   // (Telegraf v4) — "online" and the menu installation used to hang there, so the "/" menu
@@ -5552,7 +5552,7 @@ async function notifyCrash(kind: string, err: unknown) {
       html,
     );
   } catch {
-    /* abaikan */
+    /* ignored */
   }
 }
 process.on('uncaughtException', (err) => {
@@ -5574,7 +5574,7 @@ const shutdown = (sig: string) => {
   try {
     bot.stop(sig);
   } catch {
-    /* abaikan */
+    /* ignored */
   }
   setTimeout(() => process.exit(0), 1500).unref();
 };

@@ -65,7 +65,7 @@ export async function swapTokenViaRelay(
     const raw = quote?.details?.currencyOut?.amount;
     if (raw) outWei = BigInt(raw);
   } catch {
-    /* abaikan */
+    /* ignored */
   }
 
   return { txHashes, outWei };

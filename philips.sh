@@ -230,9 +230,11 @@ function assert_ours() {
   fi
 }
 
-function show_logs()   { assert_ours; sudo journalctl -u "$SERVICE" -f; }
+# assert_ours guards each of these with && , never ; -- with a semicolon a refusal is
+# printed and the command runs anyway, which once stopped a DIFFERENT installation's bot.
+function show_logs()   { assert_ours && sudo journalctl -u "$SERVICE" -f; }
 function restart_bot() { assert_ours && sudo systemctl restart "$SERVICE" && verify_running "The bot restarted and is running."; }
-function stop_bot()    { assert_ours; sudo systemctl stop "$SERVICE"; ok "The bot was stopped."; }
+function stop_bot()    { assert_ours && sudo systemctl stop "$SERVICE" && ok "The bot was stopped."; }
 
 function go_live() {
   local f="$APP_DIR/.env"

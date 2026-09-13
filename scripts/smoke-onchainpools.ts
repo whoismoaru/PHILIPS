@@ -13,9 +13,9 @@ import { ethers } from 'ethers';
 // The PoolKey cache is a real file under data/. Snapshot it so this test never
 // leaves an entry behind in the running bot's cache.
 const CACHE = 'data/poolkeys.json';
-const semula = fs.existsSync(CACHE) ? fs.readFileSync(CACHE, 'utf8') : null;
-const pulihkan = () => (semula === null ? fs.rmSync(CACHE, { force: true }) : fs.writeFileSync(CACHE, semula));
-process.on('exit', pulihkan);
+const original = fs.existsSync(CACHE) ? fs.readFileSync(CACHE, 'utf8') : null;
+const restore = () => (original === null ? fs.rmSync(CACHE, { force: true }) : fs.writeFileSync(CACHE, original));
+process.on('exit', restore);
 
 // $RSTR on Robinhood: live with $86k liquidity while BOTH indexers returned zero.
 const RSTR = '0x78b96280C3347E0f58a7147B73eb0EC5fFFf025d';

@@ -30,7 +30,7 @@ for (const [name, confirm, card] of paths) {
 }
 
 // The v4 detail card must not take down an open that ALREADY succeeded: the position is real,
-// kartunya cuma tampilan.
+// the card is presentation only.
 const h = src.slice(src.indexOf('async function replyV4Card'), src.indexOf('/** Tampilan detail'));
 assert.match(h, /try \{/, 'replyV4Card must swallow its own read errors');
 assert.match(h, /if \(!tokenId\) return/, 'with no tokenId, a dry run for instance, do not attempt the read');

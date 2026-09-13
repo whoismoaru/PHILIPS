@@ -224,7 +224,7 @@ assert.ok(
   picker.indexOf('All chains') > picker.indexOf('Robinhood'),
   'All chains belongs below the per-chain list, not inside it',
 );
-console.log('smoke-pnlaudit: rekonsiliasi OK');
+console.log('smoke-pnlaudit: the figures reconcile');
 
 // The ownership filter must fail CLOSED: an unreadable address gives zero entries,
 // not the whole journal. Opening everything is most dangerous precisely when we do
