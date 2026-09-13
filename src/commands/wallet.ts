@@ -8,12 +8,12 @@ import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
 
 /**
- * Dompet: /settings (hubungkan & putuskan lewat tombol di kartunya).
- * `awaitingSecret` & `handleSecret` diekspor karena handler teks di index.ts
- * harus mendahulukan alur ini sebelum detektor rahasia-nyasar bekerja.
+ * The wallet: /settings, with connect and disconnect as buttons on its card.
+ * `awaitingSecret` and `handleSecret` are exported because the text handler in index.ts has
+ * to give this flow precedence before its stray-secret detector runs.
  */
 
-// ---------- /settings — dompet (connect & disconnect = tombol) ----------
+// ---------- /settings: the wallet, connected and disconnected by button ----------
 export const awaitingSecret = new Set<number>();
 
 export function cmdConnect(ctx: any) {
@@ -34,15 +34,15 @@ bot.action('connect:cancel', async (ctx) => {
   await ctx.editMessageText(msg.msgCancelled(), html);
 });
 
-/** Dipanggil dari handler teks saat user menempel kunci di alur /connect. */
+/** Called by the text handler when a key is pasted during the connect flow. */
 export async function handleSecret(ctx: any, raw: string): Promise<void> {
   awaitingSecret.delete(ctx.from.id);
-  // Hapus DULU, baru proses: kunci tak boleh nongkrong di chat semenit pun.
+  // Delete FIRST, then process: the key must not sit in the chat for even a moment.
   await ctx.deleteMessage().catch(() => {});
   const prog = await ctx.reply(msg.msgConnectImporting(), html);
   try {
     const addr = walletStore.connect(raw);
-    rebuildChains(); // kontrak lama masih memegang VoidSigner
+    rebuildChains(); // the old contracts still hold a VoidSigner
     await editProgress(ctx, prog, msg.msgConnected(addr), html);
     // Then the same card /start shows, with the same grid -- a fresh connect lands the
     // user exactly where a returning one does, instead of on a three-button stub.
@@ -56,12 +56,12 @@ export async function cmdSettings(ctx: any) {
   const addr = walletStore.address();
   const cc = getChain();
   const rows: any[] = [];
-  // Tombol "Adjust Slippage" dari naskah sengaja TIDAK dipasang: slippage masih
-  // konstanta di kode, jadi tombolnya cuma akan membuka kartu yang tak mengubah apa
-  // pun. Pasang setelah nilainya benar-benar bisa disimpan & dipakai jalur swap.
+  // The "Adjust Slippage" button from the design is deliberately absent: slippage is still
+  // a constant in the code, so the button would open a card that changes nothing. Add it
+  // once the value can really be stored and used by the swap path.
   const gasCeil = gasFeeCapLabel() ? `${gasFeeCapLabel()} ${cc.nativeSymbol}` : null;
-  // Angka persen tiap alur bisa diubah dari sini — dulu dipatok di kode, jadi
-  // praktis tak pernah bisa disesuaikan tanpa edit + restart.
+  // Each flow's percentages are editable from here. They used to be hardcoded, so in
+  // practice they could never be adjusted without an edit and a restart.
   // Labels follow the flows as they are now named. "Withdraw %" used to sit on pct:stop,
   // which is the share of an LP you close -- a different thing from a withdrawal to an
   // address, and the two shared one word.
@@ -104,17 +104,16 @@ bot.action('lpshape', async (ctx: any) => {
   return cmdSettings(ctx);
 });
 
-// Perintah apa pun (/add, /buy, /sell, /bridge) membatalkan prompt persen yang
-// menggantung — kalau tidak, nominal yang diketik user tertelan sebagai jawaban.
-// awaitingSecret ikut dibersihkan: tanpa ini tombol ❌ Cancel umum (dan perintah
-// apa pun yang memanggil resetFlows) meninggalkan prompt connect tetap menunggu,
-// padahal cabangnya dicek paling awal di handler teks.
+// Any command cancels a percentage prompt left hanging -- otherwise the next amount typed
+// is swallowed as an answer to it. awaitingSecret is cleared here too: without that, the
+// generic Cancel button (and anything else calling resetFlows) left the connect prompt
+// waiting, even though its branch is checked first in the text handler.
 registerFlowReset((uid) => {
   pctPresets.clearEdit(uid);
   awaitingSecret.delete(uid);
 });
 
-/** Satuan + batas + catatan khusus satu alur, dipakai ketiga kartu setelan. */
+/** One flow's unit, limits and special notes, shared by all three settings cards. */
 function pctOpts(flow: pctPresets.PctFlow) {
   const b = pctPresets.boundsFor(flow);
   return {
@@ -130,7 +129,7 @@ function pctOpts(flow: pctPresets.PctFlow) {
   };
 }
 
-/** Kartu satu alur: nilai sekarang + tombol ubah / kembalikan ke bawaan. */
+/** One flow's card: the current value plus buttons to change it or restore the defaults. */
 function pctCardKb(flow: pctPresets.PctFlow) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('✏️ Edit', `pctedit:${flow}`), Markup.button.callback('↩️ Reset', `pctreset:${flow}`)],
@@ -140,8 +139,8 @@ function pctCardKb(flow: pctPresets.PctFlow) {
 
 bot.action(/^pct:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
-  // Kembali dari prompt = batal mengetik. Tanpa ini penandanya menetap dan menelan
-  // pesan teks berikutnya, di alur mana pun.
+  // Going back from the prompt means abandoning it. Without this the marker persists and
+  // swallows the next text message, whichever flow it belonged to.
   pctPresets.clearEdit(ctx.from!.id);
   await ctx.answerCbQuery();
   return ctx.editMessageText(
@@ -172,9 +171,9 @@ bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
 });
 
 /**
- * Menerima daftar persen yang diketik user. Dipanggil dari penangan teks utama
- * (index.ts) SEBELUM alur nominal, supaya "25 50 75" tak terbaca sebagai nominal.
- * @returns true bila pesan ini memang jawaban untuk prompt persen.
+ * Accepts a typed list of percentages. Called from the main text handler BEFORE the amount
+ * flows, so "25 50 75" is not read as an amount.
+ * @returns true when this message really was an answer to the percentage prompt.
  */
 export async function handlePctReply(ctx: any, raw: string): Promise<boolean> {
   const flow = pctPresets.pendingEdit(ctx.from?.id);
@@ -183,7 +182,7 @@ export async function handlePctReply(ctx: any, raw: string): Promise<boolean> {
   const saved = nums ? pctPresets.set(flow, nums) : null;
   if (!saved) {
     await ctx.reply(msg.msgPctInvalid(pctOpts(flow)), html);
-    return true; // tetap ditangani: jangan jatuh ke alur nominal
+    return true; // still handled here: never fall through to the amount flow
   }
   pctPresets.clearEdit(ctx.from.id);
   await ctx.reply(

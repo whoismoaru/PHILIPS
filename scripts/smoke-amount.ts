@@ -15,7 +15,7 @@ assert.equal(parseAmt('0.1234567', 6), 123456n);
 assert.equal(parseAmt('100', 6), 100000000n);
 
 for (const bad of ['1e-9', '0', '0.0', '-1', 'abc', '', '  ', '1.2.3', '0.0000001']) {
-  assert.equal(parseAmt(bad, 6), null, `harus ditolak: ${JSON.stringify(bad)}`);
+  assert.equal(parseAmt(bad, 6), null, `must be rejected: ${JSON.stringify(bad)}`);
 }
 assert.equal(parseAmt('1e18', 18), null);
 

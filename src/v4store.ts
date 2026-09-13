@@ -3,10 +3,10 @@ import { join } from 'node:path';
 import { writeJson } from './store.js';
 
 /**
- * Pelacakan RINGAN posisi Uniswap v4 yang DIBUKA oleh bot (terpisah dari store v3
- * agar tak mengganggu jalur v3). Menyimpan entry supaya /positions bisa hitung PnL
- * dan monitor bisa alert in/out-range. Posisi v4 yang dibuka di luar bot tetap
- * tampil (read-only) tanpa entry.
+ * Lightweight tracking for the Uniswap v4 positions the bot OPENED, kept separate from the
+ * v3 store so it cannot disturb that path. It holds the entry data so /positions can
+ * compute PnL and the monitor can alert on range changes. A v4 position opened elsewhere
+ * still shows up, read-only, with no entry data.
  */
 export type V4Record = {
   tokenId: string;
@@ -18,22 +18,22 @@ export type V4Record = {
   hooks: string;
   base: 'ETH' | 'USDG' | null;
   baseIsCurrency0: boolean;
-  entryBaseWei: string; // base disetor saat open (raw, desimal base)
-  entryEthUsd?: number; // harga base(USD) saat open — PnL USD ala LP Agent (ETH: harga ETH; USDG: 1)
-  entryTick?: number; // tick pool saat open — range % kartu dipatok ke sini (biar diam)
-  entryMcap?: number; // market cap USD saat open — batas mcap kartu dipatok ke sini
-  groupId?: string; // ladder Bid-Ask v4: N leg berbagi groupId = 1 posisi logis
+  entryBaseWei: string; // the base deposited at open (raw, base decimals)
+  entryEthUsd?: number; // the base price in USD at open, for LP-Agent-style USD PnL (ETH's price for ETH, 1 for USDG)
+  entryTick?: number; // the pool tick at open; the card's range % is anchored here so it stays still
+  entryMcap?: number; // the USD market cap at open; the card's mcap bounds are anchored here
+  groupId?: string; // a v4 bid-ask ladder: N legs sharing a groupId make one logical position
   legIndex?: number;
   legCount?: number;
   shape?: 'spot' | 'bidask';
   openedAt: number;
   lastInRange?: boolean;
-  dropTier?: number; // tangga alert anjlok yang sudah bunyi (setara v3)
+  dropTier?: number; // the drop-alert rung that already fired (same as v3)
   dropAlerted?: boolean;
-  ilAlerted?: boolean; // alert rugi bersih sudah bunyi (re-arm saat pulih)
+  ilAlerted?: boolean; // the net-loss alert already fired; it re-arms on recovery
 };
 
-/** Semua leg satu grup ladder v4 (urut legIndex). */
+/** Every leg of one v4 ladder group, ordered by legIndex. */
 export function groupV4(groupId: string): V4Record[] {
   return records.filter((r) => r.groupId === groupId).sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
 }
@@ -48,7 +48,7 @@ function load(): V4Record[] {
     return Array.isArray(r) ? r : [];
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    if (err.code !== 'ENOENT') console.error('[v4store] v4positions.json tak terbaca — mulai KOSONG:', err.message);
+    if (err.code !== 'ENOENT') console.error('[v4store] v4positions.json could not be read, starting EMPTY:', err.message);
     return [];
   }
 }
@@ -66,7 +66,7 @@ export function trackV4(rec: Omit<V4Record, 'openedAt' | 'lastInRange'> & { open
   persist();
 }
 
-/** Tambal sebagian record (penanda alert). Tak ada = no-op. */
+/** Patch part of a record, the alert markers. A missing record is a no-op. */
 export function updateV4(tokenId: string, patch: Partial<V4Record>): void {
   const r = records.find((x) => x.tokenId === tokenId);
   if (!r) return;
@@ -81,9 +81,9 @@ export function removeV4(tokenId: string): void {
 }
 
 /**
- * Set status in-range. Return true HANYA bila berubah dari nilai yang sudah
- * pernah tercatat (set pertama tak memicu alert — hindari notifikasi palsu saat
- * posisi single-sided baru dibuka yang memang mulai out-of-range).
+ * Record the in-range status. Returns true ONLY when it changed from a value already
+ * stored -- the first write never fires an alert, which would otherwise be a false alarm
+ * every time a single-sided position opens, since those start out of range by design.
  */
 export function setV4InRange(tokenId: string, inRange: boolean): boolean {
   const r = records.find((x) => x.tokenId === tokenId);

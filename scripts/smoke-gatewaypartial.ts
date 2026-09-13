@@ -34,15 +34,15 @@ async function main() {
     data: { topV3Pools: [], topV4Pools: [pool] },
     errors: [{ message: 'external API error', path: ['topV4Pools', 0, 'cumulativeVolume'] }],
   });
-  const parsial = await explore.poolsForToken(cc, CA);
-  assert.equal(parsial.length, 1, 'balasan parsial dibuang — bug 9 Sep kambuh');
-  assert.equal(parsial[0].vol24hUsd ?? 0, 0, 'volume yang hilang harus terbaca 0, bukan NaN');
+  const partial = await explore.poolsForToken(cc, CA);
+  assert.equal(partial.length, 1, 'balasan partial dibuang — bug 9 Sep kambuh');
+  assert.equal(partial[0].vol24hUsd ?? 0, 0, 'a missing volume reads 0, never NaN');
 
   // 2. Empty: errors[] populated, no payload -> still a real failure.
   globalThis.fetch = balas({ data: { topV3Pools: [], topV4Pools: [] }, errors: [{ message: 'external API error' }] });
-  await assert.rejects(() => explore.poolsForToken(cc, CA), /external API error/, 'balasan kosong harus tetap melempar');
+  await assert.rejects(() => explore.poolsForToken(cc, CA), /external API error/, 'an empty response still has to throw');
 
   globalThis.fetch = asli;
-  console.log('ok: balasan parsial lolos, balasan kosong tetap melempar');
+  console.log('ok: a partial response passes and an empty one still throws');
 }
 main();

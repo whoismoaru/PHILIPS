@@ -11,7 +11,7 @@ for (const chainKey of Object.keys(PM)) {
   const cc = getChain(chainKey as any);
   const live = (await listPositionsV4(cc, { onlyLive: true }))
     .filter((p) => p.valueBaseWei !== null && p.base);
-  if (!live.length) { console.log(`${chainKey}: tak ada posisi v4 hidup — lewati`); continue; }
+  if (!live.length) { console.log(`${chainKey}: no live v4 positions, skipping`); continue; }
 
   const pmAbi = ['function ownerOf(uint256) view returns (address)'];
   let checked = 0;
@@ -35,8 +35,8 @@ for (const chainKey of Object.keys(PM)) {
           bal(p.poolKey.currency0), bal(p.poolKey.currency1),
         ] }], validation: false,
       }, 'latest']);
-    } catch { console.log(`  #${p.tokenId}: RPC tanpa eth_simulateV1 — lewati silang-cek`); continue; }
-    if (sim[0].calls[0].status !== '0x1') { console.log(`  #${p.tokenId}: simulasi revert — lewati`); continue; }
+    } catch { console.log(`  #${p.tokenId}: this RPC has no eth_simulateV1, skipping the cross-check`); continue; }
+    if (sim[0].calls[0].status !== '0x1') { console.log(`  #${p.tokenId}: the simulation reverted, skipping`); continue; }
 
     const before = await Promise.all([p.poolKey.currency0, p.poolKey.currency1].map((a) =>
       new ethers.Contract(a, ['function balanceOf(address) view returns (uint256)'], cc.provider).balanceOf(owner)));
@@ -62,9 +62,9 @@ for (const chainKey of Object.keys(PM)) {
     assert.ok(p.feesBaseWei !== null, `#${p.tokenId}: feesBaseWei null`);
     const drift = Number(gotBase - totalCard) / Number(totalCard || 1n);
     console.log(`  #${p.tokenId}: prinsipal ${p.valueBaseWei} + fee ${p.feesBaseWei} · simulasi base ${gotBase} · drift ${(drift * 100).toFixed(2)}%`);
-    assert.ok(Math.abs(drift) < 0.01, `#${p.tokenId}: selisih kartu vs simulasi ${(drift * 100).toFixed(2)}% > 5%`);
+    assert.ok(Math.abs(drift) < 0.01, `#${p.tokenId}: card vs simulation differ by ${(drift * 100).toFixed(2)}%, over 5%`);
     checked++;
   }
-  console.log(`${chainKey}: ${checked} posisi tersilang-cek OK`);
+  console.log(`${chainKey}: ${checked} positions cross-checked ok`);
 }
 console.log('smoke-v4fees: LULUS');

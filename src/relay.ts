@@ -3,9 +3,9 @@ import { approveExact } from './chain.js';
 import { getChain, type ChainCtx } from './chains.js';
 
 /**
- * Swap token → ETH native di chain yang sama lewat Relay (relay.link).
- * Relay mengembalikan daftar langkah transaksi; kita eksekusi berurutan
- * (termasuk approve bila perlu).
+ * Swap a token into native ETH on the same chain through Relay (relay.link).
+ * Relay returns a list of transaction steps, which are executed in order,
+ * including the approval where one is needed.
  */
 
 const RELAY_API = 'https://api.relay.link/quote';
@@ -45,9 +45,10 @@ export async function swapTokenViaRelay(
     for (const item of step.items ?? []) {
       const d = item?.data;
       if (!d?.to) continue;
-      // Jual token same-chain = ERC20 masuk, TAK ADA native. Step ber-value>0 itu
-      // anomali (calldata relay tak terduga bisa kuras BNB/ETH) → tolak. Pemanggil
-      // punya fallback Uniswap, jadi menolak di sini aman, bukan menggagalkan total.
+      // Selling a token on one chain means ERC20 in and NO native. A step carrying
+      // value > 0 is an anomaly -- unexpected relay calldata could drain the native
+      // balance -- so refuse it. The caller has a Uniswap fallback, which makes refusing
+      // here safe rather than fatal.
       const value = d.value ? BigInt(d.value) : 0n;
       if (value > 0n) {
         throw new Error(`relay step unexpectedly requires ${value} native on a token sell — aborted for safety`);
@@ -58,7 +59,7 @@ export async function swapTokenViaRelay(
     }
   }
 
-  // Estimasi jumlah keluar dari quote (kalau tersedia).
+  // The estimated output from the quote, when it carries one.
   let outWei = 0n;
   try {
     const raw = quote?.details?.currencyOut?.amount;
@@ -79,7 +80,7 @@ export async function swapTokenToEthViaRelay(
   return { txHashes: r.txHashes, outEthWei: r.outWei };
 }
 
-/** Quote-only Relay same-chain from→to (TIDAK eksekusi). null bila tak ada rute. */
+/** A Relay quote only, same chain, from -> to. Never executes. null when there is no route. */
 export async function relayQuoteOut(
   fromCurrency: string,
   toCurrency: string,
@@ -113,12 +114,12 @@ export async function relayQuoteOut(
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Kirim tx dengan pemulihan tabrakan NONCE. Rute swap yang gagal kadang sudah
- * MENGIRIM tx (memakai nonce) sebelum revert; kirim berikutnya lalu memakai nonce
- * yang sama ("nonce has already been used") → seluruh cash-out gagal & token
- * tertinggal (PnL jadi salah, lihat kasus LIGER #774283). Saat kena error nonce,
- * ambil nonce segar dari chain lalu ulang — beberapa kali dengan jeda kecil untuk
- * memberi RPC waktu menyusul.
+ * Send a transaction, recovering from a NONCE collision. A swap route that fails has
+ * sometimes already SENT a transaction (consuming a nonce) before reverting, so the next
+ * send reuses it and dies with "nonce has already been used" -- taking the whole cash-out
+ * with it and leaving the token behind, which then reports the wrong PnL (see LIGER
+ * #774283). On a nonce error, read a fresh nonce from the chain and retry, a few times
+ * with a short pause so the RPC can catch up.
  */
 async function sendTxNonceSafe(
   wallet: ethers.Wallet,
@@ -141,9 +142,9 @@ async function sendTxNonceSafe(
   throw new Error('unreachable');
 }
 
-// Dua bentuk struct exactInputSingle yang beredar. Uniswap SwapRouter02 membuang
-// `deadline`; SwapRouter v3 asli (dipakai PancakeSwap) tetap memakainya. Memanggil
-// dengan bentuk yang salah = revert tanpa data — mahal & membingungkan.
+// Two shapes of exactInputSingle are in the wild. Uniswap's SwapRouter02 dropped
+// `deadline`; the original v3 SwapRouter, which PancakeSwap uses, still takes it. Calling
+// with the wrong shape reverts with no data -- expensive and baffling.
 const ROUTER_ABI = [
   'function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
 ];
@@ -151,7 +152,7 @@ const ROUTER_ABI_DEADLINE = [
   'function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 deadline,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
 ];
 
-/** Kontrak router + parameter exactInputSingle sesuai bentuk struct chain ini. */
+/** The router contract plus exactInputSingle parameters shaped for this chain's struct. */
 function routerCall(
   ctx: ChainCtx,
   wallet: ethers.Signer,
@@ -183,8 +184,8 @@ const QUOTER_ABI = [
  * deliberate, a swap that will not fill inside 3% now fails and is retried later
  * rather than filling 15% down.
  *
- * Relay TIDAK diikutkan: default-nya sudah 1% (diverifikasi 2 Agu 2026 — kirim
- * slippageTolerance=300 justru melonggarkannya ke 3%), jadi biarkan apa adanya.
+ * Relay is left out of this: its own default is already 1% (verified 2 Aug 2026 -- sending
+ * slippageTolerance=300 actually loosened it to 3%), so it is left alone.
  */
 export const SLIP_MAX_PCT = 3;
 export function slipLadder(max: number = SLIP_MAX_PCT): number[] {
@@ -192,7 +193,7 @@ export function slipLadder(max: number = SLIP_MAX_PCT): number[] {
   return [...new Set([1, 2, 3].map((s) => Math.min(s, cap)))].filter((s) => s > 0);
 }
 
-/** Fallback: swap token → WETH langsung via Uniswap SwapRouter02 (pool ter-likuid). */
+/** Fallback: swap the token straight into WETH through Uniswap's SwapRouter02, on the deepest pool. */
 async function swapViaUniswap(
   tokenAddress: string,
   amountWei: bigint,
@@ -203,8 +204,8 @@ async function swapViaUniswap(
   const { discoverPools } = await import('./uniswap.js');
   const { wallet, weth } = ctx;
 
-  // Jalur ini memang khusus token→WETH/WBNB. Token yang likuiditasnya hanya di pool
-  // stablecoin akan gagal DI SINI — itu benar; pemulihannya lewat jalur 3 (stable-hop).
+  // This route is specifically token -> WETH/WBNB. A token whose only liquidity is in a
+  // stablecoin pool fails HERE, and that is correct: route 3 (the stable hop) recovers it.
   const pools = (await discoverPools(tokenAddress, ctx)).filter((p) => p.baseReserve > 0n);
   if (pools.length === 0)
     throw new Error(`no ${ctx.bases.find((b) => b.kind === 'weth')?.symbol ?? 'WETH'} pool for the fallback swap`);
@@ -214,10 +215,10 @@ async function swapViaUniswap(
   const routerAddr = ctx.routerAddress;
   txHashes.push(...(await approveExact(tokenAddress, routerAddr, amountWei, wallet)));
 
-  // minOut dari quoter, dikurangi slippage. Quoter gagal / kembali 0 → BATALKAN
-  // route ini (JANGAN swap dgn minOut=0 — itu umpan sandwich). swapTokenToEthRobust
-  // akan coba jalur lain; bila semua gagal, token ditahan (leftover/STOPPED) & sweep
-  // mencoba lagi nanti — jauh lebih baik daripada dijual di harga berapa pun.
+  // minOut comes from the quoter, less slippage. If the quoter fails or returns 0, ABORT
+  // this route -- never swap with minOut=0, which is bait for a sandwich.
+  // swapTokenToEthRobust will try the others; if they all fail the token is held as a
+  // leftover and the sweep retries later, which beats selling at any price at all.
   let minOut: bigint;
   try {
     const quoter = new e.Contract(ctx.quoterAddress, QUOTER_ABI, wallet);
@@ -249,7 +250,7 @@ async function swapViaUniswap(
   await tx.wait();
   txHashes.push(tx.hash);
 
-  // Unwrap WETH hasil swap → ETH native.
+  // Unwrap the WETH the swap produced into native ETH.
   const gotWeth: bigint = (await weth.balanceOf(wallet.address)) - beforeWeth;
   if (gotWeth > 0n) {
     const wtx = await weth.withdraw(gotWeth);
@@ -260,10 +261,10 @@ async function swapViaUniswap(
 }
 
 /**
- * Swap token → ETH TAHAN BANTING:
- *  1. Relay, retry 3x (backoff 2s/5s) — kuat saat jaringan/API ramai.
- *  2. Fallback Uniswap router: slippage 1% → 2% → 3%, tak pernah lebih.
- * Lempar error hanya kalau SEMUA jalur gagal.
+ * A token -> ETH swap built to survive:
+ *  1. Relay, retried 3 times (2s/5s backoff), which holds up when the network or API is busy.
+ *  2. The Uniswap router as a fallback: slippage 1% -> 2% -> 3%, never beyond.
+ * This throws only when every route has failed.
  */
 async function tokenBalance(tokenAddress: string, ctx: ChainCtx): Promise<bigint> {
   const c = new ethers.Contract(
@@ -274,7 +275,7 @@ async function tokenBalance(tokenAddress: string, ctx: ChainCtx): Promise<bigint
   return (await c.balanceOf(ctx.wallet.address)) as bigint;
 }
 
-/** Relay + VERIFIKASI saldo token benar-benar berkurang (Relay kadang "sukses" tanpa swap). */
+/** Relay, plus a CHECK that the token balance really fell: Relay sometimes "succeeds" without swapping. */
 async function relayVerified(
   tokenAddress: string,
   amountWei: bigint,
@@ -284,12 +285,12 @@ async function relayVerified(
   const ethBefore = await ctx.provider.getBalance(ctx.wallet.address).catch(() => null);
   const r = await swapTokenToEthViaRelay(tokenAddress, amountWei, ctx);
   const after = await tokenBalance(tokenAddress, ctx);
-  // Harus berkurang ≥90% dari yang diminta; kalau tidak, anggap Relay no-op.
+  // The balance must fall by at least 90% of what was asked; otherwise Relay did nothing.
   if (before - after < (amountWei * 9n) / 10n) {
     throw new Error(`relay did not reduce the token balance (before=${before} after=${after})`);
   }
-  // outEthWei dari quote hanyalah ESTIMASI (kadang 0) — dan angka itu dipakai
-  // sebagai hasil close di jurnal. Ukur dari delta saldo native bila bisa.
+  // The quote's outEthWei is an ESTIMATE, sometimes 0 -- and that number is recorded as
+  // the close result in the journal. Measure it from the native balance delta instead.
   const ethAfter = await ctx.provider.getBalance(ctx.wallet.address).catch(() => null);
   const measured = ethBefore !== null && ethAfter !== null && ethAfter > ethBefore ? ethAfter - ethBefore : 0n;
   return { ...r, outEthWei: measured > 0n ? measured : r.outEthWei };
@@ -305,8 +306,8 @@ export const LIFI_TOL = 0.015; // 1.5%
 export const lifiPreferred = (lifi: bigint, bestOther: bigint): boolean =>
   lifi > 0n && lifi * 1000n >= bestOther * BigInt(Math.floor((1 - LIFI_TOL) * 1000));
 
-/** Batas waktu LI.FI: kalau quote/tx belum kelar dalam tempo ini → anggap "lambat"
- *  dan mundur ke Relay/Uniswap. Sama untuk sisi jual & preview. */
+/** LI.FI's deadline: a quote or transaction not finished within this counts as "slow" and
+ *  falls back to Relay/Uniswap. The same figure covers the sell side and the preview. */
 const LIFI_TIMEOUT_MS = 12_000;
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -352,10 +353,10 @@ export async function swapTokenToEthRobust(
 ): Promise<{ txHashes: string[]; outEthWei: bigint; route: string }> {
   const errors: string[] = [];
 
-  // Jalur 0 (UTAMA): LI.FI — agregator DEX terdalam & tercepat. Relay & Uniswap jadi
-  // cadangan bila LI.FI tak mendukung chain, rate-nya lebih jelek dari keduanya, atau
-  // kelamaan (timeout). Rate dibandingkan lebih dulu, bukan hanya dipakai buta:
-  // "utama" berarti didahulukan selama harganya tak kalah, bukan dipakai apa pun rate-nya.
+  // Route 0 (PRIMARY): LI.FI, the deepest and fastest DEX aggregator here. Relay and
+  // Uniswap are the fallbacks when LI.FI does not cover the chain, quotes worse than both,
+  // or takes too long. The rate is compared first rather than trusted blindly: "primary"
+  // means it goes first while its price holds, not that it is used whatever the price.
   const { lifiQuoteOut } = await import('./lifi.js'); // dynamic → hindari circular import
   const [lifiOutEth, relayOutEth] = await Promise.all([
     lifiQuoteOut(tokenAddress, NATIVE, amountWei, ctx).catch(() => null),
@@ -372,13 +373,13 @@ export async function swapTokenToEthRobust(
       return null;
     }
   };
-  // Quote gagal di kedua sisi = tak ada pembanding; LI.FI tetap didahulukan.
+  // A failed quote on both sides leaves nothing to compare, and LI.FI still goes first.
   if (lifiOutEth === null && relayOutEth === null ? true : lifiPreferred(lifiOutEth ?? 0n, relayOutEth ?? 0n)) {
     const r = await tryLifiEth();
     if (r) return r;
   }
 
-  // Jalur 1: Relay (agregator, hasil ETH native langsung) — terverifikasi.
+  // Path 1: Relay, an aggregator paying out native ETH directly, and verified.
   try {
     const r = await relayVerified(tokenAddress, amountWei, ctx);
     return { ...r, route: 'relay' };
@@ -386,8 +387,9 @@ export async function swapTokenToEthRobust(
     errors.push(`relay: ${(e as Error).message.slice(0, 80)}`);
   }
 
-  // Jalur 2: langsung Uniswap router (exactInputSingle → swap FULL amountIn), slippage naik.
-  // Slipstream (Ink/Velodrome): router/quoter DEX tak dipakai — lewati, andalkan agregator.
+  // Route 2: the Uniswap router directly (exactInputSingle over the full amountIn), with
+  // slippage stepping up. On Slipstream (Ink/Velodrome) the DEX router and quoter are not
+  // used at all -- skip it and lean on the aggregators.
   for (const slip of ctx.slipstream ? [] : slipLadder(maxSlipPct)) {
     try {
       const r = await swapViaUniswap(tokenAddress, amountWei, slip, ctx);
@@ -397,18 +399,18 @@ export async function swapTokenToEthRobust(
     }
   }
 
-  // Semua cadangan gagal dan LI.FI belum sempat dicoba (quote-nya kalah). Coba
-  // sekarang: rate lebih jelek tetap lebih baik daripada token nyangkut.
+  // Every fallback failed and LI.FI was never attempted, because its quote lost. Try it
+  // now: a worse rate still beats a token stuck in the wallet.
   if (!lifiEthTried) {
     const r = await tryLifiEth();
     if (r) return r;
   }
 
-  // Jalur 3: 2-hop token → stablecoin → native. Wajib utk token yang likuiditasnya
-  // HANYA di pool stablecoin (GME/USDG di Robinhood, 币安城/USDT di BSC) — tak punya
-  // pool WETH/WBNB, jadi jalur 1 & 2 selalu gagal & token nyangkut selamanya.
-  // Stablecoin-nya IKUT CHAIN: dulu digerbang `ctx.usdgAddress` saja, sehingga BSC
-  // (yang punya USDT, bukan USDG) melewati jalur ini sama sekali.
+  // Route 3: a two-hop token -> stablecoin -> native. Required for tokens whose liquidity
+  // lives ONLY in a stablecoin pool (GME/USDG on Robinhood, 币安城/USDT on BSC): they have
+  // no WETH/WBNB pool, so routes 1 and 2 always fail and the token stays stuck for good.
+  // The stablecoin FOLLOWS THE CHAIN -- this was once gated on `ctx.usdgAddress` alone, so
+  // BSC, which has USDT rather than USDG, skipped the route entirely.
   const stableAddr = ctx.usdgAddress ?? ctx.usdtAddress ?? ctx.usdcAddress;
   if (stableAddr && tokenAddress.toLowerCase() !== stableAddr.toLowerCase()) {
     try {
@@ -424,7 +426,7 @@ export async function swapTokenToEthRobust(
     }
   }
 
-  // Jalur 4: Relay sekali lagi (siapa tahu gangguan tadi transien).
+  // Path 4: Relay one more time, in case that outage was transient.
   await sleep(2000);
   try {
     const r = await relayVerified(tokenAddress, amountWei, ctx);
@@ -436,10 +438,11 @@ export async function swapTokenToEthRobust(
 }
 
 /**
- * Swap token → USDG (untuk close posisi pasangan USDG). Pilih pool USDG/token
- * terlikuid, exactInputSingle via Uniswap router dgn minOut dari quoter (floor,
- * sama seperti jalur WETH — quoter gagal/0 → BATALKAN, hindari sandwich).
- * Slippage 1% → 2% → 3%, tak pernah lebih. USDG TIDAK di-unwrap (tetap stablecoin).
+ * Swap a token to the chain's stablecoin, for closing a stablecoin-paired position. It
+ * takes the deepest stable/token pool and calls exactInputSingle through the Uniswap
+ * router with minOut from the quoter -- the same floor as the WETH route, so a failed or
+ * zero quote ABORTS rather than inviting a sandwich. Slippage steps 1% -> 2% -> 3% and no
+ * further. The stablecoin is never unwrapped; it stays a stablecoin.
  */
 export async function swapTokenToUsdgRobust(
   tokenAddress: string,
@@ -475,11 +478,11 @@ export async function swapTokenToUsdgRobust(
       bestFee = fee;
     }
   }
-  // TIDAK ADA pool langsung bukan alasan menyerah: Relay di bawah bisa merutekan
-  // lewat WETH dll. Dulu di sini ada `throw` — akibatnya fallback Relay TAK PERNAH
-  // tercapai dan /sell ke base stablecoin selalu gagal utk token yang cuma
-  // berpasangan dgn WETH. Lewati saja bagian pool langsung, jangan berhenti.
-  // Slipstream: quoter DEX tak tersedia → paksa lewat Relay/agregator (hasDirectPool=false).
+  // No direct pool is not a reason to give up: Relay below can route through WETH and
+  // others. This used to `throw` here, so the Relay fallback was NEVER reached and selling
+  // into a stablecoin base always failed for tokens paired only with WETH. Skip the
+  // direct-pool section instead of stopping.
+  // On Slipstream there is no DEX quoter, so force the aggregator path (hasDirectPool=false).
   const hasDirectPool = !ctx.slipstream && bestReserve >= 0n;
 
   // LI.FI is the primary router here too. This path used to go straight to the single
@@ -509,7 +512,7 @@ export async function swapTokenToUsdgRobust(
       const r = await lifiVerified(tokenAddress, usdgAddress, amountWei, ctx, maxSlipPct);
       return { ...r, route: 'lifi-usdg' };
     } catch (e) {
-      console.log(`[swap] lifi→usdg gagal, mundur ke uniswap/relay: ${(e as Error).message.slice(0, 80)}`);
+      console.log(`[swap] lifi->usdg failed, falling back to uniswap/relay: ${(e as Error).message.slice(0, 80)}`);
       return null;
     }
   };
@@ -556,10 +559,11 @@ export async function swapTokenToUsdgRobust(
     }
   }
 
-  // Fallback: Relay token→USDG (agregator; rute lewat WETH dll bila pool USDG langsung
-  // tipis/impact tinggi). Verifikasi saldo token TURUN ≥90% (Relay kadang "sukses"
-  // tanpa swap) & ukur USDG masuk dari delta saldo. Menyamakan ketahanan dgn jalur ETH
-  // → posisi pasangan USDG tak lagi sering nyangkut tanpa auto-swap.
+  // Fallback: Relay token -> stablecoin, which can route through WETH when the direct
+  // stable pool is thin or the impact is high. The token balance is verified to have
+  // fallen by at least 90% (Relay sometimes "succeeds" without swapping) and the stablecoin
+  // received is measured from the balance delta. This gives the stablecoin path the same
+  // resilience as the ETH one, so those positions no longer get stuck without an auto-swap.
   try {
     const beforeTok = await tokenBalance(tokenAddress, ctx);
     const beforeUsdg: bigint = await usdg.balanceOf(wallet.address);
@@ -581,20 +585,20 @@ export async function swapTokenToUsdgRobust(
     if (r) return r;
   }
 
-  // Rute 3: 2-hop token → WETH → USDG. Cermin dari `usdg-hop` di
-  // swapTokenToEthRobust, dan bukan teori: diukur 2 Agu 2026 utk SESTRI & IF —
-  // pool token/WETH ADA (fee 1%), pool token/USDG TIDAK ADA, dan Relay pun tak
-  // punya rute (quote null). Tanpa hop ini, /sell & close berbasis stablecoin
-  // gagal total untuk mayoritas token, yang memang cuma berpasangan dgn WETH.
+  // Route 3: a two-hop token -> WETH -> stablecoin. The mirror of the stable hop in
+  // swapTokenToEthRobust, and not a theory: measured on 2 Aug 2026 for SESTRI and IF, where
+  // the token/WETH pool existed (1% fee), the token/stable pool did not, and Relay had no
+  // route either (a null quote). Without this hop, selling and closing into a stablecoin
+  // failed outright for most tokens, which are only ever paired with WETH.
   //
-  // Bila kaki-1 sukses tapi kaki-2 gagal, dompet memegang WETH (bukan token) —
-  // itu tetap kemajuan: sweep monitor bisa meng-unwrap-nya.
+  // If the first leg lands and the second fails, the wallet holds WETH rather than the
+  // token -- still progress, since the monitor's sweep can unwrap it.
   const wethLower = ctx.wethAddress.toLowerCase();
   const tokLower = tokenAddress.toLowerCase();
   if (tokLower !== wethLower && tokLower !== usdgAddress.toLowerCase()) {
     try {
-      // Import dinamis: swapRoute.ts meng-import modul INI, jadi import statik
-      // akan membuat siklus modul. Dipanggil saat runtime → aman.
+      // Imported dynamically: swapRoute.ts imports THIS module, so a static import would
+      // close a module cycle. Called at runtime, it is safe.
       const { swapExactInBest } = await import('./swapRoute.js');
       const leg1 = await swapExactInBest(tokenAddress, ctx.wethAddress, amountWei, ctx, Math.min(maxSlipPct ?? SLIP_MAX_PCT, SLIP_MAX_PCT), maxSlipPct);
       const leg2 = await swapExactInBest(ctx.wethAddress, usdgAddress, leg1.outWei, ctx, Math.min(maxSlipPct ?? SLIP_MAX_PCT, SLIP_MAX_PCT), maxSlipPct);
@@ -611,25 +615,25 @@ export async function swapTokenToUsdgRobust(
   throw new Error(`token→USDG swap failed: ${lastErr}`);
 }
 
-// ─── bridge lintas chain (Relay) ────────────────────────────────────
+// ─── cross-chain bridging (Relay) ───────────────────────────────────
 //
-// Relay itu agregator bridge: swap same-chain di atas hanyalah kasus khusus dengan
-// origin == destination. Untuk lintas chain, kedua id diisi berbeda.
+// Relay is a bridge aggregator: the same-chain swaps above are just the special case where
+// origin equals destination. Crossing chains simply means giving it two different ids.
 
 export type BridgeQuote = {
   inLabel: string; // "0.01 ETH"
   outLabel: string; // "0.0319 BNB"
   outWei: bigint;
-  impactPct: number | null; // selisih nilai USD masuk vs keluar
+  impactPct: number | null; // the difference in USD value between what went in and what came out
   feeUsd: number | null; // biaya relayer
   etaSec: number | null;
   steps: Array<{ to: string; data: string; value: string; approvalAddress?: string }>;
 };
 
 /**
- * Quote bridge native→native. Calldata-nya BERUMUR PENDEK — jangan pernah
- * mengeksekusi `steps` dari quote yang dipakai merender kartu; minta quote baru
- * tepat sebelum kirim (lihat executeBridge).
+ * A native -> native bridge quote. Its calldata is SHORT-LIVED: never execute the `steps`
+ * from the quote that rendered a card. Ask for a fresh quote right before sending (see
+ * executeBridge).
  */
 export async function getBridgeQuote(
   from: ChainCtx,
@@ -641,7 +645,7 @@ export async function getBridgeQuote(
   const destinationCurrency = opts.destinationCurrency ?? NATIVE;
   const body = {
     user: from.wallet.address,
-    recipient: from.wallet.address, // dompet yang sama di kedua chain (EVM)
+    recipient: from.wallet.address, // the same wallet on both chains, since they are EVM
     originChainId: from.chainId,
     destinationChainId: to.chainId,
     originCurrency: originCurrency === NATIVE ? NATIVE : ethers.getAddress(originCurrency),
@@ -666,8 +670,8 @@ export async function getBridgeQuote(
   if (steps.length === 0) throw new Error('Relay returned no executable step for this route.');
   const outWei = BigInt(d?.currencyOut?.amount ?? '0');
   if (outWei <= 0n) throw new Error('Relay quote returned zero output — route unusable right now.');
-  // Relay mengembalikan presisi penuh (18 angka di belakang koma) — dipangkas 6,
-  // cukup untuk keputusan dan tak memenuhi layar HP.
+  // Relay returns full precision (18 decimal places). Six is enough to decide on, and does
+  // not fill a phone screen.
   const trim = (v: unknown, fallback: bigint): string =>
     Number(v ?? ethers.formatEther(fallback)).toFixed(6);
   return {
@@ -682,9 +686,9 @@ export async function getBridgeQuote(
 }
 
 /**
- * Kirim bridge. Quote DIMINTA ULANG di sini: calldata Relay berumur pendek, dan
- * mengeksekusi calldata basi = dana terkirim dengan angka yang bukan lagi yang
- * dilihat user. `minOutWei` menjaga hasil tak jatuh jauh dari yang dikonfirmasi.
+ * Send the bridge. The quote is REQUESTED AGAIN here: Relay's calldata is short-lived, and
+ * executing stale calldata means funds leaving on figures the user never saw. `minOutWei`
+ * keeps the fill from landing far below what was confirmed.
  */
 export async function executeBridge(
   from: ChainCtx,

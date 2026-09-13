@@ -4,18 +4,18 @@ import { join, dirname } from 'node:path';
 import { config } from './config.js';
 
 /**
- * Dompet yang dihubungkan lewat /connect.
+ * The wallet connected through /connect.
  *
- * Kunci TIDAK pernah ditulis polos: disimpan sebagai keystore JSON v3 (scrypt +
- * AES) di data/keystore.json, chmod 600. Passphrase-nya diturunkan dari rahasia
- * server (WALLET_SECRET, jika kosong: token bot) — bukan diminta ke user tiap
- * restart. Alasannya bukan kemalasan: monitor.sweepLeftovers menandatangani
- * transaksi di latar belakang, jadi dompet yang terkunci sampai user mengetik
- * sesuatu = penyapuan gagal diam-diam setiap kali service di-deploy ulang.
+ * The key is NEVER written in the clear: it is stored as a v3 JSON keystore (scrypt + AES)
+ * at data/keystore.json, chmod 600. Its passphrase is derived from a server secret
+ * (WALLET_SECRET, or the bot token when that is empty) rather than asked for on every
+ * restart. That is not laziness: monitor.sweepLeftovers signs transactions in the
+ * background, so a wallet locked until somebody types something means sweeps failing
+ * silently after every redeploy.
  *
- * Batas jujur: siapa pun yang bisa membaca disk + .env server ini bisa membuka
- * keystore-nya. Yang dilindungi adalah kunci-di-disk-polos dan kunci-di-git,
- * bukan penyerang yang sudah memegang mesinnya.
+ * The honest limit: anyone who can read this server's disk and .env can open the keystore.
+ * What this protects against is a key sitting in plain text on disk or in git, not an
+ * attacker who already has the machine.
  */
 
 const FILE = join(process.cwd(), 'data', 'keystore.json');
@@ -38,32 +38,32 @@ function passphrase(): string {
 let cached: ethers.HDNodeWallet | ethers.Wallet | null = null;
 let loaded = false;
 
-/** Adopsi PRIVATE_KEY dari .env sekali saja, supaya pemasangan lama tetap jalan. */
+/** Adopt PRIVATE_KEY from .env once, so an older installation keeps working. */
 function adoptEnvKey(): void {
   const pk = config.wallet.privateKey?.trim();
   if (!pk) return;
   if (existsSync(TOMBSTONE)) {
-    console.log('[wallet] PRIVATE_KEY di .env dilewati: dompet dicabut lewat /settings. Hapus barisnya di .env kalau memang tak dipakai lagi.');
+    console.log('[wallet] PRIVATE_KEY in .env skipped: the wallet was disconnected from /settings. Remove that line if it is no longer used.');
     return;
   }
-  // Bentuknya divalidasi DI SINI, sebelum menyentuh ethers. Alasannya konkret:
-  // ethers menyensor nilai hanya pada galat "invalid private key". Kalau panjang
-  // atau karakternya salah — persis kasus salah tempel — ia melempar "invalid
-  // BytesLike value" DENGAN NILAI MENTAH di pesannya, dan pesan itu dulu ikut
-  // tercetak ke journald secara permanen.
+  // The shape is validated HERE, before ethers ever sees it, for a concrete reason: ethers
+  // redacts the value only on an "invalid private key" error. Get the length or the
+  // characters wrong -- exactly what a bad paste looks like -- and it throws "invalid
+  // BytesLike value" with the RAW VALUE in the message, which used to land in journald
+  // permanently.
   if (!/^(0x)?[a-fA-F0-9]{64}$/.test(pk)) {
     console.error(
-      '[wallet] PRIVATE_KEY di .env diabaikan: bentuknya bukan 64 karakter heksadesimal. ' +
-        'Perbaiki nilainya, atau hapus barisnya dan sambungkan lewat /settings.',
+      '[wallet] PRIVATE_KEY in .env ignored: it is not 64 hexadecimal characters. ' +
+        'Fix the value, or delete the line and connect through /settings.',
     );
     return;
   }
   try {
     save(new ethers.Wallet(pk.startsWith('0x') ? pk : `0x${pk}`));
-    console.log('[wallet] PRIVATE_KEY dari .env diadopsi jadi keystore terenkripsi');
+    console.log('[wallet] the PRIVATE_KEY from .env was adopted into an encrypted keystore');
   } catch {
-    // Pesan galat ethers TIDAK BOLEH dicetak di sini — ia bisa memuat kuncinya.
-    console.error('[wallet] gagal mengadopsi PRIVATE_KEY dari .env (kunci tak dicetak).');
+    // The ethers error message must NEVER be printed here: it can contain the key itself.
+    console.error('[wallet] failed to adopt the PRIVATE_KEY from .env (the key is not printed).');
   }
 }
 
@@ -77,7 +77,7 @@ function load(): ethers.HDNodeWallet | ethers.Wallet | null {
   try {
     cached = ethers.Wallet.fromEncryptedJsonSync(readFileSync(FILE, 'utf8'), passphrase());
   } catch (e) {
-    console.error('[wallet] keystore gagal dibuka:', (e as Error).message);
+    console.error('[wallet] the keystore could not be opened:', (e as Error).message);
     cached = null;
   }
   return cached;
@@ -86,8 +86,8 @@ function load(): ethers.HDNodeWallet | ethers.Wallet | null {
 function save(w: ethers.HDNodeWallet | ethers.Wallet): void {
   // A fresh connect is consent: clear the refusal left by an earlier disconnect.
   if (existsSync(TOMBSTONE)) unlinkSync(TOMBSTONE);
-  // Jangan menumpang efek samping impor store.ts: kalau urutan impor berubah,
-  // data/ belum ada dan penyimpanan kunci gagal senyap.
+  // Do not ride on store.ts's import side effect: if the import order ever changes,
+  // data/ would not exist yet and saving the key would fail in silence.
   mkdirSync(dirname(FILE), { recursive: true });
   writeFileSync(FILE, w.encryptSync(passphrase()), { mode: 0o600 });
   chmodSync(FILE, 0o600);
@@ -95,36 +95,38 @@ function save(w: ethers.HDNodeWallet | ethers.Wallet): void {
   loaded = true;
 }
 
-/** true bila ada dompet terhubung. */
+/** True when a wallet is connected. */
 export function isConnected(): boolean {
   return load() !== null;
 }
 
-/** Alamat dompet terhubung, atau null. */
+/** The connected wallet's address, or null. */
 export function address(): string | null {
   return load()?.address ?? null;
 }
 
 /**
- * Antrean kirim-tx global. Dua tx yang berangkat bersamaan membaca nonce
- * "pending" yang sama dan yang kedua mati `nonce has already been used`.
- * Guard beginMoneyOp/isBusy hanya menjaga monitor; jalur fallback swap, relay,
- * approve, dan unwrap tidak lewat sana. Antreannya di modul (bukan instance)
- * karena tiap chain membuat Wallet-nya sendiri dari kunci yang sama.
- * ponytail: satu antrean lintas chain — pisahkan per chainId kalau throughput
- * multi-chain jadi masalah.
+ * A global send queue. Two transactions leaving at the same moment read the same "pending"
+ * nonce, and the second dies with `nonce has already been used`. The beginMoneyOp/isBusy
+ * guard only covers the monitor: the swap fallback, relay, approve and unwrap paths never
+ * pass through it. The queue lives on the module rather than an instance because each chain
+ * builds its own Wallet from the same key.
+ *
+ * One queue across every chain. Split it per chainId if multi-chain throughput ever matters.
  */
 let txQueue: Promise<unknown> = Promise.resolve();
-// Lantai nonce lokal per-chainId. Mengurutkan pengiriman saja tak cukup: nonce
-// bisa dibaca lebih awal (sebelum tx op sebelumnya mendarat) lalu baru mengantre,
-// jadi RPC memberi "pending" basi dan tx mati `nonce has already been used`.
-// Karena itu nonce dihitung DI DALAM bagian terserialisasi = max(pending, lantai).
-// Lantai hanya maju setelah broadcast sukses → gagal tak meninggalkan lubang.
-// ponytail: kalau sebuah broadcast sukses tapi tx-nya lenyap dari mempool (langka
-// di Alchemy), lantai bisa nyangkut di atas chain; pakai `pkill`+restart untuk reset.
+// A local nonce floor per chainId. Ordering the sends is not enough on its own: a nonce
+// can be read early, before the previous operation's transaction lands, and only then join
+// the queue -- so the RPC hands back a stale "pending" and the transaction dies with
+// `nonce has already been used`. The nonce is therefore computed INSIDE the serialised
+// section, as max(pending, floor). The floor only advances after a successful broadcast,
+// so a failure leaves no hole.
+//
+// If a broadcast succeeds but its transaction vanishes from the mempool (rare on Alchemy),
+// the floor can sit above the chain; restart the service to reset it.
 const nonceFloor = new Map<number, number>();
 
-/** Signer untuk sebuah provider; null bila belum terhubung. */
+/** A signer for this provider, or null when no wallet is connected. */
 export function signerFor(provider: ethers.Provider): ethers.Wallet | null {
   const w = load();
   if (!w) return null;
@@ -139,15 +141,15 @@ export function signerFor(provider: ethers.Provider): ethers.Wallet | null {
       nonceFloor.set(cid, nonce + 1);
       return resp;
     });
-    txQueue = run.catch(() => {}); // rute yang gagal tak boleh memutus antrean
+    txQueue = run.catch(() => {}); // a failed route must not break the queue
     return run;
   };
   return s;
 }
 
 /**
- * Hubungkan dompet dari private key ATAU seed phrase. Mengembalikan alamatnya.
- * Melempar bila masukannya bukan keduanya — pemanggil yang memutuskan pesan.
+ * Connect a wallet from a private key OR a seed phrase, returning its address. Throws when
+ * the input is neither; the caller decides what to say about it.
  */
 export function connect(secret: string): string {
   const t = secret.replace(/\s+/g, ' ').trim();
@@ -164,7 +166,7 @@ export function connect(secret: string): string {
   return w.address;
 }
 
-/** Putuskan dompet: keystore dihapus dari disk & dari memori. */
+/** Disconnect: the keystore is deleted from disk and from memory. */
 export function disconnect(): void {
   if (existsSync(FILE)) unlinkSync(FILE);
   // The mark is what makes the disconnect survive a restart; see TOMBSTONE.

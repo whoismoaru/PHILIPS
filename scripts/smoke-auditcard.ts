@@ -1,8 +1,8 @@
 /**
- * Kartu TOKEN SECURITY AUDIT: bentuk pohon + aturan yang tak boleh dilanggar.
- * Yang paling mahal di kartu ini bukan tata letaknya, tapi mengarang jawaban:
- * "Disabled ✅" untuk data yang sebenarnya tak terbaca membuat token berbahaya
- * tampak bersih. Data hilang WAJIB jadi '?'.
+ * The TOKEN SECURITY AUDIT card: tree shape plus the rules it may never break.
+ * The expensive mistake here is not the layout but an invented answer: a
+ * "Disabled ✅" for data that was never actually read makes a dangerous token
+ * look clean. Missing data MUST render as '?'.
  */
 import assert from 'node:assert';
 import { formatScreen } from '../src/screening.js';
@@ -20,45 +20,45 @@ const full: any = {
   renounced: true, sellPath: 'ok', flags: [], verdict: 'AMAN', gmgn,
 };
 const CA = '0xF7F2Fb6178290EB812e9bD280920f3dC63437777';
-const kartu = formatScreen(full, { ca: CA, chainLabel: 'BSC' });
+const card = formatScreen(full, { ca: CA, chainLabel: 'BSC' });
 
-for (const bagian of ['BASIC STATS :', 'CONTRACT :', 'HOLDER RISK :', 'MARKET :'])
-  assert.ok(kartu.includes(bagian), `bagian "${bagian}" hilang`);
-for (const baris of ['Mint Authority', 'Freeze Authority', 'LP Status', 'Honeypot', 'Tax (Buy/Sell)',
+for (const section of ['BASIC STATS :', 'CONTRACT :', 'HOLDER RISK :', 'MARKET :'])
+  assert.ok(card.includes(section), `section "${section}" is missing`);
+for (const row of ['Mint Authority', 'Freeze Authority', 'LP Status', 'Honeypot', 'Tax (Buy/Sell)',
   'Ownership', 'Dev Wallet', 'Sniper Bundles', 'Top 10 Holders', 'Total Holders', 'Liquidity', 'Age'])
-  assert.ok(kartu.includes(baris), `baris "${baris}" hilang`);
+  assert.ok(card.includes(row), `row "${row}" is missing`);
 
-// Tiap bagian pohon harus ditutup └ tepat sekali, dan tak ada ├ sesudahnya.
-for (const blok of kartu.split('\n\n').filter((b) => b.includes('├')))
-  assert.equal(blok.split('\n').filter((l) => l.startsWith('└')).length, 1, `pohon rusak:\n${blok}`);
+// Every tree section closes with exactly one └, and nothing follows it.
+for (const block of card.split('\n\n').filter((b) => b.includes('├')))
+  assert.equal(block.split('\n').filter((l) => l.startsWith('└')).length, 1, `pohon rusak:\n${block}`);
 
-assert.match(kartu, /Age: 1h 45m/, 'umur pool harus jam+menit, bukan pembulatan jam');
-assert.match(kartu, /\$452\.5K/, 'mcap rentang K harus satu desimal');
-assert.match(kartu, /\(Pancakeswap\)/, 'venue likuiditas harus disebut');
-assert.match(kartu, /LP Status: 100% Burned/, 'burn didahulukan atas lock');
-assert.match(kartu, /Honeypot: PASS/, 'sellPath ok = PASS');
-assert.ok(kartu.includes(`<code>${CA}</code>`), 'CA harus tercetak');
+assert.match(card, /Age: 1h 45m/, 'the pool age must be hours and minutes, not rounded to the hour');
+assert.match(card, /\$452\.5K/, 'a mcap in the K range carries one decimal');
+assert.match(card, /\(Pancakeswap\)/, 'the liquidity venue must be named');
+assert.match(card, /LP Status: 100% Burned/, 'a burn outranks a lock');
+assert.match(card, /Honeypot: PASS/, 'a working sellPath means PASS');
+assert.ok(card.includes(`<code>${CA}</code>`), 'the CA must be printed');
 
-// Privilege kosong = benar-benar tak ada → Disabled.
-assert.match(kartu, /Mint Authority: Disabled/);
+// No privileges at all really does mean Disabled.
+assert.match(card, /Mint Authority: Disabled/);
 
-// Data hilang TIDAK boleh jadi jawaban positif.
-const kosong = formatScreen(
+// Missing data must never turn into a reassuring answer.
+const blank = formatScreen(
   { ...full, gmgn: null, renounced: null, verified: null, sellPath: 'unknown', holdersCount: null, top10Pct: null, dexName: null } as any,
   { ca: CA, chainLabel: 'HyperEVM' },
 );
-for (const baris of ['Mint Authority', 'Freeze Authority', 'LP Status', 'Honeypot', 'Ownership', 'Dev Wallet', 'Total Holders']) {
-  const l = kosong.split('\n').find((x) => x.includes(baris))!;
-  assert.ok(/\?/.test(l), `"${baris}" mengarang jawaban saat data hilang: ${l}`);
-  assert.ok(!/✅|PASS|Disabled|Renounced/.test(l), `"${baris}" mengaku aman tanpa data: ${l}`);
+for (const row of ['Mint Authority', 'Freeze Authority', 'LP Status', 'Honeypot', 'Ownership', 'Dev Wallet', 'Total Holders']) {
+  const l = blank.split('\n').find((x) => x.includes(row))!;
+  assert.ok(/\?/.test(l), `"${row}" invents an answer where the data is missing: ${l}`);
+  assert.ok(!/✅|PASS|Disabled|Renounced/.test(l), `"${row}" claims safety with no data behind it: ${l}`);
 }
-// Privilege null (payload tak terbaca) ≠ privilege [] (terbaca, tak ada).
-const takTerbaca = formatScreen({ ...full, gmgn: { ...gmgn, privileges: null } } as any, { chainLabel: 'BSC' });
-assert.ok(/Mint Authority: \?/.test(takTerbaca), 'privileges null harus "?", bukan Disabled');
+// Null privileges (the payload never parsed) are not [] (parsed, and empty).
+const unreadable = formatScreen({ ...full, gmgn: { ...gmgn, privileges: null } } as any, { chainLabel: 'BSC' });
+assert.ok(/Mint Authority: \?/.test(unreadable), 'null privileges must read "?", never Disabled');
 
-// Proxy & Verified sengaja dipertahankan di luar naskah — kontrak proxy bisa
-// diganti isinya sesudah audit ini dicetak.
-assert.ok(kartu.includes('Proxy') && kartu.includes('Verified'));
-assert.ok(kartu.length < 4096, 'kartu melewati batas pesan Telegram');
+// Proxy and Verified are deliberately kept out of the script: a proxy contract can
+// have their implementation swapped after this audit is printed.
+assert.ok(card.includes('Proxy') && card.includes('Verified'));
+assert.ok(card.length < 4096, 'the card exceeds the Telegram message limit');
 
 console.log('smoke-auditcard OK');

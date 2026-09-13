@@ -3,22 +3,22 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Open ladder yang gagal SETELAH tx mendarat harus tetap memungut posisinya.
+ * A ladder open that fails AFTER the transaction lands must still adopt its positions.
  *
- * 29 Agu 2026: RPC balas 503 tepat saat open. Pembacaan id awal gagal, dan karena
- * pemungutan bergantung pada id itu, ia menyerah tanpa mencoba — delapan posisi
- * lahir di chain tanpa catatan dan hilang dari /positions sampai dipungut tangan.
+ * 29 Aug 2026: the RPC answered 503 right at open. Reading the starting id failed, and
+ * because adoption depended on that id, it gave up without trying: eight positions were
+ * born on chain with no record and stayed missing from /positions until adopted by hand.
  */
 const src = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8');
-const fn = src.slice(src.indexOf('async function adoptStrayV4'), src.indexOf('/** Kartu detail satu posisi v4'));
+const fn = src.slice(src.indexOf('async function adoptStrayV4'), src.indexOf('/** The detail card for one v4 position'));
 
-// Pembacaan id dicoba ulang, bukan sekali lalu menyerah.
-assert.ok(/for \(let i = 0; i < 3 && to === null; i\+\+\)/.test(fn), 'pembacaan nextTokenId tak dicoba ulang');
-// Tanpa id awal, mundur satu jendela — bukan pulang dengan tangan kosong.
-assert.ok(/const start = from \?\? \(to > window \? to - window : 0n\)/.test(fn), 'tak ada jalur tanpa id awal');
-// Yang sudah tercatat bukan stray: memungutnya lagi menyeret posisi grup lain.
-assert.ok(/ids\.filter\(\(id\) => !v4store\.getV4\(id\)\)/.test(fn), 'posisi yang sudah tercatat bisa dipungut ulang');
-// Pemanggil tak boleh lagi melewati pemungutan saat id awal gagal dibaca.
-assert.ok(!/idBefore !== null \? await adoptStrayV4/.test(src), 'pemungutan masih bergantung pada id awal');
+// The id read is retried rather than attempted once and abandoned.
+assert.ok(/for \(let i = 0; i < 3 && to === null; i\+\+\)/.test(fn), 'the nextTokenId read is never retried');
+// With no starting id, step back one window rather than come home empty-handed.
+assert.ok(/const start = from \?\? \(to > window \? to - window : 0n\)/.test(fn), 'there is no path for a missing starting id');
+// Anything already recorded is not stray: adopting it again drags in another group's positions.
+assert.ok(/ids\.filter\(\(id\) => !v4store\.getV4\(id\)\)/.test(fn), 'an already-recorded position can be adopted twice');
+// The caller may no longer skip adoption just because the starting id failed to read.
+assert.ok(!/idBefore !== null \? await adoptStrayV4/.test(src), 'adoption still depends on the starting id');
 
-console.log('OK — adopt stray: pemungutan tetap jalan walau pembacaan id gagal.');
+console.log('ok: adoption still runs even when the id read fails.');

@@ -3,7 +3,7 @@
 clear
 HEADER_WIDTH=52
 TITLE="PHILIPS LP BOT"
-SUB="single-sided liquidity, dari Telegram"
+SUB="single-sided liquidity, from Telegram"
 
 printf '=%.0s' $(seq 1 $HEADER_WIDTH); echo
 printf "%*s%s\n" $(( (HEADER_WIDTH - ${#TITLE}) / 2 )) "" "$TITLE"
@@ -21,7 +21,7 @@ ok()   { echo -e "[✓] $*"; }
 info() { echo -e "[+] $*"; }
 warn() { echo -e "[!] $*"; }
 
-ask() { # ask "Pertanyaan" "default" -> jawaban di $REPLY_VAL
+ask() { # ask "Question" "default" -> the answer lands in $REPLY_VAL
   local q="$1" def="$2" a
   if [ -n "$def" ]; then read -rp "    $q [$def]: " a; else read -rp "    $q: " a; fi
   REPLY_VAL="${a:-$def}"
@@ -31,56 +31,56 @@ ask() { # ask "Pertanyaan" "default" -> jawaban di $REPLY_VAL
 function install_node() {
   if command -v node >/dev/null 2>&1; then
     local v; v="$(node -v | sed 's/v//;s/\..*//')"
-    if [ "$v" -ge 20 ]; then ok "Node $(node -v) sudah ada, skip."; return; fi
-    warn "Node $(node -v) terlalu lama — PHILIPS butuh 20+."
+    if [ "$v" -ge 20 ]; then ok "Node $(node -v) is already here, skipping."; return; fi
+    warn "Node $(node -v) is too old; PHILIPS needs 20 or newer."
   fi
-  info "Memasang Node.js 20..."
+  info "Installing Node.js 20..."
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt-get install -y nodejs
-  ok "Node $(node -v) terpasang."
+  ok "Node $(node -v) installed."
 }
 
-# ── 2. Ambil kode ───────────────────────────────────────────────────
+# -- 2. Fetch the code ----------------------------------------------
 function clone_repo() {
   if [ -d "$APP_DIR/.git" ]; then
-    info "Repo sudah ada di $APP_DIR, menarik versi terbaru..."
-    git -C "$APP_DIR" pull --ff-only || warn "pull dilewati (ada perubahan lokal)."
+    info "The repo is already at $APP_DIR, pulling the latest version..."
+    git -C "$APP_DIR" pull --ff-only || warn "pull skipped: there are local changes."
   else
-    info "Mengunduh PHILIPS ke $APP_DIR..."
+    info "Downloading PHILIPS into $APP_DIR..."
     git clone "$REPO" "$APP_DIR"
   fi
-  info "Memasang dependensi (butuh 1-2 menit)..."
+  info "Installing dependencies (this takes a minute or two)..."
   ( cd "$APP_DIR" && npm ci )
-  ok "Kode siap."
+  ok "Code ready."
 }
 
-# ── 3. Konfigurasi ──────────────────────────────────────────────────
+# -- 3. Configuration -----------------------------------------------
 function setup_env() {
   local f="$APP_DIR/.env"
   if [ -f "$f" ]; then
-    ask "File .env sudah ada. Timpa? (y/N)" "N"
-    [[ "$REPLY_VAL" =~ ^[Yy]$ ]] || { ok ".env lama dipertahankan."; return; }
+    ask ".env already exists. Overwrite it? (y/N)" "N"
+    [[ "$REPLY_VAL" =~ ^[Yy]$ ]] || { ok "Keeping the existing .env."; return; }
     cp "$f" "$f.bak-$(date +%s)"
-    info "Cadangan lama disimpan."
+    info "A backup of the old one was saved."
   fi
 
   echo
   echo "  --- Telegram ---"
-  echo "  Token dari @BotFather, dan id numerikmu dari @userinfobot."
+  echo "  The token comes from @BotFather, your numeric id from @userinfobot."
   ask "TELEGRAM_BOT_TOKEN" ""; local TOKEN="$REPLY_VAL"
-  [ -n "$TOKEN" ] || { warn "Token tak boleh kosong."; return 1; }
+  [ -n "$TOKEN" ] || { warn "The token cannot be empty."; return 1; }
   ask "TELEGRAM_ALLOWED_USER_ID" ""; local UID_TG="$REPLY_VAL"
-  [ -n "$UID_TG" ] || { warn "Telegram id tak boleh kosong."; return 1; }
+  [ -n "$UID_TG" ] || { warn "The Telegram id cannot be empty."; return 1; }
 
   echo
-  echo "  --- Chain utama ---"
-  echo "  Pakai RPC berkunci milikmu sendiri; RPC publik kena rate-limit."
+  echo "  --- Primary chain ---"
+  echo "  Use your own keyed RPC; public ones get rate limited."
   ask "RPC_URL" ""; local RPC="$REPLY_VAL"
   ask "CHAIN_ID" "4663"; local CID="$REPLY_VAL"
 
   echo
-  echo "  Alamat kontrak Uniswap v3 di chain itu."
-  echo "  (Enter untuk memakai bawaan Robinhood Chain)"
+  echo "  The Uniswap v3 contract addresses on that chain."
+  echo "  (Press Enter to accept the Robinhood Chain defaults)"
   ask "UNISWAP_V3_FACTORY"          "0x1F98431c8aD98523631AE4a59f267346ea31F984"; local F="$REPLY_VAL"
   ask "UNISWAP_V3_POSITION_MANAGER" "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"; local PM="$REPLY_VAL"
   ask "UNISWAP_V3_QUOTER"           "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"; local Q="$REPLY_VAL"
@@ -88,24 +88,24 @@ function setup_env() {
   ask "WETH_ADDRESS"                ""; local W="$REPLY_VAL"
 
   echo
-  echo "  --- Chain tambahan (opsional) ---"
-  ask "Aktifkan BSC? (y/N)" "N"; local BSC="false" BSC_RPC=""
+  echo "  --- Extra chains (optional) ---"
+  ask "Enable BSC? (y/N)" "N"; local BSC="false" BSC_RPC=""
   if [[ "$REPLY_VAL" =~ ^[Yy]$ ]]; then
-    BSC="true"; ask "BSC_RPC_URL (Enter = dataseed publik)" ""; BSC_RPC="$REPLY_VAL"
+    BSC="true"; ask "BSC_RPC_URL (Enter = the public dataseed)" ""; BSC_RPC="$REPLY_VAL"
   fi
-  ask "Aktifkan Base? (y/N)" "N"; local BASE="false" BASE_RPC=""
+  ask "Enable Base? (y/N)" "N"; local BASE="false" BASE_RPC=""
   if [[ "$REPLY_VAL" =~ ^[Yy]$ ]]; then
     BASE="true"; ask "BASE_RPC_URL (Enter = mainnet.base.org)" ""; BASE_RPC="$REPLY_VAL"
   fi
 
-  local SECRET="" SECRET_NOTE="WALLET_SECRET diacak otomatis."
+  local SECRET="" SECRET_NOTE="A WALLET_SECRET was generated for you."
   for old in "$f" "$f".bak-*; do
     [ -f "$old" ] || continue
     SECRET="$(grep -m1 '^WALLET_SECRET=' "$old" 2>/dev/null | cut -d= -f2-)"
     [ -n "$SECRET" ] && break
   done
   if [ -n "$SECRET" ]; then
-    SECRET_NOTE="WALLET_SECRET lama dipertahankan — keystore tetap bisa dibuka."
+    SECRET_NOTE="The previous WALLET_SECRET was kept, so the keystore still opens."
   else
     SECRET="$(head -c 32 /dev/urandom | base64 | tr -d '\n=/+' | head -c 40)"
   fi
@@ -134,15 +134,15 @@ BASE_RPC_URL=$BASE_RPC
 MAX_ETH_PER_TX=0.05
 MAX_STABLE_PER_TX=250
 
-# WAJIB true sampai kamu selesai memeriksa /status dan /positions.
+# Keep this true until you have checked /status and /positions.
 DRY_RUN=true
 
 GMGN_API_KEY=
 KRYSTAL_API_KEY=
 EOF
   chmod 600 "$f"
-  ok ".env dibuat (izin 600). $SECRET_NOTE"
-  warn "DRY_RUN=true — bot menyimulasi, belum mengirim transaksi."
+  ok ".env written with mode 600. $SECRET_NOTE"
+  warn "DRY_RUN=true: the bot simulates and sends no transactions yet."
 }
 
 # ── 4. systemd ──────────────────────────────────────────────────────
@@ -158,26 +158,26 @@ function ensure_free_service() {
   [ "$existing" = "$APP_DIR" ] && return 0
 
   echo
-  warn "Service '$SERVICE' SUDAH dipakai instalasi lain:"
-  warn "  folder terpasang : $existing"
-  warn "  folder sekarang  : $APP_DIR"
-  warn "Menimpanya akan menghentikan bot itu — termasuk pemantauan posisinya."
+  warn "Service '$SERVICE' is ALREADY used by another installation:"
+  warn "  installed folder : $existing"
+  warn "  current folder   : $APP_DIR"
+  warn "Overwriting it stops that bot, and its position monitoring with it."
   echo
-  echo "    1) Pakai nama service lain (aman, keduanya jalan berdampingan)"
-  echo "    2) Batalkan"
-  ask "Pilih" "1"
-  [ "$REPLY_VAL" = "1" ] || { warn "Dibatalkan. Instalasi lama tak disentuh."; return 1; }
+  echo "    1) Use a different service name (safe, both run side by side)"
+  echo "    2) Cancel"
+  ask "Choose" "1"
+  [ "$REPLY_VAL" = "1" ] || { warn "Cancelled. The existing installation was left alone."; return 1; }
 
   local suggest; suggest="philips-bot-$(basename "$APP_DIR")"
-  ask "Nama service baru" "$suggest"
+  ask "New service name" "$suggest"
   SERVICE="$REPLY_VAL"
-  [ -z "$(service_dir "$SERVICE")" ] || { warn "Nama '$SERVICE' juga sudah dipakai. Coba nama lain."; return 1; }
-  ok "Memakai service '$SERVICE'."
+  [ -z "$(service_dir "$SERVICE")" ] || { warn "The name '$SERVICE' is taken as well. Try another."; return 1; }
+  ok "Using service '$SERVICE'."
 }
 
 function setup_service() {
   ensure_free_service || return 1
-  info "Membuat service systemd '$SERVICE'..."
+  info "Creating the systemd service '$SERVICE'..."
   sudo tee "/etc/systemd/system/$SERVICE.service" >/dev/null <<EOF
 [Unit]
 Description=PHILIPS LP Bot
@@ -193,8 +193,8 @@ ExecStart=$APP_DIR/node_modules/.bin/tsx src/index.ts
 Restart=always
 RestartSec=10
 TimeoutStopSec=15
-# 78 = galat konfigurasi (.env salah / token tak sah). Mengulangnya tiap 10 detik
-# hanya membanjiri log — berhenti, dan tunggu manusia memperbaiki.
+# 78 means a configuration error: a bad .env or an invalid token. Retrying every 10
+# seconds would only flood the log, so stop and wait for a human to fix it.
 RestartPreventExitStatus=78
 
 [Install]
@@ -203,16 +203,16 @@ EOF
   sudo systemctl daemon-reload
   sudo systemctl enable "$SERVICE" >/dev/null 2>&1
   sudo systemctl restart "$SERVICE"
-  verify_running "Bot jalan. Buka Telegram, kirim /start ke botmu."
+  verify_running "The bot is running. Open Telegram and send /start to it."
 }
 
 function verify_running() {
   sleep 3
   if systemctl is-active --quiet "$SERVICE"; then
-    ok "${1:-Bot jalan.}"
+    ok "${1:-The bot is running.}"
     return 0
   fi
-  warn "Bot TIDAK jalan. Sebabnya:"
+  warn "The bot is NOT running. Here is why:"
   sudo journalctl -u "$SERVICE" -n 15 --no-pager | grep -vE "^\s*at |systemd\[1\]" | tail -8
   return 1
 }
@@ -220,32 +220,32 @@ function verify_running() {
 function assert_ours() {
   local d; d="$(service_dir "$SERVICE")"
   if [ -z "$d" ]; then
-    warn "Service '$SERVICE' belum ada — jalankan opsi 1 dulu."
+    warn "Service '$SERVICE' does not exist yet; run option 1 first."
     return 1
   fi
   if [ "$d" != "$APP_DIR" ]; then
-    warn "Service '$SERVICE' milik $d, bukan $APP_DIR."
-    warn "Jalankan ulang dengan: SERVICE=<nama-service-mu> bash philips.sh"
+    warn "Service '$SERVICE' belongs to $d, not $APP_DIR."
+    warn "Run it again as: SERVICE=<your-service-name> bash philips.sh"
     return 1
   fi
 }
 
 function show_logs()   { assert_ours; sudo journalctl -u "$SERVICE" -f; }
-function restart_bot() { assert_ours && sudo systemctl restart "$SERVICE" && verify_running "Bot di-restart dan jalan."; }
-function stop_bot()    { assert_ours; sudo systemctl stop "$SERVICE"; ok "Bot dihentikan."; }
+function restart_bot() { assert_ours && sudo systemctl restart "$SERVICE" && verify_running "The bot restarted and is running."; }
+function stop_bot()    { assert_ours; sudo systemctl stop "$SERVICE"; ok "The bot was stopped."; }
 
 function go_live() {
   local f="$APP_DIR/.env"
-  [ -f "$f" ] || { warn ".env belum ada — jalankan opsi 1 dulu."; return 1; }
+  [ -f "$f" ] || { warn ".env does not exist yet; run option 1 first."; return 1; }
   echo
-  warn "LIVE artinya bot mengirim transaksi SUNGGUHAN dengan uangmu."
-  warn "Pastikan /status, /positions, dan satu /add_lp kering sudah kamu periksa."
-  ask "Lanjut? ketik LIVE untuk konfirmasi" ""
-  [ "$REPLY_VAL" = "LIVE" ] || { ok "Dibatalkan, tetap DRY RUN."; return; }
+  warn "LIVE means the bot sends REAL transactions with your money."
+  warn "Make sure you have checked /status, /positions, and one dry /add_lp."
+  ask "Continue? type LIVE to confirm" ""
+  [ "$REPLY_VAL" = "LIVE" ] || { ok "Cancelled, staying in DRY RUN."; return; }
   assert_ours || return 1
   sed -i 's/^DRY_RUN=.*/DRY_RUN=false/' "$f"
   sudo systemctl restart "$SERVICE"
-  verify_running "Mode LIVE aktif. Mulai dari nominal kecil."
+  verify_running "LIVE mode is on. Start small."
 }
 
 function install_all() {
@@ -255,31 +255,31 @@ function install_all() {
   
   if ! setup_service; then
     echo
-    warn "Pemasangan berhenti di sini. Perbaiki sebab di atas, lalu:"
-    echo "      - ubah konfigurasi : jalankan skrip ini lagi, pilih 3"
-    echo "      - coba nyalakan    : pilih 5"
+    warn "Installation stopped here. Fix the cause above, then:"
+    echo "      - change the config : run this script again and pick 3"
+    echo "      - try starting it   : pick 5"
     return 1
   fi
   echo
-  ok "Selesai. Langkah berikutnya di Telegram:"
+  ok "Done. Next steps, in Telegram:"
   echo "      1. /start"
   echo "      2. /settings -> Connect Wallet -> tempel private key / seed"
-  echo "      3. /status untuk memastikan saldo terbaca"
-  echo "      4. kembali ke sini, pilih menu 6 saat siap LIVE"
+  echo "      3. /status, to confirm the balances read correctly"
+  echo "      4. come back here and pick 6 when you are ready to go LIVE"
 }
 
 function print_menu() {
   echo
   echo "=== PHILIPS Installer ==="
-  echo "1. Pasang semua (Node + kode + konfigurasi + service)"
-  echo "2. Perbarui kode saja"
-  echo "3. Ubah konfigurasi (.env)"
-  echo "4. Lihat log langsung"
-  echo "5. Restart bot"
-  echo "6. Ganti ke mode LIVE"
-  echo "7. Hentikan bot"
-  echo "0. Keluar"
-  echo -n "Pilih opsi: "
+  echo "1. Install everything (Node + code + config + service)"
+  echo "2. Update the code only"
+  echo "3. Edit the configuration (.env)"
+  echo "4. Follow the live log"
+  echo "5. Restart the bot"
+  echo "6. Switch to LIVE mode"
+  echo "7. Stop the bot"
+  echo "0. Quit"
+  echo -n "Choose an option: "
 }
 
 while true; do
@@ -293,7 +293,7 @@ while true; do
     5) restart_bot || true ;;
     6) go_live || true ;;
     7) stop_bot || true ;;
-    0) echo "Sampai jumpa."; exit 0 ;;
-    *) warn "Opsi tak dikenal." ;;
+    0) echo "See you."; exit 0 ;;
+    *) warn "Unknown option." ;;
   esac
 done

@@ -81,12 +81,12 @@ export function withdrawFloors(
 ): { min0: bigint; min1: bigint } {
   // Amounts are monotonic in price, so each side's minimum has to sit at one of
   // the band's edges. Two points is enough; no need to sweep.
-  const bawah = amountsForLiquidity(shiftSqrt(sqrtP, 10_000n - WITHDRAW_BAND_BPS), sqrtA, sqrtB, liquidity);
-  const atas = amountsForLiquidity(shiftSqrt(sqrtP, 10_000n + WITHDRAW_BAND_BPS), sqrtA, sqrtB, liquidity);
-  const kecil = (a: bigint, b: bigint) => (a < b ? a : b);
+  const lower = amountsForLiquidity(shiftSqrt(sqrtP, 10_000n - WITHDRAW_BAND_BPS), sqrtA, sqrtB, liquidity);
+  const upper = amountsForLiquidity(shiftSqrt(sqrtP, 10_000n + WITHDRAW_BAND_BPS), sqrtA, sqrtB, liquidity);
+  const smaller = (a: bigint, b: bigint) => (a < b ? a : b);
   const floor = (v: bigint) => (v * (10_000n - ROUNDING_BPS)) / 10_000n;
   return {
-    min0: floor(kecil(bawah.amount0, atas.amount0)),
-    min1: floor(kecil(bawah.amount1, atas.amount1)),
+    min0: floor(smaller(lower.amount0, upper.amount0)),
+    min1: floor(smaller(lower.amount1, upper.amount1)),
   };
 }

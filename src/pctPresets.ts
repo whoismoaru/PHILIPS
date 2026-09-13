@@ -2,12 +2,12 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Angka persen yang muncul sebagai tombol di alur nominal. Disimpan di
- * data/pctpresets.json supaya bertahan lintas restart.
+ * The percentages that appear as buttons on every amount step, stored in
+ * data/pctpresets.json so they survive a restart.
  *
- * Sebelumnya keempat alur memakai angka yang dipatok di kode (dan berbeda-beda:
- * /add memakai 30/50/70/90, sisanya 25/50/75/100). Mengubahnya berarti mengedit
- * empat tempat lalu restart, jadi praktis tak pernah diubah.
+ * Each flow used to carry its own hardcoded set, and they disagreed: /add offered
+ * 30/50/70/90 while the rest offered 25/50/75/100. Changing one meant editing four places
+ * and restarting, so in practice they were never changed at all.
  */
 export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs' | 'send';
 
@@ -21,27 +21,27 @@ export const FLOW_LABEL: Record<PctFlow, string> = {
   send: 'Send',
 };
 
-// `stop` sengaja tanpa 100: menarik seluruhnya = menutup posisi, dan itu punya
-// tombolnya sendiri (jalur close, bukan decreaseLiquidity sebagian).
+// `stop` deliberately omits 100: pulling everything out means closing the position, which
+// has its own button and its own path -- not a partial decreaseLiquidity.
 const DEFAULTS: Record<PctFlow, number[]> = {
   buy: [25, 50, 75, 100],
   sell: [25, 50, 75, 100],
   add: [30, 50, 70, 90],
   stop: [25, 50, 75],
   bridge: [25, 50, 75, 100],
-  // Bukan persen: jumlah anak tangga ladder bid-ask.
+  // Not a percentage: the number of rungs in a bid-ask ladder.
   legs: [8, 9, 10, 69],
   send: [25, 50, 75, 100],
 };
 
 const FILE = join(process.cwd(), 'data', 'pctpresets.json');
-// 6, bukan 4. Batas 4 memaksa user membuang salah satu angka yang ia mau: 28 Agu
-// 2026 empat percobaan menyetel preset ditolak beruntun karena daftarnya 5 angka,
-// dan yang tersimpan akhirnya versi tanpa 100%. Tombolnya kini dipecah jadi
-// beberapa baris, jadi lebar layar bukan lagi alasan membatasi di 4.
+// Six, not four. A limit of four forced the owner to drop a number they wanted: on 28 Aug
+// 2026 four attempts to set presets were rejected in a row because the list held five
+// values, and what finally saved was the version without 100%. The buttons now wrap onto
+// several rows, so screen width is no longer a reason to stop at four.
 const MAX_BUTTONS = 6;
 
-/** Pecah tombol jadi baris berisi maksimal 4 — lebih dari itu terpotong di HP sempit. */
+/** Split buttons into rows of at most four; beyond that they truncate on a narrow phone. */
 export function chunkButtons<T>(items: T[], per = 4): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += per) out.push(items.slice(i, i + per));
@@ -51,12 +51,11 @@ export function chunkButtons<T>(items: T[], per = 4): T[][] {
 let cache: Record<PctFlow, number[]> | null = null;
 
 /**
- * Batas nilai yang sah per alur.
+ * The valid range for each flow.
  *
- * `stop` berhenti di 99: menarik 100% berarti MENUTUP posisi, dan itu jalur kode
- * yang berbeda dengan tombolnya sendiri. `legs` bukan persen sama sekali — itu
- * jumlah anak tangga, minimal 2 (satu leg bukan ladder) dan dibatasi 69 seperti
- * jalur open-nya.
+ * `stop` stops at 99: taking 100% out means CLOSING the position, which is a different code
+ * path with its own button. `legs` is not a percentage at all -- it is a number of rungs,
+ * at least 2 (one leg is not a ladder) and capped at 69, matching the open path.
  */
 const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
   buy: { min: 1, max: 100 },
@@ -68,13 +67,13 @@ const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
   send: { min: 1, max: 100 },
 };
 export const boundsFor = (flow: PctFlow) => BOUNDS[flow];
-/** Satuan yang dipakai kartu setelan — '%' untuk nominal, 'legs' untuk ladder. */
+/** The unit the settings card shows: '%' for amounts, 'legs' for a ladder. */
 export const unitFor = (flow: PctFlow): string => (flow === 'legs' ? 'legs' : '%');
 
-/** Nilai sah: bilangan bulat dalam jangkauan alurnya, urut naik, tanpa kembar, maksimal 4. */
+/** Valid values: whole numbers inside the flow's range, ascending, no duplicates, at most 4. */
 export function sanitize(values: number[], flow: PctFlow): number[] | null {
-  // Angka di luar jangkauan DITOLAK, bukan disaring diam-diam: "0 50" hampir pasti
-  // salah ketik, dan menyimpannya sebagai "50" membuat user mengira 0 diterima.
+  // Out-of-range numbers are REJECTED rather than quietly filtered: "0 50" is almost certainly
+  // a typo, and storing it as "50" would let the user believe the 0 was accepted.
   const { min, max } = BOUNDS[flow];
   if (values.some((v) => !Number.isInteger(v) || v < min || v > max)) return null;
   const clean = [...new Set(values)].sort((a, b) => a - b);
@@ -94,7 +93,7 @@ function load(): Record<PctFlow, number[]> {
         if (ok) cache[f] = ok;
       }
     } catch {
-      /* berkas rusak → pakai bawaan, jangan matikan alur nominal */
+      /* a corrupt file falls back to the defaults rather than killing the amount flow */
     }
   }
   return cache;
@@ -118,13 +117,13 @@ export function reset(flow: PctFlow): number[] {
 }
 
 /**
- * Siapa yang sedang diminta mengetik angka (userId → alur).
+ * Who is currently being asked to type numbers (userId -> flow).
  *
- * BER-KEDALUWARSA. Dulu tanpa batas waktu: begitu user menekan Edit lalu pergi
- * tanpa menjawab, penanda ini menetap selamanya — dan karena jawabannya diperiksa
- * PALING AWAL di penangan teks, setiap pesan berikutnya (nominal /add, /buy, apa
- * pun) tertelan sebagai "daftar persen" lalu ditolak. Terjadi 28 Agu 2026: empat
- * penolakan beruntun sebelum user menyerah dan pindah ke /add.
+ * It EXPIRES. It used to have no deadline: tap Edit, walk away without answering, and this
+ * marker stayed forever -- and because its answer is checked FIRST in the text handler,
+ * every later message (an /add amount, a /buy amount, anything) was swallowed as a
+ * "percentage list" and rejected. It happened on 28 Aug 2026: four rejections in a row
+ * before the attempt was abandoned.
  */
 const PENDING_TTL_MS = 5 * 60_000;
 const pending = new Map<number, { flow: PctFlow; at: number }>();
@@ -140,7 +139,7 @@ export function pendingEdit(userId: number): PctFlow | undefined {
 }
 export const clearEdit = (userId: number): void => void pending.delete(userId);
 
-/** "10 25 50, 90" / "10/25/50/90" → [10,25,50,90]. Gagal → null. */
+/** "10 25 50, 90" / "10/25/50/90" → [10,25,50,90]. Anything else returns null. */
 export function parseList(raw: string): number[] | null {
   const parts = raw.split(/[\s,/|]+/).map((x) => x.replace('%', '').trim()).filter(Boolean);
   if (parts.length === 0) return null;

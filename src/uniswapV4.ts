@@ -108,16 +108,16 @@ export type V4Position = {
   tickLower: number;
   tickUpper: number;
   liquidity: bigint;
-  base: 'ETH' | 'USDG' | null; // aset dasar pasangan (utk add/cash-out)
+  base: 'ETH' | 'USDG' | null; // the pair's base asset, for adds and cash-outs
   poolKey: PoolKeyV4;
-  valueBaseWei: bigint | null; // PRINSIPAL dlm base (null bila gagal baca harga)
-  feesBaseWei: bigint | null; // fee belum diklaim, dlm base
-  rangePctHigh: number | null; // % ujung terdekat dari harga sekarang
+  valueBaseWei: bigint | null; // the PRINCIPAL in the base, null when the price could not be read
+  feesBaseWei: bigint | null; // unclaimed fees, in the base
+  rangePctHigh: number | null; // the near end as a % of the current price
   rangePctLow: number | null;
   inRange: boolean | null;
-  currentTick: number | null; // tick pool saat ini — kartu memakainya utk mcap "now"
+  currentTick: number | null; // the pool's current tick; the card uses it for the "now" mcap
   converted: boolean; // out-of-range & 100% token seberang (target tercapai)
-  impliedTokenEthPrice: number | null; // harga token dlm ETH menurut slot0 pool INI (buat cek pool sekarat)
+  impliedTokenEthPrice: number | null; // the token price in ETH according to THIS pool's slot0, used to spot a dying pool
   // How much of the OTHER token this position holds. `valueBaseWei` marks it at the
   // current pool price, and that is NOT what you would receive: selling it moves the
   // price. The card uses this figure to request a real quote before calling anything
@@ -125,7 +125,7 @@ export type V4Position = {
   otherAmountWei: bigint | null;
   otherAddress: string | null;
   otherDecimals: number | null;
-  baseAmountWei: bigint | null; // sisi base yang dipegang — ini tak perlu dijual
+  baseAmountWei: bigint | null; // the base side held, which never needs selling
 };
 
 /** Work out the pair's base asset, and whether the base is currency0. */
@@ -200,7 +200,7 @@ const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
 // Scans are incremental: the first one walks the whole chain, later ones resume from
 // where the last left off. The public RPC rate-limits full-range queries (observed
 // 429 after a handful in a row), and /positions is called often.
-const enumCache = new Map<string, { blok: number; ids: Set<string> }>();
+const enumCache = new Map<string, { block: number; ids: Set<string> }>();
 
 /** Forget the incremental scan state and walk the chain again from block 0. */
 export function resetV4EnumCache(): void {
@@ -231,38 +231,38 @@ export async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
 
   const w = ethers.zeroPadValue(cc.wallet.address, 32);
   const cache = enumCache.get(cc.key);
-  const dari = cache ? cache.blok + 1 : 0;
+  const scanFrom = cache ? cache.block + 1 : 0;
   try {
-    const kini = await cc.provider.getBlockNumber();
-    if (cache && dari > kini) {
+    const scanTo = await cc.provider.getBlockNumber();
+    if (cache && scanFrom > scanTo) {
       enumDegraded = false;
       for (const id of cache.ids) ids.add(id);
       return [...ids];
     }
-    const rentang = { fromBlock: '0x' + dari.toString(16), toBlock: '0x' + kini.toString(16), address: pm };
-    const [masuk, keluar] = await Promise.all([
-      logsRpc(rpc, { ...rentang, topics: [TRANSFER_TOPIC, null, w] }),
-      logsRpc(rpc, { ...rentang, topics: [TRANSFER_TOPIC, w, null] }),
+    const range = { fromBlock: '0x' + scanFrom.toString(16), toBlock: '0x' + scanTo.toString(16), address: pm };
+    const [incoming, outgoing] = await Promise.all([
+      logsRpc(rpc, { ...range, topics: [TRANSFER_TOPIC, null, w] }),
+      logsRpc(rpc, { ...range, topics: [TRANSFER_TOPIC, w, null] }),
     ]);
     // An NFT can leave and come back, so the LAST event per tokenId decides ownership.
     // Ordering by (block, logIndex) is what makes a mint-then-burn in one transaction
     // resolve correctly.
     const ev = [
-      ...masuk.map((l) => [Number(l.blockNumber), Number(l.logIndex), l.topics[3], true] as const),
-      ...keluar.map((l) => [Number(l.blockNumber), Number(l.logIndex), l.topics[3], false] as const),
+      ...incoming.map((l) => [Number(l.blockNumber), Number(l.logIndex), l.topics[3], true] as const),
+      ...outgoing.map((l) => [Number(l.blockNumber), Number(l.logIndex), l.topics[3], false] as const),
     ].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-    const punya = new Map<string, boolean>(cache ? [...cache.ids].map((i) => [i, true]) : []);
-    for (const [, , topic, masukkah] of ev) punya.set(BigInt(topic).toString(), masukkah);
-    const dimiliki = new Set([...punya].filter(([, v]) => v).map(([k]) => k));
-    enumCache.set(cc.key, { blok: kini, ids: dimiliki });
-    for (const id of dimiliki) ids.add(id);
+    const ownedNow = new Map<string, boolean>(cache ? [...cache.ids].map((i) => [i, true]) : []);
+    for (const [, , topic, isIncoming] of ev) ownedNow.set(BigInt(topic).toString(), isIncoming);
+    const owned = new Set([...ownedNow].filter(([, v]) => v).map(([k]) => k));
+    enumCache.set(cc.key, { block: scanTo, ids: owned });
+    for (const id of owned) ids.add(id);
     enumDegraded = false;
   } catch (e) {
     // Do not swallow this: an enumeration failure that v4store happened to cover has
     // to be visible. And not only in the server log -- whoever is looking at
     // /positions needs to know the list may be incomplete.
     enumDegraded = true;
-    console.log('[v4] enumerasi log gagal, pakai v4store saja:', (e as Error).message.slice(0, 100));
+    console.log('[v4] log enumeration failed, falling back to v4store alone:', (e as Error).message.slice(0, 100));
     if (cache) for (const id of cache.ids) ids.add(id);
   }
   return [...ids];
@@ -325,7 +325,7 @@ async function burnMinsV4(
     const { sqrtPriceX96 } = await readPoolState(cc, pk);
     return { ...withdrawFloors(sqrtPriceX96, sqrtAtTick(tickLower), sqrtAtTick(tickUpper), liquidity), unprotected: false };
   } catch (e) {
-    console.log(`[v4] ⚠️ lantai slippage TAK tersedia (#${tokenId}) — burn tanpa proteksi harga:`, (e as Error).message.slice(0, 80));
+    console.log(`[v4] ⚠️ no slippage floor available (#${tokenId}), burning without price protection:`, (e as Error).message.slice(0, 80));
     return { min0: 0n, min1: 0n, unprotected: true };
   }
 }
@@ -349,7 +349,7 @@ export async function closePositionV4(
   other?: string; // token non-base → jurnal & kandidat sweep
   cashedOut?: string;
   leftover?: string;
-  unprotected?: boolean; // burn terpaksa tanpa lantai harga
+  unprotected?: boolean; // the burn was forced through without a price floor
 }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
@@ -393,7 +393,7 @@ export async function closePositionV4(
     sym0: string;
     sym1: string;
     base: 'ETH' | 'USDG' | null;
-    other?: string; // alamat token non-base → dipakai jurnal & kandidat sweep
+    other?: string; // the non-base token address, used by the journal and as a sweep candidate
     cashedOut?: string;
     leftover?: string;
     unprotected?: boolean;
@@ -956,7 +956,7 @@ export async function planLadderV4(
     const sqrtL = sqrtAtTick(tickLower);
     const sqrtU = sqrtAtTick(tickUpper);
     const liquidity = baseIsCurrency0 ? liqForAmount0(sqrtL, sqrtU, legWei) : liqForAmount1(sqrtL, sqrtU, legWei);
-    if (liquidity <= 0n) continue; // leg debu — lewati
+    if (liquidity <= 0n) continue; // a dust leg, skipped
     const pcts = [pctOf(tickUpper), pctOf(tickLower)].sort((a, b) => b - a);
     out.push({ tickLower, tickUpper, baseAmountWei: legWei, liquidity, pctHigh: pcts[0], pctLow: pcts[1] });
   }
@@ -1202,13 +1202,13 @@ export type V4Valuation = {
   amount1: bigint;
   base: 'ETH' | 'USDG' | null;
   baseIsCurrency0: boolean;
-  valueBaseWei: bigint; // nilai posisi dalam unit base (raw, desimal base) — PRINSIPAL saja
-  feesBaseWei: bigint; // fee belum diklaim, dinilai dalam base (0 bila tokenId tak diberi)
-  rangePctHigh: number; // % ujung terdekat dari harga sekarang
+  valueBaseWei: bigint; // the position's value in base units (raw, base decimals): PRINCIPAL only
+  feesBaseWei: bigint; // unclaimed fees, valued in the base (0 when no tokenId is given)
+  rangePctHigh: number; // the near end as a % of the current price
   rangePctLow: number;
   inRange: boolean;
   currentTick: number;
-  converted: boolean; // out-of-range & sisi base kosong → 100% token seberang (target tercapai)
+  converted: boolean; // out of range with an empty base side: 100% in the other token, the target reached
 };
 
 /** Value a v4 position (token amounts, value in base, range %). */
@@ -1275,6 +1275,6 @@ export async function checkV4Status(
     const val = await valuePositionV4(cc, poolKey, tickLower, tickUpper, liquidity, tokenId);
     return { exists: true, inRange: val.inRange, tick: val.currentTick, val };
   } catch {
-    return { exists: true, inRange: null, tick: null, val: null }; // transien → jangan hapus & jangan alert
+    return { exists: true, inRange: null, tick: null, val: null }; // transient: neither delete nor alert
   }
 }

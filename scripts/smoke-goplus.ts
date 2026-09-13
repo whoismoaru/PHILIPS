@@ -25,19 +25,19 @@ try {
   assert.equal(v.verified, true);
   assert.equal(v.isProxy, false);
   assert.equal(v.holderCount, 828);
-  assert.equal(v.buyTaxPct, 2, 'tax 0.02 harus jadi 2%');
+  assert.equal(v.buyTaxPct, 2, 'a 0.02 tax reads as 2%');
   assert.equal(v.renounced, true);
 
   // MISSING field -> null, not false. This is the whole point of the test.
   globalThis.fetch = jawab({ [CA.replace('a', 'b')]: { is_open_source: '1', holder_count: '10', token_name: 'x' } });
   const w = await goplusInfo(CA.replace('a', 'b'), 'bsc');
   assert.ok(w);
-  assert.equal(w.isProxy, null, 'is_proxy absen harus "?" bukan "tidak"');
-  assert.equal(w.honeypot, null, 'is_honeypot absen harus "?"');
-  assert.equal(w.renounced, null, 'owner_address absen harus "?"');
+  assert.equal(w.isProxy, null, 'a missing is_proxy reads "?", never "no"');
+  assert.equal(w.honeypot, null, 'a missing is_honeypot reads "?"');
+  assert.equal(w.renounced, null, 'a missing owner_address reads "?"');
 
   // Robinhood is unmapped -> no call goes out at all.
-  globalThis.fetch = (() => assert.fail('robinhood tak boleh memanggil GoPlus')) as unknown as typeof fetch;
+  globalThis.fetch = (() => assert.fail('robinhood must never call GoPlus')) as unknown as typeof fetch;
   assert.equal(await goplusInfo(CA, 'robinhood'), null);
 } finally {
   globalThis.fetch = asli;

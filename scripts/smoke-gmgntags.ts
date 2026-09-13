@@ -24,12 +24,12 @@ assert.equal(s.sniperCount, 2);
 assert.ok(Math.abs(s.bundlerPct! - 6.67) < 1e-6);
 assert.ok(Math.abs(s.insidersPct! - 5) < 1e-6, 'sandwich_bot ikut dihitung sebagai insider');
 
-// maker_token_tags harus dibaca sama seperti tags — bundler di atas hanya ada di sana.
-assert.ok(s.bundlerPct! > 0, 'maker_token_tags tak boleh diabaikan');
+// maker_token_tags is read just like tags: the bundler above only appears there.
+assert.ok(s.bundlerPct! > 0, 'maker_token_tags must not be ignored');
 
-// Daftar kosong = tak ada yang bertanda, bukan crash.
-const kosong = tagStats([]);
-assert.equal(kosong.devPct, 0);
-assert.equal(kosong.sniperCount, 0);
+// An empty list means nothing is tagged, not a crash.
+const blank = tagStats([]);
+assert.equal(blank.devPct, 0);
+assert.equal(blank.sniperCount, 0);
 
 console.log('smoke-gmgntags OK');

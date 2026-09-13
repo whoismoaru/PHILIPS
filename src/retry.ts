@@ -1,19 +1,19 @@
 /**
- * Retry sekali untuk jalur uang, dijaga state on-chain.
+ * A single retry for money paths, refereed by on-chain state.
  *
- * Di jalur uang, kegagalan paling lumrah justru terjadi SESUDAH transaksi mendarat
- * (saldo terbaca basi, wait timeout, verifikasi gagal). Mengulang di situ = beli /
- * jual / mint dua kali dengan uang yang tak disetujui pemilik. Karena itu yang jadi
- * wasit adalah state on-chain, BUKAN jenis error-nya — pesan error tak pernah bisa
- * dipercaya soal apa yang sudah mendarat.
+ * On a money path the most common failure happens AFTER the transaction has landed: a
+ * stale balance read, a wait that times out, a verification that fails. Retrying there
+ * means buying, selling or minting twice with money nobody approved twice. So the referee
+ * is on-chain state, NEVER the kind of error -- an error message can never be trusted about
+ * what did or did not land.
  *
- * Error yang dilempar saat state SUDAH bergerak ditandai `landed = true`: tx-nya
- * mendarat, jadi pesan "gagal" apa adanya menyesatkan (pemilik mengira uangnya
- * tak jadi keluar lalu mencoba lagi). Lihat `msgError`.
+ * An error thrown once the state HAS moved is marked `landed = true`: the transaction
+ * landed, so a plain "failed" message would mislead the owner into thinking the money never
+ * left and trying again. See `msgError`.
  *
- * `probe` mengembalikan angka yang PASTI berubah bila ada yang mendarat (saldo,
- * likuiditas, jumlah NFT posisi). -1n atau melempar = tak bisa dipastikan → dianggap
- * sudah bergerak → tidak diulang. Ragu berarti berhenti.
+ * `probe` returns a number that is CERTAIN to change if anything landed: a balance, a
+ * liquidity figure, a position NFT count. Returning -1n or throwing means it cannot be
+ * established, which is treated as "it moved" and never retried. When in doubt, stop.
  */
 export type RetryLog = (line: string) => void;
 
@@ -32,12 +32,12 @@ export async function retryOnce<T>(
     const why = (first as Error).message.slice(0, 160);
     if (before < 0n || after < 0n || after !== before) {
       log(`[retry:${label}] TAK diulang (state ${before}→${after}): ${why}`);
-      // Probe valid dan angkanya berubah = tx BENAR-BENAR mendarat (mint/close/swap
-      // sukses walau run() melempar). Probe -1n = tak terbaca → jangan mengaku tahu.
+      // A valid probe whose number moved means the transaction REALLY landed (a mint, close or swap
+      // succeeded even though run() threw). A -1n probe means unreadable, so claim nothing.
       if (before >= 0n && after >= 0n) (first as { landed?: boolean }).landed = true;
       throw first;
     }
-    log(`[retry:${label}] percobaan 1 gagal, on-chain tak berubah — ulang: ${why}`);
+    log(`[retry:${label}] attempt 1 failed and the chain did not move, retrying: ${why}`);
     if (opts.onRetry) await opts.onRetry().catch(() => {});
     await new Promise((r) => setTimeout(r, opts.sleepMs ?? 2500));
     return await run();

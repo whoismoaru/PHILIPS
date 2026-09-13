@@ -15,21 +15,22 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Auto-monitor pasif: tiap interval, cek posisi ACTIVE.
- * Kirim notifikasi saat posisi masuk/keluar range (mulai/berhenti konversi & panen fee).
+ * A passive auto-monitor: every interval it checks the ACTIVE positions and sends a
+ * notification as one enters or leaves its range, which is where conversion and fee
+ * earning start and stop.
  */
 
 const INTERVAL_MS = 60_000;
-const DROP_ALERT_PCT = 25; // ambang bawaan bila /alerts belum diatur
-const DROP_HYSTERESIS_PCT = 5; // pulih 5% di atas ambang → tangga di-arm ulang (anti-spam)
+const DROP_ALERT_PCT = 25; // the default threshold when /alerts has not been set
+const DROP_HYSTERESIS_PCT = 5; // recovering 5% above the threshold re-arms the rung (anti-spam)
 /**
- * Anak tangga alert anjlok, dari ambang user ke bawah. Satu bunyi per tangga, jadi
- * penurunan yang makin dalam tetap memberi kabar tanpa membanjiri notifikasi.
+ * Drop-alert rungs, from the user's threshold downwards. One alert per rung, so a fall
+ * that keeps going keeps reporting without flooding the chat.
  */
 /**
- * Penurunan harga token (%) dari tick pool, tanpa sumber harga luar.
- * Harga token per base = 1.0001^(sgn·tick); sgn -1 bila base = currency0.
- * Positif = turun (dip), negatif = naik.
+ * Token price drop (%) read from the pool tick, with no outside price source.
+ * The token price per base is 1.0001^(sgn*tick), with sgn = -1 when the base is currency0.
+ * Positive is a fall, a dip; negative is a rise.
  */
 export function dropPctFromTick(tick: number, entryTick: number, baseIsCurrency0: boolean): number {
   const sgn = baseIsCurrency0 ? -1 : 1;
@@ -37,10 +38,10 @@ export function dropPctFromTick(tick: number, entryTick: number, baseIsCurrency0
 }
 
 /**
- * Satu-satunya pintu notifikasi monitor. `flag` = kunci di /alerts yang
- * mengatur pesan ini; null = laporan AKSI (bot memindahkan uang) yang memang
- * selalu dikirim. Dibuat wajib supaya pagar tak bisa terlupa — dulu jalur v4
- * mengirim langsung lewat bot.telegram dan mengabaikan setelan sepenuhnya.
+ * The monitor's ONLY way out to Telegram. `flag` names the /alerts switch that governs
+ * this message; null marks a report of an ACTION the bot took with money, which is always
+ * sent. It is a required argument so the check cannot be forgotten -- the v4 path used to
+ * call bot.telegram directly and ignored the settings entirely.
  */
 async function notify(
   bot: Telegraf,
@@ -58,15 +59,15 @@ async function notify(
 function dropLadder(base: number): number[] {
   return [...new Set([base, 30, 50, 75].filter((t) => t >= base))].sort((a, b) => a - b);
 }
-const SWEEP_EVERY_MS = 60_000; // sapu sisa token tiap 1 menit (= tiap tick monitor)
+const SWEEP_EVERY_MS = 60_000; // sweep leftover tokens every minute, i.e. on every monitor tick
 const SWEEP_COOLDOWN_MS = 6 * 3_600_000; // per token max 1 percobaan / 6 jam
-const SWEEP_RECENT_MS = 24 * 3_600_000; // sisa cash-out selalu muncul di jam-jam pertama
-const DUST_COOLDOWN_MS = 7 * 24 * 3_600_000; // token "terlalu kecil" → mundur 7 hari
-const SWEEP_RETRY_BACKOFF_MS = 10 * 60_000; // gagal transien (RPC) → jeda 10 menit
+const SWEEP_RECENT_MS = 24 * 3_600_000; // cash-out leftovers always surface in the first hours
+const DUST_COOLDOWN_MS = 7 * 24 * 3_600_000; // a token that is "too small" backs off for 7 days
+const SWEEP_RETRY_BACKOFF_MS = 10 * 60_000; // a transient RPC failure backs off for 10 minutes
 const SWEEP_FILE = join(process.cwd(), 'data', 'sweep.json');
 const html = { parse_mode: 'HTML' as const };
-// nextSweep[key] = epoch ms paling awal token boleh disapu lagi. PERSIST ke disk
-// agar cooldown tak reset tiap restart (dulu in-memory → dust diulang tiap boot).
+// nextSweep[key] = the earliest epoch ms this token may be swept again. Persisted to
+// disk so the cooldown survives a restart -- in memory, dust was retried on every boot.
 const nextSweep = loadSweep();
 let lastSweepRun = 0;
 
@@ -86,7 +87,7 @@ function saveSweep() {
   }
 }
 
-/** Buang record STOPPED untuk token ini — sisanya sudah tak ada lagi di wallet. */
+/** Drop the STOPPED record for this token: its leftover is no longer in the wallet. */
 function reapStopped(ca: string, chain?: string): void {
   const st = store
     .all()
@@ -99,14 +100,14 @@ function reapStopped(ca: string, chain?: string): void {
   if (st) store.remove(st.tokenId);
 }
 
-/** Sapu token sisa (cash-out gagal) di wallet → swap ke base posisi. Non-fatal. */
+/** Sweep leftover tokens from a failed cash-out in the wallet into the position's base. Non-fatal. */
 async function sweepLeftovers(bot: Telegraf) {
   if (Date.now() - lastSweepRun < SWEEP_EVERY_MS) return;
   lastSweepRun = Date.now();
   const seen = new Set<string>();
-  // Kandidat = SISA yang sesungguhnya saja: posisi STOPPED (definisi leftover, PRD §8.6)
-  // + token dari close < 24 jam (record-nya mungkin sudah terhapus).
-  // JANGAN pakai semua token yang pernah di-LP: bag spot hasil /buy ikut terjual.
+  // Candidates are GENUINE leftovers only: STOPPED positions, plus tokens from a close in
+  // the last 24 hours whose record may already be gone. Never every token ever LP'd --
+  // that would sell a spot bag bought with /buy along with it.
   const candidates = [
     ...store
       .all()
@@ -144,23 +145,23 @@ async function sweepLeftovers(bot: Telegraf) {
       const t = new ethers.Contract(r.ca, ERC20_ABI, cc.wallet);
       const bal: bigint = await t.balanceOf(cc.wallet.address);
       if (bal === 0n) {
-        // Saldo habis (tersapu lebih dulu / dijual manual) → record STOPPED-nya sudah
-        // tak punya sisa untuk dipulihkan. Dulu cuma `continue`, jadi record mati
-        // menetap SELAMANYA di store & ikut disapu tiap ronde (terbukti: 币安城
-        // nyangkut sejak 11 Agu dengan saldo on-chain 0). Reap di sini.
+        // Nothing left to recover: the balance was swept earlier or sold by hand. This
+        // used to just `continue`, so a dead record stayed in the store for good and was
+        // retried every round (币安城 sat there from 11 Aug with a zero on-chain balance).
+        // Reap it here instead.
         reapStopped(r.ca, r.chain);
         continue;
       }
-      // Jual maksimal SISA posisi ini — jangan dump bag spot token yang sama yang
-      // kebetulan kamu pegang terpisah. Tanpa cap (record lama) → seluruh saldo.
+      // Sell at most THIS position's leftover, never a spot bag of the same token held
+      // separately. An older record without a cap falls back to the whole balance.
       const amt = r.cap !== undefined && r.cap < bal ? r.cap : bal;
       if (amt === 0n) continue;
       nextSweep.set(key, Date.now() + SWEEP_COOLDOWN_MS);
       saveSweep();
       if (config.safety.dryRun) continue;
-      // Sapu ke base ASLI posisi. Dulu selalu ke native: menutup posisi USDT lalu
-      // memulihkan sisanya sebagai BNB mengubah denominasi & eksposur diam-diam,
-      // dan bikin hasilnya tak bisa dicocokkan dengan modal awal posisi itu.
+      // Sweep back to the position's OWN base. This always went to native once: closing a
+      // USDT position and recovering its dust as BNB quietly changed both the denomination
+      // and the exposure, and left the result impossible to match against the deposit.
       const stableAddr =
         r.baseKind === 'usdg'
           ? cc.usdgAddress
@@ -182,11 +183,11 @@ async function sweepLeftovers(bot: Telegraf) {
             unit: cc.nativeSymbol,
             dec: 18,
           }));
-      // Sisa sudah pulih → record STOPPED tak perlu dipertahankan (kalau tidak ia
-      // menumpuk selamanya & tetap jadi kandidat sweep tiap ronde).
+      // The leftover is recovered, so the STOPPED record has no reason to stay -- kept,
+      // it would pile up for good and be a sweep candidate every round.
       reapStopped(r.ca, r.chain);
-      // Uangnya baru masuk SEKARANG, jauh setelah entri close ditulis. Tanpa catatan
-      // ini jurnal permanen mengecilkan PnL posisi tersebut.
+      // The money only arrives NOW, long after the close entry was written. Without this
+      // record the journal understates that position's PnL for good.
       journal.recordRecovery({
         tokenId: r.tokenId,
         symbol: r.symbol,
@@ -204,20 +205,20 @@ async function sweepLeftovers(bot: Telegraf) {
       await notify(bot, null, msgSwept({ symbol: r.symbol, tokenId: r.tokenId, amountLabel: gotLabel, dryRun: config.safety.dryRun }));
     } catch (e) {
       const emsg = (e as Error).message ?? '';
-      // Token debu (nilai terlalu kecil utk di-swap) → mundur lama, jangan ulang tiap 6j.
+      // Dust, worth too little to swap, backs off for a long time rather than retrying every 6h.
       if (/too small|below minimum|\bminimum\b|dust/i.test(emsg)) {
         nextSweep.set(key, Date.now() + DUST_COOLDOWN_MS);
         saveSweep();
       } else if (Date.now() >= (nextSweep.get(key) ?? 0)) {
-        // Gagal SEBELUM cooldown 6 jam sempat dipasang — paling sering saat baca
-        // saldo (RPC reset). Tanpa jeda, token itu dicoba lagi TIAP menit selama
-        // RPC-nya rewel: 28 Agu 2026 satu token gagal 8× dalam 15 menit, justru
-        // menambah beban saat jaringan sedang goyah. Mundur sebentar, bukan 6 jam:
-        // ini kegagalan sementara, bukan keputusan bahwa tokennya tak layak sapu.
+        // Failed BEFORE the 6-hour cooldown was set, most often while reading the balance
+        // (an RPC reset). With no pause the token is retried every minute for as long as
+        // the RPC misbehaves: on 28 Aug 2026 one token failed 8 times in 15 minutes, adding
+        // load exactly while the network was struggling. Back off briefly, not for 6 hours:
+        // this is a transient failure, not a verdict that the token is not worth sweeping.
         nextSweep.set(key, Date.now() + SWEEP_RETRY_BACKOFF_MS);
         saveSweep();
       }
-      console.log(`[sweep] ${r.symbol} gagal: ${emsg.slice(0, 120)}`);
+      console.log(`[sweep] ${r.symbol} failed: ${emsg.slice(0, 120)}`);
     }
   }
   await sweepStuckWeth(bot);
@@ -225,15 +226,15 @@ async function sweepLeftovers(bot: Telegraf) {
 }
 
 /**
- * Buang catatan v4 yang posisinya SUDAH TAK ADA di chain.
+ * Drop v4 records whose position no longer exists on chain.
  *
- * Catatan hantu bukan sekadar sampah: karena penutupan ladder v4 mengemas semua
- * leg ke SATU multicall, satu id yang tak ter-mint me-revert seluruh batch dengan
- * 'NOT_MINTED' — jadi leg yang sehat pun ikut tak bisa ditutup. 29 Agu 2026 delapan
- * catatan hantu memblokir sebuah ladder sampai dibersihkan tangan.
+ * A ghost record is worse than clutter: closing a v4 ladder packs every leg into ONE
+ * multicall, so a single unminted id reverts the whole batch with 'NOT_MINTED' and the
+ * healthy legs cannot be closed either. On 29 Aug 2026 eight ghosts blocked a ladder
+ * until they were cleared by hand.
  *
- * HANYA revert kepemilikan yang dihitung "hilang". Gagal baca (RPC rewel) dibiarkan
- * — menghapus catatan karena jaringan sedang goyah adalah cara kehilangan posisi.
+ * ONLY an ownership revert counts as "gone". A failed read (a flaky RPC) is left alone --
+ * deleting records because the network is having a bad minute is how positions get lost.
  */
 async function reapDeadV4(): Promise<void> {
   for (const cc of Object.values(CHAINS)) {
@@ -245,7 +246,7 @@ async function reapDeadV4(): Promise<void> {
         const m = (e as Error).message ?? '';
         if (!/NOT_MINTED|invalid token id|nonexistent/i.test(m)) continue;
         v4store.removeV4(r.tokenId);
-        console.log(`[reap-v4] #${r.tokenId} tak ada di chain — catatan dibuang`);
+        console.log(`[reap-v4] #${r.tokenId} does not exist on chain, dropping the record`);
       }
     }
   }
@@ -255,9 +256,9 @@ async function reapDeadV4(): Promise<void> {
 const WETH_DUST = 10_000_000_000_000n;
 
 /**
- * Unwrap WETH NYANGKUT → ETH. WETH cuma perantara di bot ini (wrap saat open/swap);
- * sisa apa pun dari operasi gagal-separuh dikembalikan ke ETH native. Tanpa ini,
- * WETH menumpuk & harus di-unwrap manual (keluhan berulang user).
+ * Unwrap stuck WETH back to native. WETH is only ever an intermediate here (wrapped for
+ * an open or a swap), so anything left by a half-failed operation is returned to native.
+ * Without this it piles up and has to be unwrapped by hand.
  */
 async function sweepStuckWeth(bot: Telegraf) {
   for (const cc of Object.values(CHAINS)) {
@@ -272,23 +273,23 @@ async function sweepStuckWeth(bot: Telegraf) {
       console.log(`[sweep-weth] unwrap ${ethers.formatEther(bal)} ${wrapped} → ${cc.nativeSymbol} (${cc.key})`);
       await notify(bot, null, `♻️ Swept ${Number(ethers.formatEther(bal)).toFixed(6)} stuck ${wrapped} → ${cc.nativeSymbol} (${cc.label})`, {});
     } catch (e) {
-      console.log(`[sweep-weth] ${cc.key} gagal: ${(e as Error).message.slice(0, 80)}`);
+      console.log(`[sweep-weth] ${cc.key} failed: ${(e as Error).message.slice(0, 80)}`);
     }
   }
 }
 
 let tickStartedAt = 0; // 0 = idle
-// Satu tx yang tak pernah settle (RPC blackhole, unwrap underpriced) membuat
-// `finally` tak pernah jalan. Dengan flag boolean, monitor mati DIAM-DIAM selamanya:
-// tak ada alert range, anjlok, rugi, maupun sweep. Batas waktu ini membiarkan tick
-// berikutnya mengambil alih; tick yang menggantung dibiarkan selesai sendiri.
+// One transaction that never settles (an RPC blackhole, an underpriced unwrap) means the
+// `finally` never runs. With a boolean flag the monitor would die SILENTLY and for good:
+// no range alerts, no drop alerts, no loss alerts, no sweeps. This deadline lets the next
+// tick take over, and leaves the hung one to finish on its own.
 const TICK_STUCK_MS = 5 * 60_000;
 
 export function startMonitor(bot: Telegraf) {
   setInterval(async () => {
-    // tick sebelumnya masih menunggu tx — jangan bertumpuk, KECUALI sudah macet.
+    // The previous tick is still waiting on a transaction: do not stack, unless it is stuck.
     if (tickStartedAt && Date.now() - tickStartedAt < TICK_STUCK_MS) return;
-    if (tickStartedAt) console.log('[monitor] tick sebelumnya macet >5m — dilanjutkan tanpa menunggu');
+    if (tickStartedAt) console.log('[monitor] previous tick stuck >5m, carrying on without it');
     tickStartedAt = Date.now();
     try {
       await tick(bot);
@@ -299,11 +300,10 @@ export function startMonitor(bot: Telegraf) {
 }
 
 /**
- * Segarkan kurs USD tiap satuan supaya entri jurnal bisa DICAP saat ditutup.
+ * Refresh the USD rate for every unit, so a journal entry can be STAMPED as it closes.
  *
- * Ditumpangkan ke denyut monitor yang memang sudah jalan tiap menit — jauh lebih
- * murah daripada mengambil harga di dalam jalur close (yang harus cepat) dan
- * tak menambah satu pun timer baru.
+ * Ridden on the monitor's own pulse, which already runs every minute -- far cheaper than
+ * fetching a price inside the close path, which has to be quick, and it adds no timer.
  */
 async function refreshUsdRates(): Promise<void> {
   await Promise.all(
@@ -317,12 +317,12 @@ async function refreshUsdRates(): Promise<void> {
 }
 
 async function tick(bot: Telegraf) {
-  // Gagal ambil harga tak boleh menghentikan monitor: entri yang ditutup ronde ini
-  // sekadar tak tercap, lalu dihitung sbg taksiran di /pnl.
+  // A failed price fetch must not stop the monitor: entries closed this round simply go
+  // unstamped, and /pnl values them as estimates.
   await refreshUsdRates().catch(() => {});
-  // Sweep hanya saat tak ada tx uang berjalan (nonce & WETH perantara).
+  // Sweep only while no money transaction is in flight: they share the nonce and the WETH.
   if (!store.isBusy())
-    await sweepLeftovers(bot).catch((e) => console.log('[sweep] gagal:', (e as Error).message.slice(0, 120)));
+    await sweepLeftovers(bot).catch((e) => console.log('[sweep] failed:', (e as Error).message.slice(0, 120)));
   for (const rec of store.active()) {
     try {
       const d = await getPositionDetail(rec.tokenId, ctxOf(rec));
@@ -349,11 +349,11 @@ async function tick(bot: Telegraf) {
           );
         }
       }
-      // Alert TERKONVERSI PENUH: harga menembus SELURUH rentang ke arah tujuan,
-      // jadi modal sudah 100% berubah jadi aset seberang dan posisi berhenti
-      // memanen fee. Ini kejadian yang berbeda dari sekadar keluar rentang —
-      // dan yang paling perlu ditindak, karena modal tak bisa pulih sendiri
-      // sebelum harga balik. Sekali per crossing; re-arm saat kembali in range.
+      // FULLY CONVERTED alert: price went through the WHOLE range in the intended
+      // direction, so the capital is now 100% the other asset and the position has stopped
+      // earning fees. That is a different event from merely leaving the range -- and the
+      // one that most needs acting on, because the capital cannot recover on its own until
+      // price comes back. Fires once per crossing, and re-arms when it returns in range.
       const converted = !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below');
       if (cfg.rangeNotify && converted && !rec.convertedAlerted) {
         await notify(bot, 'rangeNotify',
@@ -374,23 +374,23 @@ async function tick(bot: Telegraf) {
         store.update(rec.tokenId, { convertedAlerted: false });
       }
 
-      // Alert anjlok BERTINGKAT. Versi lama menyala SEKALI lalu diam sampai harga
-      // pulih — jadi penurunan katastrofik menghasilkan tepat satu notifikasi:
-      // 币安城 dialerti di -15%, lalu SENYAP sampai -93% (record-nya dropAlerted=true).
-      // Sekarang tiap anak tangga (-15/-30/-50/-75 dari ambangmu) berbunyi sendiri.
+      // TIERED drop alerts. The old version fired ONCE and then stayed quiet until price
+      // recovered, so a catastrophic fall produced exactly one notification: 币安城 alerted
+      // at -15%, then silence all the way to -93% because its dropAlerted was already true.
+      // Now each rung (-15/-30/-50/-75 from your threshold) speaks for itself.
       const entry = rec.entryPrice ? Number(rec.entryPrice) : 0;
       const cur = Number(d.currentPrice);
       if (cfg.dropPct !== null && entry > 0 && cur > 0) {
         const ladder = dropLadder(cfg.dropPct ?? DROP_ALERT_PCT);
         const dropPct = (1 - cur / entry) * 100;
-        // Migrasi record lama: dropAlerted=true berarti tangga pertama sudah bunyi.
+        // Older records: dropAlerted=true means the first rung has already fired.
         const tier = rec.dropTier ?? (rec.dropAlerted ? 1 : 0);
-        // Tangga terdalam yang sudah dilewati harga sekarang.
+        // The deepest rung the current price has passed.
         let reached = 0;
         for (const t of ladder) if (dropPct >= t) reached++;
         if (reached > tier) {
-          // Tombol menuju kartu KONFIRMASI tutup (stop:), bukan kirim tx — invariant
-          // §8.5 utuh, tapi user tak perlu mengetik command saat harga jatuh.
+          // The button opens the close card rather than sending a transaction, so nothing
+          // moves without a deliberate tap -- but no command has to be typed mid-crash.
           await notify(bot, 'dropPct',
             msgPriceDrop(rec.tokenId, rec.symbol, dropPct, d.baseSymbol, ladder[reached - 1]),
             {
@@ -406,13 +406,13 @@ async function tick(bot: Telegraf) {
           store.update(rec.tokenId, { dropTier: 0, dropAlerted: false });
         }
       } else if (rec.dropTier || rec.dropAlerted) {
-        // Alert MATI → kosongkan tangga yang terlanjur ter-arm. Kalau dibiarkan,
-        // menyalakan /alerts lagi mewarisi tier lama dan alert berikutnya BUNGKAM
-        // sampai harga menembus tangga itu lagi (cabang re-arm ikut mati di sini).
+        // Alerts are OFF, so clear any rung already armed. Left in place, switching
+        // /alerts back on would inherit the old tier and the next alert would stay silent
+        // until price passed that rung again -- the re-arm branch is off here too.
         store.update(rec.tokenId, { dropTier: 0, dropAlerted: false });
       }
-      // Alert rugi bersih (IL setelah fee): nilai posisi + fee vs modal saat buka.
-      // Sekali per crossing, dipulihkan lewat penanda yang sama seperti alert anjlok.
+      // The net-loss alert, impermanent loss after fees: position value plus fees against the
+      // capital at open. Once per crossing, re-armed through the same marker as the drop alert.
       if (cfg.ilPct !== null && !rec.imported) {
         const init = Number(ethers.formatUnits(BigInt(rec.initialWethWei || '0'), d.baseDecimals));
         const now = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
@@ -438,9 +438,9 @@ async function tick(bot: Telegraf) {
       }
       store.update(rec.tokenId, { lastInRange: d.inRange });
     } catch (e) {
-      // Posisi sudah di-burn (NFT hilang) → catat ke jurnal & keluarkan dari store.
-      // TAPI jangan sentuh yang sedang ditutup jalur manual: dia yang punya angka
-      // hasil cash-out; menjurnalkan 'burned' di sini = entri ganda / PnL hilang.
+      // The position was burned (its NFT is gone): journal it and drop it from the store.
+      // But leave anything being closed by hand alone -- that path holds the cash-out
+      // figures, and journalling 'burned' here would double the entry or lose the PnL.
       if (
         /invalid token id/i.test(String((e as Error)?.message ?? e)) &&
         !store.closing.has(rec.tokenId) &&
@@ -449,17 +449,18 @@ async function tick(bot: Telegraf) {
         journal.recordClose(rec, { reason: 'burned' });
         store.remove(rec.tokenId);
       }
-      /* error lain: lewati ronde ini */
+      /* any other error: skip this round */
     }
   }
-  // Monitor posisi v4 yang DIKELOLA bot (alert in/out-range; bersihkan bila tertutup).
-  // LADDER: cek 1 WAKIL per grup, bukan tiap leg. Ladder 69-leg dulu = 138 RPC SERIAL
-  // tiap ronde → saturasi Alchemy free-tier → semua command (mis. /positions) molor >1
-  // menit. Leg segrup berbagi pool → status range-nya diwakili satu leg; alert pun cukup
-  // sekali per grup (bukan 69 notif).
+  // Watch the v4 positions the bot MANAGES: in/out-of-range alerts, and cleanup once one
+  // is closed. For a ladder, check ONE representative per group rather than every leg. A
+  // 69-leg ladder meant 138 serial RPCs per round, which saturated the free Alchemy tier
+  // and left every command (/positions among them) taking over a minute. Legs in a group
+  // share a pool, so one leg's range status stands for all of them -- and one alert per
+  // group is enough, not 69 notifications.
   const seenGroup = new Set<string>();
   const v4reps = v4store.allV4().filter((rec) => {
-    if (!rec.groupId) return true; // posisi tunggal → selalu dicek
+    if (!rec.groupId) return true; // a single position is always checked
     if (seenGroup.has(rec.groupId)) return false;
     seenGroup.add(rec.groupId);
     return true; // leg pertama grup = wakil
@@ -468,15 +469,15 @@ async function tick(bot: Telegraf) {
     try {
       const st = await checkV4Status(getChain(rec.chain), rec.tokenId);
       if (!st.exists && !rec.groupId) {
-        v4store.removeV4(rec.tokenId); // tunggal & ditutup di luar bot → buang
+        v4store.removeV4(rec.tokenId); // single position, closed outside the bot: drop it
         continue;
       }
-      // setV4InRange PUNYA EFEK SAMPING (menyimpan status terakhir) — panggil
-      // duluan supaya status tetap segar walau notifikasi mati. Kalau di-skip,
-      // menyalakan /alerts lagi akan membandingkan dgn status basi → alert palsu.
+      // setV4InRange HAS A SIDE EFFECT (it stores the last status), so call it first and
+      // keep that status fresh even while notifications are off. Skipped, switching
+      // /alerts back on would compare against a stale status and fire a false alert.
       const berubah = st.inRange !== null && v4store.setV4InRange(rec.tokenId, st.inRange);
-      // Hormati /alerts sama seperti jalur v3. Dulu blok ini tak memeriksa
-      // setelan sama sekali → rangeNotify=false tetap membanjiri Telegram.
+      // Respect /alerts exactly as the v3 path does. This block used to check nothing at
+      // all, so rangeNotify=false still flooded Telegram.
       if (berubah && st.inRange !== null && alerts.get().rangeNotify) {
         const label = rec.groupId ? `${msgV4Range(rec.tokenId, st.inRange)} (ladder ${rec.legCount ?? '?'} leg)` : msgV4Range(rec.tokenId, st.inRange);
         await notify(bot, 'rangeNotify', label);
@@ -485,8 +486,8 @@ async function tick(bot: Telegraf) {
       const cfgV4 = alerts.get();
       const sym = rec.groupId ? `#${rec.tokenId} (ladder)` : `#${rec.tokenId}`;
 
-      // --- Alert ANJLOK (setara v3). Harga dari TICK: rasio 1.0001^Δtick, jadi
-      // tak perlu sumber harga luar dan nol RPC tambahan (tick sudah dibaca). ---
+      // --- DROP alert, matching v3. The price comes from the TICK (a ratio of
+      // 1.0001^Δtick), so it needs no outside price source and no extra RPC. ---
       if (cfgV4.dropPct !== null && st.tick !== null && rec.entryTick !== undefined) {
         const dropPct = dropPctFromTick(st.tick, rec.entryTick, rec.baseIsCurrency0);
         const ladder = dropLadder(cfgV4.dropPct);
@@ -503,28 +504,29 @@ async function tick(bot: Telegraf) {
           v4store.updateV4(rec.tokenId, { dropTier: 0, dropAlerted: false });
         }
       } else if (rec.dropTier || rec.dropAlerted) {
-        v4store.updateV4(rec.tokenId, { dropTier: 0, dropAlerted: false }); // mati → arm ulang bersih
+        v4store.updateV4(rec.tokenId, { dropTier: 0, dropAlerted: false }); // switched off, so re-arm from clean
       }
 
-      // --- Alert RUGI BERSIH (setara v3): nilai + fee vs modal masuk. Untuk
-      // ladder dijumlah SELURUH leg (bobot tiap leg beda, wakil tak mewakili). ---
+      // --- NET LOSS alert, matching v3: value plus fees against the capital put in. For a
+      // ladder this sums EVERY leg, since the legs are weighted differently and one
+      // representative does not represent the rest. ---
       if (cfgV4.ilPct !== null && st.val) {
         const legs = rec.groupId ? v4store.groupV4(rec.groupId) : [rec];
-        // ponytail: ladder besar dilewati — tiap leg butuh ~3 RPC dan monitor
-        // jalan tiap menit. Naikkan batas ini kalau sudah pakai RPC berbayar.
+        // Large ladders are skipped: each leg costs ~3 RPCs and the monitor runs every
+        // minute. Raise this limit once the RPC is a paid one.
         if (legs.length <= 25) {
           let nowSum = 0n;
           let initSum = 0n;
-          let gagal = false;
+          let failed = false;
           for (const leg of legs) {
             const v = leg.tokenId === rec.tokenId
               ? st.val
               : (await checkV4Status(getChain(leg.chain), leg.tokenId)).val;
-            if (!v) { gagal = true; break; }
+            if (!v) { failed = true; break; }
             nowSum += v.valueBaseWei + v.feesBaseWei;
             initSum += BigInt(leg.entryBaseWei || '0');
           }
-          if (!gagal && initSum > 0n) {
+          if (!failed && initSum > 0n) {
             const dec = baseDecimalsOf(rec.chain, rec.base === 'USDG' ? 'usdg' : 'weth');
             const now = Number(ethers.formatUnits(nowSum, dec));
             const init = Number(ethers.formatUnits(initSum, dec));
@@ -544,7 +546,7 @@ async function tick(bot: Telegraf) {
         v4store.updateV4(rec.tokenId, { ilAlerted: false }); // alasan sama spt dropTier
       }
     } catch (e) {
-      console.log(`[monitor:v4] #${rec.tokenId} dilewati ronde ini:`, (e as Error).message.slice(0, 120));
+      console.log(`[monitor:v4] #${rec.tokenId} skipped this round:`, (e as Error).message.slice(0, 120));
     }
   }
 }

@@ -5,17 +5,17 @@ import type { TokenPool } from './explore.js';
 import { v4Supported, type PoolKeyV4 } from './uniswapV4.js';
 
 /**
- * Sumber pool via Krystal Cloud API — daftar pool jauh lebih lengkap dari gateway
- * Uniswap / DexScreener (mis. pool ETH/token ber-TVL besar yang gateway lewatkan),
- * dengan TVL benar. Dipakai di Robinhood (uniswap v3/v4) DAN BSC (pancakeswap v3).
+ * Pools from the Krystal Cloud API -- a far more complete list than Uniswap's gateway or
+ * DexScreener (it carries deep ETH/token pools the gateway simply misses), with correct
+ * TVL. Used on Robinhood (Uniswap v3/v4) and BSC (PancakeSwap v3).
  *
- * Catatan penting per protokol:
- *  - v4: Krystal memberi fee EFEKTIF & tickSpacing 0 di list → TAK bisa dipakai mint.
- *    poolKey direkonstruksi di resolveV4PoolKey (detail Krystal + brute-force fee)
- *    lalu DIVERIFIKASI keccak==poolId. Hanya ditawarkan di chain yang bot bisa
- *    KELOLA posisinya (butuh Blockscout utk enumerasi/monitor — BSC tak punya).
- *  - v3: poolAddress = kontrak pool langsung; buka cukup pakai fee + factory.getPool,
- *    jadi tak perlu rekonstruksi. fee wajib termasuk feeTiers chain.
+ * What matters per protocol:
+ *  - v4: Krystal's list reports the EFFECTIVE fee and a tickSpacing of 0, neither of which
+ *    can be used to mint. The poolKey is rebuilt in resolveV4PoolKey (Krystal's detail plus
+ *    a brute-forced fee) and then VERIFIED by keccak == poolId. Offered only on chains
+ *    where the bot can actually manage the position afterwards.
+ *  - v3: poolAddress is the pool contract itself, and opening needs only the fee plus
+ *    factory.getPool, so nothing has to be rebuilt. The fee must be one of the chain's tiers.
  */
 
 const CHAIN_ID: Record<string, number> = { robinhood: 4663, bsc: 56, base: 8453 };
@@ -40,12 +40,12 @@ async function fetchJson(url: string): Promise<any> {
 }
 
 const coder = ethers.AbiCoder.defaultAbiCoder();
-// Buffer ABI-encoded poolKey dgn fee=0 (placeholder); fee ditulis-ulang saat brute.
+// An ABI-encoded poolKey buffer with fee=0 as a placeholder; the fee is rewritten per attempt.
 const poolIdBufferHex = (c0: string, c1: string, ts: number, h: string): string =>
   coder.encode(['tuple(address,address,uint24,int24,address)'], [[c0, c1, 0, ts, h]]);
 
-// poolKey diverifikasi bersifat TETAP (poolId = keccak-nya) → cache selamanya.
-// Bikin resolusi tahan gangguan API sesaat: sekali terbukti, tak perlu diulang.
+// A verified poolKey is immutable -- the poolId IS its keccak -- so it is cached for good.
+// That makes resolution survive a passing API outage: once proven, never repeated.
 const pkCache = new Map<string, PoolKeyV4>();
 
 /** Detail 1 pool: list memberi tickSpacing 0, detail memberi tickSpacing & hooks asli. */
@@ -56,12 +56,14 @@ async function krystalDetail(cid: number, poolId: string): Promise<{ tickSpacing
 }
 
 /**
- * poolKey v4 diverifikasi, ANDAL (tanpa Blockscout — dulu getLogs 0→latest sering
- * timeout/rate-limit → pool v4 lenyap dari daftar). Sumber: detail Krystal
- * (tickSpacing + hooks) + fee di-BRUTE-FORCE. Krystal cuma tahu fee EFEKTIF (≈ fee
- * poolKey − ~1000 unit), jadi fee dicari di window sempit sekitar feeTier lalu
- * DIVERIFIKASI keccak==poolId. Cocok → pasti aman di-mint; hooks/ts salah → tak
- * cocok → null (tak ditawarkan). Hasil di-cache.
+ * A verified v4 poolKey, resolved reliably and without Blockscout -- getLogs from 0 to
+ * latest used to time out or hit the rate limit, and v4 pools vanished from the list.
+ *
+ * The source is Krystal's detail (tickSpacing and hooks) plus a BRUTE-FORCED fee: Krystal
+ * only knows the EFFECTIVE fee, roughly the poolKey fee minus ~1000 units, so the fee is
+ * searched in a narrow window around the fee tier and then VERIFIED by keccak == poolId. A
+ * match is certain to be mintable; wrong hooks or tickSpacing simply never match and the
+ * pool is not offered. The result is cached.
  */
 async function resolveV4PoolKey(cc: ChainCtx, p: any): Promise<PoolKeyV4 | null> {
   const poolId = String(p.poolAddress);
@@ -72,13 +74,15 @@ async function resolveV4PoolKey(cc: ChainCtx, p: any): Promise<PoolKeyV4 | null>
   const det = await krystalDetail(CHAIN_ID[cc.key], poolId);
   if (!det) return null;
   const [c0, c1] = a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
-  // Encode poolKey SEKALI, lalu tiap iterasi cuma tulis-ulang 3 byte fee (uint24 di
-  // ujung word ke-3) + keccak — jauh lebih cepat dari AbiCoder.encode per iterasi
-  // (dulu ~40 dtk untuk 5 pool → wizard menggantung). Window lebar aman karena murah.
+  // Encode the poolKey ONCE, then per attempt rewrite only the 3 fee bytes (the uint24 at
+  // the end of the third word) and hash -- far faster than calling AbiCoder.encode each
+  // time, which took ~40 s for five pools and left the wizard hanging. A wide window is
+  // affordable precisely because each attempt is this cheap.
   const buf = ethers.getBytes(poolIdBufferHex(c0, c1, det.tickSpacing, det.hooks));
   const target = poolId.toLowerCase();
-  // fee poolKey ≈ fee efektif − beberapa % (dynamic-fee premium; terukur 2–3%).
-  // Window 20% ke bawah + 2000 ke atas = margin ~6× dari yang teramati, tetap murah.
+  // The poolKey fee is the effective fee less a few percent (the dynamic-fee premium,
+  // measured at 2-3%). A window of 20% below and 2000 above gives roughly six times the
+  // observed margin, and still costs almost nothing.
   const lo = Math.max(0, Math.floor(det.feeTier * 0.8) - 100);
   const hi = det.feeTier + 2_000;
   for (let f = lo; f <= hi; f++) {
@@ -94,21 +98,21 @@ async function resolveV4PoolKey(cc: ChainCtx, p: any): Promise<PoolKeyV4 | null>
   return null;
 }
 
-/** Protokol v3 BAWAAN chain (yang cc.factory tunjuk). */
+/** The chain's DEFAULT v3 protocol, the one cc.factory points at. */
 const chainV3Protocol = (cc: ChainCtx): string => (cc.dexLabel === 'PancakeSwap' ? 'pancakev3' : 'uniswapv3');
 
 /**
- * Venue untuk sebuah protokol v3 di chain ini, atau null bila bot tak punya
- * kontraknya. Protokol bawaan → undefined (pakai kontrak chain apa adanya);
- * protokol lain → nama venue bila terdaftar di VENUES (mis. 'uniswapv3' di BSC,
- * yang punya factory sendiri terpisah dari PancakeSwap).
+ * The venue for a v3 protocol on this chain, or null when the bot has no contracts for it.
+ * The chain's default protocol returns undefined (use the chain's own contracts); any other
+ * returns its venue name if VENUES lists it -- 'uniswapv3' on BSC, say, which has its own
+ * factory separate from PancakeSwap's.
  */
 function venueForProtocol(cc: ChainCtx, proto: string): { venue?: string } | null {
   if (proto === chainV3Protocol(cc)) return {};
   return venuesFor(cc.key).includes(proto) ? { venue: proto } : null;
 }
 
-/** base bot dari sepasang currency (ETH-native/WETH/WBNB, USDG, atau USDT). null = tak didukung. */
+/** Our base asset within a currency pair, or null when the pair has none we support. */
 function baseOfPair(
   cc: ChainCtx,
   c0: string,
@@ -128,10 +132,11 @@ function baseOfPair(
 }
 
 /**
- * Pool untuk 1 token via Krystal, siap dipakai wizard. v4 → poolKey diverifikasi
- * on-chain; v3 → fee + base (buka via factory.getPool). Hanya pair base ETH/USDG/
- * USDT. Diurut TVL turun. Tak dikonfigurasi / gagal → []. Pemanggil tetap menjalankan
- * filter kesehatan (activeLiq>0 utk v4).
+ * Pools for one token via Krystal, ready for the wizard. v4 entries carry a poolKey
+ * verified on chain; v3 entries carry a fee and a base and are opened through
+ * factory.getPool. Only pairs against one of our bases, sorted by TVL descending. An
+ * unconfigured or failing API returns an empty list, and the caller still applies its own
+ * health filters.
  */
 export async function krystalPools(cc: ChainCtx, token: string, sortBy = 0): Promise<TokenPool[]> {
   if (!krystalConfigured(cc)) return [];
@@ -146,19 +151,19 @@ export async function krystalPools(cc: ChainCtx, token: string, sortBy = 0): Pro
       if (!proto || !p.poolAddress) return null;
       const t0 = p.token0?.token, t1 = p.token1?.token;
       if (!t0?.address || !t1?.address) return null;
-      // Debu → lewati SEBELUM resolusi poolKey v4 yang mahal (brute-force). Diuji pada
-      // TVL sendiri: volume tak boleh menutupi pool kosong (lihat MIN_POOL_TVL_USD).
-      // Ambang di sini setengah ambang tampilan — biar pemanggil tetap yang memutuskan.
+      // Skip dust BEFORE the expensive v4 poolKey resolution. Tested against TVL alone:
+      // volume must never paper over an empty pool (see MIN_POOL_TVL_USD). The threshold
+      // here is half the display one, so the caller still makes the final call.
       const tvl = Number(p.tvl) || 0;
       if (tvl < 500) return null;
 
       if (proto === 'uniswapv4') {
-        // v4 hanya di chain yang PositionManager-nya terkonfigurasi — tanpa itu
-        // posisi yang dibuka tak bisa dipantau maupun ditutup. Blockscout tak lagi
-        // jadi syarat: enumerasi punya jalur tanpa indexer (nextTokenId + ownerOf).
+        // v4 only where a PositionManager is configured -- without one, a position opened
+        // here could be neither monitored nor closed. Blockscout is no longer required:
+        // enumeration has an indexer-free path (nextTokenId plus ownerOf).
         if (!v4Supported(cc)) return null;
         const pk = await resolveV4PoolKey(cc, p);
-        if (!pk) return null; // poolKey tak terbukti → jangan tawarkan
+        if (!pk) return null; // the poolKey is unproven, so do not offer it
         const b = baseOfPair(cc, pk.currency0, pk.currency1);
         if (!b) return null;
         const otherSym = (b.baseIsCurrency0 ? t1.symbol : t0.symbol) ?? '?';
@@ -180,16 +185,16 @@ export async function krystalPools(cc: ChainCtx, token: string, sortBy = 0): Pro
       }
 
       if (V3_PROTOCOLS.has(proto)) {
-        // Hanya v3 yang kontraknya BOT PUNYA: DEX bawaan chain, atau venue terdaftar
-        // (mis. uniswapv3 di BSC — factory-nya beda dari PancakeSwap, jadi harus
-        // dibuka lewat kontrak Uniswap, bukan cc.factory).
+        // Only v3 pools the bot has contracts for: the chain's default DEX, or a listed
+        // venue -- uniswapv3 on BSC, say, whose factory differs from PancakeSwap's, so it
+        // has to be opened through Uniswap's contracts rather than cc.factory.
         const vn = venueForProtocol(cc, proto);
         if (!vn) return null;
         const vcc = venueCtx(cc, vn.venue);
         const b = baseOfPair(cc, t0.address, t1.address);
         if (!b) return null;
         const fee = Number(p.feeTier);
-        // feeTiers-nya milik VENUE: Uniswap punya 3000, PancakeSwap 2500.
+        // The fee tiers belong to the VENUE: Uniswap has 3000, PancakeSwap 2500.
         if (!vcc.feeTiers.includes(fee)) return null;
         const otherSym = (b.baseIsCurrency0 ? t1.symbol : t0.symbol) ?? '?';
         const baseSym = (b.baseIsCurrency0 ? t0.symbol : t1.symbol) ?? (b.base === 'weth' ? 'ETH' : b.base.toUpperCase());

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { CHAINS, basesFor, isStableBase } from '../src/chains.js';
 
 /**
- * Saldo native ikut daftar /sell dan dicatat memakai alamat wrapped-native.
- * Kalau tujuan jualnya juga native, from == to — swap ke dirinya sendiri, yang
- * selalu balik sebagai "No route (thin pool/liquidity)". Native harus dijual ke
+ * The native balance appears in the /sell list, recorded under the wrapped-native address.
+ * If the sell destination is also native, from == to: a swap into itself, which always
+ * comes back as "No route (thin pool/liquidity)". Native has to be sold into
  * STABLECOIN; token biasa dijual ke native.
  */
 for (const cc of Object.values(CHAINS)) {
@@ -15,28 +15,28 @@ for (const cc of Object.values(CHAINS)) {
   if (nativeDest) {
     assert.notEqual(
       nativeDest.address.toLowerCase(), weth,
-      `${cc.key}: menjual ${cc.nativeSymbol} mendarat di dirinya sendiri`,
+      `${cc.key}: selling ${cc.nativeSymbol} lands back on itself`,
     );
   }
   if (tokenDest) {
-    assert.equal(tokenDest.address.toLowerCase(), weth, `${cc.key}: base wrappable harus = wrapped-native`);
+    assert.equal(tokenDest.address.toLowerCase(), weth, `${cc.key}: a wrappable base must equal wrapped-native`);
   }
-  // Native hanya boleh ditawarkan untuk dijual bila ada stablecoin tujuannya.
+  // Native may only be offered for sale when there is a stablecoin to sell it into.
   if (cc.hasWethBase && !nativeDest) {
-    assert.ok(true, `${cc.key}: tanpa stablecoin, native memang tak ditawarkan (addNativeHolding menolak)`);
+    assert.ok(true, `${cc.key}: with no stablecoin, native is correctly not offered (addNativeHolding refuses)`);
   }
 }
 
-// Native hanya ditawarkan bila ada stablecoin tujuannya — dan bila ditawarkan,
-// tujuannya WAJIB ada di chain yang sama, bukan milik chain lain.
+// Native is only offered when a destination stablecoin exists, and when it is offered
+// that destination MUST live on the same chain, never on another one.
 for (const cc of Object.values(CHAINS)) {
   const stable = basesFor(cc).find((b) => isStableBase(b.kind));
   if (!cc.hasWethBase || !stable) continue;
   assert.ok(
     cc.bases.some((b) => b.address.toLowerCase() === stable.address.toLowerCase()),
-    `${cc.key}: stablecoin tujuan bukan base chain ini`,
+    `${cc.key}: the destination stablecoin is not a base of this chain`,
   );
   assert.notEqual(stable.address.toLowerCase(), cc.wethAddress.toLowerCase(), `${cc.key}: tujuan = wrapped-native`);
 }
 
-console.log('OK — sell route: native → stablecoin, token → native; berlaku di semua chain.');
+console.log('ok: native sells into a stablecoin and tokens into native, on every chain.');

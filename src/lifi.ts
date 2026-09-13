@@ -4,16 +4,16 @@ import { NATIVE, SLIP_MAX_PCT } from './relay.js';
 
 /**
  * LI.FI (mesin di balik Jumper) — agregator swap & bridge lintas ratusan DEX/bridge.
- * Dipakai sebagai SUMBER QUOTE tambahan di best-of (swapRoute.ts) dan penyedia
- * bridge alternatif (commands/bridge.ts). Rute dipilih otomatis oleh best-of:
- * output tertinggi = likuiditas efektif terdalam; bridge tie-break ke ETA tercepat.
+ * Used as an extra QUOTE SOURCE in the best-of (swapRoute.ts) and as an alternative
+ * bridge provider (commands/bridge.ts). The route is picked automatically: the highest
+ * output means the deepest effective liquidity, and bridges tie-break on the fastest ETA.
  *
- * KEAMANAN — LI.FI mengembalikan target & spender DINAMIS. Hot wallet ini tak punya
- * stop-loss, jadi calldata dari API TAK PERNAH dieksekusi ke alamat sembarang:
- *  - `to` transaksi & `approvalAddress` WAJIB = LiFiDiamond resmi chain ini
- *    (allowlist di bawah, diverifikasi dari li.quest/v1/chains). Beda = tolak.
- *  - approve EXACT-amount ke diamond, bukan MaxUint256.
- *  - `out` dari API hanya ESTIMASI; pemanggil tetap verifikasi delta saldo (§8).
+ * SECURITY -- LI.FI returns a DYNAMIC target and spender. This hot wallet has no
+ * stop-loss, so calldata from an API is never executed against an arbitrary address:
+ *  - the transaction's `to` and `approvalAddress` MUST be this chain's official
+ *    LiFiDiamond (allowlist below, taken from li.quest/v1/chains). Anything else is refused.
+ *  - approve the EXACT amount to the diamond, never MaxUint256.
+ *  - the API's `out` is an ESTIMATE; the caller still verifies the balance delta.
  */
 
 const LIFI_API = 'https://li.quest/v1';
@@ -27,13 +27,13 @@ const DIAMOND: Record<number, string> = {
   56: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', // BSC
 };
 
-/** true bila LI.FI aktif untuk chain ini (diamond diketahui). */
+/** true when LI.FI is available on this chain (its diamond is known). */
 export const lifiSupports = (ctx: ChainCtx): boolean => DIAMOND[ctx.chainId] !== undefined;
 
 const isAllowed = (chainId: number, addr: string | undefined): boolean =>
   !!addr && !!DIAMOND[chainId] && addr.toLowerCase() === DIAMOND[chainId].toLowerCase();
 
-/** LI.FI memakai 0x000..0 untuk native — sama dgn NATIVE kita. */
+/** LI.FI uses 0x000..0 for native, the same sentinel as ours. */
 const tok = (a: string) => (a === NATIVE ? NATIVE : ethers.getAddress(a));
 
 async function fetchQuote(params: Record<string, string>): Promise<any | null> {
@@ -50,7 +50,7 @@ async function fetchQuote(params: Record<string, string>): Promise<any | null> {
   }
 }
 
-/** Quote-only same-chain from→to (TIDAK eksekusi). null bila tak ada rute / chain tak didukung. */
+/** Quote only, same chain, from -> to. Never executes. null when there is no route. */
 export async function lifiQuoteOut(
   fromAddr: string,
   toAddr: string,
@@ -75,7 +75,7 @@ export async function lifiQuoteOut(
   }
 }
 
-/** Eksekusi swap same-chain from→to lewat LI.FI. Verifikasi delta saldo dilakukan pemanggil. */
+/** Execute a same-chain from->to swap through LI.FI. The caller verifies the balance delta. */
 export async function swapViaLifi(
   fromAddr: string,
   toAddr: string,
@@ -83,7 +83,7 @@ export async function swapViaLifi(
   ctx: ChainCtx,
   slipPct = SLIP_MAX_PCT,
 ): Promise<{ txHashes: string[]; outWei: bigint }> {
-  if (!lifiSupports(ctx)) throw new Error('LI.FI tidak mendukung chain ini');
+  if (!lifiSupports(ctx)) throw new Error('LI.FI does not support this chain');
   const wallet = ctx.wallet;
   const q = await fetchQuote({
     fromChain: String(ctx.chainId),
@@ -94,11 +94,11 @@ export async function swapViaLifi(
     fromAddress: wallet.address,
     slippage: String(Math.min(slipPct, SLIP_MAX_PCT) / 100),
   });
-  if (!q) throw new Error('LI.FI quote gagal / kosong');
+  if (!q) throw new Error('the LI.FI quote failed or came back empty');
   const tr = q.transactionRequest;
   const spender: string | undefined = q.estimate?.approvalAddress;
-  // PIN: target tx & spender HARUS diamond resmi chain ini. Kalau tidak → API
-  // mungkin dikompromikan/keliru; batalkan sebelum menandatangani apa pun.
+  // PINNED: the transaction target and the spender MUST be this chain's official diamond.
+  // Anything else means the API is compromised or wrong -- abort before signing.
   if (!tr?.to || !isAllowed(ctx.chainId, tr.to)) {
     throw new Error(`LI.FI target tak dikenal (${tr?.to}) — ditolak demi keamanan`);
   }
@@ -106,7 +106,7 @@ export async function swapViaLifi(
     throw new Error(`LI.FI spender tak dikenal (${spender}) — ditolak demi keamanan`);
   }
   const txHashes: string[] = [];
-  // Approve EXACT-amount ke diamond (bukan MaxUint256). Native tak perlu approve.
+  // Approve the EXACT amount to the diamond, never MaxUint256. Native needs no approval.
   if (fromAddr !== NATIVE) {
     const erc = new ethers.Contract(
       fromAddr,
@@ -132,7 +132,7 @@ export async function swapViaLifi(
   try {
     outWei = BigInt(q.estimate?.toAmount ?? '0');
   } catch {
-    /* estimasi saja; pemanggil ukur dari saldo */
+    /* an estimate only; the caller measures from the balance */
   }
   return { txHashes, outWei };
 }
@@ -140,14 +140,14 @@ export async function swapViaLifi(
 // ─── bridge lintas chain (LI.FI) ────────────────────────────────────
 import type { BridgeQuote } from './relay.js';
 
-/** Quote bridge native→native lewat LI.FI. Bentuk sama dgn Relay agar bisa diadu. */
+/** A native -> native bridge quote via LI.FI, shaped like Relay's so the two can be compared. */
 export async function lifiBridgeQuote(
   from: ChainCtx,
   to: ChainCtx,
   amountWei: bigint,
   opts: { originCurrency?: string; destinationCurrency?: string } = {},
 ): Promise<BridgeQuote> {
-  if (!lifiSupports(from) || !lifiSupports(to)) throw new Error('LI.FI tak mendukung salah satu chain');
+  if (!lifiSupports(from) || !lifiSupports(to)) throw new Error('LI.FI does not support one of these chains');
   const q = await fetchQuote({
     fromChain: String(from.chainId),
     toChain: String(to.chainId),
@@ -158,19 +158,19 @@ export async function lifiBridgeQuote(
     toAddress: from.wallet.address,
     slippage: String(SLIP_MAX_PCT / 100),
   });
-  if (!q) throw new Error('LI.FI bridge quote gagal');
+  if (!q) throw new Error('the LI.FI bridge quote failed');
   const tr = q.transactionRequest;
   if (!tr?.to || !isAllowed(from.chainId, tr.to)) {
     throw new Error(`LI.FI bridge target tak dikenal (${tr?.to}) — ditolak`);
   }
-  // Untuk token ERC20 spender juga wajib diamond (approve terjadi di executeBridgeVia... —
-  // bridge native tak perlu; token perlu, jadi tetap dipin di sini).
+  // For an ERC20 the spender must be the diamond too. The approval happens in
+  // executeBridgeVia -- a native bridge needs none, a token does -- so it is pinned here.
   if ((opts.originCurrency ?? NATIVE) !== NATIVE && !isAllowed(from.chainId, q.estimate?.approvalAddress)) {
     throw new Error(`LI.FI bridge spender tak dikenal (${q.estimate?.approvalAddress}) — ditolak`);
   }
   const outWei = BigInt(q.estimate?.toAmount ?? '0');
   if (outWei <= 0n) throw new Error('LI.FI bridge out 0 — rute tak terpakai');
-  // Desimal & simbol dari token yang LI.FI kembalikan — jangan asumsikan 18.
+  // Decimals and symbol come from the token LI.FI returned. Never assume 18.
   const inTok = q.action?.fromToken ?? {};
   const outTok = q.action?.toToken ?? {};
   const fmt = (wei: bigint, dec: number, sym: string) => `${Number(ethers.formatUnits(wei, dec)).toFixed(6)} ${sym}`;

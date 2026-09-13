@@ -2,13 +2,13 @@ import { ethers } from 'ethers';
 import { config } from './config.js';
 
 /**
- * Lapisan koneksi ke Robinhood Chain: provider, dompet, dan kontrak.
- * ABI di sini sengaja minimal — hanya fungsi yang benar-benar kita pakai.
+ * The connection layer: provider, wallet and contracts.
+ * The ABIs here are deliberately minimal -- only the functions actually called.
  */
 
 export const provider = new ethers.JsonRpcProvider(config.chain.rpcUrl, config.chain.chainId);
-// Dompet TIDAK lagi dibuat di sini: sumbernya walletStore (lihat chains.ts).
-// Modul ini tinggal provider + kumpulan ABI.
+// The wallet is no longer built here: walletStore is its source (see chains.ts).
+// What is left in this module is the provider plus the ABI collection.
 
 export const ERC20_ABI = [
   'function symbol() view returns (string)',
@@ -28,11 +28,11 @@ export const FACTORY_ABI = [
   'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address)',
 ];
 
-// ── Velodrome Slipstream (CL) — fork Uniswap v3 dgn `fee`→`tickSpacing` (int24) ──
-// Pool diidentifikasi tickSpacing, bukan fee-tier. Kita simpan tickSpacing di
-// slot `fee` yang sama (nama param sengaja tetap `fee`), jadi seluruh pipeline
-// getPool/positions/mint pass-through tanpa ubah. Beda nyata: tipe int24 & mint
-// punya trailing `sqrtPriceX96` (diisi 0 untuk pool yang sudah ada).
+// ── Velodrome Slipstream (CL): a Uniswap v3 fork where `fee` becomes `tickSpacing` ──
+// Pools are identified by tick spacing rather than a fee tier. The tick spacing is kept in
+// the same `fee` slot (the parameter keeps that name on purpose), so the whole
+// getPool/positions/mint pipeline passes through unchanged. The real differences: the type
+// is int24, and mint carries a trailing `sqrtPriceX96`, set to 0 for an existing pool.
 export const FACTORY_ABI_SLIP = [
   'function getPool(address tokenA, address tokenB, int24 fee) view returns (address)',
 ];
@@ -59,22 +59,22 @@ export const POSITION_MANAGER_ABI = [
   'function multicall(bytes[] data) payable returns (bytes[] results)',
 ];
 
-// Instance kontrak default-chain sengaja TIDAK dibuat di sini: semua jalur sudah
-// chain-aware lewat chains.ts (cc.factory/cc.positionManager/cc.weth), dan
-// `new Contract('')` saat env kosong dulu meledak di import-time.
+// No default-chain contract instances are built here, on purpose: every path is already
+// chain-aware through chains.ts (cc.factory, cc.positionManager, cc.weth), and
+// `new Contract('')` with an empty env used to blow up at import time.
 
 /**
- * Approve SEBESAR YANG DIPAKAI, bukan MaxUint256.
+ * Approve EXACTLY what is being spent, never MaxUint256.
  *
- * Approve tak terbatas berarti tiap router/PM yang pernah kita sentuh boleh
- * menarik SELURUH saldo token itu selamanya — kalau salah satunya kompromis,
- * yang hilang bukan cuma nominal transaksinya. LI.FI di repo ini sudah memakai
- * pola exact-amount; ini menyamakan sisanya.
+ * An unlimited approval lets every router and position manager we have ever touched pull
+ * the entire balance of that token, for good -- and if one of them is ever compromised,
+ * what is lost is not just the transaction's amount. LI.FI already used the exact-amount
+ * pattern here; this brings the rest in line.
  *
- * Sebagian token gaya USDT menolak mengubah allowance bukan-nol ke bukan-nol
- * lain, jadi sisa allowance dinolkan dulu sebelum diisi ulang.
+ * Some USDT-style tokens refuse to move a non-zero allowance straight to another non-zero
+ * value, so any remaining allowance is zeroed first.
  *
- * @returns hash tx approve yang benar-benar dikirim (kosong bila allowance cukup).
+ * @returns the approve transaction hashes actually sent (empty when the allowance sufficed).
  */
 export async function approveExact(
   token: string,
@@ -99,12 +99,12 @@ export async function approveExact(
 }
 
 /**
- * Header untuk API explorer (Blockscout).
+ * Headers for the explorer API (Blockscout).
  *
- * Tanpa User-Agent, Blockscout Robinhood membalas **403** — bot-protection, bukan
- * indexer lambat. Selama berbulan-bulan itu terbaca sebagai "indexer bermasalah"
- * dan membuat /positions memasang peringatan daftar tak lengkap. Terbukti 29 Agu
- * 2026: permintaan yang sama, satu header ditambah, HTTP 403 → 200.
+ * Without a User-Agent, Robinhood's Blockscout answers 403 -- bot protection, not a slow
+ * indexer. For months that read as "the indexer is struggling" and made /positions warn
+ * that its list might be incomplete. Proven on 29 Aug 2026: the same request, one header
+ * added, 403 became 200.
  */
 export const EXPLORER_HEADERS = {
   accept: 'application/json',

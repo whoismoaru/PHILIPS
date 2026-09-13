@@ -3,7 +3,7 @@ import { bot, html } from '../core.js';
 import * as alerts from '../alerts.js';
 import * as msg from '../messages.js';
 
-/** /alerts — sakelar notifikasi (in/out range, harga anjlok, rugi bersih). */
+/** /alerts: the notification switches for in/out of range, a price drop, and a net loss. */
 
 // ---------- /alerts — setelan notifikasi ----------
 const DROP_OPTIONS: Array<number | null> = [10, 15, 25, 40, null];

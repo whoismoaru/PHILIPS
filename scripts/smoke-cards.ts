@@ -4,14 +4,14 @@ const out: string[] = [];
 const show = (name: string, text: string) => out.push(`\n══════ ${name} ══════\n${text}`);
 
 show(
-  'START — bot hidup (dengan sinkron)',
+  'START -- bot alive, with a sync',
   m.msgStarted({ dryRun: false, chainLabel: 'Robinhood', chainId: 4663, positions: 1, imported: 2, gone: 1 }),
 );
 show(
-  'START — tanpa sinkron, DRY RUN',
+  'START -- no sync, DRY RUN',
   m.msgStarted({ dryRun: true, chainLabel: 'Robinhood', chainId: 4663, positions: 0, imported: 0, gone: 0 }),
 );
-show('HELP (daftar perintah)', m.msgHelp(false));
+show('HELP (the command list)', m.msgHelp(false));
 
 show(
   'UANG (/status)',
@@ -32,7 +32,7 @@ show(
   }),
 );
 
-show('UANG — harga native tak terbaca', m.msgStatus({
+show('MONEY -- the native price could not be read', m.msgStatus({
   dryRun: false,
   positions: 0,
   chains: [{ label: 'Robinhood', amount: '0.0421', symbol: 'ETH', usd: null }],
@@ -40,7 +40,7 @@ show('UANG — harga native tak terbaca', m.msgStatus({
 }));
 
 show(
-  'POSISI',
+  'POSITION',
   m.msgPositionsList({
     dryRun: false,
     activeCount: 4,
@@ -82,7 +82,7 @@ show(
 );
 
 show(
-  'PREVIEW 4/4 — kurang saldo',
+  'PREVIEW 4/4 -- not enough balance',
   m.msgPlanStep({
     screenDanger: false,
     screenFailed: false,
@@ -103,7 +103,7 @@ show(
 );
 
 show(
-  'PREVIEW 4/4 — biaya gagal dibaca',
+  'PREVIEW 4/4 -- the cost failed to read',
   m.msgPlanStep({
     screenDanger: false,
     screenFailed: false,
@@ -123,10 +123,10 @@ show(
   }),
 );
 
-show('ADD 3/4 (nominal + saldo)', m.msgAmountStep('WETH', '∞', '0.0376 ETH'));
+show('ADD 3/4 (amount + balance)', m.msgAmountStep('WETH', '∞', '0.0376 ETH'));
 
 show(
-  'KONFIRMASI BELI — BAHAYA',
+  'BUY CONFIRMATION -- DANGER',
   m.msgTSwapConfirm({
     buy: true,
     chainLabel: 'Robinhood',
@@ -142,7 +142,7 @@ show(
 );
 
 show(
-  'KONFIRMASI BELI — saldo kurang',
+  'BUY CONFIRMATION -- short on balance',
   m.msgTSwapConfirm({
     buy: true,
     chainLabel: 'Robinhood',
@@ -157,9 +157,9 @@ show(
 );
 
 show('ALERT ANJLOK', m.msgPriceDrop('12345', 'TENDIES', 31.4, 'WETH', 30));
-show('ERROR (revert ethers multi-baris)', m.msgError('close', 'execution reverted: STF\n  reason=STF, code=CALL_EXCEPTION\n  transaction={...}'));
+show('ERROR (a multi-line ethers revert)', m.msgError('close', 'execution reverted: STF\n  reason=STF, code=CALL_EXCEPTION\n  transaction={...}'));
 show('UNKNOWN — CA ditempel', m.msgUnknown('0x020bfc650a365f8bb26819deaabf3e21291018b4'));
-show('TUTUP SEMUA (v3+v4)', m.msgCloseAllPick(2, 1));
+show('CLOSE ALL (v3 + v4)', m.msgCloseAllPick(2, 1));
 
 console.log(out.join('\n'));
 
@@ -171,5 +171,5 @@ if (bad) {
 }
 const opens = (all.match(/<(b|i|code|pre|blockquote)>/g) ?? []).length;
 const closes = (all.match(/<\/(b|i|code|pre|blockquote)>/g) ?? []).length;
-console.log(`\n✅ tag seimbang: ${opens} buka / ${closes} tutup`);
+console.log(`\n✅ tags balance: ${opens} open / ${closes} close`);
 if (opens !== closes) process.exit(1);

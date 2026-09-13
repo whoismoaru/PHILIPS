@@ -2,18 +2,18 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Setelan notifikasi (/alerts). Disimpan di data/alerts.json.
+ * Notification settings (/alerts), stored in data/alerts.json.
  *
- * `ilPct` = ambang RUGI BERSIH posisi: nilai posisi + fee belum diklaim,
- * dibandingkan modal saat buka. Untuk LP satu sisi, "hodl" = modal itu sendiri,
- * jadi angka ini memang impermanent loss yang sudah dikurangi fee — bukan
- * rumus IL teoretis yang mengabaikan fee dan menakuti tanpa sebab.
+ * `ilPct` is the NET LOSS threshold: the position's value plus its unclaimed fees, against
+ * the capital put in. For a single-sided LP, holding is exactly that capital, so this
+ * figure is impermanent loss with the fees already netted off -- not the theoretical IL
+ * formula, which ignores fees and alarms people for no reason.
  */
 
 export type AlertSettings = {
-  rangeNotify: boolean; // masuk/keluar rentang
-  dropPct: number | null; // harga token anjlok X% dari harga buka (null = mati)
-  ilPct: number | null; // rugi bersih posisi X% (null = mati)
+  rangeNotify: boolean; // entering and leaving the range
+  dropPct: number | null; // the token price fell X% from the open price (null turns it off)
+  ilPct: number | null; // the position is X% net down (null turns it off)
 };
 
 const FILE = join(process.cwd(), 'data', 'alerts.json');
@@ -33,7 +33,7 @@ export function get(): AlertSettings {
       };
       return cache;
     } catch {
-      /* berkas rusak → pakai default, jangan matikan monitor */
+      /* a corrupt file falls back to the defaults rather than killing the monitor */
     }
   }
   cache = { ...DEFAULTS };
@@ -46,7 +46,7 @@ export function set(patch: Partial<AlertSettings>): AlertSettings {
   return cache;
 }
 
-/** Putar nilai ke pilihan berikutnya (dipakai tombol). null = mati. */
+/** Cycle the value to the next option, used by the buttons. null turns it off. */
 export function cycle(current: number | null, options: Array<number | null>): number | null {
   const i = options.findIndex((o) => o === current);
   return options[(i + 1) % options.length];

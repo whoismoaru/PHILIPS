@@ -17,7 +17,7 @@ const sqrtAt = (tick: number) => sqrtAtTick(tick);
 const geser = (sqrtP: bigint, bps: number) => (sqrtP * isqrt((BigInt(10_000 + bps) * 10n ** 12n) / 10_000n)) / 10n ** 6n;
 
 const L = 10n ** 18n;
-let diuji = 0;
+let tested = 0;
 
 // Narrow ranges, the concentrated-LP norm, tested across many price positions:
 // far below, right on the lower edge, mid-range, upper edge, far above.
@@ -36,7 +36,7 @@ for (const [lo, hi] of [[-60000, -30000], [-6000, -3000], [-600, 600], [0, 60], 
         a.amount0 >= min0 && a.amount1 >= min1,
         `rentang [${lo},${hi}] tick ${tick}: gerak ${bps}bp DITOLAK (a0=${a.amount0} min0=${min0} · a1=${a.amount1} min1=${min1})`,
       );
-      diuji++;
+      tested++;
     }
 
     // 2) A big shove (+/-5%) must be REJECTED on the side it hurts. That is the
@@ -45,15 +45,15 @@ for (const [lo, hi] of [[-60000, -30000], [-6000, -3000], [-600, 600], [0, 60], 
     //    stolen; a zero floor is not a leak, and demanding rejection would only be
     //    testing zero against zero.
     if (sqrtP > sqrtA && sqrtP < sqrtB) {
-      const naik = amountsForLiquidity(geser(sqrtP, 500), sqrtA, sqrtB, L);
-      const turun = amountsForLiquidity(geser(sqrtP, -500), sqrtA, sqrtB, L);
+      const up = amountsForLiquidity(geser(sqrtP, 500), sqrtA, sqrtB, L);
+      const down = amountsForLiquidity(geser(sqrtP, -500), sqrtA, sqrtB, L);
       if (min0 > 0n) {
-        assert.ok(naik.amount0 < min0, `rentang [${lo},${hi}] tick ${tick}: dorongan +5% lolos (amount0 tak terjaga)`);
-        diuji++;
+        assert.ok(up.amount0 < min0, `range [${lo},${hi}] tick ${tick}: a +5% push got through, amount0 unguarded`);
+        tested++;
       }
       if (min1 > 0n) {
-        assert.ok(turun.amount1 < min1, `rentang [${lo},${hi}] tick ${tick}: dorongan -5% lolos (amount1 tak terjaga)`);
-        diuji++;
+        assert.ok(down.amount1 < min1, `range [${lo},${hi}] tick ${tick}: a -5% push got through, amount1 unguarded`);
+        tested++;
       }
     }
   }
@@ -64,7 +64,7 @@ for (const tick of [-1200, 0, 1200]) {
   const sqrtP = sqrtAt(tick), sqrtA = sqrtAt(-1800), sqrtB = sqrtAt(1800);
   const now = amountsForLiquidity(sqrtP, sqrtA, sqrtB, L);
   const f = withdrawFloors(sqrtP, sqrtA, sqrtB, L);
-  assert.ok(f.min0 <= now.amount0 && f.min1 <= now.amount1, `lantai di atas jumlah saat ini (tick ${tick})`);
+  assert.ok(f.min0 <= now.amount0 && f.min1 <= now.amount1, `the floor sits above the current amounts (tick ${tick})`);
 }
 
 // Zero liquidity gives a zero floor, not a division by zero.
@@ -75,16 +75,16 @@ assert.equal(nol.min1, 0n);
 // Both protocols MUST share one floor. If either drifts back to a per-side
 // percentage, the old bug returns there with no test turning red.
 const fs = await import('node:fs');
-for (const [nama, berkas] of [
+for (const [name, file] of [
   ['v4 (burnMinsV4)', 'src/uniswapV4.ts'],
   ['v3 (withdrawMins)', 'src/uniswap.ts'],
 ] as const) {
-  const src = fs.readFileSync(berkas, 'utf8');
-  assert.match(src, /withdrawFloors\(/, `${nama} tak lagi memakai lantai pita bersama`);
+  const src = fs.readFileSync(file, 'utf8');
+  assert.match(src, /withdrawFloors\(/, `${name} no longer uses the shared band floor`);
   assert.ok(
     !/\(10000n - WITHDRAW_SLIPPAGE_BPS\)|\(10000n - BURN_SLIPPAGE_BPS\)/.test(src),
-    `${nama} masih memakai potongan per sisi yang lama`,
+    `${name} still uses the old per-side haircut`,
   );
 }
 
-console.log(`ok — ${diuji} skenario: gerak ±0,4% lolos, dorongan ±5% ditolak; v3 & v4 pakai lantai yang sama`);
+console.log(`ok: ${tested} scenarios -- a ±0.4% drift passes, a ±5% push is rejected, and v3 and v4 share one floor`);

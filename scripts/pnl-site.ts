@@ -1,14 +1,14 @@
 /**
- * Situs PnL lintas-chain — SATU berkas HTML mandiri.
+ * The cross-chain PnL site: ONE self-contained HTML file.
  *
- * Sengaja BUKAN server: datanya riwayat trade pribadi, dan membuka port di VPS
- * berarti menaruhnya di internet tanpa autentikasi. Berkas statis bisa dibuka
- * di HP lewat Telegram, disimpan, atau dikirim ke diri sendiri — tanpa satu pun
- * dari itu meninggalkan mesin ini kecuali kau yang mengirimnya.
+ * Deliberately NOT a server: the data is a private trading history, and opening a port
+ * on the VPS would put it on the internet with no authentication. A static file opens on
+ * a phone through Telegram, can be saved, or mailed to yourself, and none
+ * of it leaves this machine unless you send it somewhere yourself.
  *
- * Nilai USD memakai kurs SAAT CLOSE bila entri sudah tercap (`usdRate`); entri
- * lama dinilai kurs sekarang dan dihitung terpisah, supaya tak tertukar dengan
- * angka yang sudah terkunci.
+ * USD values use the rate AT CLOSE where the entry carries one (`usdRate`); older
+ * entries are valued at today's rate and counted separately, so they never get
+ * mistaken for the figures that are already locked in.
  *
  *   npx tsx scripts/pnl-site.ts [keluaran.html]
  */
@@ -19,7 +19,7 @@ import { getEthUsd } from '../src/screening.js';
 
 const OUT = process.argv[2] ?? 'data/pnl.html';
 
-// ── kurs sekarang (cadangan untuk entri tanpa cap) ──────────────────────────
+// -- today's rate, the fallback for entries with no stamp --------------------
 const rates = new Map<string, number | null>();
 for (const cc of Object.values(CHAINS))
   for (const b of cc.bases) {
@@ -57,7 +57,7 @@ for (const e of journal.readMine(Number.MAX_SAFE_INTEGER)) {
 rows.sort((a, b) => a.t - b.t);
 
 // ── agregat ────────────────────────────────────────────────────────────────
-const EPS = 0.1; // di bawah ini bukan menang & bukan kalah — cuma debu (lihat FLAT_EPS)
+const EPS = 0.1; // below this it is neither a win nor a loss, just dust (see FLAT_EPS)
 const wins = rows.filter((r) => r.usd > EPS);
 const losses = rows.filter((r) => r.usd < -EPS);
 const flats = rows.length - wins.length - losses.length;
@@ -90,14 +90,14 @@ const daily = perDay
   .map(([k, v]) => ({ d: Number(k), net: v.net, n: v.n }))
   .sort((a, b) => a.d - b.d);
 
-// kurva kumulatif harian, hari kosong tetap punya titiknya
-const kurva: Array<{ d: number; cum: number }> = [];
+// the daily cumulative curve; an empty day still gets its point
+const curve: Array<{ d: number; cum: number }> = [];
 if (daily.length) {
   let cum = 0;
   const m = new Map(daily.map((x) => [x.d, x.net]));
   for (let d = daily[0].d; d <= daily[daily.length - 1].d; d++) {
     cum += m.get(d) ?? 0;
-    kurva.push({ d, cum });
+    curve.push({ d, cum });
   }
 }
 
@@ -109,23 +109,23 @@ const tgl = (d: number) => new Date(d * DAY).toISOString().slice(0, 10);
 const chainLabel = (k: string) => CHAINS[k]?.label ?? k;
 
 const sparkline = (): string => {
-  if (kurva.length < 2) return '<p class="muted">Belum cukup data untuk kurva.</p>';
+  if (curve.length < 2) return '<p class="muted">Not enough data for a curve yet.</p>';
   const W = 900;
   const H = 220;
-  const lo = Math.min(0, ...kurva.map((p) => p.cum));
-  const hi = Math.max(0, ...kurva.map((p) => p.cum));
+  const lo = Math.min(0, ...curve.map((p) => p.cum));
+  const hi = Math.max(0, ...curve.map((p) => p.cum));
   const span = hi - lo || 1;
-  const x = (i: number) => (i / (kurva.length - 1)) * W;
+  const x = (i: number) => (i / (curve.length - 1)) * W;
   const y = (v: number) => H - ((v - lo) / span) * H;
-  const pts = kurva.map((p, i) => `${x(i).toFixed(1)},${y(p.cum).toFixed(1)}`).join(' ');
+  const pts = curve.map((p, i) => `${x(i).toFixed(1)},${y(p.cum).toFixed(1)}`).join(' ');
   const zero = y(0).toFixed(1);
-  const naik = kurva[kurva.length - 1].cum >= 0;
+  const rising = curve[curve.length - 1].cum >= 0;
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Kurva PnL kumulatif">
       <polyline points="0,${zero} ${W},${zero}" class="zero"/>
-      <polygon points="0,${zero} ${pts} ${W},${zero}" class="${naik ? 'fill-up' : 'fill-dn'}"/>
-      <polyline points="${pts}" class="${naik ? 'line-up' : 'line-dn'}"/>
+      <polygon points="0,${zero} ${pts} ${W},${zero}" class="${rising ? 'fill-up' : 'fill-dn'}"/>
+      <polyline points="${pts}" class="${rising ? 'line-up' : 'line-dn'}"/>
     </svg>
-    <div class="axis"><span>${tgl(kurva[0].d)}</span><span>${tgl(kurva[kurva.length - 1].d)}</span></div>`;
+    <div class="axis"><span>${tgl(curve[0].d)}</span><span>${tgl(curve[curve.length - 1].d)}</span></div>`;
 };
 
 const bars = (): string => {
@@ -192,14 +192,14 @@ footer{color:var(--muted);font-size:12px;margin-top:40px;border-top:1px solid va
 </style></head><body><div class="wrap">
 <h1>PHILIPS · PnL</h1>
 <p class="big ${net >= 0 ? 'up' : 'dn'}">${money(net)}</p>
-<p class="sub">${rows.length} trade tertutup · ${Object.keys(CHAINS).length} chain · semua nilai USD</p>
+<p class="sub">${rows.length} closed trades · ${Object.keys(CHAINS).length} chains · all values in USD</p>
 
 <div class="grid">
   <div class="card"><b>Winrate</b><span>${wr.toFixed(1)}%</span></div>
   <div class="card"><b>Menang / Kalah</b><span>${wins.length} / ${losses.length}</span></div>
   <div class="card"><b>Profit factor</b><span>${pf === null ? '—' : pf.toFixed(2)}</span></div>
-  <div class="card"><b>Profit kotor</b><span class="up">${plain(grossWin)}</span></div>
-  <div class="card"><b>Rugi kotor</b><span class="dn">${plain(Math.abs(grossLoss))}</span></div>
+  <div class="card"><b>Gross profit</b><span class="up">${plain(grossWin)}</span></div>
+  <div class="card"><b>Gross loss</b><span class="dn">${plain(Math.abs(grossLoss))}</span></div>
   <div class="card"><b>Impas</b><span>${flats}</span></div>
 </div>
 
@@ -213,7 +213,7 @@ ${tabel('Per chain', perChain, chainLabel)}
 ${tabel('Per token', perToken, (k) => k, 40)}
 
 <h2>50 trade terakhir</h2>
-<table><thead><tr><th>Waktu (WIB)</th><th>Token</th><th>Chain</th><th class="r">PnL</th></tr></thead><tbody>
+<table><thead><tr><th>Time (WIB)</th><th>Token</th><th>Chain</th><th class="r">PnL</th></tr></thead><tbody>
 ${terbaru
   .map(
     (r) =>
@@ -223,10 +223,10 @@ ${terbaru
 </tbody></table>
 
 <footer>
-Dompet ${esc(me ?? '—')}<br>
-Nilai USD dikunci pada kurs saat trade ditutup${estimated ? `; ${estimated} entri lama dinilai dengan kurs hari ini` : ''}.<br>
-Tak dihitung: ${untracked} hasil tak terukur${noRate ? ` · ${noRate} tanpa kurs USD` : ''}. Impas = di bawah ±$${EPS.toFixed(2)}, tak masuk winrate.<br>
-Dibuat ${new Date(Date.now() + WIB).toISOString().slice(0, 16).replace('T', ' ')} WIB · data lokal, tidak dikirim ke mana pun.
+Wallet ${esc(me ?? '—')}<br>
+USD values are locked to the rate at close${estimated ? `; ${estimated} older entries are valued at today's rate` : ''}.<br>
+Excluded: ${untracked} unmeasured outcomes${noRate ? ` · ${noRate} with no USD rate` : ''}. Break-even means under ±$${EPS.toFixed(2)} and does not count towards the win rate.<br>
+Built ${new Date(Date.now() + WIB).toISOString().slice(0, 16).replace('T', ' ')} WIB · local data, sent nowhere.
 </footer>
 </div></body></html>`;
 
