@@ -53,4 +53,4 @@ for (const [name, pattern] of [
 ] as const)
   assert.match(src, pattern, `${name} no longer resolves its own position's chain`);
 
-console.log('ok — v4 terbaca lintas chain di /positions, /portfolio, detail, refresh & close');
+console.log('ok: v4 reads across chains in /positions, /portfolio, the detail card, refresh and close');

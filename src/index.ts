@@ -188,7 +188,7 @@ async function sweepTokenToBase(
           break;
         }
       }
-      if (landed) continue; // token bergerak → ukur ulang di iterasi berikutnya
+      if (landed) continue; // the token moved, so measure again on the next pass
       break;
     }
     await sleep(1500); // give the balance time to settle on the RPC before re-checking
@@ -1087,7 +1087,7 @@ function finalizeClose(
   // is held back, and only briefly: a real burn is still caught by the next sweep.
   const GRACE_MS = 60_000;
   if (opts.reason === 'gone' && rec?.openedAt && Date.now() - rec.openedAt < GRACE_MS) {
-    console.log(`[gone] #${tokenId} diabaikan: baru ${Math.round((Date.now() - rec.openedAt) / 1000)}s, RPC kemungkinan tertinggal`);
+    console.log(`[gone] #${tokenId} ignored: only ${Math.round((Date.now() - rec.openedAt) / 1000)}s old, the RPC is probably behind`);
     return;
   }
   // Journal exactly once, on the transition out of ACTIVE, to avoid a duplicate when
@@ -1678,7 +1678,7 @@ async function cmdPositions(ctx: any, edit = false) {
       pnlUsd,
       pnlPct,
       baseSymbol: sym,
-      inRange: p.inRange ?? false, // null (tak diketahui) → dianggap out (konservatif)
+      inRange: p.inRange ?? false, // null means unknown, and is treated as out of range, which is the conservative call
       wethEq: p.base === 'USDG' ? (ethUsd ? investNum / ethUsd : 0) : investNum,
       natSym: pcc.nativeSymbol,
       // v4 fees USED to be left out of the list row, so a v4 position that had been in
@@ -2461,7 +2461,7 @@ async function continueAddlp(
           // merely flagged. The volume test matters: a brand-new pool also reads
           // zero, and that means "has not traded yet", not "will never pay".
           if (!h.paysLps && (p.vol24hUsd ?? 0) >= NO_FEE_VOL_USD) {
-            console.log(`[pools] ${p.baseSymbol}/${p.otherSymbol} fee=${p.fee} dibuang: LP tak dapat fee (vol $${Math.round(p.vol24hUsd ?? 0).toLocaleString()}, feeGrowth 0)`);
+            console.log(`[pools] ${p.baseSymbol}/${p.otherSymbol} fee=${p.fee} dropped: LPs earn no fee here (vol $${Math.round(p.vol24hUsd ?? 0).toLocaleString()}, feeGrowth 0)`);
             return null;
           }
           // For ETH pairs there is a market reference, so also drop anything off by >25%.
@@ -2924,7 +2924,7 @@ async function execAdd(ctx: any) {
       const legPlans = await planLadderSingleSided(flow.token, flow.fee, flow.ethAmount, flow.rangePct, flow.legs!, 'bidask', base, ccAdd);
       const entryMcap = (await explore.tokenMarketCap(ccAdd, flow.token).catch(() => null)) ?? undefined;
       const entryEthUsd = isStableBase(base.kind) ? 1 : ((await getEthUsd(ccAdd.wethAddress, ccAdd).catch(() => null)) ?? undefined);
-      const usable = legPlans.filter((lp) => lp.baseAmountWei > 0n); // buang leg debu (pembulatan)
+      const usable = legPlans.filter((lp) => lp.baseAmountWei > 0n); // drop dust legs left by rounding
       // A wrappable WETH base is funded from native, so native must cover deposit plus gas;
       // a stable base needs native for gas only. ensureBaseReady inside executeAddBatch
       // handles the wrap, but check first so a failure is friendly ("top up ETH") rather
@@ -3836,7 +3836,7 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
       const dec = Number(await erc.decimals().catch(() => 18));
       out.push({ ca: ethers.getAddress(ca), symbol: sym, dec, balWei, amountNum: Number(ethers.formatUnits(balWei, dec)), usd: null });
     } catch {
-      /* skip token bermasalah */
+      /* skip a token that cannot be read */
     }
   }
   await addStableBases(cc, out);
@@ -5084,7 +5084,7 @@ async function execCloseV4(ctx: any) {
           { reason: 'cashed' },
         );
       }
-      v4store.removeV4(tokenId); // berhenti dilacak setelah tertutup
+      v4store.removeV4(tokenId); // stop tracking it once closed
       invalidateV4ListCache();
     }
     if (r.dryRun) {
@@ -5377,7 +5377,7 @@ function assertMenuComplete(): void {
   const stale = [...inMenu].filter((c) => !registeredCommands.has(c));
   if (missing.length) console.error('[menu] live commands missing from the menu:', missing.join(', '));
   if (stale.length) console.error('[menu] in the menu but not registered:', stale.join(', '));
-  if (!missing.length && !stale.length) console.log(`[menu] ${inMenu.size} command — menu & handler cocok`);
+  if (!missing.length && !stale.length) console.log(`[menu] ${inMenu.size} commands, menu and handlers agree`);
 }
 
 /**
@@ -5515,7 +5515,7 @@ startMonitor(bot); // the auto-monitor for active positions
 function startWatchdog() {
   const EVERY_MS = 3 * 60_000;
   const TIMEOUT_MS = 10_000;
-  const MAX_FAILS = 4; // ~12 menit tak terjangkau → restart
+  const MAX_FAILS = 4; // about 12 minutes unreachable triggers a restart
   let fails = 0;
   setInterval(async () => {
     try {
@@ -5528,7 +5528,7 @@ function startWatchdog() {
       fails++;
       console.error(`[watchdog] getMe failed ${fails}/${MAX_FAILS}: ${(e as Error).message.slice(0, 80)}`);
       if (fails >= MAX_FAILS) {
-        console.error('[watchdog] Telegram tak terjangkau — restart via systemd.');
+        console.error('[watchdog] Telegram is unreachable, restarting through systemd.');
         await notifyCrash('watchdog', 'long-poll ngadat — restart otomatis').catch(() => {});
         setTimeout(() => process.exit(1), 2000).unref();
       }

@@ -35,7 +35,7 @@ async function main() {
     errors: [{ message: 'external API error', path: ['topV4Pools', 0, 'cumulativeVolume'] }],
   });
   const partial = await explore.poolsForToken(cc, CA);
-  assert.equal(partial.length, 1, 'balasan partial dibuang — bug 9 Sep kambuh');
+  assert.equal(partial.length, 1, 'the partial response was dropped: the 9 Sep bug is back');
   assert.equal(partial[0].vol24hUsd ?? 0, 0, 'a missing volume reads 0, never NaN');
 
   // 2. Empty: errors[] populated, no payload -> still a real failure.

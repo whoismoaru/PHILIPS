@@ -180,14 +180,14 @@ console.log('smoke-pnlaudit: total USD OK');
 //   entries   = scored legs + unreadable + placeholder + sweep
 //   positions = scored + break-even
 const st0 = journal.statsFor(0);
-const berskor = st0.books.reduce((a, b) => a + b.known, 0);
-const impas = st0.books.reduce((a, b) => a + b.flats, 0);
+const scored = st0.books.reduce((a, b) => a + b.known, 0);
+const flat = st0.books.reduce((a, b) => a + b.flats, 0);
 assert.equal(
   st0.legs + st0.untracked + st0.excluded + st0.noCapital + st0.recovered + st0.unconverted,
   st0.count,
   'journal entries do not reconcile: a category is unaccounted for',
 );
-assert.equal(berskor + impas, st0.positions, 'positions do not reconcile from the scored counts');
+assert.equal(scored + flat, st0.positions, 'positions do not reconcile from the scored counts');
 assert.ok(st0.positions <= st0.legs, 'there cannot be more positions than legs');
 
 const main0 = st0.books[0];
@@ -206,7 +206,7 @@ const card = msgPnl({
 assert.equal(usd.books.length <= 1, true, 'the card reads books[0] alone, so the dollar conversion must leave exactly one book');
 assert.match(card, new RegExp(`Trade: <b>${main0?.known ?? 0}</b>`), 'the card does not use its book scored count');
 assert.match(card, /Win Rate/, 'the winrate is missing from the card');
-void berskor;
+void scored;
 
 // The picker shows ONE figure per chain: the scored count, the same number the recap
 // card reports. It used to print "480 positions · 161 scored", which invited the reader

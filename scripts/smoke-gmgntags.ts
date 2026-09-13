@@ -19,10 +19,10 @@ const s = tagStats([
   { tags: ['top_holder'], amount_percentage: 0.3 },
 ]);
 
-assert.ok(Math.abs(s.devPct! - 10) < 1e-6, `dev_team 8% + creator 2% = 10%, dapat ${s.devPct}`);
+assert.ok(Math.abs(s.devPct! - 10) < 1e-6, `dev_team 8% plus creator 2% is 10%, got ${s.devPct}`);
 assert.equal(s.sniperCount, 2);
 assert.ok(Math.abs(s.bundlerPct! - 6.67) < 1e-6);
-assert.ok(Math.abs(s.insidersPct! - 5) < 1e-6, 'sandwich_bot ikut dihitung sebagai insider');
+assert.ok(Math.abs(s.insidersPct! - 5) < 1e-6, 'sandwich_bot is being counted as an insider');
 
 // maker_token_tags is read just like tags: the bundler above only appears there.
 assert.ok(s.bundlerPct! > 0, 'maker_token_tags must not be ignored');

@@ -14,7 +14,7 @@ const src = await import('node:fs/promises').then((f) => f.readFile('src/index.t
 // The guard must require BOTH a zero fee and a real hook: a genuine 0% pool with
 // no hook really is free, and must keep saying so.
 assert.ok(/p\.fee === 0 && !!p\.poolKey\?\.hooks && p\.poolKey\.hooks !== ethers\.ZeroAddress/.test(src),
-  'hookFee wajib menuntut fee 0 DAN hook non-zero');
+  'hookFee must require both a zero fee AND a non-zero hook');
 assert.ok(/feeLabel: hookFee\(p\) \? 'dynamic'/.test(src), "a zero fee with a hook reads 'dynamic', never 0.00%");
 assert.ok(/apr: hookFee\(p\) \? 'hook fee'/.test(src), "the APR has to name the reason rather than print '?'");
 // The button carries the same fee text; leaving it at 0.00% would contradict the row.

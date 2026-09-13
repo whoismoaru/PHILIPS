@@ -29,7 +29,7 @@ for (const [name, pattern] of [
   ['v3 ilAlerted resets when ilPct is switched off',
    /\} else if \(rec\.ilAlerted\) \{/],
   ['v4 setV4InRange is called before the fence',
-   /const berubah = [^\n]*setV4InRange/],
+   /const changed = [^\n]*setV4InRange/],
 ] as const) {
   assert.ok(pattern.test(text), `the alert state can freeze: ${name}`);
 }

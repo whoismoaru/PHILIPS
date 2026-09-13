@@ -6,9 +6,9 @@ import { EXPLORER_HEADERS } from '../src/chain.js';
 /**
  * Robinhood's Blockscout REFUSES requests without a User-Agent, with a 403.
  *
- * Selama ini itu terbaca sebagai "indexer bermasalah" dan /positions memasang
+ * That read as "the indexer is struggling", and /positions would raise
  * an incomplete-list warning, while the indexer was perfectly healthy and the request was
- * ditolak. Terbukti 29 Agu 2026: URL sama, satu header ditambah, 403 → 200.
+ * refused. Proven on 29 Aug 2026: same URL, one header added, 403 became 200.
  */
 assert.ok(EXPLORER_HEADERS['user-agent'], 'the explorer headers carry no User-Agent');
 assert.ok(/Mozilla/.test(EXPLORER_HEADERS['user-agent']), 'the User-Agent does not read as a browser');

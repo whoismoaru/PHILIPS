@@ -32,7 +32,7 @@ const UNISWAP_CHAIN: Record<string, string> = {
 
 // Fetch plenty, then filter and sort here: the API sorts by TVL, and we want APR.
 const FETCH_N = 100;
-// Lantai TVL: cegah pool debu ($ receh, 1 swap) memalsukan APR ribuan %.
+// A TVL floor, so a dust pool (a few cents, one swap) cannot fake an APR in the thousands of percent.
 const MIN_TVL_USD = 1_000;
 
 export type ExplorePool = {
@@ -46,7 +46,7 @@ export type ExplorePool = {
   chain?: string; // the source chain key; REQUIRED once a list mixes several chains
   chainLabel?: string; // label tampilan chain asal
   vol1hUsd?: number; // the 1h volume; undefined means it could not be read
-  mcapUsd?: number; // kapitalisasi pasar sisi token. undefined = tak terbaca.
+  mcapUsd?: number; // the token side's market cap; undefined means it could not be read
 };
 
 type ApiPool = {

@@ -223,7 +223,7 @@ export type PositionsCardOpts = {
     inRange: boolean;
   }>;
   netLabel: string; // 'Net +$4.73'
-  netPositive: boolean | null; // null = tak diketahui → warna netral
+  netPositive: boolean | null; // null means unknown, so a neutral colour
   footer: string; // 'LIVE · 17:42 WIB'
   moreCount: number; // the rows that did not fit
 };

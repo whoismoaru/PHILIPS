@@ -157,7 +157,7 @@ bot.action(/^snd:(\w+):(native|0x[0-9a-fA-F]{40})$/, async (ctx) => {
   if (!cc) return ctx.answerCbQuery('Chain unavailable.');
   await ctx.answerCbQuery();
   // Compare addresses in lower case: the base addresses in chains.ts are not uniformly cased
-  // (USDG Robinhood tersimpan lowercase, sisanya checksummed), jadi membandingkan
+  // (Robinhood's USDG is stored lower case, the rest checksummed), so comparing
   // comparing the strings verbatim makes an asset that plainly exists read as "missing".
   const addr = ctx.match[2] === 'native' ? null : ctx.match[2].toLowerCase();
   const list = await assetsOn(cc).catch(() => []);

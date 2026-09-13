@@ -37,7 +37,7 @@ assert.ok(!card.includes('Ink'), 'a chain with no balance need not be shown');
 
 // Each tree closes with exactly one └.
 for (const block of card.split('\n\n').filter((b) => b.includes('├')))
-  assert.equal(block.split('\n').filter((l) => l.startsWith('└')).length, 1, `pohon rusak:\n${block}`);
+  assert.equal(block.split('\n').filter((l) => l.startsWith('└')).length, 1, `the tree is malformed:\n${block}`);
 
 // An unreadable USD value renders '—': never $0.00, and never a partial sum.
 const blind = msgStatus({
@@ -47,7 +47,7 @@ const blind = msgStatus({
 assert.match(blind, /Total: <b>—<\/b>/);
 assert.match(blind, /Free: <b>—<\/b>/);
 assert.match(blind, /<b>BSC<\/b>: —/, 'one unreadable part means the whole row reads —');
-assert.ok(!/\$0\.00/.test(blind), 'nol palsu terbaca sebagai fakta');
+assert.ok(!/\$0\.00/.test(blind), 'a fake zero reads as a fact');
 assert.match(blind, /failed to read/, 'a position that failed to read must be admitted to');
 
 // DRY RUN has to stand out; LIVE needs no label.

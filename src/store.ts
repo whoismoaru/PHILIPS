@@ -75,7 +75,7 @@ function load(): PosRecord[] {
     } catch {
       /* even if it cannot be moved aside, do not carry on */
     }
-    console.error(`[store] positions.json rusak (${(e as Error).message}) — disisihkan ke ${aside}`);
+    console.error(`[store] positions.json is corrupt (${(e as Error).message}), moved aside to ${aside}`);
     throw e;
   }
 }
@@ -126,7 +126,7 @@ export function addImported(rec: {
     fee: rec.fee,
     symbol: rec.symbol,
     baseKind: rec.baseKind,
-    initialWethWei: '0', // entry tak diketahui
+    initialWethWei: '0', // the entry is unknown
     openedAt: Date.now(),
     status: 'ACTIVE',
     imported: true,

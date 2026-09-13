@@ -3,7 +3,7 @@
  *  1. every button has a handler, because a dead button is a tap that does nothing;
  *  2. every button handler answers the callback, or Telegram's spinner hangs;
  *  3. every "waiting for input" state joins resetFlows, or an orphan prompt swallows what is typed
- *     berikutnya (persis bug prompt persen & prompt connect).
+ *     next one, exactly the percentage-prompt and connect-prompt bugs.
  */
 import assert from 'node:assert';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -44,7 +44,7 @@ for (const f of files) {
 }
 assert.deepEqual(silent, [], `button handlers that never answer, leaving the spinner to hang:\n  ${silent.join('\n  ')}`);
 
-// 3) state penunggu ketikan wajib ikut dibersihkan resetFlows
+// 3) every state waiting for input must be cleared by resetFlows
 const reset = src.match(/registerFlowReset\(\([^)]*\)\s*=>\s*\{[\s\S]*?\n\}\)|registerFlowReset\([^\n]*\)/g)?.join('\n') ?? '';
 for (const state of ['flows.delete', 'tswapFlows.delete', 'hubs.delete', 'awaitingSecret.delete', 'clearEdit'])
   assert.ok(reset.includes(state), `state "${state}" is missing from resetFlows, so an orphan prompt swallows what is typed`);

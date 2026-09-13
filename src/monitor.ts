@@ -252,7 +252,7 @@ async function reapDeadV4(): Promise<void> {
   }
 }
 
-// Ambang debu WETH: < 0.00001 WETH diabaikan (gas unwrap > nilainya).
+// The WETH dust threshold: under 0.00001 WETH is ignored, since unwrapping costs more than it is worth.
 const WETH_DUST = 10_000_000_000_000n;
 
 /**
@@ -402,7 +402,7 @@ async function tick(bot: Telegraf) {
           );
           store.update(rec.tokenId, { dropTier: reached, dropAlerted: true });
         } else if (tier > 0 && dropPct < ladder[0] - DROP_HYSTERESIS_PCT) {
-          // Pulih di atas ambang (minus histeresis) → seluruh tangga di-arm ulang.
+          // Recovering above the threshold, less the hysteresis, re-arms the whole ladder.
           store.update(rec.tokenId, { dropTier: 0, dropAlerted: false });
         }
       } else if (rec.dropTier || rec.dropAlerted) {
@@ -463,7 +463,7 @@ async function tick(bot: Telegraf) {
     if (!rec.groupId) return true; // a single position is always checked
     if (seenGroup.has(rec.groupId)) return false;
     seenGroup.add(rec.groupId);
-    return true; // leg pertama grup = wakil
+    return true; // the group's first leg stands for the rest
   });
   for (const rec of v4reps) {
     try {
@@ -475,10 +475,10 @@ async function tick(bot: Telegraf) {
       // setV4InRange HAS A SIDE EFFECT (it stores the last status), so call it first and
       // keep that status fresh even while notifications are off. Skipped, switching
       // /alerts back on would compare against a stale status and fire a false alert.
-      const berubah = st.inRange !== null && v4store.setV4InRange(rec.tokenId, st.inRange);
+      const changed = st.inRange !== null && v4store.setV4InRange(rec.tokenId, st.inRange);
       // Respect /alerts exactly as the v3 path does. This block used to check nothing at
       // all, so rangeNotify=false still flooded Telegram.
-      if (berubah && st.inRange !== null && alerts.get().rangeNotify) {
+      if (changed && st.inRange !== null && alerts.get().rangeNotify) {
         const label = rec.groupId ? `${msgV4Range(rec.tokenId, st.inRange)} (ladder ${rec.legCount ?? '?'} leg)` : msgV4Range(rec.tokenId, st.inRange);
         await notify(bot, 'rangeNotify', label);
       }
