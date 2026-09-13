@@ -4349,29 +4349,51 @@ async function sendProfitCard(
   const baseSym = baseSymbolOf(rec.baseKind, ctxOf(rec));
   const baseIn = Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
   const baseOut = Number(ethers.formatUnits(baseOutWei, dec));
-  const pnl = baseOut - baseIn;
-  const pnlPct = baseIn > 0 ? (pnl / baseIn) * 100 : 0;
+  // Both sides priced in dollars, each at its OWN moment: the deposit at the rate stored
+  // when the position opened, the proceeds at the rate now. That is what the money did.
+  //
+  // The figure therefore INCLUDES any move in the base asset itself -- deposit 1 ETH, get
+  // 1 ETH back while ETH fell, and this reads negative. For a stablecoin base the two
+  // rates are both 1, so nothing is folded in at all.
+  const nowUsd = isStableBase(rec.baseKind ?? 'weth') ? 1 : await getEthUsd(ctxOf(rec).wethAddress, ctxOf(rec)).catch(() => null);
+  const entryUsd = rec.entryEthUsd ?? nowUsd;
+  const usdKnown = nowUsd !== null && entryUsd !== null && entryUsd > 0;
+  const pnl = usdKnown ? baseOut * nowUsd! - baseIn * entryUsd! : baseOut - baseIn;
+  const pnlPct = usdKnown
+    ? baseIn * entryUsd! > 0
+      ? (pnl / (baseIn * entryUsd!)) * 100
+      : 0
+    : baseIn > 0
+      ? ((baseOut - baseIn) / baseIn) * 100
+      : 0;
   const positive = pnl >= 0;
-  // PnL is ALWAYS in the asset that was DEPOSITED: a USDG deposit is reported in USDG, an
-  // ETH deposit in ETH. Everything used to be multiplied by today's price into USD, which
-  // folded base-price movement into a number that should be pure LP result (depositing 1
-  // ETH and getting 1 ETH back could read "-$120" simply because ETH fell), and left it out
-  // of line with the deposit and received lines below it.
   const fmt = (n: number) => n.toLocaleString('id-ID', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
-  const pnlBig = `${positive ? '+' : ''}${fmt(pnl)} ${baseSym}`;
+  // Dollars when both rates are known; otherwise the base asset, because an unpriced
+  // close must not invent a dollar figure.
+  const usd2 = (n: number) => n.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pnlBig = usdKnown
+    ? `${positive ? '+' : '-'}$${usd2(Math.abs(pnl))}`
+    : `${positive ? '+' : ''}${fmt(pnl)} ${baseSym}`;
   const buf = await renderProfitCard({
     pair: pairLabel(baseSym, rec.symbol),
     positive,
     pnlBig,
     pnlPct: msg.fmtPct(pnlPct),
     stats: [
-      { label: 'deposit', value: `${fmt(baseIn)} ${baseSym}` },
-      { label: 'received', value: `${fmt(baseOut)} ${baseSym}` },
+      { label: 'deposit', value: usdKnown ? `$${usd2(baseIn * entryUsd!)}` : `${fmt(baseIn)} ${baseSym}` },
+      { label: 'received', value: usdKnown ? `$${usd2(baseOut * nowUsd!)}` : `${fmt(baseOut)} ${baseSym}` },
       { label: 'held', value: msg.fmtAge(Date.now() - rec.openedAt) },
       // Fees are read BEFORE the burn (see the caller). Unreadable leaves the fourth box
       // empty rather than showing a 0, which reads as "earned no fees at all".
       ...(feesBaseWei !== undefined && feesBaseWei > 0n
-        ? [{ label: 'fees', value: `${fmt(Number(ethers.formatUnits(feesBaseWei, dec)))} ${baseSym}` }]
+        ? [
+            {
+              label: 'fees',
+              value: usdKnown
+                ? `$${usd2(Number(ethers.formatUnits(feesBaseWei, dec)) * nowUsd!)}`
+                : `${fmt(Number(ethers.formatUnits(feesBaseWei, dec)))} ${baseSym}`,
+            },
+          ]
         : []),
     ],
     // nowWib() carries the date now; the ISO prefix printed it twice.
