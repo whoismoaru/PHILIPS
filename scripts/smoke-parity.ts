@@ -69,4 +69,13 @@ assert.ok(/return execTopUp\(ctx, ctx\.from\.id, wei\)/.test(idx), 'nominal yang
 assert.equal((idx.match(/t\.base\.wrappable \? held - \(await gasBuffer\(cc\)\)|t\.base\.wrappable \? raw - \(await gasBuffer\(cc\)\)/g) ?? []).length, 2,
   'kedua jalur nominal harus menyisihkan cadangan gas');
 
+// --- v4 increase must CLOSE each currency, not settle both ---
+// Increasing an existing position also pays out its accrued fees, so one side ends up
+// owed TO the wallet. SETTLE_PAIR demands a debt on both and reverted with
+// DeltaNotNegative(0x3351b260) on the credited side; CLOSE_CURRENCY handles either sign.
+const inc = v4src.slice(v4src.indexOf('export async function increaseLiquidityV4'), v4src.indexOf('export async function increaseLiquidityV4') + 3600);
+assert.ok(/CLOSE_CURRENCY, CLOSE_CURRENCY/.test(inc), 'increase v4 harus menutup tiap currency satu per satu');
+assert.ok(!/SETTLE_PAIR/.test(inc), 'increase v4 tak boleh memakai SETTLE_PAIR — sisi berpiutang akan revert');
+assert.ok(/staticCall/.test(inc), 'increase v4 wajib disimulasikan sebelum dikirim');
+
 console.log('ok: kartu, tombol, dan alur setara antara v3 & v4 di semua chain');
