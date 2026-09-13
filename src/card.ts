@@ -384,8 +384,12 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
   // Centred under the stats row and a size down from the labels: it is a timestamp, the
   // quietest thing on the card, and left-aligned it read as a fifth column.
   ctx.fillStyle = COL.muted;
-  ctx.font = '10px PhMono';
-  ctx.fillText(o.footer, W / 2 - ctx.measureText(o.footer).width / 2, H - 16);
+  ctx.font = '12px PhMono';
+  // Centred by the canvas itself rather than by subtracting half a measured width: the
+  // mono face reports a trailing advance that pushed the line a few pixels left.
+  ctx.textAlign = 'center';
+  ctx.fillText(o.footer, W / 2, H - 16);
+  ctx.textAlign = 'left';
 
   return canvas.toBuffer('image/png');
 }
