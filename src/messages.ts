@@ -1478,14 +1478,16 @@ export function msgStrategyStep(
 
 export function msgRangeStep(tokenSide = false): string {
   return [
-    bold('OPEN LP · Step [4/5] Set Price Range'),
+    bold('OPEN LP | Set Price Range'),
     '',
-    // The range's direction defines what this whole step means: the base side waits
-    // for price to FALL into the token, the token side waits for it to RISE into base.
-    // One sentence covering both is guaranteed to be wrong about one of them.
-    tokenSide
-      ? 'A wider range means slower conversion back to the base asset, but a longer duration to earn trading fees.'
-      : 'A wider range means slower conversion to the token, but a longer duration to earn trading fees.',
+    // The range's direction defines what this whole step means: the base side waits for
+    // price to FALL into the token, the token side waits for it to RISE into base. One
+    // sentence covering both is guaranteed to be wrong about one of them.
+    italic(
+      tokenSide
+        ? 'a wider range means slower conversion back to the base asset, but a longer duration to earn trading fees.'
+        : 'a wider range means slower conversion to the token, but a longer duration to earn trading fees.',
+    ),
   ].join('\n');
 }
 
