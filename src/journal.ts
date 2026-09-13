@@ -275,6 +275,15 @@ export type PeriodStats = {
   recovered: number; // recovery entries for leftover tokens: they count towards net, but are not trades
   unconverted: number; // USD mode: entries whose rate could not be read. SKIPPED, never treated as zero
   estimated: number; // USD mode: older entries with no stamped rate, valued at TODAY's rate
+  /**
+   * Capital DEPLOYED by the scored positions, in the book's unit. Net alone says
+   * nothing about the size of the book behind it: +$36 on $350 and +$36 on $35,000
+   * are not the same result.
+   */
+  volume: number;
+  /** Positions whose OPENING falls inside the period. Closed ones only -- a position
+   *  still open has no journal entry yet, so the caller adds the live ones. */
+  opened: number;
   books: Book[]; // ordered with the busiest book first
 };
 
@@ -297,7 +306,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
   // wallet showing up as your PnL, at the exact moment we least know who owns them.
   // /history came back empty while /pnl ballooned.
   if (!me)
-    return { count: 0, positions: 0, legs: 0, known: 0, untracked: 0, excluded: 0, noCapital: 0, recovered: 0, unconverted: 0, estimated: 0, books: [] };
+    return { count: 0, positions: 0, legs: 0, known: 0, untracked: 0, excluded: 0, noCapital: 0, recovered: 0, unconverted: 0, estimated: 0, volume: 0, opened: 0, books: [] };
   const all = read(Number.MAX_SAFE_INTEGER).filter(
     (e) =>
       (e.closedAt ?? 0) >= sinceMs &&
@@ -308,6 +317,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
   );
   const byUnit = new Map<string, Book>();
   let known = 0, untracked = 0, excluded = 0, noCapital = 0, recovered = 0, unconverted = 0, estimated = 0;
+  let volume = 0, opened = 0;
   const bookOf = (unit: string): Book => {
     let b = byUnit.get(unit);
     if (!b) {
@@ -319,7 +329,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
   // Step 1 — value each entry. NET is summed here, per entry: the money does not
   // care how things are grouped, and summing it again through groups would only
   // add another way to get it wrong.
-  type Score = { e: JournalEntry; unit: string; value: number };
+  type Score = { e: JournalEntry; unit: string; value: number; cost: number };
   const scores: Score[] = [];
   for (const e of all) {
     if (e.resultEthWei === undefined) { untracked++; continue; }
@@ -345,6 +355,10 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
     }
     const unit = usdOf ? 'USD' : native;
     const value = e.pnlEth * (rate ?? 1);
+    // The deposit, valued the SAME way the result is -- at the entry's own rate, never
+    // today's. Mixing the two makes the volume drift every time the card is opened.
+    const cost =
+      Number(ethers.formatUnits(BigInt(e.initialWethWei || '0'), baseDecimalsOf(e.chain, e.baseKind))) * (rate ?? 1);
     bookOf(unit).net += value;
     // 'recovery' is leftover tokens swept after the position closed. The money is
     // REAL (it belongs in net and profit), but it is not a trade of its own —
@@ -354,7 +368,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
       recovered++;
       continue;
     }
-    scores.push({ e, unit, value });
+    scores.push({ e, unit, value, cost });
   }
   // Step 2 — score by POSITION, not by leg. An 8-leg ladder is one trade; scoring
   // it per leg splits the PnL into eighths so each piece falls under the dust
@@ -370,6 +384,10 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
     // is simply break-even. `pnlEth >= 0` used to throw it into the win column and
     // inflate the winrate. Its money already went into `net` above — the only thing
     // withheld here is the SCORE.
+    volume += group.reduce((a, g) => a + g.cost, 0);
+    // The position OPENED in this period, not merely closed in it. A ladder opens once,
+    // so the earliest leg is the position's opening.
+    if (Math.min(...group.map((g) => g.e.openedAt)) >= sinceMs) opened++;
     const eps = FLAT_EPS[unit] ?? FLAT_EPS_UNKNOWN;
     if (value > eps) { b.wins++; b.grossWin += value; }
     else if (value < -eps) { b.losses++; b.grossLoss += value; }
@@ -394,6 +412,8 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
     recovered,
     unconverted,
     estimated,
+    volume,
+    opened,
     books,
   };
 }

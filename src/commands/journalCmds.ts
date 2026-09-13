@@ -3,8 +3,10 @@ import { config } from '../config.js';
 import { bot, html } from '../core.js';
 import { CHAINS } from '../chains.js';
 import { getEthUsd } from '../screening.js';
-import { renderProfitCard } from '../card.js';
+import { renderPnlCard } from '../card.js';
 import * as journal from '../journal.js';
+import * as store from '../store.js';
+import * as v4store from '../v4store.js';
 import * as msg from '../messages.js';
 
 /** /history and /pnl — reads of the closed-trade journal. No RPC, no state. */
@@ -152,30 +154,41 @@ const n2 = (v: number, _unit: string): string =>
  * recap reads as an event of equal weight rather than a plain table. The main
  * book (most trades) becomes the headline figure; the rest go in the stats row.
  */
+/**
+ * Where the period starts. '1 Month' means 30 WHOLE WIB days so the figure does not
+ * drift each time the card opens; 1d and 1w stay rolling, because "the last day"
+ * really does mean the last 24 hours.
+ */
+function sinceOf(key: journal.PeriodKey): number {
+  const p = journal.PERIODS[key];
+  return p.ms === 0 ? 0 : key === '1m' ? journal.monthStartMs(30) : Date.now() - p.ms;
+}
+
 async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.PeriodStats): Promise<Buffer | null> {
   const main = s.books[0];
   if (!main) return null;
   const wr = journal.winrateOf(main);
-  // Card layout: TRADES / PROFIT / LOSS. The gross figures read at a glance and
-  // the columns fit without colliding with the artwork. Profit factor and average
-  // win/loss moved to the caption and text card, where there is room.
-  const stats: Array<{ label: string; value: string }> = [
-    { label: 'trades', value: `${main.known} (${main.wins}W/${main.losses}L)` }, // positions, not legs
-    { label: 'profit', value: n2(main.grossWin, main.unit) },
-    { label: 'loss', value: n2(main.grossLoss, main.unit) },
-  ];
-  // Everything is one USD book now, so this image covers the WHOLE period with no
-  // other book left outside the frame. It used to read "All chains" above figures
-  // that were really just USDG.
-  return renderProfitCard({
-    pair: `${chain === ALL ? 'All chains' : chainLabel(chain)} · ${journal.PERIODS[key].label}`,
-    positive: main.net >= 0,
-    pnlBig: n2(main.net, main.unit),
-    pnlPct: `${wr.toFixed(1)}% winrate`,
-    stats,
-    footerLeft: `${s.known} of ${s.positions} positions scored${
-      s.books.reduce((n, b) => n + b.flats, 0) ? ` · ${s.books.reduce((n, b) => n + b.flats, 0)} flat` : ''
-    } · ${new Date().toISOString().slice(0, 10)}`,
+  const since = sinceOf(key);
+  // Positions OPENED in the period. The journal only knows the ones that have closed
+  // again, so the ones still running are counted from the live records -- otherwise a
+  // period spent opening positions reads as "0 opened".
+  const live =
+    store.active().filter((r) => (!chain || chain === ALL || (r.chain ?? 'robinhood') === chain) && r.openedAt >= since).length +
+    v4store.allV4().filter((r) => (!chain || chain === ALL || r.chain === chain) && r.openedAt >= since).length;
+  const usd = (v: number) => `$${Math.abs(v).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return renderPnlCard({
+    period: journal.PERIODS[key].label,
+    opened: s.opened + live,
+    closed: s.positions,
+    net: main.net,
+    netLabel: n2(main.net, main.unit),
+    volumeLabel: usd(s.volume),
+    // A winrate over no decided trade is not 0%, it is unknown.
+    winRateLabel: main.known ? `${wr.toFixed(1)}%` : '-',
+    positionsLabel: String(s.positions),
+    bestLabel: main.best ? n2(main.best.pnl, main.unit) : '-',
+    bestPositive: (main.best?.pnl ?? 0) >= 0,
+    footer: `${config.safety.dryRun ? 'DRY RUN' : 'LIVE'} · ${chain === ALL ? 'All chains' : chainLabel(chain)} · ${msg.nowWib()}`,
   }).catch(() => null);
 }
 
@@ -209,7 +222,7 @@ async function renderPnl(ctx: any, chain: string, key: journal.PeriodKey, fresh 
   // USDG is ever added to ETH; only the chain coverage is combined. '1 Month' means
   // 30 WHOLE WIB days, so the figure does not drift each time the card opens; 1d and
   // 1w stay rolling, because "the last day" really does mean the last 24 hours.
-  const since = p.ms === 0 ? 0 : key === '1m' ? journal.monthStartMs(30) : Date.now() - p.ms;
+  const since = sinceOf(key);
   // EVERY recap figure in USD (owner's call). Per-denomination books still exist
   // in storage; only the displayed unit changes. Without this the card hands over
   // four numbers in four units that cannot be compared with each other.

@@ -56,6 +56,7 @@ const COL = {
   green: '#3FB950',
   red: '#F85149',
   chipBg: '#1B2333',
+  amber: '#F0883E', // activity counts only: a state, never a result
 };
 
 function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -208,6 +209,148 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   ctx.fillStyle = COL.muted;
   ctx.font = '17px PhMono';
   ctx.fillText(o.footerLeft, X, H - 42);
+
+  return canvas.toBuffer('image/png');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+export type PnlCardOpts = {
+  period: string; // 'Today' | '1 Week' | 'All Time'
+  opened: number;
+  closed: number;
+  net: number; // the headline, in USD; the sign picks the colour
+  netLabel: string; // '+$36.32', already formatted
+  volumeLabel: string; // '$1,204.00'
+  winRateLabel: string; // '90.5%' or '-'
+  positionsLabel: string; // '12'
+  bestLabel: string; // '+$18.42' or '-'
+  bestPositive: boolean;
+  footer: string; // 't.me/...' or 'LIVE · 05:42 WIB'
+};
+
+/**
+ * The PnL recap card: one period, one headline figure.
+ *
+ * Laid out flat and left-aligned against the artwork, with the four supporting
+ * figures on a single baseline at the foot. Everything else on the card is a LABEL --
+ * only the net is allowed to be large, so the eye lands on the money first.
+ */
+export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> {
+  ensureFonts();
+  const canvas = createCanvas(Math.round(W * scale), Math.round(H * scale));
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+  // Zero is NEITHER a profit nor a loss. Painting a flat period green is the card
+  // telling the owner they made money when they did not.
+  const accent = o.net > 0 ? COL.green : o.net < 0 ? COL.red : COL.text;
+
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, W, H);
+  const img = await background();
+  if (img) {
+    const s = Math.max(W / img.width, H / img.height);
+    ctx.drawImage(img, W - img.width * s, (H - img.height * s) / 2, img.width * s, img.height * s);
+    // Monochrome, then dimmed. The artwork's own colours competed with the only colour
+    // on this card that carries meaning -- the green or red on the net figure. Stripping
+    // the hue out of the art leaves exactly one thing coloured, which is the point.
+    // Done per pixel rather than with a 'saturation' composite: that blend mode left a
+    // sepia cast here, and a card that is meant to have exactly ONE colour on it cannot
+    // afford a second one arriving by accident.
+    const px = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = px.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const y = (d[i] * 0.2126 + d[i + 1] * 0.7152 + d[i + 2] * 0.0722) | 0;
+      d[i] = d[i + 1] = d[i + 2] = y;
+    }
+    ctx.putImageData(px, 0, 0);
+    ctx.fillStyle = 'rgba(0,0,0,0.34)';
+    ctx.fillRect(0, 0, W, H);
+  }
+  // A far heavier veil than the profit card carries: this card's text runs the full
+  // height, and the artwork's own bright areas were washing out the figures.
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(760, 0);
+  ctx.lineTo(680, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
+  ctx.clip();
+  const veil = ctx.createLinearGradient(0, 0, 700, 0);
+  veil.addColorStop(0, 'rgba(4,6,10,0.97)');
+  veil.addColorStop(0.6, 'rgba(6,9,14,0.86)');
+  veil.addColorStop(1, 'rgba(10,14,22,0)');
+  ctx.fillStyle = veil;
+  ctx.fillRect(0, 0, 760, H);
+  ctx.restore();
+
+  const X = 88;
+  // The bot's name, centred over the artwork the way a masthead sits.
+  ctx.fillStyle = COL.muted;
+  ctx.font = '21px PhMono';
+  ctx.fillText('PHILIPS', W * 0.63 - ctx.measureText('PHILIPS').width / 2, 52);
+
+  const label = (t: string, y: number) => {
+    ctx.fillStyle = COL.muted;
+    ctx.font = '17px PhMono';
+    ctx.fillText(t.toUpperCase(), X, y);
+  };
+
+  label('period', 118);
+  ctx.fillStyle = COL.text;
+  ctx.font = '58px PhSansB';
+  ctx.fillText(o.period, X, 182);
+
+  // Activity counts. Coloured ONLY when something actually happened -- an accent on
+  // "0 opened · 0 closed" is colour that means nothing.
+  ctx.fillStyle = o.opened + o.closed > 0 ? COL.amber : COL.muted;
+  ctx.font = '19px PhSansB';
+  ctx.fillText(`${o.opened} OPENED · ${o.closed} CLOSED`, X, 216);
+
+  ctx.fillStyle = COL.text;
+  ctx.font = '58px PhSansB';
+  ctx.fillText('Realized PnL', X, 290);
+
+  label('profit (usd)', 334);
+  // The headline. It shrinks itself rather than running under the artwork.
+  let npx = 86;
+  ctx.font = `${npx}px PhSansB`;
+  while (npx > 44 && ctx.measureText(o.netLabel).width > 470) {
+    npx -= 3;
+    ctx.font = `${npx}px PhSansB`;
+  }
+  ctx.fillStyle = accent;
+  ctx.fillText(o.netLabel, X, 410);
+
+  // The four supporting figures, spread across the full width on one baseline: they
+  // are context for the headline, not competitors to it.
+  const cells: Array<{ label: string; value: string; colour: string }> = [
+    { label: 'volume', value: o.volumeLabel, colour: COL.text },
+    { label: 'win rate', value: o.winRateLabel, colour: COL.text },
+    { label: 'positions', value: o.positionsLabel, colour: COL.text },
+    // '-' is not a win, so it stays neutral; only a real figure takes the colour.
+    { label: 'biggest win', value: o.bestLabel, colour: o.bestLabel === '-' ? COL.muted : o.bestPositive ? COL.green : COL.red },
+  ];
+  // A dark band under the row so the two right-hand cells stay legible over the artwork.
+  const band = ctx.createLinearGradient(0, H - 160, 0, H);
+  band.addColorStop(0, 'rgba(4,6,10,0)');
+  band.addColorStop(0.45, 'rgba(4,6,10,0.82)');
+  band.addColorStop(1, 'rgba(4,6,10,0.94)');
+  ctx.fillStyle = band;
+  ctx.fillRect(0, H - 160, W, 160);
+  cells.forEach((c, i) => {
+    const cx = 150 + i * 300; // centre of the cell
+    ctx.fillStyle = COL.muted;
+    ctx.font = '17px PhMono';
+    ctx.fillText(c.label.toUpperCase(), cx - ctx.measureText(c.label.toUpperCase()).width / 2, H - 84);
+    ctx.fillStyle = c.colour;
+    ctx.font = '28px PhSansB';
+    ctx.fillText(c.value, cx - ctx.measureText(c.value).width / 2, H - 46);
+  });
+
+  ctx.fillStyle = COL.muted;
+  ctx.font = '17px PhMono';
+  ctx.fillText(o.footer, X, H - 14);
 
   return canvas.toBuffer('image/png');
 }
