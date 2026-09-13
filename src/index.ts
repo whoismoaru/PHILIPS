@@ -856,7 +856,37 @@ async function buildPositionCard(
         };
       })()
     : undefined;
+  // The pool's own numbers. The index is preferred (it carries volume and APR), and a
+  // pool it has not picked up yet -- new pools take hours -- falls back to the reserve
+  // held by the pool CONTRACT, which is always readable for v3.
+  const poolRow = await (async () => {
+    try {
+      const hit = (await explore.poolsForToken(cc, rec.ca).catch(() => [])).find(
+        (x) => x.protocol === 'v3' && x.fee === rec.fee && x.base === d.baseKind,
+      );
+      if (hit) {
+        return {
+          tvl: msg.usdCompact(hit.tvlUsd),
+          vol: hit.vol24hUsd != null && hit.vol24hUsd > 0 ? msg.usdCompact(hit.vol24hUsd) : undefined,
+          apr: hit.aprPct == null ? undefined : `~${hit.aprPct >= 100 ? Math.round(hit.aprPct) : hit.aprPct.toFixed(1)}%`,
+        };
+      }
+      const onchain = (await discoverAllPools(rec.ca, cc).catch(() => [])).find(
+        (p) => p.fee === rec.fee && p.base === d.baseKind,
+      );
+      if (!onchain) return undefined;
+      const amt = Number(ethers.formatUnits(onchain.baseReserve, onchain.baseDecimals));
+      const usdPer = isStableBase(onchain.base) ? 1 : await getEthUsd(cc.wethAddress, cc).catch(() => null);
+      if (usdPer === null) return undefined;
+      // Both sides are worth roughly the base side at the current price, so the pool holds
+      // about twice what the base reserve alone shows.
+      return { tvl: msg.usdCompact(amt * usdPer * 2), onchain: true };
+    } catch {
+      return undefined;
+    }
+  })();
   const text = msg.msgPositionCard({
+    pool: poolRow,
     tokenId: rec.tokenId,
     symbol: rec.symbol,
     fee: rec.fee,
