@@ -188,9 +188,9 @@ function section(op: string, chains: Chain[], rate: number | null): string[] {
       return `${esc(c.label)}: ${bold(`${r.native.toFixed(6)} ${r.sym}`)} ${italic('(no USD price)')}`;
     }),
   ];
-  // Cheapest first, numbered: this section IS a ranking, and the number states the rank
-  // outright instead of leaving it to be counted.
-  return [bold(op.toUpperCase()), ...rows.map((l, i) => `${i + 1}. ${l}`)];
+  // Cheapest first, drawn as a tree: the rank is the ORDER, so a number in front of each
+  // line only repeats what the position already says.
+  return [bold(op.toUpperCase()), ...rows.map((l, i) => `${i === rows.length - 1 ? '└' : '├'} ${l}`)];
 }
 
 /** The whole card. Exported so it can be tested without Telegram (scripts/smoke-gas.ts). */
