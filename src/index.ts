@@ -1587,11 +1587,17 @@ async function cmdPositions(ctx: any, edit = false) {
     rows,
   });
 
-  // At most 6 id buttons (a 7th position onward is still listed and reachable via /stop).
-  // The label is "#id Details": #id is always unique, so two positions on the same token
-  // never produce twin buttons that cannot be told apart.
+  // At most 6 buttons (a 7th position onward is still listed and reachable via /stop).
+  // Each button repeats its block's header verbatim -- the same pair, id and protocol --
+  // so there is nothing to match up by eye between the text and the row that opens it.
+  // The id stays on the label because two positions can share a pool.
   const top = rows.slice(0, 6);
-  const idBtns = top.map((r) => Markup.button.callback(`🔍 #${r.id} Details`, `pos_detail_${r.id}`));
+  const idBtns = top.map((r) =>
+    Markup.button.callback(
+      `$${msg.posPair(r.pair, r.baseSymbol)} | #${r.id}${r.protocol ? ` (${r.protocol})` : ''}`,
+      `pos_detail_${r.id}`,
+    ),
+  );
   // One button per row, per the design.
   const kbRows: ReturnType<typeof Markup.button.callback>[][] = idBtns.map((b) => [b]);
   // Close All moves money and cannot be undone, so it sits alone rather than one slip
