@@ -2096,15 +2096,35 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
  * Every guard the Confirm button used to sit in front of still runs inside execAdd.
  */
 async function planThenOpen(ctx: any, flow: AddFlow) {
+  // The plan card is SENT here, and its id is captured: execAdd is written for a button
+  // press and edits the card it was tapped on. Coming from a typed amount there is no
+  // such card, so without this the progress and result edits land nowhere and the
+  // deposit finishes invisibly.
+  let planMsgId: number | null = null;
+  const capture: any = Object.create(ctx);
+  capture.reply = async (text: string, extra?: any) => {
+    const m = await ctx.reply(text, extra);
+    planMsgId = m?.message_id ?? null;
+    return m;
+  };
   try {
-    await renderPlanStep(ctx, flow, false);
+    await renderPlanStep(capture, flow, false);
   } catch (err) {
     return void (await ctx.reply(msg.msgError('plan', (err as Error).message), html));
   }
   if (config.safety.dryRun) return; // the plan card IS the output in a dry run
-  // execAdd is written for a button press; give it the one callback-only method it uses.
+
   const auto: any = Object.create(ctx);
   auto.answerCbQuery = async () => {};
+  auto.editMessageText = async (text: string, extra?: any) => {
+    if (planMsgId === null) return ctx.reply(text, extra);
+    return ctx.telegram.editMessageText(ctx.chat.id, planMsgId, undefined, text, extra).catch(() => {});
+  };
+  // Same for the reply markup: execAdd clears the buttons off the card it edits.
+  auto.editMessageReplyMarkup = async (markup?: any) =>
+    planMsgId === null
+      ? undefined
+      : ctx.telegram.editMessageReplyMarkup(ctx.chat.id, planMsgId, undefined, markup).catch(() => {});
   return execAdd(auto);
 }
 
