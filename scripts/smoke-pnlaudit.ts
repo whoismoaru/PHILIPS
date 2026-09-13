@@ -24,11 +24,11 @@ const img = jc.slice(jc.indexOf('async function pnlImage'), jc.indexOf('function
 // Now that the whole recap is computed in USD, the image holds ONE book covering
 // everything: no other book may be left outside the frame.
 assert.ok(!/other books/.test(img), 'a book is still being left off the image');
-// The card names its period up top and its chain coverage in the footer; before, both
-// were crammed into one title line. Both must still be there -- a recap that does not
-// say WHICH chain and WHICH window it covers is a number with no meaning.
+// The card names its period up top and carries a timestamp at the foot. The chain is
+// named by the caption and by the picker the card was opened from, so it is not repeated
+// here -- but a recap with no period and no timestamp is a number with no meaning.
 assert.match(img, /period: journal\.PERIODS\[key\]\.label/, 'the card must name its period');
-assert.match(img, /footer: `[^`]*chain === ALL[^`]*`/, 'the card footer must name its chain coverage');
+assert.match(img, /footer: msg\.nowWib\(\)/, 'the card must carry a timestamp');
 
 // Winrate and profit factor: break-even must stay out of the denominator.
 assert.equal(journal.winrateOf({ wins: 3, losses: 1 }), 75);

@@ -258,7 +258,7 @@ export type PnlCardOpts = {
   positionsLabel: string; // '12'
   bestLabel: string; // '+$18.42' or '-'
   bestPositive: boolean;
-  footer: string; // 't.me/...' or 'LIVE · 05:42 WIB'
+  footer: string; // the timestamp, nothing else
 };
 
 /**
@@ -381,9 +381,11 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
     ctx.fillText(c.value, cx - ctx.measureText(c.value).width / 2, H - 46);
   });
 
+  // Centred under the stats row and a size down from the labels: it is a timestamp, the
+  // quietest thing on the card, and left-aligned it read as a fifth column.
   ctx.fillStyle = COL.muted;
-  ctx.font = '17px PhMono';
-  ctx.fillText(o.footer, X, H - 14);
+  ctx.font = '15px PhMono';
+  ctx.fillText(o.footer, W / 2 - ctx.measureText(o.footer).width / 2, H - 16);
 
   return canvas.toBuffer('image/png');
 }

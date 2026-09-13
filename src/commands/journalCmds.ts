@@ -188,7 +188,10 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
     positionsLabel: String(s.positions),
     bestLabel: main.best ? n2(main.best.pnl, main.unit) : '-',
     bestPositive: (main.best?.pnl ?? 0) >= 0,
-    footer: `${config.safety.dryRun ? 'DRY RUN' : 'LIVE'} · ${chain === ALL ? 'All chains' : chainLabel(chain)} · ${msg.nowWib()}`,
+    // Date and time alone. The chain is already named by the picker this card was opened
+    // from, and the mode belongs to a card that is about to spend money -- this one reports
+    // trades that have already closed.
+    footer: msg.nowWib(),
   }).catch(() => null);
 }
 
