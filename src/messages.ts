@@ -1826,7 +1826,7 @@ export function msgSettings(
     '',
     `${bold('Mode')} : ${bold(dryRun ? 'DRY RUN' : 'LIVE')}  ${dryRun ? '\u26AA' : '\u{1F7E2}'}`,
     '',
-    ...fields.map((f, i) => `${i === fields.length - 1 ? '└' : '├'} ${f}`),
+    ...fields.map((f, i) => `${i + 1}. ${f}`),
     '',
     note(nowWib()),
   ].join('\n');
