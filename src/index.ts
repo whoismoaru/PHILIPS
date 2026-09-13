@@ -307,12 +307,17 @@ registerFlowReset((uid) => {
 // much later, it must not be eaten by a stale flow. 15 minutes.
 
 // Range width choices (%) with their risk labels.
+// Named for the SHAPE of the range, not a verdict on it. The old names read backwards:
+// a 10% range was called "Conservative" while it is the one that converts fastest and
+// concentrates every dollar right under the price, and 90% was "Extreme" while it is the
+// most patient of the five. A label that argues with the sentence above it is worse than
+// no label.
 const RANGE_OPTIONS = [
-  { pct: 10, label: 'Conservative' },
-  { pct: 30, label: 'Moderate' },
-  { pct: 50, label: 'Aggressive' },
-  { pct: 70, label: 'Very Aggressive' },
-  { pct: 90, label: 'Extreme' },
+  { pct: 10, label: 'Tightest' },
+  { pct: 30, label: 'Tight' },
+  { pct: 50, label: 'Balanced' },
+  { pct: 70, label: 'Wide' },
+  { pct: 90, label: 'Widest' },
 ];
 
 /** Leg-count choices for a Bid-Ask ladder. 8-10 is the free-tier sweet spot; 69 needs
@@ -1960,10 +1965,8 @@ async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
   const rows = RANGE_OPTIONS.map((o) => [
     Markup.button.callback(`${up ? '📈 +' : '📉 -'}${o.pct}% ${o.label}`, `rng:${o.pct}`),
   ]);
-  rows.push([
-    Markup.button.callback('⬅️ Back', 'back:amount'),
-    Markup.button.callback('❌ Cancel', 'cancel'),
-  ]);
+  rows.push([Markup.button.callback('⬅️ Back', 'back:amount'), Markup.button.callback('❌ Cancel', 'cancel')]);
+  rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   const text = msg.msgRangeStep(flow.strategy === 'token');
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
