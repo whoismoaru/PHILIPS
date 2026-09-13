@@ -1089,6 +1089,9 @@ export function msgPositionCard(opts: {
   side?: 'base' | 'token'; // sisi setoran; kosong = base (posisi lama)
   converted?: boolean; // harga menembus seluruh rentang → posisi 100% aset seberang
   feeIsTickSpacing?: boolean; // Velodrome Slipstream: `fee` = tickSpacing (fee-nya dinamis)
+  /** The pool's own depth and activity. `onchain` marks a TVL measured from the pool
+   *  contract itself rather than the index -- real, but with no volume or APR behind it. */
+  pool?: { tvl: string; vol?: string; apr?: string; onchain?: boolean };
   ladder?: {
     legIndex: number; legCount: number; shape: string; groupInvest?: string;
     // A summary of the WHOLE ladder, which is the point of the bid-ask feature.
@@ -1131,6 +1134,16 @@ export function msgPositionCard(opts: {
     `${opts.inRange ? '🟢' : opts.converted ? '🟡' : '🔴'} ${bold(`$${esc(posPair(`${base} / ${sym}`, base))}`)} | #${esc(opts.tokenId)} (V3)`,
     '',
     `Fee: ${italic(opts.feeIsTickSpacing ? `ts ${opts.fee}, dynamic` : feeLabel(opts.fee))}${opts.chain ? ` \u00B7 ${esc(opts.chain)}` : ''}`,
+    // The POOL's own figures: how deep it is and how hard it trades decides whether this
+    // position keeps earning. An on-chain TVL carries no volume, so those columns are
+    // left off rather than filled with question marks.
+    ...(opts.pool
+      ? [
+          opts.pool.onchain
+            ? `TVL: ${esc(opts.pool.tvl)} ${italic('(read on-chain)')}`
+            : `TVL: ${esc(opts.pool.tvl)} / Vol 24h: ${esc(opts.pool.vol ?? '?')} / APR: ${esc(opts.pool.apr ?? '?')}`,
+        ]
+      : []),
     `Strategy: ${strategy}${isLeg ? `, ${bold(`${opts.ladder!.shape === 'bidask' ? 'bid-ask' : 'spot'} ladder`)}` : ''}`,
     // ── The LADDER block first (a ladder is what the user deposited), then the leg. ──
     // Shaped so a bid-ask position reads the same across both protocols.
