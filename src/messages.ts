@@ -2404,30 +2404,3 @@ export function msgSwept(o: {
     note(`${o.dryRun ? 'DRY RUN' : 'LIVE'} \u00B7 ${nowWib()}`),
   ].join('\n');
 }
-
-/** How much to add into a position that already exists. Range and side are already set. */
-export function msgTopUpAmount(symbol: string, tokenId: string, balanceLabel: string, baseSym: string): string {
-  return [
-    bold(`ADD LIQUIDITY | $${esc(symbol)} / #${esc(tokenId)}`),
-    '',
-    `\u{1F4BC} ${bold('Balance')} = ${bold(esc(balanceLabel))}`,
-    '',
-    italic(`tap a percentage below, or type the exact amount of ${esc(baseSym)} in the chat.`),
-    '',
-    italic(`it goes into this position's own range \u2014 the side and range do not change.`),
-    '',
-    note(nowWib()),
-  ].join('\n');
-}
-
-export function msgTopUpDone(symbol: string, tokenId: string, amountLabel: string, txHash: string | null): string {
-  return [
-    `\u2705 ${bold('LIQUIDITY ADDED')}`,
-    '',
-    `${bold(esc(amountLabel))} into ${bold(`$${esc(symbol)}`)} / #${esc(tokenId)}`,
-    'The range and side are unchanged, only the size grew.',
-    ...(txHash ? ['', bold('Tx Hash :'), code(txHash)] : []),
-    '',
-    note(nowWib()),
-  ].join('\n');
-}
