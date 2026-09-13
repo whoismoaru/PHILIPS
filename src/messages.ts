@@ -1281,32 +1281,27 @@ export function msgPositionsList(opts: {
     out.push('', note('the indexer is lagging, positions opened outside the bot may be missing from this list.'));
   }
   if (opts.rows.length > MAX_ROWS) out.push('', note(`+${opts.rows.length - MAX_ROWS} more positions, close some to see them`));
-  // The closing line follows what is ACTUALLY true. "Not active yet" only holds when
-  // every position really is waiting; printing it while one is earning fees makes this
-  // card lie about the very thing it is read to decide.
-  const anyIn = shown.some((r) => r.inRange);
-  const anyConverted = shown.some((r) => !r.inRange && r.converted);
-  const anyWaiting = shown.some((r) => !r.inRange && !r.converted);
-  const tail = anyIn
-    ? anyWaiting || anyConverted
-      ? 'Some positions are in range and earning fees, the rest are listed above.'
-      : 'Your liquidity is in range and earning fees.'
-    : anyConverted && !anyWaiting
-      ? 'Your liquidity has fully converted and stopped earning fees. Withdraw it, or wait for the price to move back into range.'
-      : anyConverted
-        ? 'Part of your liquidity has fully converted and stopped earning fees, the rest is still waiting to enter range.'
-        : 'Your liquidity is not active yet. It starts earning fees once the token price moves into your range.';
-  // A one-line summary of the whole list. These four figures were computed by the caller
-  // and then thrown away by this card: totals are the one thing a per-position list
-  // cannot show, and "how much is deployed" is the question the list is opened with.
-  const inRange = shown.filter((r) => r.inRange).length;
-  const summary = [
-    `${opts.activeCount} position${opts.activeCount === 1 ? '' : 's'}`,
-    ...(opts.totalInvestLabel ? [`${esc(opts.totalInvestLabel)} deployed`] : []),
-    ...(opts.totalFeesLabel ? [`fees ${esc(opts.totalFeesLabel)}`] : []),
-    `${inRange}/${shown.length} in range`,
-  ].join(' \u00B7 ');
-  out.push('', summary, tail, '', note(nowWib()));
+  // One sentence, chosen from what is ACTUALLY in the list. A fixed line would lie about
+  // the very thing this card is read to decide: whether the money is earning right now.
+  // "Converted" is kept apart from "waiting" -- a position that has been through its whole
+  // range is finished buying and will not recover on its own, which is the opposite
+  // situation from one that has not started.
+  const inCount = shown.filter((r) => r.inRange).length;
+  const convCount = shown.filter((r) => !r.inRange && r.converted).length;
+  const waitCount = shown.length - inCount - convCount;
+  const tail =
+    inCount === shown.length
+      ? 'Your liquidity is in range and earning fees.'
+      : inCount > 0
+        ? convCount > 0 && waitCount === 0
+          ? 'Part of your liquidity is in range and earning fees, the rest has fully converted.'
+          : 'Part of your liquidity is in range and earning fees, the rest is out of range.'
+        : convCount === shown.length
+          ? 'Your liquidity has fully converted and stopped earning fees.'
+          : convCount > 0
+            ? 'Part of your liquidity has fully converted, the rest is out of range and waiting.'
+            : 'Your liquidity is out of range and not earning fees yet.';
+  out.push('', tail, '', note(nowWib()));
   return out.join('\n');
 }
 
