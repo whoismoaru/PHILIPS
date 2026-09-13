@@ -8,9 +8,8 @@ import { renderPnlCard } from '../src/card.js';
  * the bug this card was rewritten to avoid. So the headline pixel is read back.
  */
 const base = {
-  period: 'Today', date: '14th September 2026',
-  realized: { label: '+$0.00', positive: true }, unrealized: { label: '-', positive: null },
-  best: { label: '-', positive: null }, winRate: '- · 0 closes',
+  period: 'Today', opened: 0, closed: 0, volumeLabel: '$0.00', winRateLabel: '-',
+  positionsLabel: '0', bestLabel: '-', bestPositive: true, date: '14 September 2026',
 };
 /** The average colour of the headline figure's row, read off the rendered PNG. */
 async function headline(net: number, netLabel: string) {

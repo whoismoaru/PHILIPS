@@ -9,9 +9,8 @@ import { BG_CUSTOM, customBackground, invalidateBackground, renderPnlCard } from
  * old backdrop because the decoded one was cached.
  */
 const opts = {
-  period: 'Today', date: '14th September 2026', net: 0, netLabel: '+$0.00',
-  realized: { label: '+$0.00', positive: true }, unrealized: { label: '-', positive: null },
-  best: { label: '-', positive: null }, winRate: '- · 0 closes',
+  period: 'Today', opened: 0, closed: 0, net: 0, netLabel: '+$0.00', volumeLabel: '$0.00',
+  winRateLabel: '-', positionsLabel: '0', bestLabel: '-', bestPositive: true, date: '14 September 2026',
 };
 // An existing custom backdrop belongs to the owner: move it aside, never delete it.
 const saved = existsSync(BG_CUSTOM) ? readFileSync(BG_CUSTOM) : null;

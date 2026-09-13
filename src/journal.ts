@@ -249,7 +249,7 @@ export type Book = {
   net: number;
   grossWin: number;
   grossLoss: number; // negatif
-  best?: { symbol: string; pnl: number; pct: number | null }; // pct is null when the cost is unknown
+  best?: { symbol: string; pnl: number };
   worst?: { symbol: string; pnl: number };
 };
 
@@ -384,8 +384,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
     // is simply break-even. `pnlEth >= 0` used to throw it into the win column and
     // inflate the winrate. Its money already went into `net` above — the only thing
     // withheld here is the SCORE.
-    const cost = group.reduce((a, g) => a + g.cost, 0);
-    volume += cost;
+    volume += group.reduce((a, g) => a + g.cost, 0);
     // The position OPENED in this period, not merely closed in it. A ladder opens once,
     // so the earliest leg is the position's opening.
     if (Math.min(...group.map((g) => g.e.openedAt)) >= sinceMs) opened++;
@@ -396,9 +395,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
     known++;
     b.known++;
     const symbol = group[0].e.symbol;
-    // The percentage belongs WITH the figure: +$73 on a $400 position and on a $40,000 one
-    // are not the same trade, and the dollar alone cannot tell them apart.
-    if (!b.best || value > b.best.pnl) b.best = { symbol, pnl: value, pct: cost > 0 ? (value / cost) * 100 : null };
+    if (!b.best || value > b.best.pnl) b.best = { symbol, pnl: value };
     if (!b.worst || value < b.worst.pnl) b.worst = { symbol, pnl: value };
   }
   const books = [...byUnit.values()].sort((a, b) => b.known - a.known);

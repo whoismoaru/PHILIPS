@@ -7,7 +7,6 @@ import { renderPnlCard } from '../card.js';
 import * as journal from '../journal.js';
 import * as store from '../store.js';
 import * as v4store from '../v4store.js';
-import { unrealizedUsd } from '../unrealized.js';
 import * as msg from '../messages.js';
 
 /** /history and /pnl — reads of the closed-trade journal. No RPC, no state. */
@@ -169,27 +168,30 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   const main = s.books[0];
   if (!main) return null;
   const wr = journal.winrateOf(main);
-  // What the OPEN positions are worth right now. It is read live, and a read that fails
-  // says '-' rather than '$0.00' -- unknown is not the same as flat.
-  const un = await unrealizedUsd(chain === ALL ? undefined : chain).catch(() => ({ usd: null, read: 0, total: 0 }));
-  const sign = (v: number | null) => (v === null ? null : v >= 0);
+  const since = sinceOf(key);
+  // Positions OPENED in the period. The journal only knows the ones that have closed
+  // again, so the ones still running are counted from the live records -- otherwise a
+  // period spent opening positions reads as "0 opened".
+  const live =
+    store.active().filter((r) => (!chain || chain === ALL || (r.chain ?? 'robinhood') === chain) && r.openedAt >= since).length +
+    v4store.allV4().filter((r) => (!chain || chain === ALL || r.chain === chain) && r.openedAt >= since).length;
+  const usd = (v: number) => `$${Math.abs(v).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   return renderPnlCard({
     period: journal.PERIODS[key].label,
-    date: msg.dateWibLong(),
-    // The headline is realized PLUS unrealized: it answers "where do I stand", and money
-    // still sitting in a position is money either way.
-    net: main.net + (un.usd ?? 0),
-    netLabel: n2(main.net + (un.usd ?? 0), main.unit),
-    realized: { label: n2(main.net, main.unit), positive: main.net >= 0 },
-    unrealized: { label: un.usd === null ? '-' : n2(un.usd, main.unit), positive: sign(un.usd) },
-    best: {
-      label: main.best
-        ? `${n2(main.best.pnl, main.unit)}${main.best.pct === null ? '' : ` (${main.best.pct >= 0 ? '+' : ''}${main.best.pct.toFixed(2)}%)`}`
-        : '-',
-      positive: main.best ? main.best.pnl >= 0 : null,
-    },
+    opened: s.opened + live,
+    closed: s.positions,
+    net: main.net,
+    netLabel: n2(main.net, main.unit),
+    volumeLabel: usd(s.volume),
     // A winrate over no decided trade is not 0%, it is unknown.
-    winRate: main.known ? `${wr.toFixed(1)}% · ${s.positions} closes` : `- · ${s.positions} closes`,
+    winRateLabel: main.known ? `${wr.toFixed(1)}%` : '-',
+    positionsLabel: String(s.positions),
+    bestLabel: main.best ? n2(main.best.pnl, main.unit) : '-',
+    bestPositive: (main.best?.pnl ?? 0) >= 0,
+    // The DAY, spelled out. The chain is already named by the picker this card was opened
+    // from, and the mode belongs to a card that is about to spend money -- this one reports
+    // trades that have already closed.
+    date: msg.dateWibLong(),
   }).catch(() => null);
 }
 
