@@ -517,6 +517,8 @@ export function msgV4Added(o: {
   sizeEth: string;
   rangeLabel: string;
   txHash?: string;
+  /** "$ARENA/USDG" — the same label the list and position cards use. */
+  pair?: string;
   dryRun: boolean;
 }): string {
   if (o.dryRun) {
@@ -529,16 +531,16 @@ export function msgV4Added(o: {
       note('simulation valid — no transaction was sent.'),
     ]);
   }
-  const body: string[] = [
-    `🟢 ${bold('new v4 position opened')} — monitoring is active`,
+  // Same card as the v3 path: one shape for "a position now exists", whichever protocol
+  // minted it. The full hash, because a shortened one cannot be pasted into an explorer.
+  return [
+    `\u2705 ${bold('POSITION OPENED')}`,
     '',
-    ...hrows([
-      ['Deposit', o.sizeEth],
-      ['Range', o.rangeLabel],
-    ]),
-  ];
-  if (o.txHash) body.push('', ...hrows([['tx', shortAddr(o.txHash)]]));
-  return card(`✅ ${title('ADDED v4', o.tokenId ? `#${o.tokenId}` : '')}`, body, nowWib());
+    `${bold(esc(o.pair ?? ''))} | #${esc(o.tokenId ?? '?')} (V4)`,
+    ...(o.txHash ? ['', `tx: ${code(o.txHash)}`] : []),
+    '',
+    note(nowWib()),
+  ].join('\n');
 }
 
 /** Confirmation for closing a Uniswap v4 position. */
@@ -1482,14 +1484,15 @@ export function msgLegStep(tokenSym: string, rangePct: number): string {
   ].join('\n');
 }
 
-export function msgLadderOpened(opened: number, total: number, pair: string, deposit: string): string {
+export function msgLadderOpened(opened: number, total: number, pair: string, deposit: string, txHash?: string | null): string {
   return [
-    `✅ ${bold('BID-ASK LADDER OPENED')} · ${opened}/${total} legs`,
+    `\u2705 ${bold('POSITION OPENED')} \u00B7 ladder ${opened}/${total} legs`,
     '',
     `${bold(esc(pair))}`,
-    `Deposit · ${bold(esc(deposit))} (split across ${opened} legs)`,
+    `Deposit: ${bold(esc(deposit))}, split across ${opened} legs`,
+    ...(txHash ? ['', `tx: ${code(txHash)}`] : []),
     '',
-    italic('Each leg is one position; managed together as one ladder.'),
+    note(nowWib()),
   ].join('\n');
 }
 
@@ -1694,30 +1697,22 @@ export function msgOpeningLp(): string {
  * sentence, a 66-character hash is impossible to select with a thumb.
  * Notes without a hash are shown as they are (a retry warning, say).
  */
-export function msgLpOpened(tokenId: string, notes: string[], pair?: string, rangeLabel?: string | null): string {
-  const out = [
-    `✅ ${bold('Single-Side LP Successfully Created!')}`,
-    '',
-    `Position ${bold(`#${tokenId}`)}${pair ? ` · ${bold(pair)}` : ''} is now active.`,
-    ...(rangeLabel ? [`Fees will start accumulating when the price enters the range: ${code(rangeLabel)}.`] : []),
-    '',
-    `🔗 ${bold('Transaction Steps :')}`,
-  ];
-
-  // A step and its hash sit tight together (no blank line between); blank lines only
-  // separate the title and the footer.
+export function msgLpOpened(
+  tokenId: string,
+  notes: string[],
+  pair?: string,
+  rangeLabel?: string | null,
+  protocol: 'V3' | 'V4' = 'V3',
+): string {
+  void rangeLabel; // the range is on the position card, one tap away
+  const out = [`\u2705 ${bold('POSITION OPENED')}`, '', `${bold(esc(pair ?? ''))} | #${esc(tokenId)} (${protocol})`];
+  // The FULL hash, as <code>: a shortened one cannot be pasted into an explorer, and this
+  // is the only place the opening transaction is ever shown.
   for (const n of notes) {
-    const m = n.match(/^(.*?)\s*\(tx (0x[0-9a-fA-F]+)\)$/);
-    out.push(`• ${esc(m ? m[1] : n)}:`);
-    if (m) out.push(`  ${code(m[2])}`);
+    const mt = n.match(/\(tx (0x[0-9a-fA-F]+)\)/);
+    if (mt) out.push('', `tx: ${code(mt[1])}`);
   }
-
-  out.push(
-    '',
-    'PHILIPS is monitoring this position and will notify you when it enters or exits the range. You can check it anytime via /positions.',
-    '',
-    italic(nowWib()),
-  );
+  out.push('', note(nowWib()));
   return out.join('\n');
 }
 
