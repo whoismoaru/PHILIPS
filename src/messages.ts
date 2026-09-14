@@ -470,7 +470,10 @@ export function msgV4Position(p: {
     // The window is named: an unlabelled "Volume" beside a TVL invites reading it as
     // all-time, which would make a young pool look far busier than it is. A pool the
     // index has not picked up reads '—', never '$0' -- unknown is not the same as idle.
-    `Volume: ${p.pool ? esc(p.pool.vol ?? '$0') : '—'} (24h)`,
+    // '$0' is a claim that nothing traded. An unread volume is not that, and the fallback
+    // source leaves it empty whenever it has no figure -- so an unknown reads '—', the same
+    // as a pool the index has never seen.
+    `Volume: ${esc(p.pool?.vol ?? '—')} (24h)`,
     // The POOL's liquidity at the price, not this position's capital: that is what
     // decides whether a trade through it moves the price, and it is readable on-chain
     // even when the index has no TVL for the pool yet.
@@ -1152,7 +1155,8 @@ export function msgPositionCard(opts: {
     // filled with a question mark.
     `TVL: ${opts.pool ? `${esc(opts.pool.tvl)}${opts.pool.onchain ? ' (on-chain)' : ''}` : '—'}`,
     `Fills: ${esc(opts.fillsLabel ?? '—')}`,
-    `Volume: ${opts.pool && !opts.pool.onchain ? esc(opts.pool.vol ?? '$0') : '—'} (24h)`,
+    // Same rule as the v4 card: an unread volume is '—'. '$0' would claim nothing traded.
+    `Volume: ${opts.pool && !opts.pool.onchain ? esc(opts.pool.vol ?? '—') : '—'} (24h)`,
     // The POOL's liquidity, not this position's capital -- the same meaning as on the v4
     // card. Read on-chain, so it survives a pool the index has not picked up yet.
     `Liquidity: ${esc(opts.poolDepth ?? '—')}`,
