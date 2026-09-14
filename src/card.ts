@@ -271,37 +271,48 @@ export type PnlCardOpts = {
   winRate: string; // '71.4% · 26 closes'
 };
 
+// This card has its own canvas, 1200x758. The close card is 1200x630, and the difference
+// is not cosmetic: every position below is a proportion of THIS shape.
+const PW = 1200;
+const PH = 758;
+// Mint, not the close card's green. On a card that is nothing but a dark ground and one
+// figure, the heavier green reads as muddy.
+const MINT = '#34D399';
+const MINT_RED = '#F87171';
+const PNL_LABEL = '#D4D4D8';
+const PNL_DATE = '#C9C9CD';
+
 /**
  * The PnL recap card: one period, one headline figure.
  *
- * The whole card is a letterhead — name and date on one line at the top, the result in the
- * middle, and four supporting figures on two rows at the foot. Everything except the net
- * is a label, so the eye lands on the money first and nothing competes with it.
+ * Name and date on one line at the top, the result in the middle, four supporting figures
+ * on two rows at the foot. Everything except the net is a label, so the eye lands on the
+ * money first and nothing competes with it.
  */
 export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> {
   ensureFonts();
-  const canvas = createCanvas(Math.round(W * scale), Math.round(H * scale));
+  const canvas = createCanvas(Math.round(PW * scale), Math.round(PH * scale));
   const ctx = canvas.getContext('2d');
   ctx.scale(scale, scale);
   // Zero is NEITHER a profit nor a loss. Painting a flat period green is the card telling
   // the owner they made money when they did not.
-  const hue = (positive: boolean | null) => (positive === null ? COL.text : positive ? COL.green : COL.red);
-  const accent = o.net > 0 ? COL.green : o.net < 0 ? COL.red : COL.text;
+  const hue = (positive: boolean | null) => (positive === null ? COL.text : positive ? MINT : MINT_RED);
+  const accent = o.net > 0 ? MINT : o.net < 0 ? MINT_RED : COL.text;
 
   // Rounded corners, clipped once: everything after this is drawn inside the card.
   ctx.save();
-  roundRect(ctx, 0, 0, W, H, 28);
+  roundRect(ctx, 0, 0, PW, PH, 30);
   ctx.clip();
 
   ctx.fillStyle = '#000000';
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(0, 0, PW, PH);
   const img = await background();
   if (img) {
-    const s = Math.max(W / img.width, H / img.height);
-    ctx.drawImage(img, W - img.width * s, (H - img.height * s) / 2, img.width * s, img.height * s);
+    const s = Math.max(PW / img.width, PH / img.height);
+    ctx.drawImage(img, PW - img.width * s, (PH - img.height * s) / 2, img.width * s, img.height * s);
     // Monochrome, then dimmed. The artwork's own colours competed with the only colour on
-    // this card that carries meaning — the green or red on the figures. Done per pixel
-    // rather than with a 'saturation' composite, which left a sepia cast here.
+    // this card that carries meaning -- the green or the red. Done per pixel rather than
+    // with a 'saturation' composite, which left a sepia cast here.
     const px = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const d = px.data;
     for (let i = 0; i < d.length; i += 4) {
@@ -310,16 +321,16 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
     }
     ctx.putImageData(px, 0, 0);
     ctx.fillStyle = 'rgba(0,0,0,0.30)';
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(0, 0, PW, PH);
   }
-  // The text column, veiled so it stays legible over ANY backdrop -- the owner can swap
-  // the image at any time, so nothing may be assumed about what sits behind the words.
+  // The text column, veiled so it stays legible over ANY backdrop -- the owner can swap the
+  // image at any time, so nothing may be assumed about what sits behind the words.
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(0, 0);
   ctx.lineTo(700, 0);
-  ctx.lineTo(620, H);
-  ctx.lineTo(0, H);
+  ctx.lineTo(620, PH);
+  ctx.lineTo(0, PH);
   ctx.closePath();
   ctx.clip();
   const veil = ctx.createLinearGradient(0, 0, 650, 0);
@@ -327,7 +338,7 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
   veil.addColorStop(0.6, 'rgba(0,0,0,0.88)');
   veil.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = veil;
-  ctx.fillRect(0, 0, 700, H);
+  ctx.fillRect(0, 0, 700, PH);
   ctx.restore();
   // A scrim along the top and the foot, for the same reason: the date and the right-hand
   // figures sit over the artwork.
@@ -336,44 +347,42 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
     g.addColorStop(0, `rgba(0,0,0,${from})`);
     g.addColorStop(1, `rgba(0,0,0,${to})`);
     ctx.fillStyle = g;
-    ctx.fillRect(0, y, W, h);
+    ctx.fillRect(0, y, PW, h);
   };
-  strip(0, 180, 0.95, 0);
-  strip(H - 210, 210, 0, 0.93);
+  strip(0, 210, 0.95, 0);
+  strip(PH - 230, 230, 0, 0.93);
 
-  const X = 72;
-  // ── The letterhead: mark, name, date.
+  const X = 66;
+  // ── The letterhead: mark, name, date. Sizes and baselines are the reference card's own
+  // proportions, measured off it and scaled to this canvas.
   ctx.fillStyle = COL.white;
-  roundRect(ctx, X, 74, 42, 42, 11);
+  roundRect(ctx, X, 84, 30, 30, 8);
   ctx.fill();
   ctx.fillStyle = '#000000';
-  ctx.font = '27px PhSansB';
-  ctx.fillText('P', X + 13, 105);
-  // Bright white, brighter than the body text: the wordmark is the one thing on the card
-  // that is not data, so it is set apart by weight rather than by a colour that would
-  // compete with the green and the red.
+  ctx.font = '21px PhSansB';
+  ctx.fillText('P', X + 9, 106);
   ctx.fillStyle = COL.white;
-  ctx.font = '31px PhSansB';
-  ctx.fillText('PHILIPS', X + 60, 106);
-  ctx.fillStyle = COL.text;
-  ctx.font = '23px PhSans';
+  ctx.font = '48px PhSansB';
+  ctx.fillText('PHILIPS', X + 48, 117);
+  ctx.fillStyle = PNL_DATE;
+  ctx.font = '31px PhSans';
   ctx.textAlign = 'right';
-  ctx.fillText(o.date, W - X, 104);
+  ctx.fillText(o.date, PW - X, 100);
   ctx.textAlign = 'left';
 
-  // ── The headline.
+  // ── The headline. The period is always named with it.
   ctx.fillStyle = COL.text;
-  ctx.font = '45px PhSans';
-  ctx.fillText(`PnL (${o.period})`, X, 300);
+  ctx.font = '50px PhSans';
+  ctx.fillText(`PnL (${o.period})`, X, 298);
   // It shrinks itself rather than running under the artwork.
-  let npx = 88;
+  let npx = 93;
   ctx.font = `${npx}px PhSansB`;
-  while (npx > 44 && ctx.measureText(o.netLabel).width > 500) {
+  while (npx > 44 && ctx.measureText(o.netLabel).width > 520) {
     npx -= 3;
     ctx.font = `${npx}px PhSansB`;
   }
   ctx.fillStyle = accent;
-  ctx.fillText(o.netLabel, X, 420);
+  ctx.fillText(o.netLabel, X, 448);
 
   // ── Four supporting figures, two per row: label left, figure right within its half.
   const cells: Array<{ label: string; value: string; colour: string }> = [
@@ -383,18 +392,18 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
     { label: 'Win Rate', value: o.winRate, colour: COL.text },
   ];
   cells.forEach((c, i) => {
-    const y = 538 + Math.floor(i / 2) * 58;
-    const left = i % 2 === 0 ? X : 640;
-    const right = i % 2 === 0 ? 560 : W - X;
-    ctx.fillStyle = COL.text;
-    ctx.font = '26px PhSansB';
+    const y = 620 + Math.floor(i / 2) * 63;
+    const left = i % 2 === 0 ? X : 636;
+    const right = i % 2 === 0 ? 557 : PW - X;
+    ctx.fillStyle = PNL_LABEL;
+    ctx.font = '27px PhSansB';
     ctx.fillText(c.label, left, y);
     ctx.fillStyle = c.colour;
     ctx.textAlign = 'right';
     // The figure shrinks before it can collide with its own label.
-    let f = 26;
+    let f = 29;
     ctx.font = `${f}px PhSansB`;
-    while (f > 16 && ctx.measureText(c.value).width > right - left - ctx.measureText(c.label).width - 24) {
+    while (f > 18 && ctx.measureText(c.value).width > right - left - ctx.measureText(c.label).width - 26) {
       f -= 1;
       ctx.font = `${f}px PhSansB`;
     }
