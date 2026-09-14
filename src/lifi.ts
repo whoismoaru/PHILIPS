@@ -25,6 +25,11 @@ const DIAMOND: Record<number, string> = {
   999: '0x0a0758d937d1059c356D4714e57F5df0239bce1A', // HyperEVM
   8453: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', // Base
   56: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', // BSC
+  // Arc. LI.FI already lists chain 5042 (li.quest/v1/chains) and this diamond carries
+  // code on Arc -- so the moment ARC_RPC_URL is filled in, bridging works with no further
+  // change. Arc's gas IS USDC and its "native" token is the 6-decimal ERC-20 at
+  // 0x3600...0000, which LI.FI itself flags as nonStandardNativeDecimals.
+  5042: '0xA4072583658Fae592A3506A42431cb6316a8d40b', // Arc
 };
 
 /** true when LI.FI is available on this chain (its diamond is known). */

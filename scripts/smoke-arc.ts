@@ -46,5 +46,9 @@ assert.ok(v4.includes("arc: '0x6049c9a0e26405c0985f9e3685c87d0ae917f82b'"), 'the
 const cfg = readFileSync('src/config.ts', 'utf8');
 assert.match(cfg, /ARC_ENABLED[\s\S]{0,80}&& !!process\.env\.ARC_RPC_URL/, 'ARC_ENABLED alone can now enable the chain');
 
+// Bridging is ready too: LI.FI lists chain 5042 and its diamond carries code on Arc.
+const lifi = readFileSync('src/lifi.ts', 'utf8');
+assert.ok(lifi.includes("5042: '0xA4072583658Fae592A3506A42431cb6316a8d40b'"), 'the Arc LI.FI diamond is missing');
+
 void ethers;
 console.log('ok: Arc is scaffolded, its addresses are pinned, and it stays out of the registry until an RPC is given');
