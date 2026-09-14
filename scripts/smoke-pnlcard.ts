@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { renderProfitCard } from '../src/card.js';
+import { renderPnlCard } from '../src/card.js';
 
 /**
  * The PnL recap card. What matters here is not the layout but the COLOUR: a flat period
@@ -8,20 +8,19 @@ import { renderProfitCard } from '../src/card.js';
  * the bug this card was rewritten to avoid. So the headline pixel is read back.
  */
 const base = {
-  label: 'PnL Weekly',
-  pnlPct: '90.5% winrate',
-  stats: [{ label: 'opened', value: '7' }, { label: 'closed', value: '12' }],
-  footerLeft: 'Robinhood · 14 Sep 2026',
+  period: 'Today', date: '14th September 2026',
+  realized: { label: '+$0.00', positive: true }, unrealized: { label: '-', positive: null },
+  best: { label: '-', positive: null }, winRate: '- · 0 closes',
 };
 /** The average colour of the headline figure's row, read off the rendered PNG. */
 async function headline(net: number, netLabel: string) {
-  const png = await renderProfitCard({ ...base, positive: net === 0 ? null : net > 0, pnlBig: netLabel }, 1);
+  const png = await renderPnlCard({ ...base, net, netLabel }, 1);
   assert.ok(png.length > 10_000, 'the card came back empty');
   const img = await loadImage(png);
   const c = createCanvas(img.width, img.height);
   c.getContext('2d').drawImage(img, 0, 0);
   // A band through the middle of the big figure, left column only.
-  const d = c.getContext('2d').getImageData(74, 260, 400, 40).data;
+  const d = c.getContext('2d').getImageData(74, 380, 420, 40).data;
   let r = 0, g = 0, b = 0, n = 0;
   for (let i = 0; i < d.length; i += 4) {
     if (d[i] + d[i + 1] + d[i + 2] < 150) continue; // the dark ground, not the glyphs

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createCanvas } from '@napi-rs/canvas';
-import { BG_CUSTOM, customBackground, invalidateBackground, renderProfitCard } from '../src/card.js';
+import { BG_CUSTOM, customBackground, invalidateBackground, renderPnlCard } from '../src/card.js';
 
 /**
  * The backdrop the owner sends must actually reach the card. The failure this guards is
@@ -9,16 +9,16 @@ import { BG_CUSTOM, customBackground, invalidateBackground, renderProfitCard } f
  * old backdrop because the decoded one was cached.
  */
 const opts = {
-  label: 'PnL Today', positive: true, pnlBig: '+$0.00', pnlPct: '0.0% winrate',
-  stats: [{ label: 'opened', value: '0' }, { label: 'closed', value: '0' }],
-  footerLeft: 'Robinhood · 14 Sep 2026',
+  period: 'Today', date: '14th September 2026', net: 0, netLabel: '+$0.00',
+  realized: { label: '+$0.00', positive: true }, unrealized: { label: '-', positive: null },
+  best: { label: '-', positive: null }, winRate: '- · 0 closes',
 };
 // An existing custom backdrop belongs to the owner: move it aside, never delete it.
 const saved = existsSync(BG_CUSTOM) ? readFileSync(BG_CUSTOM) : null;
 if (saved) rmSync(BG_CUSTOM);
 invalidateBackground();
 assert.equal(customBackground(), false, 'the test started with a custom backdrop still in place');
-const before = await renderProfitCard(opts, 1);
+const before = await renderPnlCard(opts, 1);
 
 // A backdrop that is unmistakably not the shipped artwork.
 const c = createCanvas(1200, 630);
@@ -28,13 +28,13 @@ g.fillRect(0, 0, 1200, 630);
 writeFileSync(BG_CUSTOM, c.toBuffer('image/jpeg'));
 invalidateBackground();
 assert.equal(customBackground(), true, 'the saved backdrop is not being seen');
-const after = await renderProfitCard(opts, 1);
+const after = await renderPnlCard(opts, 1);
 assert.ok(!before.equals(after), 'the card is identical after the backdrop changed: it is still drawing the cached one');
 
 // Restoring the default has to take effect just as immediately.
 rmSync(BG_CUSTOM);
 invalidateBackground();
-const back = await renderProfitCard(opts, 1);
+const back = await renderPnlCard(opts, 1);
 assert.ok(back.equals(before), 'the default did not come back after the custom backdrop was removed');
 
 if (saved) {

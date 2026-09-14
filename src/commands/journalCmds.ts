@@ -3,10 +3,11 @@ import { config } from '../config.js';
 import { bot, html } from '../core.js';
 import { CHAINS } from '../chains.js';
 import { getEthUsd } from '../screening.js';
-import { renderProfitCard } from '../card.js';
+import { renderPnlCard } from '../card.js';
 import * as journal from '../journal.js';
 import * as store from '../store.js';
 import * as v4store from '../v4store.js';
+import { unrealizedUsd } from '../unrealized.js';
 import * as msg from '../messages.js';
 
 /** /history and /pnl — reads of the closed-trade journal. No RPC, no state. */
@@ -168,31 +169,29 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   const main = s.books[0];
   if (!main) return null;
   const wr = journal.winrateOf(main);
-  const since = sinceOf(key);
-  // Positions OPENED in the period. The journal only knows the ones that have closed
-  // again, so the ones still running are counted from the live records -- otherwise a
-  // period spent opening positions reads as "0 opened".
-  const live =
-    store.active().filter((r) => (!chain || chain === ALL || (r.chain ?? 'robinhood') === chain) && r.openedAt >= since).length +
-    v4store.allV4().filter((r) => (!chain || chain === ALL || r.chain === chain) && r.openedAt >= since).length;
-  return renderProfitCard({
-    // No pair line: a recap covers many positions, and naming one of them would be a lie.
-    // The label says what the card IS, so it is drawn in white rather than in an outcome
-    // colour -- see ProfitCardOpts.label.
-    label: `PnL ${journal.PERIODS[key].label}`,
-    positive: main.net === 0 ? null : main.net > 0,
-    pnlBig: n2(main.net, main.unit),
+  // What the OPEN positions are worth right now. Read live, and a read that fails says '-'
+  // rather than '$0.00' -- unknown is not the same as flat.
+  const un = await unrealizedUsd(chain === ALL ? undefined : chain).catch(() => ({ usd: null, read: 0, total: 0 }));
+  const sign = (v: number | null) => (v === null ? null : v >= 0);
+  const head = main.net + (un.usd ?? 0);
+  return renderPnlCard({
+    // The period is ALWAYS named with it: 'PnL (Weekly)' never just 'PnL'.
+    period: journal.PERIODS[key].label,
+    date: msg.dateWibLong(),
+    // The headline is realized PLUS unrealized: it answers "where do I stand", and money
+    // still sitting in a position is money either way.
+    net: head,
+    netLabel: n2(head, main.unit),
+    realized: { label: n2(main.net, main.unit), positive: main.net >= 0 },
+    unrealized: { label: un.usd === null ? '-' : n2(un.usd, main.unit), positive: sign(un.usd) },
+    best: {
+      label: main.best
+        ? `${n2(main.best.pnl, main.unit)}${main.best.pct === null ? '' : ` (${main.best.pct >= 0 ? '+' : ''}${main.best.pct.toFixed(2)}%)`}`
+        : '-',
+      positive: main.best ? main.best.pnl >= 0 : null,
+    },
     // A winrate over no decided trade is not 0%, it is unknown.
-    pnlPct: main.known ? `${wr.toFixed(1)}% winrate` : 'no decided trade yet',
-    stats: [
-      { label: 'opened', value: String(s.opened + live) },
-      { label: 'closed', value: String(s.positions) },
-      { label: 'profit', value: n2(main.grossWin, main.unit) },
-      { label: 'loss', value: n2(main.grossLoss, main.unit) },
-    ],
-    // Chain and DATE. No clock: a recap covers a whole period, so the minute it was taken
-    // says nothing, and no timezone can be misread.
-    footerLeft: `${chain === ALL ? 'All chains' : chainLabel(chain)} · ${msg.dateWibShort()}`,
+    winRate: main.known ? `${wr.toFixed(1)}% · ${s.positions} closes` : `- · ${s.positions} closes`,
   }).catch(() => null);
 }
 
