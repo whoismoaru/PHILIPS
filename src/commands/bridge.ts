@@ -5,6 +5,7 @@ import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset } fro
 import { CHAINS, getChain, isStableBase, type ChainCtx, type BaseKind } from '../chains.js';
 import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridgeRoute.js';
 import { NATIVE } from '../relay.js';
+import { lifiSupports } from '../lifi.js';
 import { ERC20_ABI } from '../chain.js';
 import { getEthUsd } from '../screening.js';
 import * as store from '../store.js';
@@ -130,9 +131,23 @@ async function assetBalance(cc: ChainCtx, kind: BaseKind): Promise<{ wei: bigint
   return { wei, label: `${Number(ethers.formatUnits(wei, b.decimals)).toFixed(4)} ${b.symbol}` };
 }
 
+/**
+ * Chains a bridge can actually reach.
+ *
+ * A chain being ENABLED is not the same as being bridgeable: Arc is live, its contracts
+ * are verified and LI.FI lists it in /v1/chains and /v1/tools -- yet /v1/quote still
+ * answers "Chain 5042 is not supported", and Relay does not carry it at all. Offering the
+ * route anyway gives a button that can only fail after the user has picked an amount, so
+ * the pairs are filtered to what a provider will really quote.
+ *
+ * LI.FI's diamond map is the test: every chain in it has been quoted against. Relay is
+ * not consulted here because it covers a superset of those chains today.
+ */
+const bridgeable = (cc: ChainCtx): boolean => lifiSupports(cc);
+
 /** Every direction between the active chains. With one chain there is nothing to bridge. */
 function routes(): Array<{ from: ChainCtx; to: ChainCtx }> {
-  const list = Object.values(CHAINS);
+  const list = Object.values(CHAINS).filter(bridgeable);
   const out: Array<{ from: ChainCtx; to: ChainCtx }> = [];
   for (const from of list) for (const to of list) if (from.key !== to.key) out.push({ from, to });
   return out;
