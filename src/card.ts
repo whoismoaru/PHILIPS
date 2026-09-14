@@ -212,12 +212,13 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   // The result label and a rule as wide as the word itself -- LOSS is shorter than PROFIT,
   // and a fixed width would leave the rule hanging.
   const word = o.label ?? (o.positive === null ? 'FLAT' : o.positive ? 'PROFIT' : 'LOSS');
-  // PROFIT/LOSS is an outcome and takes the outcome's colour. A supplied label names the
-  // card instead, so it stays white and leaves the colour to the figure.
+  // PROFIT/LOSS is an outcome: small, in the outcome's colour, with a rule as wide as the
+  // word itself. A supplied label NAMES the card instead -- it is the title of a recap, so
+  // it is set larger, in white, and carries no rule.
   ctx.fillStyle = o.label ? COL.text : accent;
-  ctx.font = '19px PhSansB';
+  ctx.font = `${o.label ? 32 : 19}px PhSansB`;
   ctx.fillText(word, X, 208);
-  ctx.fillRect(X, 216, ctx.measureText(word).width, 2);
+  if (!o.label) ctx.fillRect(X, 216, ctx.measureText(word).width, 2);
 
   // The amount and percentage take the result colour. The unit ('USDT') is split off and
   // drawn smaller: what makes '-138.61 USDT' so much longer than '+$18.42' is the unit,
