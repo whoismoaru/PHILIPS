@@ -38,3 +38,28 @@ const hook = msgV4Position({ ...base, feeLabel: 'ts 200, dynamic', pool: { tvl: 
 assert.ok(hook.includes('APR: hook fee'), 'a hook-fee pool must name its reason');
 
 console.log('ok: the v4 pool card keeps its six rows, and an unread pool never reads as a zero one');
+
+// ── The SAME six rows on the v3 card. One protocol must not read differently from the
+// other for the same position, and the pair of cards is reached by the same tap.
+const { msgPositionCard } = await import('../src/messages.js');
+const v3 = msgPositionCard({
+  tokenId: '987654', symbol: 'GG', fee: 10000, invest: '$1.00', pnlText: '—', age: '3m',
+  dryRun: false, range: '+2.0% / -90.1%', inRange: false, side: 'base', baseSymbol: 'USDG',
+  chain: 'BSC', fillsLabel: '≤2%', poolDepth: '452,3265 USDT',
+  pool: { tvl: '$37.5K', vol: '$222.9K', apr: '0%' },
+} as any).replace(/<[^>]+>/g, '');
+const v3rows = v3.split('\n').filter((l) => /^[├└] /.test(l)).map((l) => l.slice(2).split(':')[0]);
+assert.deepEqual(v3rows, ['Fee', 'TVL', 'APR', 'Fills', 'Volume', 'Liquidity'], `the v3 rows differ: ${v3rows.join(', ')}`);
+assert.ok(!/Range:/.test(v3), 'the v3 card still prints the range');
+
+// An on-chain TVL has no volume behind it, so APR and Volume have nothing to say -- and
+// must say exactly that rather than 0.
+const chainOnly = msgPositionCard({
+  tokenId: '987654', symbol: 'GG', fee: 10000, invest: '$1.00', pnlText: '—', age: '3m',
+  dryRun: false, range: '—', inRange: false, side: 'base', baseSymbol: 'USDG',
+  pool: { tvl: '$12.0K', onchain: true },
+} as any).replace(/<[^>]+>/g, '');
+assert.ok(chainOnly.includes('TVL: $12.0K (on-chain)'), 'an on-chain TVL must say where it came from');
+assert.ok(chainOnly.includes('APR: —') && chainOnly.includes('Volume: — (24h)'), 'an on-chain read must not invent an APR or a volume');
+
+console.log('ok: v3 and v4 print the same six rows, on every chain');

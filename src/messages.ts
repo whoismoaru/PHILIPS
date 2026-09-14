@@ -1160,14 +1160,19 @@ export function msgPositionCard(opts: {
     // An on-chain TVL carries no volume behind it, so that column is left off rather than
     // filled with a question mark.
     `TVL: ${opts.pool ? `${esc(opts.pool.tvl)}${opts.pool.onchain ? ' (on-chain)' : ''}` : '—'}`,
+    // What the pool PAYS, beside what it holds. An on-chain TVL has no volume behind it,
+    // so there is nothing to annualise and the row reads '?' rather than a made-up yield.
+    `APR: ${opts.pool && !opts.pool.onchain ? esc(opts.pool.apr ?? '?') : '—'}`,
     `Fills: ${esc(opts.fillsLabel ?? '—')}`,
     // Same rule as the v4 card: an unread volume is '—'. '$0' would claim nothing traded.
     `Volume: ${opts.pool && !opts.pool.onchain ? esc(opts.pool.vol ?? '—') : '—'} (24h)`,
     // The POOL's liquidity, not this position's capital -- the same meaning as on the v4
     // card. Read on-chain, so it survives a pool the index has not picked up yet.
     `Liquidity: ${esc(opts.poolDepth ?? '—')}`,
-    `Range: ${esc(opts.mcRange ?? opts.range)}`,
   ];
+  // The range lives on the LIST card now, pinned to the entry values. Printing it here as
+  // well gave the two cards a way to disagree about the same position.
+  void opts.mcRange;
   return [
     // Same header the list card uses, so the card you land on is recognisably the row
     // you tapped: state emoji, pair, id, protocol.

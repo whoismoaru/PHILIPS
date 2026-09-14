@@ -916,8 +916,16 @@ async function buildPositionCard(
   // held by the pool CONTRACT, which is always readable for v3.
   const poolRow = await (async () => {
     try {
+      // The VENUE is part of the match. On BSC a Uniswap v3 pool and a PancakeSwap pool
+      // can share a token, a base AND a fee while being two different pools in two
+      // different factories -- without this the card could report the other one's TVL,
+      // volume and APR for the position you are looking at.
       const hit = (await explore.poolsForToken(cc, rec.ca).catch(() => [])).find(
-        (x) => x.protocol === 'v3' && x.fee === rec.fee && x.base === d.baseKind,
+        (x) =>
+          x.protocol === 'v3' &&
+          x.fee === rec.fee &&
+          x.base === d.baseKind &&
+          (x.venue ?? '') === (rec.venue ?? ''),
       );
       if (hit) {
         return {
