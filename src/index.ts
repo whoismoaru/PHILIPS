@@ -4447,7 +4447,8 @@ async function sendProfitCard(
     : baseIn > 0
       ? ((baseOut - baseIn) / baseIn) * 100
       : 0;
-  const positive = pnl >= 0;
+  // Zero is flat, not a win: null leaves the card neutral.
+  const positive = pnl === 0 ? null : pnl > 0;
   const fmt = (n: number) => n.toLocaleString('id-ID', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
   // Dollars when both rates are known; otherwise the base asset, because an unpriced
   // close must not invent a dollar figure.
@@ -4477,8 +4478,10 @@ async function sendProfitCard(
           ]
         : []),
     ],
-    // nowWib() carries the date now; the ISO prefix printed it twice.
-    footerLeft: `#${tokenId} · ${msg.nowWib()}`,
+    // The CHAIN and the date. The token id was only ever useful to the bot; the chain is
+    // what a card scrolled back to weeks later actually has to say. No clock: the trade is
+    // already closed, so the minute the card was drawn means nothing.
+    footerLeft: `${ctxOf(rec).label} · ${msg.dateWibShort()}`,
     // The position's shape follows its record; an older position with no marker is treated
     // as SPOT (which is exactly how things behaved before ladders existed).
     shape: shape ?? rec.shape ?? 'spot',

@@ -196,16 +196,16 @@ export function nowWib(): string {
 
 
 /**
- * "14 September 2026" -- the date spelled out, no clock.
+ * "14 Sep 2026" -- the date, no clock.
  *
- * The PnL card covers a whole period, so a minute-precise stamp on it says nothing: what
- * matters is the DAY the recap was taken. Built the same way as nowWib (UTC shifted by 7)
- * rather than through a locale, which on a server set to another zone silently returns
- * yesterday.
+ * The PnL cards cover a whole period, or a trade that has already closed, so a
+ * minute-precise stamp says nothing and a timezone on it is one more thing to misread.
+ * Built the same way as nowWib (UTC shifted by 7) rather than through a locale, which on a
+ * server set to another zone silently returns yesterday.
  */
-export function dateWibLong(): string {
+export function dateWibShort(): string {
   const d = new Date(Date.now() + 7 * 3_600_000);
-  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 

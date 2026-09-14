@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { bot, html } from '../core.js';
 import { CHAINS } from '../chains.js';
 import { getEthUsd } from '../screening.js';
-import { renderPnlCard } from '../card.js';
+import { renderProfitCard } from '../card.js';
 import * as journal from '../journal.js';
 import * as store from '../store.js';
 import * as v4store from '../v4store.js';
@@ -175,23 +175,24 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   const live =
     store.active().filter((r) => (!chain || chain === ALL || (r.chain ?? 'robinhood') === chain) && r.openedAt >= since).length +
     v4store.allV4().filter((r) => (!chain || chain === ALL || r.chain === chain) && r.openedAt >= since).length;
-  const usd = (v: number) => `$${Math.abs(v).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  return renderPnlCard({
-    period: journal.PERIODS[key].label,
-    opened: s.opened + live,
-    closed: s.positions,
-    net: main.net,
-    netLabel: n2(main.net, main.unit),
-    volumeLabel: usd(s.volume),
+  return renderProfitCard({
+    // No pair line: a recap covers many positions, and naming one of them would be a lie.
+    // The label says what the card IS, so it is drawn in white rather than in an outcome
+    // colour -- see ProfitCardOpts.label.
+    label: `PnL ${journal.PERIODS[key].label}`,
+    positive: main.net === 0 ? null : main.net > 0,
+    pnlBig: n2(main.net, main.unit),
     // A winrate over no decided trade is not 0%, it is unknown.
-    winRateLabel: main.known ? `${wr.toFixed(1)}%` : '-',
-    positionsLabel: String(s.positions),
-    bestLabel: main.best ? n2(main.best.pnl, main.unit) : '-',
-    bestPositive: (main.best?.pnl ?? 0) >= 0,
-    // The DAY, spelled out. The chain is already named by the picker this card was opened
-    // from, and the mode belongs to a card that is about to spend money -- this one reports
-    // trades that have already closed.
-    date: msg.dateWibLong(),
+    pnlPct: main.known ? `${wr.toFixed(1)}% winrate` : 'no decided trade yet',
+    stats: [
+      { label: 'opened', value: String(s.opened + live) },
+      { label: 'closed', value: String(s.positions) },
+      { label: 'profit', value: n2(main.grossWin, main.unit) },
+      { label: 'loss', value: n2(main.grossLoss, main.unit) },
+    ],
+    // Chain and DATE. No clock: a recap covers a whole period, so the minute it was taken
+    // says nothing, and no timezone can be misread.
+    footerLeft: `${chain === ALL ? 'All chains' : chainLabel(chain)} · ${msg.dateWibShort()}`,
   }).catch(() => null);
 }
 
