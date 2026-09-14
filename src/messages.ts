@@ -466,6 +466,10 @@ export function msgV4Position(p: {
     // The pool figures are absent, not zero, when the index has not picked this pool up.
     // Printing "$0" would describe a dead pool, which is a different thing entirely.
     `TVL: ${p.pool ? esc(p.pool.tvl) : '—'}`,
+    // What the pool PAYS, next to what it holds. '?' means the volume behind it could not
+    // be read, and 'hook fee' that the pool's own fee is not what the LP earns -- neither
+    // is a zero, and printing one as a number would be the card inventing a yield.
+    `APR: ${p.pool ? esc(p.pool.apr) : '—'}`,
     `Fills: ${esc(p.fillsLabel ?? '—')}`,
     // The window is named: an unlabelled "Volume" beside a TVL invites reading it as
     // all-time, which would make a young pool look far busier than it is. A pool the
@@ -478,8 +482,10 @@ export function msgV4Position(p: {
     // decides whether a trade through it moves the price, and it is readable on-chain
     // even when the index has no TVL for the pool yet.
     `Liquidity: ${esc(p.poolDepth ?? '—')}`,
-    `Range: ${esc(p.mcRange ?? p.rangeLabel)}`,
   ];
+  // The range is carried by the LIST card now (one row per position, pinned to the entry
+  // values), so repeating it here only gave the two cards a way to disagree.
+  void p.mcRange;
   const lines = [
     // Same header the list card uses, so the card you land on is recognisably the row
     // you tapped: state emoji, pair, id, protocol.

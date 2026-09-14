@@ -923,7 +923,7 @@ async function buildPositionCard(
         return {
           tvl: msg.usdCompact(hit.tvlUsd),
           vol: hit.vol24hUsd != null && hit.vol24hUsd > 0 ? msg.usdCompact(hit.vol24hUsd) : undefined,
-          apr: hit.aprPct == null ? undefined : `~${hit.aprPct >= 100 ? Math.round(hit.aprPct) : hit.aprPct.toFixed(1)}%`,
+          apr: hit.aprPct == null ? undefined : aprLabel(hit.aprPct),
         };
       }
       const onchain = (await discoverAllPools(rec.ca, cc).catch(() => [])).find(
@@ -1393,15 +1393,14 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
         apr: (() => {
           const feeFrac = Number(p.poolKey.fee) / 1e6;
           if (!dex.vol24hUsd || !dex.tvlUsd || !isFinite(feeFrac) || feeFrac <= 0) return '?';
-          const a = ((dex.vol24hUsd * feeFrac) / dex.tvlUsd) * 365 * 100;
-          return `~${a >= 100 ? Math.round(a) : a.toFixed(1)}%`;
+          return aprLabel(((dex.vol24hUsd * feeFrac) / dex.tvlUsd) * 365 * 100);
         })(),
       };
     }
     return {
       tvl: msg.usdCompact(hit.tvlUsd),
       vol: hit.vol24hUsd != null && hit.vol24hUsd > 0 ? msg.usdCompact(hit.vol24hUsd) : undefined,
-      apr: hit.aprPct == null ? '?' : `~${hit.aprPct >= 100 ? Math.round(hit.aprPct) : hit.aprPct.toFixed(1)}%`,
+      apr: aprLabel(hit.aprPct),
     };
   })();
   // The pool's own depth at the current price, in base units. Read from the chain, so it
@@ -1467,6 +1466,17 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     ]),
   };
   return { text, extra };
+}
+
+/**
+ * An APR for a card: '12.3%', '148%', '0%'. null means it could not be computed, which
+ * reads '?' -- an unknown yield is not a zero one, and printing 0% would state a fact
+ * about the pool that nobody measured.
+ */
+function aprLabel(pct: number | null | undefined): string {
+  if (pct == null || !isFinite(pct)) return '?';
+  if (pct === 0) return '0%';
+  return `${pct >= 100 ? Math.round(pct) : Number(pct.toFixed(1))}%`;
 }
 
 /**
