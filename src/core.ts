@@ -111,7 +111,19 @@ export const capLabelFor = (cap: number, sym: string) => (cap === Infinity ? 'un
 export const maxEthLabel = capLabelFor(maxEth, 'ETH');
 
 /** The position was burned, or never existed on chain: its NFT is gone. */
-export const isGoneErr = (e: unknown) => /invalid token id/i.test(String((e as Error)?.message ?? e));
+/**
+ * The position is GONE -- already burned, or never minted.
+ *
+ * v3 says 'invalid token id'; v4's PositionManager says 'NOT_MINTED'. Only v3's wording
+ * was matched here, so closing a v4 position that had already been closed produced a
+ * TRANSACTION ERROR card instead of "already closed" -- and because the revert is
+ * deterministic, the retry fired and sent a second card. Seven ladder legs made fourteen
+ * error messages for a position that was simply no longer there.
+ */
+export const isGoneErr = (e: unknown) =>
+  /invalid token id|NOT_MINTED|nonexistent token|ERC721: owner query for nonexistent/i.test(
+    String((e as Error)?.message ?? e),
+  );
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

@@ -28,6 +28,9 @@ export async function retryOnce<T>(
   try {
     return await run();
   } catch (first) {
+    // A position that is GONE reverts the same way every time, so a retry can only fail
+    // again -- and each failure is another error card for the owner. Give up at once.
+    if (/invalid token id|NOT_MINTED|nonexistent token/i.test((first as Error).message ?? '')) throw first;
     const after = await probe().catch(() => -1n);
     const why = (first as Error).message.slice(0, 160);
     if (before < 0n || after < 0n || after !== before) {

@@ -5234,7 +5234,15 @@ async function execCloseV4(ctx: any) {
     }
   } catch (e) {
     await recoverStrayWeth(cc, 'close v4').catch(() => {});
-    await ctx.reply(msg.msgError('close v4', e), html);
+    // Already closed is not an error: stop tracking it and say so plainly. It used to
+    // arrive as a raw revert card, once per attempt and once per ladder leg.
+    if (isGoneErr(e)) {
+      v4store.removeV4(tokenId);
+      invalidateV4ListCache();
+      await ctx.reply(msg.msgAlreadyClosed(tokenId), html);
+    } else {
+      await ctx.reply(msg.msgError('close v4', e), html);
+    }
   } finally {
     closingInFlight.delete(key);
     store.endMoneyOp();
