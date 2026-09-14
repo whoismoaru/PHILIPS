@@ -12,16 +12,19 @@ const DEJAVU = '/usr/share/fonts/truetype/dejavu';
 let fontsReady = false;
 function ensureFonts() {
   if (fontsReady) return;
-  const reg = (file: string, alias: string) => {
+  const reg = (path: string, alias: string) => {
     try {
-      GlobalFonts.registerFromPath(`${DEJAVU}/${file}`, alias);
+      GlobalFonts.registerFromPath(path, alias);
     } catch {
       /* fall back to the canvas default when the font is missing */
     }
   };
-  reg('DejaVuSans.ttf', 'PhSans');
-  reg('DejaVuSans-Bold.ttf', 'PhSansB');
-  reg('DejaVuSansMono.ttf', 'PhMono');
+  // Liberation Sans for the text: DejaVu sets about 22% wider at the same height, which
+  // pushed the big figures off their intended width. The mono face stays DejaVu -- the
+  // Liberation mono is Courier-metric and reads much lighter next to these.
+  reg('/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf', 'PhSans');
+  reg('/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf', 'PhSansB');
+  reg(`${DEJAVU}/DejaVuSansMono.ttf`, 'PhMono');
   fontsReady = true;
 }
 
@@ -359,23 +362,23 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
   roundRect(ctx, X, 84, 30, 30, 8);
   ctx.fill();
   ctx.fillStyle = '#000000';
-  ctx.font = '21px PhSansB';
-  ctx.fillText('P', X + 9, 106);
+  ctx.font = '23px PhSansB';
+  ctx.fillText('P', X + 8, 107);
   ctx.fillStyle = COL.white;
-  ctx.font = '48px PhSansB';
+  ctx.font = '53px PhSansB';
   ctx.fillText('PHILIPS', X + 48, 117);
   ctx.fillStyle = PNL_DATE;
-  ctx.font = '31px PhSans';
+  ctx.font = '34px PhSans';
   ctx.textAlign = 'right';
   ctx.fillText(o.date, PW - X, 100);
   ctx.textAlign = 'left';
 
   // ── The headline. The period is always named with it.
   ctx.fillStyle = COL.text;
-  ctx.font = '50px PhSans';
+  ctx.font = '55px PhSans';
   ctx.fillText(`PnL (${o.period})`, X, 298);
   // It shrinks itself rather than running under the artwork.
-  let npx = 93;
+  let npx = 103;
   ctx.font = `${npx}px PhSansB`;
   while (npx > 44 && ctx.measureText(o.netLabel).width > 520) {
     npx -= 3;
@@ -396,12 +399,12 @@ export async function renderPnlCard(o: PnlCardOpts, scale = 2): Promise<Buffer> 
     const left = i % 2 === 0 ? X : 636;
     const right = i % 2 === 0 ? 557 : PW - X;
     ctx.fillStyle = PNL_LABEL;
-    ctx.font = '27px PhSansB';
+    ctx.font = '30px PhSansB';
     ctx.fillText(c.label, left, y);
     ctx.fillStyle = c.colour;
     ctx.textAlign = 'right';
     // The figure shrinks before it can collide with its own label.
-    let f = 29;
+    let f = 32;
     ctx.font = `${f}px PhSansB`;
     while (f > 18 && ctx.measureText(c.value).width > right - left - ctx.measureText(c.label).width - 26) {
       f -= 1;
