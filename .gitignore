@@ -14,3 +14,7 @@ docs/
 # Salinan .env (backup sebelum diedit) — isinya PRIVATE_KEY & WALLET_SECRET.
 .env.bak-*
 .env.*.bak
+
+# one-off design references, never part of the build
+*.png
+!data/*.png
