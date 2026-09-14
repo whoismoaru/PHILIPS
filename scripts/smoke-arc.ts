@@ -13,7 +13,20 @@ import { CHAINS } from '../src/chains.js';
  * 2. The addresses must not rot. They were read off @uniswap/sdk-core and checked on
  *    chain; this pins them so a careless edit is caught here instead of by a transaction.
  */
-assert.ok(!CHAINS.arc, 'Arc is in the registry: it must stay out until ARC_RPC_URL is set');
+// The registry follows the RPC, not the flag: no endpoint means no chain, because a
+// chain that joins with an empty RPC fails every read at once and reads as dead rather
+// than as unconfigured.
+if (process.env.ARC_ENABLED === 'true' && process.env.ARC_RPC_URL) {
+  const cc = CHAINS.arc;
+  assert.ok(cc, 'Arc is configured but missing from the registry');
+  assert.equal(cc!.chainId, 5042);
+  assert.equal(cc!.hasWethBase, false, 'Arc has no wrapped native, so it must offer no ETH base');
+  assert.deepEqual(cc!.bases.map((b) => b.symbol), ['USDC'], 'USDC is the only LP base on Arc');
+  assert.equal(cc!.bases[0].decimals, 6, "Arc's USDC is the 6-decimal interface, not the 18-decimal native one");
+  assert.equal(cc!.wethAddress, ethers.ZeroAddress, 'Arc must carry no wrapped-native address');
+} else {
+  assert.ok(!CHAINS.arc, 'Arc joined the registry with no RPC configured');
+}
 
 const chains = readFileSync('src/chains.ts', 'utf8');
 const arc = chains.slice(chains.indexOf('        arc: {'), chains.indexOf('  ...(config.ink.enabled'));
@@ -50,5 +63,4 @@ assert.match(cfg, /ARC_ENABLED[\s\S]{0,80}&& !!process\.env\.ARC_RPC_URL/, 'ARC_
 const lifi = readFileSync('src/lifi.ts', 'utf8');
 assert.ok(lifi.includes("5042: '0xA4072583658Fae592A3506A42431cb6316a8d40b'"), 'the Arc LI.FI diamond is missing');
 
-void ethers;
 console.log('ok: Arc is scaffolded, its addresses are pinned, and it stays out of the registry until an RPC is given');
