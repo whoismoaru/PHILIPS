@@ -43,4 +43,17 @@ const close = src.slice(src.indexOf("await recoverStrayWeth(cc, 'close v4')"), s
 assert.match(close, /isGoneErr\(e\)/, 'the close handler no longer recognises a gone position');
 assert.match(close, /msgAlreadyClosed/, 'a gone position must be reported as already closed');
 
-console.log('ok: closing a vanished position is reported once, calmly, and never retried');
+// 5) The SAME treatment on the v3 path, and on the stop/confirm step that precedes it.
+//    isGoneErr is matched on the REVERT TEXT, so it holds on every chain -- there is no
+//    per-chain branch to keep in step.
+const v3close = src.slice(src.indexOf("await sendProfitCard(ctx, tokenId, closingRec"), src.indexOf("await sendProfitCard(ctx, tokenId, closingRec") + 900);
+assert.match(v3close, /isGoneErr\(err\)[\s\S]{0,200}msgAlreadyClosed/, 'the v3 close no longer reports a gone position calmly');
+const stop = src.slice(src.indexOf("bot.action(/\^stop:"), src.indexOf("bot.action(/\^stop:") + 700);
+assert.match(stop, /isGoneErr\(e\)[\s\S]{0,200}msgAlreadyClosed/, 'the stop step no longer reports a gone position calmly');
+
+// 6) The monitor reaps dead v4 records using the same wording, so a position that vanished
+//    outside the bot stops being tracked instead of failing forever.
+const mon = readFileSync('src/monitor.ts', 'utf8');
+assert.match(mon, /NOT_MINTED\|invalid token id\|nonexistent/, 'the v4 reaper no longer recognises a vanished position');
+
+console.log('ok: closing a vanished position is reported once, calmly, and never retried -- v3 and v4, every chain');
