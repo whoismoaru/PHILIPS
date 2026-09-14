@@ -8,7 +8,7 @@ import { renderPnlCard } from '../src/card.js';
  * the bug this card was rewritten to avoid. So the headline pixel is read back.
  */
 const base = {
-  period: 'Today', date: '14th September 2026',
+  period: 'Today', date: '14 September 2026',
   realized: { label: '+$0.00', positive: true }, unrealized: { label: '-', positive: null },
   best: { label: '-', positive: null }, winRate: '- · 0 closes',
 };

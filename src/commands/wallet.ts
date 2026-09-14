@@ -164,7 +164,7 @@ export async function handleBgPhoto(ctx: any, fileId: string): Promise<void> {
     // A preview, rendered from the real card, so the choice is judged on the thing
     // itself rather than on a promise that it will look fine.
     const png = await renderPnlCard({
-      period: 'Preview', date: msg.dateWibLong(), net: 0, netLabel: '+$0.00',
+      period: 'Preview', date: msg.dateWibFull(), net: 0, netLabel: '+$0.00',
       realized: { label: '+$0.00', positive: true }, unrealized: { label: '-', positive: null },
       best: { label: '-', positive: null }, winRate: '- · 0 closes',
     }).catch(() => null);

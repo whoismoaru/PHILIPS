@@ -4481,7 +4481,7 @@ async function sendProfitCard(
     // The CHAIN and the date. The token id was only ever useful to the bot; the chain is
     // what a card scrolled back to weeks later actually has to say. No clock: the trade is
     // already closed, so the minute the card was drawn means nothing.
-    footerLeft: `${ctxOf(rec).label} · ${msg.dateWibShort()}`,
+    footerLeft: `${ctxOf(rec).label} · ${msg.dateWibFull()}`,
     // The position's shape follows its record; an older position with no marker is treated
     // as SPOT (which is exactly how things behaved before ladders existed).
     shape: shape ?? rec.shape ?? 'spot',

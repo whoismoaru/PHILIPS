@@ -177,7 +177,7 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   return renderPnlCard({
     // The period is ALWAYS named with it: 'PnL (Weekly)' never just 'PnL'.
     period: journal.PERIODS[key].label,
-    date: msg.dateWibLong(),
+    date: msg.dateWibFull(),
     // The headline is realized PLUS unrealized: it answers "where do I stand", and money
     // still sitting in a position is money either way.
     net: head,

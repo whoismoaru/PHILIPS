@@ -196,28 +196,17 @@ export function nowWib(): string {
 
 
 /**
- * "14 Sep 2026" -- the date, no clock. The close card's footer.
- */
-export function dateWibShort(): string {
-  const d = new Date(Date.now() + 7 * 3_600_000);
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-}
-
-/**
- * "14th September 2026" -- spelled out, with the ordinal. The PnL card's letterhead.
+ * "14 September 2026" -- the month spelled out, no clock.
  *
- * Built the same way as nowWib (UTC shifted by 7) rather than through a locale, which on a
- * server set to another zone silently returns yesterday.
+ * Every card that reports MONEY ALREADY BOOKED carries this: a recap covers a whole period
+ * and a close has already happened, so the minute either was drawn says nothing, and a
+ * timezone on it is one more thing to misread. Built the same way as nowWib (UTC shifted by
+ * 7) rather than through a locale, which on a server set to another zone returns yesterday.
  */
-export function dateWibLong(): string {
+export function dateWibFull(): string {
   const d = new Date(Date.now() + 7 * 3_600_000);
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-  const n = d.getUTCDate();
-  // 1st, 2nd, 3rd, 4th -- and 11th/12th/13th, which are the exception every naive version
-  // of this gets wrong.
-  const suffix = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
-  return `${n}${suffix} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
 function footerMode(dryRun?: boolean): string {

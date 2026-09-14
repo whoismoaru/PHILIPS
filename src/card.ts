@@ -264,7 +264,7 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
 // ─────────────────────────────────────────────────────────────────────────────
 export type PnlCardOpts = {
   period: string; // 'Today' | 'Weekly' | 'Monthly' | 'All Time'
-  date: string; // '14th September 2026'
+  date: string; // '14 September 2026'
   net: number; // the headline, in USD; its SIGN picks the colour
   netLabel: string; // '+$324.41', already formatted
   /** The four supporting figures. `positive` is null where there is nothing to colour. */

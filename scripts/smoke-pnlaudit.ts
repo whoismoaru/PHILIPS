@@ -28,7 +28,7 @@ assert.ok(!/other books/.test(img), 'a book is still being left off the image');
 // named by the caption and by the picker the card was opened from, so it is not repeated
 // here -- but a recap with no period and no timestamp is a number with no meaning.
 assert.match(img, /period: journal\.PERIODS\[key\]\.label/, 'the card must name its period');
-assert.match(img, /date: msg\.dateWibLong\(\)/, 'the card must carry the date it was taken');
+assert.match(img, /date: msg\.dateWibFull\(\)/, 'the card must carry the date it was taken');
 
 // Winrate and profit factor: break-even must stay out of the denominator.
 assert.equal(journal.winrateOf({ wins: 3, losses: 1 }), 75);
