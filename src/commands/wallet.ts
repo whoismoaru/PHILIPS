@@ -8,7 +8,7 @@ import * as walletStore from '../walletStore.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
-import { BG_CUSTOM, customBackground, invalidateBackground, renderPnlCard } from '../card.js';
+import { BG_CUSTOM, customBackground, invalidateBackground, renderProfitCard } from '../card.js';
 
 /**
  * The wallet: /settings, with connect and disconnect as buttons on its card.
@@ -163,10 +163,13 @@ export async function handleBgPhoto(ctx: any, fileId: string): Promise<void> {
     await editProgress(ctx, prog, msg.msgPnlBgSaved(), html);
     // A preview, rendered from the real card, so the choice is judged on the thing
     // itself rather than on a promise that it will look fine.
-    const png = await renderPnlCard({
-      period: 'Preview', date: msg.dateWibFull(), net: 0, netLabel: '+$0.00',
-      realized: { label: '+$0.00', positive: true }, unrealized: { label: '-', positive: null },
-      best: { label: '-', positive: null }, winRate: '- · 0 closes',
+    const png = await renderProfitCard({
+      label: 'PnL Preview', positive: null, pnlBig: '+$0.00', pnlPct: 'no decided trade yet',
+      stats: [
+        { label: 'realized', value: '+$0.00' }, { label: 'unrealized', value: '—' },
+        { label: 'closed', value: '0 (0W/0L)' }, { label: 'biggest win', value: '—' },
+      ],
+      footerLeft: `preview · ${msg.dateWibFull()}`,
     }).catch(() => null);
     if (png) await ctx.replyWithDocument(Input.fromBuffer(png, 'pnl-preview.png'));
   } catch (e) {

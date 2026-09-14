@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { bot, html } from '../core.js';
 import { CHAINS } from '../chains.js';
 import { getEthUsd } from '../screening.js';
-import { renderPnlCard } from '../card.js';
+import { renderProfitCard } from '../card.js';
 import * as journal from '../journal.js';
 import * as store from '../store.js';
 import * as v4store from '../v4store.js';
@@ -172,26 +172,30 @@ async function pnlImage(chain: string, key: journal.PeriodKey, s: journal.Period
   // What the OPEN positions are worth right now. Read live, and a read that fails says '-'
   // rather than '$0.00' -- unknown is not the same as flat.
   const un = await unrealizedUsd(chain === ALL ? undefined : chain).catch(() => ({ usd: null, read: 0, total: 0 }));
-  const sign = (v: number | null) => (v === null ? null : v >= 0);
+  // The headline is realized PLUS unrealized: it answers "where do I stand", and money
+  // still sitting in a position is money either way.
   const head = main.net + (un.usd ?? 0);
-  return renderPnlCard({
-    // The period is ALWAYS named with it: 'PnL (Weekly)' never just 'PnL'.
-    period: journal.PERIODS[key].label,
-    date: msg.dateWibFull(),
-    // The headline is realized PLUS unrealized: it answers "where do I stand", and money
-    // still sitting in a position is money either way.
-    net: head,
-    netLabel: n2(head, main.unit),
-    realized: { label: n2(main.net, main.unit), positive: main.net >= 0 },
-    unrealized: { label: un.usd === null ? '-' : n2(un.usd, main.unit), positive: sign(un.usd) },
-    best: {
-      label: main.best
-        ? `${n2(main.best.pnl, main.unit)}${main.best.pct === null ? '' : ` (${main.best.pct >= 0 ? '+' : ''}${main.best.pct.toFixed(2)}%)`}`
-        : '-',
-      positive: main.best ? main.best.pnl >= 0 : null,
-    },
+  return renderProfitCard({
+    // No pair line: a recap covers many positions, and naming one of them would be a lie.
+    // The label says what the card IS and is always paired with its period, so it is drawn
+    // in white rather than in an outcome colour -- see ProfitCardOpts.label.
+    label: `PnL ${journal.PERIODS[key].label}`,
+    positive: head === 0 ? null : head > 0,
+    pnlBig: n2(head, main.unit),
     // A winrate over no decided trade is not 0%, it is unknown.
-    winRate: main.known ? `${wr.toFixed(1)}% · ${s.positions} closes` : `- · ${s.positions} closes`,
+    pnlPct: main.known ? `${wr.toFixed(1)}% winrate` : 'no decided trade yet',
+    stats: [
+      { label: 'realized', value: n2(main.net, main.unit) },
+      { label: 'unrealized', value: un.usd === null ? '—' : n2(un.usd, main.unit) },
+      { label: 'closed', value: `${s.positions} (${main.wins}W/${main.losses}L)` },
+      {
+        label: 'biggest win',
+        value: main.best
+          ? `${n2(main.best.pnl, main.unit)}${main.best.pct === null ? '' : ` (${main.best.pct >= 0 ? '+' : ''}${main.best.pct.toFixed(1)}%)`}`
+          : '—',
+      },
+    ],
+    footerLeft: `${chain === ALL ? 'All chains' : chainLabel(chain)} · ${msg.dateWibFull()}`,
   }).catch(() => null);
 }
 
