@@ -1265,6 +1265,7 @@ export function msgPositionsList(opts: {
     protocol?: string | null; // 'V3' | 'V4'
     chain?: string | null; // chain label — a list can span chains, and the card must say which
     rangeLabel?: string | null;
+    mcRange?: string | null; // '$1.68M ⇄ $165.5K / now $1.70M'
     feesLabel?: string | null;
     feesUsdLabel?: string | null; // fees in USD, falling back to feesLabel when the price cannot be read
     strategy?: string | null;
@@ -1281,7 +1282,7 @@ export function msgPositionsList(opts: {
     // The side is written from the perspective of the asset DEPOSITED: "USDG Side" means
     // the base went in. Naming ETH on a USDG position would name an asset never deposited.
     const tokenSide = r.strategy === 'token';
-    const side = tokenSide ? 'Token Side (sell the rip)' : `${base ?? 'Base'} Side (buy the dip)`;
+    const side = tokenSide ? 'Token Single Side (sell the rip)' : `${base ?? 'Base'} Single Side (buy the dip)`;
     // Three states, not two: not yet reached the range, inside it, and already through
     // the WHOLE range (capital fully converted, no longer earning). Without the third, a
     // position whose buy is FINISHED reads exactly like one that has not started.
@@ -1303,6 +1304,10 @@ export function msgPositionsList(opts: {
       `Invested: ${esc(r.investLabel)}`,
       `Total Fees: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
       `PnL: ${pnl}`,
+      // The range in MARKET CAP, the same reading the detail card gives. Dropped entirely
+      // when the entry values needed to pin it were never stored -- a wobbling range is
+      // worse than no range.
+      ...(r.mcRange ? [`Range: ${esc(r.mcRange)}`] : []),
       `Status: ${esc(status)}, ${esc(r.age)}`,
     ];
     return [

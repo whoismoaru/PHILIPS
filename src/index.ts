@@ -1469,10 +1469,41 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   return { text, extra };
 }
 
+/**
+ * A deposit, written the way the owner reads it: '$1.00 USDG' on a stable base, '0.0500
+ * WETH' on a volatile one. The dollar sign is only honest where the unit really is a
+ * dollar -- putting it in front of an ETH figure would state a price nobody quoted.
+ */
+function investedLabel(amount: number, symbol: string, stable: boolean, decimals: number): string {
+  const n = amount.toFixed(decimals >= 18 ? 4 : 2);
+  return stable ? `$${n} ${symbol}` : `${n} ${symbol}`;
+}
+
+/**
+ * The range read as MARKET CAP, for a row of /positions: '$1.68M ⇄ $165.5K / now $1.70M'.
+ *
+ * Built from STORED entry values only -- no network call. The detail card may fall back to
+ * a live market-cap lookup, but a list of twelve positions must not fire twelve of them,
+ * and a range that wobbles between refreshes is worse than no range at all. Market cap
+ * scales linearly with price, so mc(edge) = mcEntry x (edge price / entry price); for v4
+ * the same ratio comes out of the tick distance.
+ */
+function mcapRangeRow(mcEntry: number | undefined, edges: [number, number] | null, nowRatio: number | null): string | null {
+  if (!mcEntry || !edges) return null;
+  const [hi, lo] = edges[0] >= edges[1] ? edges : [edges[1], edges[0]];
+  const now = nowRatio !== null ? ` / now ${explore.usdShort(mcEntry * nowRatio)}` : '';
+  return `${explore.usdShort(mcEntry * hi)} ⇄ ${explore.usdShort(mcEntry * lo)}${now}`;
+}
+
 type PosRow = {
   id: string;
   pair: string;
   investLabel: string;
+  /** The same deposit as a number, with the unit beside it. A ladder sums its legs from
+   *  these; parsing the label back apart broke the moment it grew a '$'. */
+  investNum?: number;
+  investUnit?: string;
+  investStable?: boolean;
   age: string;
   pnlUsd: number | null;
   pnlPct: number | null;
@@ -1483,6 +1514,7 @@ type PosRow = {
   strategy?: string | null;
   baseSymbol?: string | null; // the asset deposited; the side label follows it rather than a hard-coded 'ETH'
   rangeLabel?: string | null;
+  mcRange?: string | null; // the range read as market cap, pinned to the entry values
   feesLabel?: string | null;
   feesUsdLabel?: string | null;
   converted?: boolean;
@@ -1500,15 +1532,15 @@ function collapseLadderRows(rows: PosRow[]): void {
   for (const [gid, legs] of groups) {
     if (legs.length < 2) continue;
     const base = legs[0];
-    const unit = base.investLabel.replace(/^[\d.]+\s*/, '');
-    const sumInvest = legs.reduce((s, r) => s + (parseFloat(r.investLabel) || 0), 0);
+    const sumInvest = legs.reduce((s, r) => s + (r.investNum ?? 0), 0);
     const pnlVals = legs.map((r) => r.pnlUsd).filter((x): x is number => x !== null);
     const sumPnlUsd = pnlVals.length ? pnlVals.reduce((a, b) => a + b, 0) : null;
     const sumWethEq = legs.reduce((s, r) => s + r.wethEq, 0);
     const wsum = legs.reduce((s, r) => s + r.wethEq, 0) || 1;
     const pct = legs.reduce((s, r) => s + (r.pnlPct ?? 0) * r.wethEq, 0) / wsum;
     base.pair = `${base.pair}  ◣×${legs.length}`;
-    base.investLabel = `${sumInvest.toFixed(sumInvest >= 1 ? 4 : 6)} ${unit}`.trim();
+    base.investNum = sumInvest;
+    base.investLabel = investedLabel(sumInvest, base.investUnit ?? '', !!base.investStable, sumInvest >= 1 ? 18 : 6).trim();
     base.pnlUsd = sumPnlUsd;
     base.pnlPct = pnlVals.length ? pct : null;
     base.wethEq = sumWethEq;
@@ -1521,7 +1553,7 @@ function collapseLadderRows(rows: PosRow[]): void {
     if (feeVals.length) {
       const sumFee = feeVals.reduce((a, b) => a + b, 0);
       base.feesBase = sumFee;
-      base.feesLabel = `${sumFee.toFixed(sumFee >= 1 ? 4 : 6)} ${unit}`.trim();
+      base.feesLabel = `${sumFee.toFixed(sumFee >= 1 ? 4 : 6)} ${base.investUnit ?? ""}`.trim();
       const usdVals = legs
         .map((r) => (r.feesUsdLabel ? Number(r.feesUsdLabel.replace(/[^0-9.-]/g, '')) : null))
         .filter((v): v is number => v !== null && Number.isFinite(v));
@@ -1599,7 +1631,10 @@ async function cmdPositions(ctx: any, edit = false) {
         // chain's label would be wrong for any position that is not on it.
         chain: rcc.label,
         protocol: 'V3',
-        investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${d.baseSymbol}`,
+        investLabel: investedLabel(investNum, d.baseSymbol, isStableBase(d.baseKind), dec),
+        investNum,
+        investUnit: d.baseSymbol,
+        investStable: isStableBase(d.baseKind),
         age: msg.fmtAge(Date.now() - rec.openedAt),
         pnlUsd,
         pnlPct,
@@ -1623,6 +1658,16 @@ async function cmdPositions(ctx: any, edit = false) {
           const a = Number(d.priceLower), b = Number(d.priceUpper);
           const [lo, hi] = a <= b ? [d.priceLower, d.priceUpper] : [d.priceUpper, d.priceLower];
           return `${lo} — ${hi} ${d.baseSymbol} per ${rec.symbol}`;
+        })(),
+        // Price ratios against the STORED entry price, so the bounds stand still between
+        // refreshes -- the same anchoring the detail card uses.
+        mcRange: (() => {
+          const e = Number(rec.entryPrice ?? 0);
+          if (!rec.entryMcap || !(e > 0)) return null;
+          const up = Number(d.priceUpper) / e;
+          const dn = Number(d.priceLower) / e;
+          const nowP = Number(d.currentPrice);
+          return mcapRangeRow(rec.entryMcap, [up, dn], nowP > 0 ? nowP / e : null);
         })(),
         feesLabel: `${Number(ethers.formatUnits(d.feesBaseWei, dec)).toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`,
         // Fees in USD (the design uses dollars). An unreadable price gives null and the
@@ -1693,7 +1738,10 @@ async function cmdPositions(ctx: any, edit = false) {
       pair: `${p.sym0} / ${p.sym1}`,
       protocol: 'V4',
       chain: pcc.label,
-      investLabel: `${investNum.toFixed(dec >= 18 ? 4 : 2)} ${sym}`,
+      investLabel: investedLabel(investNum, sym, p.base === 'USDG', dec),
+      investNum,
+      investUnit: sym,
+      investStable: p.base === 'USDG',
       age: tracked ? msg.fmtAge(Date.now() - tracked.openedAt) : '—',
       pnlUsd,
       pnlPct,
@@ -1701,6 +1749,19 @@ async function cmdPositions(ctx: any, edit = false) {
       inRange: p.inRange ?? false, // null means unknown, and is treated as out of range, which is the conservative call
       wethEq: p.base === 'USDG' ? (ethUsd ? investNum / ethUsd : 0) : investNum,
       natSym: pcc.nativeSymbol,
+      // v4 has no stored entry PRICE, but the entry TICK gives the same ratio:
+      // price(tick)/price(entryTick) = 1.0001^(tick - entryTick), signed by which side the
+      // base sits on.
+      mcRange: (() => {
+        if (!tracked || tracked.entryTick === undefined || !tracked.entryMcap) return null;
+        const sgn = tracked.baseIsCurrency0 ? -1 : 1;
+        const ratio = (tk: number) => Math.pow(1.0001, sgn * (tk - tracked.entryTick!));
+        return mcapRangeRow(
+          tracked.entryMcap,
+          [ratio(p.tickUpper), ratio(p.tickLower)],
+          p.currentTick !== null ? ratio(p.currentTick) : null,
+        );
+      })(),
       // v4 fees USED to be left out of the list row, so a v4 position that had been in
       // range for a long time still read "Uncollected Fees: —" as though it had harvested
       // nothing. The data was already in p.feesBaseWei — it just never got passed through.
