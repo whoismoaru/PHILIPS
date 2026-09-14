@@ -216,7 +216,7 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   // word itself. A supplied label NAMES the card instead -- it is the title of a recap, so
   // it is set larger, in white, and carries no rule.
   ctx.fillStyle = o.label ? COL.text : accent;
-  ctx.font = `${o.label ? 32 : 19}px PhSansB`;
+  ctx.font = `${o.label ? 40 : 19}px PhSansB`;
   ctx.fillText(word, X, 208);
   if (!o.label) ctx.fillRect(X, 216, ctx.measureText(word).width, 2);
 
