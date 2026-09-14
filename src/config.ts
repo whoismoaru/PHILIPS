@@ -52,6 +52,17 @@ export const config = {
     enabled: (process.env.INK_ENABLED ?? 'false').toLowerCase() === 'true',
     rpcUrl: process.env.INK_RPC_URL || 'https://rpc-gel.inkonchain.com',
   },
+  /**
+   * Arc (Circle's USDC-gas L1, chain 5042). OFF until an RPC is supplied: the one public
+   * endpoint that answers, rpc.arc-scan.org, dropped roughly a third of the calls made
+   * while the contracts were being verified, and a bot that moves money cannot run on
+   * that. There is deliberately NO default URL here -- an empty ARC_RPC_URL keeps the
+   * chain out of the registry even if ARC_ENABLED is set by mistake.
+   */
+  arc: {
+    enabled: (process.env.ARC_ENABLED ?? 'false').toLowerCase() === 'true' && !!process.env.ARC_RPC_URL,
+    rpcUrl: process.env.ARC_RPC_URL || '',
+  },
   wallet: {
     // Optional since /connect exists: used once to adopt an older installation into the
     // encrypted keystore (walletStore.ts), and safe to delete afterwards.

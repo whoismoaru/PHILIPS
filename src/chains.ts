@@ -296,6 +296,45 @@ const DEFS: Record<string, Def> = {
         },
       }
     : {}),
+  ...(config.arc.enabled
+    ? {
+        arc: {
+          label: 'Arc',
+          chainId: 5042,
+          // Arc's gas IS USDC. There is no separate volatile native asset, which is why
+          // hasWethBase is false and the base list below holds USDC alone.
+          nativeSymbol: 'USDC',
+          dexKey: 'arc', // DexScreener has no Arc pairs yet; the key is its published one
+          // No public Blockscout: holders/verified screening falls back to GMGN, the same
+          // as BSC, Base and HyperEVM.
+          blockscout: null,
+          rpc: config.arc.rpcUrl,
+          // Uniswap's OWN deployment, taken from @uniswap/sdk-core (ChainId.ARC = 5042)
+          // and verified on-chain on 15 Sep 2026: every address carries bytecode, the
+          // position manager's factory() returns this factory, and the v4 position
+          // manager's poolManager() returns this pool manager.
+          factory: '0xf0db7b58379503491d857db50ac9ece64c653918',
+          pm: '0x39654a85a4c05127f5fd6ed22caec077a0fb1377',
+          router: '0x53bf6b0684ec7ef91e1387da3d1a1769bc5a6f77', // SwapRouter02
+          quoter: '0x7dfd4f31be6814d2906bde155c3e1b146eac1468',
+          // There is no wrapped native on Arc. The position manager's WETH9() points at a
+          // 108-byte stub that reverts when called, so nothing may treat it as a token:
+          // ZeroAddress plus hasWethBase:false is what the rest of the code reads.
+          weth: ethers.ZeroAddress,
+          hasWethBase: false,
+          // USDC's ERC-20 interface, 6 decimals -- verified on-chain (symbol() = 'USDC',
+          // decimals() = 6). Arc ALSO exposes the same balance as an 18-decimal native
+          // representation; mixing the two shifts every amount by 10^12, so the bot only
+          // ever touches this one.
+          usdc: '0x3600000000000000000000000000000000000000',
+          usdcDecimals: 6,
+          // Not yet measured against the factory. Uniswap's standard set is the
+          // assumption until feeAmountTickSpacing is read on a live Arc pool -- the pool
+          // sampled during the survey used fee 10000 / spacing 200, which fits it.
+          routerHasDeadline: false, // SwapRouter02, which dropped the deadline field
+        },
+      }
+    : {}),
   ...(config.ink.enabled
     ? {
         ink: {

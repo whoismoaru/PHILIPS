@@ -22,7 +22,9 @@ const BIN = process.env.GMGN_CLI_BIN || 'gmgn-cli';
 const TIMEOUT_MS = 4_000;
 
 /** Our chain key -> GMGN's chain name. Absent from the map means GMGN has no such chain. */
-const CHAIN: Record<string, string> = { robinhood: 'robinhood', bsc: 'bsc' };
+// NOTE: 'arc' and 'stable' need gmgn-cli >= 1.5.8 -- older builds validate the chain name
+// LOCALLY and reject arc before the request is ever made. Check with `gmgn-cli --version`.
+const CHAIN: Record<string, string> = { robinhood: 'robinhood', bsc: 'bsc', arc: 'arc' };
 
 export type GmgnExtra = {
   buyTaxPct: number | null;
@@ -116,7 +118,7 @@ function run(args: string[]): Promise<any | null> {
 }
 
 /** Chains whose PRICE GMGN's `token info` supports. HyperEVM and Ink are absent: DexScreener. */
-const PRICE_CHAIN: Record<string, string> = { robinhood: 'robinhood', bsc: 'bsc', base: 'base' };
+const PRICE_CHAIN: Record<string, string> = { robinhood: 'robinhood', bsc: 'bsc', base: 'base', arc: 'arc' };
 const priceCache = new Map<string, { t: number; v: { priceUsd: number; mcapUsd: number | null } | null }>();
 
 /**

@@ -17,6 +17,10 @@ const V4_POOL_MANAGER: Record<string, string> = {
   // PositionManager's own poolManager() returns exactly this address -- so the pair is
   // matched rather than two addresses that merely look right.
   base: '0x498581fF718922c3f8e6A244956aF099B2652b2b',
+  // Arc, from @uniswap/sdk-core and verified on-chain (48,020 bytes of code; the Arc
+  // PositionManager's poolManager() returns exactly this). Arc shares its PoolManager
+  // address with Robinhood -- same deployer, same salt, different chain.
+  arc: '0x8366a39cc670b4001a1121b8f6a443a643e40951',
 };
 // Extra v4 actions (add).
 const MINT_POSITION = 0x02;
@@ -37,6 +41,8 @@ const V4_PM: Record<string, string> = {
   robinhood: '0x58daec3116aae6D93017bAAea7749052E8a04fA7',
   bsc: '0x7A4a5c919aE2541AeD11041A1AEeE68f1287f95b',
   base: '0x7C5f5A4bBd8fD63184577525326123B519429bDc',
+  // Arc, verified on-chain: 47,756 bytes, poolManager() and permit2() both resolve.
+  arc: '0x6049c9a0e26405c0985f9e3685c87d0ae917f82b',
 };
 
 /**

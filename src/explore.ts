@@ -28,6 +28,11 @@ const UNISWAP_CHAIN: Record<string, string> = {
   robinhood: 'ROBINHOOD',
   ethereum: 'ETHEREUM',
   base: 'BASE',
+  // The gateway accepts ARC as a Chain enum (the query returns data:[] rather than an
+  // error), it simply has no Arc pools indexed yet. Listed here so the moment it does,
+  // discovery works with no code change -- and until then poolsForToken falls through to
+  // the on-chain path on its own, which is the same behaviour as an empty result.
+  arc: 'ARC',
 };
 
 // Fetch plenty, then filter and sort here: the API sorts by TVL, and we want APR.
