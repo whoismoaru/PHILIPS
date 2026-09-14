@@ -181,8 +181,8 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   const X = 76;
   masthead(ctx, X, 80);
   ctx.fillStyle = COL.text;
-  ctx.font = '50px PhSansB';
-  if (o.pair) ctx.fillText(o.pair, X, 136);
+  ctx.font = '40px PhSansB';
+  if (o.pair) ctx.fillText(o.pair, X, 146);
 
   // The position-shape badge, immediately right of the pair. Its colour is NEUTRAL rather
   // than green or red: this is a description, not a result, and using result colours would
@@ -191,13 +191,13 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
   if (o.shape && o.pair) {
     const label = o.shape === 'bidask' ? 'BID-ASK' : 'SPOT';
     const pairW = ctx.measureText(o.pair).width;
-    ctx.font = '19px PhSansB';
+    ctx.font = '17px PhSansB';
     const tw = ctx.measureText(label).width;
-    const padX = 13;
+    const padX = 12;
     const bw = tw + padX * 2;
-    const bh = 32;
-    const bx = X + pairW + 18;
-    const by = 136 - bh + 6; // sits on the pair's own baseline
+    const bh = 29;
+    const bx = X + pairW + 16;
+    const by = 146 - bh + 6; // sits on the pair's own baseline
     ctx.fillStyle = COL.chipBg;
     roundRect(ctx, bx, by, bw, bh, 7);
     ctx.fill();
@@ -206,7 +206,7 @@ export async function renderProfitCard(o: ProfitCardOpts, scale = 2): Promise<Bu
     roundRect(ctx, bx + 0.5, by + 0.5, bw - 1, bh - 1, 7);
     ctx.stroke();
     ctx.fillStyle = COL.muted;
-    ctx.fillText(label, bx + padX, by + bh - 10);
+    ctx.fillText(label, bx + padX, by + bh - 9);
   }
 
   // The result label and a rule as wide as the word itself -- LOSS is shorter than PROFIT,
