@@ -344,12 +344,10 @@ const DEFS: Record<string, Def> = {
           // assumption until feeAmountTickSpacing is read on a live Arc pool -- the pool
           // sampled during the survey used fee 10000 / spacing 200, which fits it.
           routerHasDeadline: false, // SwapRouter02, which dropped the deadline field
-          // No fallback list. The only public endpoint that answers, rpc.arc-scan.org,
-          // serves about half its calls (measured 4 of 8 reads); listing it twice so
-          // FallbackProvider would retry was tried and measured NO better (3 of 8), because
-          // its failures come in bursts rather than one at a time. A second endpoint has to
-          // be a genuinely different host -- LI.FI's arc-rpc.transferto.xyz is Cloudflare-
-          // blocked from this server, so until a paid one is added there is nothing to list.
+          // Arc's own endpoint, rpc.mainnet.arc.io, came up for mainnet day and answers
+          // 12 of 12 at ~180 ms including a 10k-block eth_getLogs -- so it is the primary.
+          // rpc.arc-scan.org stays as the backup: it works, but served only about half its
+          // calls while Arc was in private mainnet.
         },
       }
     : {}),
