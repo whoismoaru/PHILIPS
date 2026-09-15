@@ -93,3 +93,10 @@ if (base && arc) {
 }
 
 console.log(`ok: CCTP resolved on ${seen.join(', ')} — USDC only, never where burning is disabled`);
+
+// LI.FI is asked for the FASTEST route, not the "recommended" one. Measured Base → Arc:
+// recommended = polymerStandard, 1080 s, 49.8750 out; fastest = polymer, 10 s, 49.8684 out.
+// Six tenths of a cent buys eighteen minutes, and a bridge that sits for a quarter of an
+// hour reads as one that failed.
+const lifiSrc = readFileSync('src/lifi.ts', 'utf8');
+assert.match(lifiSrc, /order: 'FASTEST'/, 'the bridge quote is back on the slow default route');

@@ -174,6 +174,12 @@ export async function lifiBridgeQuote(
     fromAddress: from.wallet.address,
     toAddress: from.wallet.address,
     slippage: String(SLIP_MAX_PCT / 100),
+    // FASTEST, not the default RECOMMENDED. Measured Base -> Arc on 16 Sep 2026: the
+    // recommended route (polymerStandard) takes 1080 seconds and delivers 49.8750 of a $50
+    // transfer; the fastest (polymer) takes 10 seconds and delivers 49.8684. Six tenths of
+    // a cent for eighteen minutes is a trade worth making every time, and a bridge that
+    // sits for a quarter of an hour reads as one that failed.
+    order: 'FASTEST',
   });
   if (!q) throw new Error('the LI.FI bridge quote failed');
   const tr = q.transactionRequest;
