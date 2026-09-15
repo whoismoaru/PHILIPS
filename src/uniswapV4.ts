@@ -280,6 +280,11 @@ const signExt24 = (v: bigint): number => Number(v >= 1n << 23n ? v - (1n << 24n)
 const DECREASE_LIQUIDITY = 0x01;
 const BURN_POSITION = 0x03;
 const TAKE_PAIR = 0x11;
+// Used only by the escape hatch below: forfeit one currency's dust (CLEAR_OR_TAKE) and
+// take the other outright (TAKE). Codes from v4-periphery's Actions.sol -- note that this
+// PositionManager build rejects TAKE_ALL (0x0f) with UnsupportedAction, so TAKE it is.
+const CLEAR_OR_TAKE = 0x13;
+const TAKE = 0x0e;
 const V4_WRITE_ABI = [
   'function getPoolAndPositionInfo(uint256) view returns (tuple(address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) poolKey, uint256 info)',
   'function getPositionLiquidity(uint256) view returns (uint128)',
@@ -342,6 +347,20 @@ async function burnMinsV4(
  * TAKE_PAIR). A staticCall simulation is MANDATORY first; a revert aborts before
  * anything is sent. dryRun simulates only.
  */
+/**
+ * A revert that means "this token will not move".
+ *
+ * v4 wraps an inner failure as WrappedError(target, selector, reason, details); when the
+ * selector is ERC20.transfer the pool could not hand the token over. Matched on the
+ * selector rather than on any message, because such tokens revert with custom errors of
+ * their own that carry no text at all.
+ */
+function isTransferBlocked(e: unknown): boolean {
+  const data = String((e as { data?: string })?.data ?? '');
+  // 0x90bfb865 = WrappedError(...), and a9059cbb = transfer(address,uint256).
+  return data.startsWith('0x90bfb865') && data.includes('a9059cbb');
+}
+
 export async function closePositionV4(
   tokenId: string,
   cc: ChainCtx,
@@ -356,6 +375,8 @@ export async function closePositionV4(
   cashedOut?: string;
   leftover?: string;
   unprotected?: boolean; // the burn was forced through without a price floor
+  /** The symbol of a side that had to be FORFEITED because the token refuses transfers. */
+  forfeited?: string;
 }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
@@ -389,10 +410,45 @@ export async function closePositionV4(
   }
 
   // Simulation is MANDATORY (burn+take): a revert here cancels before a tx goes out.
-  await pm.modifyLiquidities.staticCall(unlockData, deadline, { from: cc.wallet.address });
-  if (opts.dryRun) return { dryRun: true, sym0, sym1, base, other: other ?? undefined, unprotected: mins.unprotected };
+  let payload = unlockData;
+  let forfeited: string | undefined;
+  try {
+    await pm.modifyLiquidities.staticCall(payload, deadline, { from: cc.wallet.address });
+  } catch (e) {
+    // A token that REFUSES to be transferred out of the pool traps the whole position.
+    // STANDARD on Robinhood does exactly this: a 0-wei transfer succeeds, any real amount
+    // reverts, so TAKE_PAIR -- which moves BOTH sides -- can never complete and $350 of
+    // USDG sits behind a few cents of untransferable dust.
+    //
+    // The escape hatch forfeits that side (CLEAR_OR_TAKE) and takes the base outright. It
+    // is used ONLY when the base really is the base: nothing here can forfeit the asset
+    // the position was opened with, and the simulation still has to pass before anything
+    // is sent.
+    const baseCur = base === 'ETH' ? (isEth(pk.currency0) ? pk.currency0 : pk.currency1) : isUsdg(pk.currency0) ? pk.currency0 : pk.currency1;
+    const otherCur = baseCur === pk.currency0 ? pk.currency1 : pk.currency0;
+    if (!base || !isTransferBlocked(e)) throw e;
+    const alt = coder.encode(
+      ['bytes', 'bytes[]'],
+      [
+        ethers.concat([Uint8Array.of(BURN_POSITION), Uint8Array.of(CLEAR_OR_TAKE), Uint8Array.of(TAKE)]),
+        [
+          pBurn,
+          coder.encode(['address', 'uint256'], [otherCur, ethers.MaxUint256]), // forfeit whatever is owed
+          coder.encode(['address', 'address', 'uint256'], [baseCur, cc.wallet.address, 0n]), // 0 = the whole delta
+        ],
+      ],
+    );
+    // If THIS reverts too, the original error is the honest one to report.
+    await pm.modifyLiquidities.staticCall(alt, deadline, { from: cc.wallet.address }).catch(() => {
+      throw e;
+    });
+    payload = alt;
+    forfeited = await tokenSymbol(otherCur, cc).catch(() => 'the token side');
+    console.log(`[v4] #${tokenId}: ${forfeited} cannot be transferred out of the pool; closing by forfeiting its dust and taking the ${base}`);
+  }
+  if (opts.dryRun) return { dryRun: true, sym0, sym1, base, other: other ?? undefined, unprotected: mins.unprotected, forfeited };
 
-  const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline));
+  const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(payload, deadline));
   const rc = await tx.wait();
   const out: {
     txHash: string;
@@ -403,6 +459,7 @@ export async function closePositionV4(
     cashedOut?: string;
     leftover?: string;
     unprotected?: boolean;
+    forfeited?: string;
   } = {
     txHash: rc?.hash ?? tx.hash,
     sym0,
@@ -410,6 +467,7 @@ export async function closePositionV4(
     base,
     other: other ?? undefined,
     unprotected: mins.unprotected,
+    forfeited,
   };
 
   // Cash out: swap the leftover token to base. Best-effort; on failure it stays as a leftover, not lost.
