@@ -2807,9 +2807,17 @@ bot.action('pool:refresh', async (ctx: any) => {
   const flow = flows.get(ctx.from!.id);
   if (!flow?.token) return ctx.answerCbQuery('Expired — paste the CA again.');
   await ctx.answerCbQuery('Re-reading pools…');
-  return continueAddlp(ctx, flow.token, flow.chain ?? getChain().key, {
-    message_id: ctx.callbackQuery.message.message_id,
-  });
+  // Refresh re-reads the POOLS, nothing else. The screening verdict from this same flow is
+  // carried through: without it `pre` was undefined, the audit ran again, and every tap
+  // posted a fresh screening card on top of the pool list -- the token cannot have changed
+  // its contract since the card was drawn a minute ago, only its pools can move.
+  return continueAddlp(
+    ctx,
+    flow.token,
+    flow.chain ?? getChain().key,
+    { message_id: ctx.callbackQuery.message.message_id },
+    { bahaya: flow.screenBahaya, failed: flow.screenFailed ?? false },
+  );
 });
 
 bot.action('back:pool', async (ctx) => {
