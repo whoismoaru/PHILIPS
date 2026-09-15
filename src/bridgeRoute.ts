@@ -2,7 +2,7 @@ import { ethers } from 'ethers';
 import { type ChainCtx } from './chains.js';
 import { getBridgeQuote, executeBridge, lifiPreferred, NATIVE, type BridgeQuote } from './relay.js';
 import { lifiBridgeQuote, lifiSupports } from './lifi.js';
-import { cctpRoute, cctpTransfer } from './cctp.js';
+import { cctpRoute, cctpTransfer, cctpQuote } from './cctp.js';
 
 export type BridgeAssets = { originCurrency?: string; destinationCurrency?: string };
 
@@ -35,16 +35,25 @@ export async function bestBridgeQuote(
   // whenever it applies -- and on Arc it is the ONLY one, since no aggregator routes there.
   const cctpUsdc = await cctpUsdcRoute(from, to, assets);
   if (cctpUsdc) {
+    // The figures come from Circle, not from an assumption: a fast transfer costs a few
+    // hundredths of a basis point and lands in seconds, a standard one is free and waits
+    // for source finality.
+    const q = (await cctpQuote(from, to, amountWei).catch(() => null)) ?? {
+      outWei: amountWei,
+      feeWei: 0n,
+      fast: false,
+      etaSec: 15 * 60,
+    };
     tasks.push(
       Promise.resolve({
         provider: 'cctp' as const,
         quote: {
           inLabel: `${ethers.formatUnits(amountWei, 6)} USDC`,
-          outLabel: `${ethers.formatUnits(amountWei, 6)} USDC`,
-          outWei: amountWei, // burn-and-mint: 1:1, no slippage and no relayer cut
+          outLabel: `${ethers.formatUnits(q.outWei, 6)} USDC`,
+          outWei: q.outWei, // burn-and-mint: no pool, so the only difference is Circle's fee
           impactPct: 0,
-          feeUsd: 0,
-          etaSec: 90, // Circle's standard attestation, measured in minutes at worst
+          feeUsd: Number(ethers.formatUnits(q.feeWei, 6)),
+          etaSec: q.etaSec,
           steps: [], // executed through cctpTransfer, not as calldata
         },
       }),
@@ -123,10 +132,11 @@ export async function executeBridgeVia(
   // Relay includes the token approval as a step of its own.
   if (provider === 'relay') return executeBridge(from, to, amountWei, minOutWei, assets);
   if (provider === 'cctp') {
+    const q = await cctpQuote(from, to, amountWei).catch(() => null);
     const r = await cctpTransfer(from, to, amountWei, { dryRun: false });
-    // Burn-and-mint moves the exact amount, so minOut cannot be missed -- there is nothing
-    // to slip. Both hashes are returned so the card shows the whole journey.
-    return { txHashes: [r.burnTx!, r.mintTx!].filter(Boolean), outWei: amountWei };
+    // There is no pool to slip against; the only deduction is Circle's own fee, already in
+    // the quote. Both hashes are returned so the card shows the whole journey.
+    return { txHashes: [r.burnTx!, r.mintTx!].filter(Boolean), outWei: q?.outWei ?? amountWei };
   }
   // LI.FI: re-quote (target and spender are already pinned to the diamond in lifiBridgeQuote) and check minOut.
   const fresh = await lifiBridgeQuote(from, to, amountWei, assets);

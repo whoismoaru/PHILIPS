@@ -47,11 +47,43 @@ const ERC20_ABI = [
 const ETH_USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 
 /**
- * 2000 = the STANDARD transfer: Circle attests once the source chain is finalised, and
- * charges no fee. The fast lane (1000) costs a fee and is not worth it for moving LP
- * capital, which is not waiting on seconds.
+ * 2000 = STANDARD: Circle attests only once the source chain is FINALISED. Free, but on
+ * Base that is 13-19 minutes of waiting.
+ * 1000 = FAST: attested at confirmed-but-not-finalised, in seconds, for a fee Circle quotes
+ * in BASIS POINTS. Measured 16 Sep 2026: Base -> Arc is 0.325 bps, i.e. 0.0016 USDC on a
+ * $50 transfer. Practically free, so fast is the default and standard is the fallback when
+ * the fee cannot be read.
  */
+const FINALITY_FAST = 1000;
 const FINALITY_STANDARD = 2000;
+
+/** Circle's fast-transfer fee for one route, in basis points. null when unavailable. */
+async function fastFeeBps(srcDomain: number, dstDomain: number): Promise<number | null> {
+  const r = await fetch(`${IRIS}/burn/USDC/fees/${srcDomain}/${dstDomain}`, { signal: AbortSignal.timeout(8_000) })
+    .then((x) => (x.ok ? x.json() : null))
+    .catch(() => null);
+  const fast = (r as any[] | null)?.find((x) => Number(x?.finalityThreshold) === FINALITY_FAST);
+  const bps = Number(fast?.minimumFee);
+  return Number.isFinite(bps) && bps >= 0 ? bps : null;
+}
+
+/**
+ * What a transfer will really deliver, and how it will travel. Exported so the bridge can
+ * quote CCTP honestly instead of assuming 1:1.
+ */
+export async function cctpQuote(
+  from: ChainCtx,
+  to: ChainCtx,
+  amountWei: bigint,
+): Promise<{ outWei: bigint; feeWei: bigint; fast: boolean; etaSec: number } | null> {
+  const route = await cctpRoute(from, to);
+  if (!route) return null;
+  const bps = await fastFeeBps(route.src.domain, route.dst.domain);
+  if (bps === null) return { outWei: amountWei, feeWei: 0n, fast: false, etaSec: 15 * 60 };
+  // Rounded UP, and never below one unit: Circle rejects a maxFee under its own minimum.
+  const feeWei = bps === 0 ? 0n : (amountWei * BigInt(Math.ceil(bps * 100)) + 999_999n) / 1_000_000n;
+  return { outWei: amountWei - feeWei, feeWei, fast: true, etaSec: 30 };
+}
 
 type Support = { domain: number; usdc: string; limitWei: bigint };
 /**
@@ -179,7 +211,19 @@ export async function cctpTransfer(
 
   const messenger = new ethers.Contract(TOKEN_MESSENGER, MESSENGER_ABI, from.wallet);
   const recipient = ethers.zeroPadValue(to.wallet.address, 32);
-  const args = [amountWei, dst.domain, recipient, src.usdc, ethers.ZeroHash, 0n, FINALITY_STANDARD] as const;
+  // Fast when Circle quotes a fee for it -- seconds instead of waiting out source finality.
+  const q = await cctpQuote(from, to, amountWei).catch(() => null);
+  const fast = !!q?.fast;
+  const maxFee = q?.feeWei ?? 0n;
+  const args = [
+    amountWei,
+    dst.domain,
+    recipient,
+    src.usdc,
+    ethers.ZeroHash,
+    maxFee,
+    fast ? FINALITY_FAST : FINALITY_STANDARD,
+  ] as const;
 
   if (opts.dryRun) return { dryRun: true, usdcSrc: src.usdc, usdcDst: dst.usdc };
 
@@ -190,7 +234,9 @@ export async function cctpTransfer(
   }
   // Simulated first, like every other money path: a revert here costs nothing.
   await messenger.depositForBurn.staticCall(...args, { from: me });
-  await opts.onStep?.(`burning ${ethers.formatUnits(amountWei, 6)} USDC on ${from.label}…`);
+  await opts.onStep?.(
+    `burning ${ethers.formatUnits(amountWei, 6)} USDC on ${from.label}${fast ? ' (fast)' : ''}…`,
+  );
   const burn = await sendTxNonceSafe(from.wallet as ethers.Wallet, await messenger.depositForBurn.populateTransaction(...args));
   const burnRc = await burn.wait();
   const burnTx = burnRc?.hash ?? burn.hash;

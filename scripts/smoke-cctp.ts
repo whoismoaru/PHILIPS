@@ -75,4 +75,21 @@ assert.match(src, /return gas \? route : null;/, 'an unaffordable mint must drop
 const aff = src.slice(src.indexOf('async function mintGasAffordable'), src.indexOf('async function mintGasAffordable') + 600);
 assert.match(aff, /catch \{[\s\S]{0,80}return false;/, 'an unreadable balance must count as unaffordable');
 
+// FAST transfer: Circle quotes the fee in basis points, and it is tiny. Standard waits out
+// source finality for free -- 13-19 minutes on Base -- so fast is the default and standard
+// the fallback when the fee cannot be read.
+const cc3 = readFileSync('src/cctp.ts', 'utf8');
+assert.match(cc3, /const FINALITY_FAST = 1000;/, 'the fast lane is gone');
+assert.match(cc3, /fast \? FINALITY_FAST : FINALITY_STANDARD/, 'the burn no longer chooses the fast lane');
+assert.match(cc3, /maxFee = q\?\.feeWei \?\? 0n/, 'a fast burn must carry the fee Circle asked for');
+if (base && arc) {
+  const q = await (await import('../src/cctp.js')).cctpQuote(base, arc, 50_000_000n);
+  assert.ok(q, 'no CCTP quote for Base → Arc');
+  // The fee is a fraction of a basis point; anything approaching a percent means the units
+  // were misread (bps against USDC) and the transfer would overpay.
+  const pct = Number(q!.feeWei) / Number(50_000_000n) * 100;
+  assert.ok(pct < 0.05, `the fast fee reads ${pct.toFixed(4)}% — the units look wrong`);
+  assert.equal(q!.outWei + q!.feeWei, 50_000_000n, 'out + fee must equal what was sent');
+}
+
 console.log(`ok: CCTP resolved on ${seen.join(', ')} — USDC only, never where burning is disabled`);
