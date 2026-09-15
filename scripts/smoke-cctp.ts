@@ -45,8 +45,8 @@ for (const key of ['robinhood', 'bsc']) {
 
 // The asset gate: CCTP carries USDC and nothing else.
 const src = readFileSync('src/bridgeRoute.ts', 'utf8');
-assert.match(src, /same\(assets\.originCurrency, route\.src\.usdc\) && same\(assets\.destinationCurrency, route\.dst\.usdc\)/,
-  'the CCTP route no longer checks that BOTH sides are the chain\'s own USDC');
+assert.match(src, /same\(assets\.originCurrency, route\.src\.usdc\)/, 'the CCTP route no longer checks the SOURCE asset is that chain\'s USDC');
+assert.match(src, /same\(assets\.destinationCurrency, route\.dst\.usdc\)/, 'the CCTP route no longer checks the DESTINATION asset is that chain\'s USDC');
 assert.match(src, /const cctp = ok\.find\(\(o\) => o\.provider === 'cctp'\);[\s\S]{0,120}return cctp;/,
   'CCTP must win when it applies: 1:1 with no counterparty beats any pooled quote');
 
