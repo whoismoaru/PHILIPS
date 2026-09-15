@@ -60,7 +60,7 @@ import * as krystal from './krystal.js';
 import { awaitingSecret, handleSecret } from './commands/wallet.js';
 import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import { cmdClaimFees } from './commands/feesAndRemove.js';
-import { tokenSymbol as v4TokenSymbol, poolDepthV4, poolIdV4 } from './uniswapV4.js';
+import { tokenSymbol as v4TokenSymbol, poolDepthV4, poolIdV4, stableOf } from './uniswapV4.js';
 import { cmdBridge } from './commands/bridge.js';
 import { cmdSend } from './commands/send.js';
 import { cmdUnwrap } from './commands/unwrap.js';
@@ -1245,7 +1245,11 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   let mcMarket: number | null = null;
   {
     const isEth = (a: string) => a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase();
-    const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
+    // The chain's stable, whichever it is: USDG on Robinhood, USDT on BSC. Reading
+    // cc.usdgAddress alone made a BSC v4 position look as though it had no base side, so
+    // the token was mis-picked and its market cap came back null.
+    const stB = stableOf(cc);
+    const isUsdg = (a: string) => !!stB && a.toLowerCase() === stB.addr.toLowerCase();
     const tokenAddr = [p.poolKey.currency0, p.poolKey.currency1].find((a) => !isEth(a) && !isUsdg(a));
     const mcNow = tokenAddr ? await explore.tokenMarketCap(cc, tokenAddr).catch(() => null) : null;
     mcMarket = mcNow;
@@ -5109,9 +5113,14 @@ async function execCloseV4(ctx: any) {
   // result: missing from /pnl and never producing a profit card. The best pools are often
   // the USDG ones.
   const readBase = async (): Promise<bigint | null> => {
-    if (trackedBase === 'usdg') {
-      if (!cc.usdgAddress) return null;
-      return (await new ethers.Contract(cc.usdgAddress, ERC20_ABI, cc.provider)
+    // ANY stable base, not just USDG. This used to test `trackedBase === 'usdg'`, so on BSC
+    // -- where the stable is USDT -- the delta was measured against the BNB balance, which
+    // does not move when USDT arrives. Every BSC v4 close then read "Received —", was
+    // journalled with no result, and produced no PnL card.
+    if (trackedBase && isStableBase(trackedBase)) {
+      const st = stableOf(cc);
+      if (!st) return null;
+      return (await new ethers.Contract(st.addr, ERC20_ABI, cc.provider)
         .balanceOf(cc.wallet.address)
         .catch(() => null)) as bigint | null;
     }

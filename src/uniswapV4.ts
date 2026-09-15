@@ -62,7 +62,7 @@ for (const table of [V4_PM, V4_POOL_MANAGER]) {
  * at the time), so enabling v4 on BSC left USDT pools unrecognised as single-sided
  * candidates. Now it comes from the chain's own base list.
  */
-function stableOf(cc: ChainCtx): { addr: string; symbol: string; decimals: number } | null {
+export function stableOf(cc: ChainCtx): { addr: string; symbol: string; decimals: number } | null {
   const b = cc.bases.find((x) => isStableBase(x.kind));
   return b ? { addr: b.address, symbol: b.symbol, decimals: b.decimals } : null;
 }
