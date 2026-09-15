@@ -1,7 +1,7 @@
 import type { Telegraf } from 'telegraf';
 import { config } from './config.js';
 import { getPositionDetail } from './uniswap.js';
-import { getChain, CHAINS, ERC20_ABI, baseDecimalsOf, ctxOf } from './chains.js';
+import { getChain, CHAINS, ERC20_ABI, baseDecimalsOf, baseAssetOf, ctxOf } from './chains.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { ethers } from 'ethers';
 import * as store from './store.js';
@@ -162,19 +162,13 @@ async function sweepLeftovers(bot: Telegraf) {
       // Sweep back to the position's OWN base. This always went to native once: closing a
       // USDT position and recovering its dust as BNB quietly changed both the denomination
       // and the exposure, and left the result impossible to match against the deposit.
-      const stableAddr =
-        r.baseKind === 'usdg'
-          ? cc.usdgAddress
-          : r.baseKind === 'usdt'
-            ? cc.usdtAddress
-            : r.baseKind === 'usdc'
-              ? cc.usdcAddress
-              : undefined;
+      const stableAsset = r.baseKind && r.baseKind !== 'weth' ? baseAssetOf(cc, r.baseKind) : undefined;
+      const stableAddr = stableAsset?.address;
       const res = stableAddr
         ? await swapTokenToUsdgRobust(r.ca, amt, stableAddr, cc).then((x) => ({
             outEthWei: x.outWei,
             route: x.route,
-            unit: r.baseKind === 'usdg' ? 'USDG' : r.baseKind === 'usdt' ? 'USDT' : 'USDC',
+            unit: stableAsset!.symbol,
             dec: baseDecimalsOf(r.chain, r.baseKind),
           }))
         : await swapTokenToEthRobust(r.ca, amt, cc).then((x) => ({

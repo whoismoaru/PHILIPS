@@ -120,8 +120,12 @@ function baseOfPair(
 ): { base: BaseKind; baseIsCurrency0: boolean } | null {
   const isEth = (a: string) =>
     cc.hasWethBase && (a === ethers.ZeroAddress || a.toLowerCase() === cc.wethAddress.toLowerCase());
-  const isUsdg = (a: string) => !!cc.usdgAddress && a.toLowerCase() === cc.usdgAddress.toLowerCase();
-  const isUsdt = (a: string) => !!cc.usdtAddress && a.toLowerCase() === cc.usdtAddress.toLowerCase();
+  // Matched against the chain's OWN base list, so USDC (Base) counts exactly like USDG and
+  // USDT do rather than being left out of the pair detection.
+  const kindOf = (a: string): BaseKind | null =>
+    cc.bases.find((b) => b.kind !== 'weth' && b.address.toLowerCase() === a.toLowerCase())?.kind ?? null;
+  const isUsdg = (a: string) => kindOf(a) === 'usdg';
+  const isUsdt = (a: string) => kindOf(a) === 'usdt';
   if (isEth(c0)) return { base: 'weth', baseIsCurrency0: true };
   if (isEth(c1)) return { base: 'weth', baseIsCurrency0: false };
   if (isUsdg(c0)) return { base: 'usdg', baseIsCurrency0: true };

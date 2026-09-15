@@ -82,13 +82,11 @@ const QUERY = `query TopPools($chain: Chain!, $n: Int!) {
 function isBase(sym: string | undefined | null, addr: string | undefined | null, ctx: ChainCtx): boolean {
   const s = (sym ?? '').toUpperCase();
   const a = (addr ?? '').toLowerCase();
-  if (s === 'ETH' || s === 'WETH') return true;
-  if (a && a === ctx.wethAddress.toLowerCase()) return true;
-  if (ctx.usdgAddress) {
-    if (s === 'USDG') return true;
-    if (a && a === ctx.usdgAddress.toLowerCase()) return true;
-  }
-  return false;
+  if (ctx.hasWethBase && (s === 'ETH' || s === 'WETH')) return true;
+  if (ctx.hasWethBase && a && a === ctx.wethAddress.toLowerCase()) return true;
+  // EVERY base this chain carries. Testing WETH and USDG alone made a USDT pair on BSC and
+  // a USDC pair on Base read as "not single-sideable", so they never reached the list.
+  return ctx.bases.some((b) => (a && a === b.address.toLowerCase()) || (s && s === b.symbol.toUpperCase()));
 }
 
 /** The top pools by APR that can be LP'd single-sided (ETH/WETH/USDG), in sync with Uniswap. */
@@ -274,7 +272,10 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
 
     const baseIsCurrency0 = !!b0;
     const base = (b0 ?? b1)!;
-    const baseSymbol = (baseIsCurrency0 ? t0.symbol : t1.symbol) ?? (base === 'usdg' ? 'USDG' : 'ETH');
+    // The fallback symbol comes from the CHAIN's own base list, so a missing symbol on a
+    // USDT or USDC pair does not silently read as 'USDG' or 'ETH'.
+    const fallbackSym = ctx.bases.find((b) => b.kind === base)?.symbol ?? 'BASE';
+    const baseSymbol = (baseIsCurrency0 ? t0.symbol : t1.symbol) ?? fallbackSym;
     const otherSymbol = (baseIsCurrency0 ? t1.symbol : t0.symbol) ?? '?';
     // APR is 24h fees annualised, the same formula as the /pools card.
     const vol = p.cumulativeVolume?.value ?? 0;

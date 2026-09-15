@@ -2075,7 +2075,10 @@ async function discoverAllPoolsFallback(token: string, cc: ChainCtx): Promise<ex
   ]);
   const mapped: explore.TokenPool[] = raw.map((p) => {
     const amt = Number(ethers.formatUnits(p.baseReserve, p.baseDecimals));
-    const tvlUsd = p.base === 'usdg' ? amt : eu !== null ? amt * eu : amt;
+    // isStableBase, NOT `=== 'usdg'`: a stable reserve IS its dollar value, while a native
+    // one has to be priced. Testing for USDG by name valued BSC's USDT reserves at the BNB
+    // price -- a $1,000 pool reading as $600,000 in the discovery fallback's ranking.
+    const tvlUsd = isStableBase(p.base) ? amt : eu !== null ? amt * eu : amt;
     return { protocol: 'v3', base: p.base, baseSymbol: p.baseSymbol, otherSymbol, fee: p.fee, tvlUsd };
   });
   mapped.sort((a, b) => b.tvlUsd - a.tvlUsd);

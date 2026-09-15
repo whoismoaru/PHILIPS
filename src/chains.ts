@@ -69,6 +69,18 @@ export type BaseAsset = {
 };
 
 /** true when this base is a dollar stablecoin (USDG/USDT/USDC ~ $1, non-wrappable). */
+/**
+ * This chain's asset for a base kind, or undefined when the chain does not carry it.
+ *
+ * Every caller used to hand-roll this, and each one that reached for `usdgAddress` alone
+ * was right on Robinhood and wrong everywhere else: a v4 close on BSC measured the BNB
+ * balance, the top-pools list rejected USDT and USDC pairs as "not single-sided", and the
+ * on-chain fallback priced USDT reserves at the native rate.
+ */
+export function baseAssetOf(ctx: { bases: BaseAsset[] }, kind: BaseKind): BaseAsset | undefined {
+  return ctx.bases.find((b) => b.kind === kind);
+}
+
 export const isStableBase = (kind: BaseKind): boolean =>
   kind === 'usdg' || kind === 'usdt' || kind === 'usdc';
 
