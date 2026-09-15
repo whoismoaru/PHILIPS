@@ -40,7 +40,7 @@ for (const key of ['robinhood', 'bsc']) {
   if (!cc) continue;
   const s = await cctpSupport(cc);
   assert.equal(s, null, `${cc.label} is being offered even though burning is disabled there`);
-  assert.equal(await cctpRoute(cc, CHAINS['arc'] ?? cc), null, `${cc.label} → Arc must not be a route`);
+  assert.equal(await cctpRoute(cc, CHAINS['arc'] ?? cc), null, `${cc.label} → Arc must not be a CCTP route`);
 }
 
 // The asset gate: CCTP carries USDC and nothing else.

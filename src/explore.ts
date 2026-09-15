@@ -450,6 +450,37 @@ export async function poolStatsV4Dex(
   }
 }
 
+/**
+ * USD price for MANY tokens in one call, keyed by lowercase address.
+ *
+ * DexScreener takes up to 30 comma-separated addresses, and the deepest pool on the chain
+ * decides the price -- a token's own dust pool must not be allowed to name its value. Used
+ * by /swap to tell a real holding from the airdrop spam that lands in every wallet.
+ */
+export async function tokenUsdPrices(ctx: ChainCtx, addresses: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const uniq = [...new Set(addresses.map((a) => a.toLowerCase()))];
+  for (let i = 0; i < uniq.length; i += 30) {
+    const batch = uniq.slice(i, i + 30);
+    const j = await fetch(`${DEXSCREENER_TOKENS}/${batch.join(',')}`, { signal: AbortSignal.timeout(15_000) })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    const deepest = new Map<string, number>();
+    for (const p of (j as any)?.pairs ?? []) {
+      if (p?.chainId !== ctx.dexKey) continue;
+      const ca = String(p?.baseToken?.address ?? '').toLowerCase();
+      const px = Number(p?.priceUsd ?? 0);
+      const liq = Number(p?.liquidity?.usd ?? 0);
+      if (!ca || !(px > 0)) continue;
+      if (liq >= (deepest.get(ca) ?? -1)) {
+        deepest.set(ca, liq);
+        out.set(ca, px);
+      }
+    }
+  }
+  return out;
+}
+
 async function dexPairs(ctx: ChainCtx, tokenAddress: string): Promise<DexPair[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15_000);

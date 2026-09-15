@@ -25,10 +25,15 @@ const DIAMOND: Record<number, string> = {
   999: '0x0a0758d937d1059c356D4714e57F5df0239bce1A', // HyperEVM
   8453: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', // Base
   56: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', // BSC
+  // Arc. LI.FI began quoting chain 5042 on 16 Sep 2026 -- measured: Base -> Arc routes via
+  // polymerStandard ($50 in, $49.88 out) and small amounts via gasZipBridge. Inbound only
+  // so far; Arc -> anywhere still returns no route, which is why the menu probes each Arc
+  // pair before offering it (see bridge.ts).
+  5042: '0xA4072583658Fae592A3506A42431cb6316a8d40b',
 };
 
 /**
- * Arc's diamond, held back deliberately.
+ * Kept for reference: this is the same address now live in the map above.
  *
  * LI.FI lists chain 5042 in /v1/chains and names four bridges plus two exchanges for it in
  * /v1/tools, and this diamond really does carry code on Arc -- but /v1/quote and

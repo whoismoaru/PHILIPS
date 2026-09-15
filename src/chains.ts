@@ -26,6 +26,9 @@ export type ChainCtx = {
   venue?: string; // a non-default DEX on this chain (e.g. 'uniswapv3' on BSC); empty means the default
   blockscout: string | null; // the explorer API base URL; null means none is available
   provider: ethers.Provider; // a JsonRpcProvider, or a FallbackProvider where backup RPCs exist
+  /** The PRIMARY endpoint's URL. `provider` may be a FallbackProvider, which has no .send(),
+   *  so a caller needing a vendor-specific method (alchemy_getTokenBalances) builds its own. */
+  rpcUrl: string;
   /** The active signer. A VoidSigner (address 0x0) when no wallet is connected. */
   wallet: ethers.Wallet | ethers.VoidSigner;
   factory: ethers.Contract;
@@ -486,6 +489,7 @@ function build(key: string, d: Def): ChainCtx {
     factory: new ethers.Contract(d.factory, d.slipstream ? FACTORY_ABI_SLIP : FACTORY_ABI, wallet),
     positionManager: new ethers.Contract(d.pm, d.slipstream ? POSITION_MANAGER_ABI_SLIP : POSITION_MANAGER_ABI, wallet),
     weth: new ethers.Contract(d.weth, WETH_ABI, wallet),
+    rpcUrl: d.rpc,
     wethAddress: d.weth,
     hasWethBase: d.hasWethBase ?? true,
     usdgAddress: d.usdg,

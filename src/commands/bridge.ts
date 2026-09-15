@@ -5,7 +5,7 @@ import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset } fro
 import { CHAINS, getChain, isStableBase, type ChainCtx, type BaseKind } from '../chains.js';
 import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridgeRoute.js';
 import { NATIVE } from '../relay.js';
-import { lifiSupports } from '../lifi.js';
+import { lifiSupports, lifiBridgeQuote } from '../lifi.js';
 import { cctpSupport } from '../cctp.js';
 import { ERC20_ABI } from '../chain.js';
 import { getEthUsd } from '../screening.js';
@@ -153,7 +153,50 @@ async function assetBalance(cc: ChainCtx, kind: BaseKind): Promise<{ wei: bigint
  * anyway gives a button that fails after the amount is typed.
  */
 const routable = (a: ChainCtx, b: ChainCtx): boolean =>
-  (lifiSupports(a) && lifiSupports(b)) || (cctpChains.has(a.key) && cctpChains.has(b.key));
+  (lifiSupports(a) && lifiSupports(b) && pairOk(a, b)) || (cctpChains.has(a.key) && cctpChains.has(b.key));
+
+/**
+ * Chains an aggregator covers only PARTIALLY, so being listed is not the same as being
+ * routable. Arc is the case this exists for: on 16 Sep 2026 LI.FI began quoting INTO it
+ * (Base -> Arc via polymerStandard, small amounts via gasZipBridge) while OUT of it still
+ * returns no route at all.
+ */
+const PARTIAL = new Set(['arc']);
+const pairProbe = new Map<string, { t: number; ok: boolean }>();
+const PROBE_TTL_MS = 10 * 60_000;
+
+/** The synchronous read of the probe cache; unknown pairs are assumed routable until asked. */
+function pairOk(a: ChainCtx, b: ChainCtx): boolean {
+  if (!PARTIAL.has(a.key) && !PARTIAL.has(b.key)) return true;
+  return pairProbe.get(`${a.key}:${b.key}`)?.ok ?? false;
+}
+
+/**
+ * Ask LI.FI for a token-sized quote on each pair that touches a partially covered chain,
+ * so the menu offers only what can really be sent. Four pairs, in parallel, cached for ten
+ * minutes -- the alternative is a button that fails after the owner has typed an amount.
+ */
+async function probePartialPairs(): Promise<void> {
+  const list = Object.values(CHAINS);
+  const pairs: Array<[ChainCtx, ChainCtx]> = [];
+  for (const a of list)
+    for (const b of list)
+      if (a.key !== b.key && (PARTIAL.has(a.key) || PARTIAL.has(b.key)) && lifiSupports(a) && lifiSupports(b)) {
+        const hit = pairProbe.get(`${a.key}:${b.key}`);
+        if (!hit || Date.now() - hit.t > PROBE_TTL_MS) pairs.push([a, b]);
+      }
+  await Promise.all(
+    pairs.map(async ([a, b]) => {
+      const src = a.bases.find((x) => isStableBase(x.kind)) ?? a.bases[0];
+      const dst = b.bases.find((x) => isStableBase(x.kind)) ?? b.bases[0];
+      const amount = 10n ** BigInt(src.decimals); // one unit: enough to answer "is there a route?"
+      const ok = await lifiBridgeQuote(a, b, amount, { originCurrency: src.address, destinationCurrency: dst.address })
+        .then(() => true)
+        .catch(() => false);
+      pairProbe.set(`${a.key}:${b.key}`, { t: Date.now(), ok });
+    }),
+  );
+}
 
 /**
  * Chains reachable by CCTP, resolved ONCE at startup.
@@ -192,7 +235,7 @@ function routes(): Array<{ from: ChainCtx; to: ChainCtx }> {
 }
 
 export async function cmdBridge(ctx: any) {
-  await refreshCctpChains();
+  await Promise.all([refreshCctpChains(), probePartialPairs()]);
   const rs = routes();
   if (rs.length === 0) return ctx.reply(msg.msgBridgeUnavailable(), html);
   flows.delete(ctx.from.id);

@@ -3821,6 +3821,33 @@ async function bsFetch(url: string): Promise<any | null> {
 }
 
 // ERC20 tokens (not bases) with a balance above zero. Blockscout first, on-chain fallback.
+/**
+ * Every ERC-20 the WALLET holds, straight from the node.
+ *
+ * Alchemy answers `alchemy_getTokenBalances` on Robinhood, BSC, Base and Arc; a node that
+ * does not know the method just errors, and the caller falls back to the journal. This is
+ * the only source that can see a token the bot never touched.
+ */
+async function walletErc20s(cc: ChainCtx): Promise<Map<string, bigint>> {
+  const out = new Map<string, bigint>();
+  // Straight at the primary endpoint: cc.provider may be a FallbackProvider, which has no
+  // .send() for a vendor method like this one.
+  const rpc = new ethers.JsonRpcProvider(cc.rpcUrl, cc.chainId, { staticNetwork: true });
+  const res: any = await rpc.send('alchemy_getTokenBalances', [cc.wallet.address]).catch(() => null);
+  for (const t of res?.tokenBalances ?? []) {
+    const ca = String(t?.contractAddress ?? '').toLowerCase();
+    if (!ca || t?.error) continue;
+    let wei: bigint;
+    try {
+      wei = BigInt(t.tokenBalance ?? '0x0');
+    } catch {
+      continue;
+    }
+    if (wei > 0n) out.set(ca, wei);
+  }
+  return out;
+}
+
 async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
   // Only wrapped-native is skipped (that is /unwrap's job, not a swap).
   // The stablecoin bases (USDT/USDG) are DELIBERATELY included: turning them back into
@@ -3863,22 +3890,48 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
     out.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
     return out.slice(0, SELL_HOLDINGS_CAP);
   }
-  // Fallback for a chain without Blockscout (Stable, say): candidates from the journal plus live positions.
+  // No Blockscout on this chain (BSC, Base, HyperEVM, Arc). Candidates come from the WALLET
+  // ITSELF where the RPC can enumerate them -- Alchemy answers alchemy_getTokenBalances --
+  // and from the journal plus live positions everywhere else.
+  //
+  // Without the wallet scan, a token bought anywhere but through this bot simply never
+  // appeared: /swap could only offer what the journal already knew about, which is why a
+  // meme held on BSC had no way out.
   const cand = new Map<string, string>();
   for (const t of journal.recentTokens(40)) if (t.ca) cand.set(t.ca.toLowerCase(), t.symbol);
   for (const p of store.active()) if (p.ca) cand.set(p.ca.toLowerCase(), p.symbol);
-  for (const [ca, sym] of [...cand].slice(0, HOLDINGS_CAND_MAX)) {
-    if (skip.has(ca)) continue;
+  const scanned = await walletErc20s(cc).catch(() => new Map<string, bigint>());
+  for (const ca of scanned.keys()) if (!cand.has(ca)) cand.set(ca, '?');
+
+  // Price EVERY candidate in one request, then keep what is worth something -- or what we
+  // have traded before. A wallet on BSC carries dozens of airdropped tokens; offering them
+  // all would bury the one holding that matters.
+  const prices = await explore.tokenUsdPrices(cc, [...cand.keys()]).catch(() => new Map<string, number>());
+  // Ranked by what the HOLDING is worth, not by the token's unit price: a million units of
+  // a $0.000001 coin outranks one unit of a $10 one, and the owner wants the former. The
+  // decimals are not known yet, so 18 is assumed for the ordering ONLY -- the exact figure
+  // is read below and decides the final sort.
+  const roughUsd = (ca: string) => (Number(scanned.get(ca) ?? 0n) / 1e18) * (prices.get(ca) ?? 0);
+  const ranked = [...cand]
+    .filter(([ca]) => !skip.has(ca) && ((prices.get(ca) ?? 0) > 0 || known.has(ca)))
+    .sort((a, b) => roughUsd(b[0]) - roughUsd(a[0]))
+    .slice(0, HOLDINGS_CAND_MAX);
+
+  await mapLimit(ranked, 6, async ([ca, sym]) => {
     try {
       const erc = new ethers.Contract(ca, ERC20_ABI, cc.provider);
-      const balWei: bigint = await erc.balanceOf(cc.wallet.address);
-      if (balWei <= 0n) continue;
+      const balWei: bigint = scanned.get(ca) ?? (await erc.balanceOf(cc.wallet.address));
+      if (balWei <= 0n) return;
       const dec = Number(await erc.decimals().catch(() => 18));
-      out.push({ ca: ethers.getAddress(ca), symbol: sym, dec, balWei, amountNum: Number(ethers.formatUnits(balWei, dec)), usd: null });
+      const symbol = sym !== '?' ? sym : String(await erc.symbol().catch(() => '?'));
+      const amountNum = Number(ethers.formatUnits(balWei, dec));
+      const px = prices.get(ca) ?? 0;
+      out.push({ ca: ethers.getAddress(ca), symbol, dec, balWei, amountNum, usd: px > 0 ? amountNum * px : null });
     } catch {
       /* skip a token that cannot be read */
     }
-  }
+  });
+  out.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
   await addStableBases(cc, out);
   await addNativeHolding(cc, out);
   return out.slice(0, SELL_HOLDINGS_CAP);

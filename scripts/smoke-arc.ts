@@ -59,12 +59,16 @@ assert.ok(v4.includes("arc: '0x6049c9a0e26405c0985f9e3685c87d0ae917f82b'"), 'the
 const cfg = readFileSync('src/config.ts', 'utf8');
 assert.match(cfg, /ARC_ENABLED[\s\S]{0,80}&& !!process\.env\.ARC_RPC_URL/, 'ARC_ENABLED alone can now enable the chain');
 
-// Bridging: the diamond is KNOWN but deliberately not in the supported map, because
-// LI.FI's quote endpoint still refuses chain 5042. A route that cannot be quoted must not
-// be offered -- the failure would land after the user has already entered an amount.
+// Bridging: LI.FI began quoting Arc on 16 Sep 2026 (Base -> Arc via polymerStandard,
+// small amounts via gasZipBridge), so its diamond is in the supported map. Coverage is
+// INBOUND ONLY -- Arc -> anywhere still returns no route -- which is why bridge.ts probes
+// each Arc pair before offering it rather than assuming both directions work.
 const lifi = readFileSync('src/lifi.ts', 'utf8');
-assert.ok(lifi.includes("ARC_DIAMOND_PENDING = '0xA4072583658Fae592A3506A42431cb6316a8d40b'"), 'the Arc diamond has gone missing');
 const map = lifi.slice(lifi.indexOf('const DIAMOND'), lifi.indexOf('};', lifi.indexOf('const DIAMOND')));
-assert.ok(!map.includes('5042'), 'Arc is in the LI.FI map: check a real quote first, then move it');
+assert.match(map, /5042: '0xA4072583658Fae592A3506A42431cb6316a8d40b'/, 'the Arc LI.FI diamond is missing');
+
+const bridge = readFileSync('src/commands/bridge.ts', 'utf8');
+assert.match(bridge, /const PARTIAL = new Set\(\['arc'\]\)/, 'Arc is no longer treated as partially covered');
+assert.match(bridge, /lifiSupports\(a\) && lifiSupports\(b\) && pairOk\(a, b\)/, 'the menu no longer probes an Arc pair before offering it');
 
 console.log('ok: Arc is scaffolded, its addresses are pinned, and it stays out of the registry until an RPC is given');
