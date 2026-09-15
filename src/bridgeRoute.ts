@@ -90,7 +90,26 @@ async function cctpUsdcRoute(from: ChainCtx, to: ChainCtx, assets: BridgeAssets)
   const route = await cctpRoute(from, to).catch(() => null);
   if (!route) return null;
   const same = (a: string | undefined, b: string) => !!a && a.toLowerCase() === b.toLowerCase();
-  return same(assets.originCurrency, route.src.usdc) && same(assets.destinationCurrency, route.dst.usdc) ? route : null;
+  if (!same(assets.originCurrency, route.src.usdc) || !same(assets.destinationCurrency, route.dst.usdc)) return null;
+  // CCTP MINTS on the destination, and that transaction is ours to pay for. With no gas
+  // there the burn would land and the mint could not follow -- the funds stay safe and
+  // claimable, but they do not arrive, which is not what "bridge" means. Measured on Arc,
+  // where gas is USDC and a fresh wallet holds none: an aggregator route delivers without
+  // us paying anything on the far side, so let that win instead.
+  const gas = await mintGasAffordable(to);
+  return gas ? route : null;
+}
+
+/** Can the wallet pay for one mint on this chain? ~250k gas is a generous ceiling. */
+async function mintGasAffordable(to: ChainCtx): Promise<boolean> {
+  try {
+    const [bal, fee] = await Promise.all([to.provider.getBalance(to.wallet.address), to.provider.getFeeData()]);
+    const price = fee.maxFeePerGas ?? fee.gasPrice ?? 0n;
+    if (price === 0n) return bal > 0n;
+    return bal >= price * 250_000n;
+  } catch {
+    return false; // unreadable means unproven, and this decides whether money can arrive
+  }
 }
 
 export async function executeBridgeVia(

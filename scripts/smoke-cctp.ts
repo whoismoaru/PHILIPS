@@ -67,4 +67,12 @@ assert.match(cc2, /depositForBurn\.staticCall/, 'the burn is sent without being 
 assert.match(cc2, /burned and SAFE/, 'a missing attestation must not read as lost funds');
 assert.match(cc2, /status === 'complete'/, 'an unsigned attestation would revert the mint');
 
+// CCTP is not chosen when the destination mint cannot be PAID FOR. The burn would land
+// and the mint could not follow: the funds stay claimable, but they do not arrive, and an
+// aggregator route that delivers without gas on the far side is the better answer.
+assert.match(src, /const gas = await mintGasAffordable\(to\);/, 'CCTP no longer checks that the mint can be paid');
+assert.match(src, /return gas \? route : null;/, 'an unaffordable mint must drop the CCTP candidate');
+const aff = src.slice(src.indexOf('async function mintGasAffordable'), src.indexOf('async function mintGasAffordable') + 600);
+assert.match(aff, /catch \{[\s\S]{0,80}return false;/, 'an unreadable balance must count as unaffordable');
+
 console.log(`ok: CCTP resolved on ${seen.join(', ')} — USDC only, never where burning is disabled`);
