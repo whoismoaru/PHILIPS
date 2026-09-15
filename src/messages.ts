@@ -641,7 +641,20 @@ export function msgStatus(opts: {
   const usdCol = (u: number | null | undefined) => (u === null || u === undefined ? '—' : usdPlain(u));
   const equity = opts.totalUsd === null ? '—' : usdPlain(opts.totalUsd + (opts.lpUsd ?? 0));
 
-  const held = opts.chains.filter((c) => Number(c.amount) > 0 || (c.stables ?? []).length > 0);
+  // Dust threshold: a chain worth less than a dime is not information, it is noise -- four
+  // rows of "$0,04" push the figures that matter off the first screen. An UNREADABLE value
+  // (null) is kept, because hiding it would quietly shrink the reported total.
+  const chainUsd = (c: (typeof opts.chains)[number]): number | null => {
+    const parts = [c.usd, ...(c.stables ?? []).map((t) => t.usd)];
+    if (parts.some((u) => u === null || u === undefined)) return null;
+    return parts.reduce<number>((a, u) => a + (u ?? 0), 0);
+  };
+  const DUST_USD = 0.1;
+  const held = opts.chains.filter((c) => {
+    if (!(Number(c.amount) > 0 || (c.stables ?? []).length > 0)) return false;
+    const v = chainUsd(c);
+    return v === null || v >= DUST_USD;
+  });
   const assetNames = [
     ...new Set(
       held.flatMap((c) => [
@@ -692,10 +705,8 @@ export function msgStatus(opts: {
           // A chain's value is native plus every stablecoin on it. One unreadable USD
           // figure makes the WHOLE row '—': quietly summing the rest would show a
           // number smaller than what the wallet really holds.
-          const parts: Array<number | null | undefined> = [c.usd, ...(c.stables ?? []).map((t) => t.usd)];
-          const value = parts.some((u) => u === null || u === undefined)
-            ? '—'
-            : usdPlain(parts.reduce<number>((a, u) => a + (u ?? 0), 0));
+          const sum = chainUsd(c);
+          const value = sum === null ? '—' : usdPlain(sum);
           return `${bold(esc(SHORT[c.label] ?? c.label))}: ${value}${assets.length ? ` ${italic(`(${assets.join(' / ')})`)}` : ''}`;
         }),
       ),
