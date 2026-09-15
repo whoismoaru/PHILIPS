@@ -201,6 +201,11 @@ export function v4ListDegraded(): boolean {
 // public RPC answers the same query over all 58M blocks in under a second.
 const LOGS_RPC: Record<string, string> = {
   robinhood: 'https://rpc.mainnet.chain.robinhood.com',
+  // Arc is deliberately ABSENT. Its public endpoint prunes history ("pruned history
+  // unavailable"), so a scan from block 0 can never succeed there, and Alchemy's free tier
+  // caps the range at 10 blocks. The bot's own v4 records still answer /positions; what is
+  // lost is only finding a position opened OUTSIDE the bot, and a call that is certain to
+  // fail is worse than not making it.
 };
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
 // Scans are incremental: the first one walks the whole chain, later ones resume from

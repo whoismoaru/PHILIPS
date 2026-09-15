@@ -344,10 +344,10 @@ const DEFS: Record<string, Def> = {
           // assumption until feeAmountTickSpacing is read on a live Arc pool -- the pool
           // sampled during the survey used fee 10000 / spacing 200, which fits it.
           routerHasDeadline: false, // SwapRouter02, which dropped the deadline field
-          // Arc's own endpoint, rpc.mainnet.arc.io, came up for mainnet day and answers
-          // 12 of 12 at ~180 ms including a 10k-block eth_getLogs -- so it is the primary.
-          // rpc.arc-scan.org stays as the backup: it works, but served only about half its
-          // calls while Arc was in private mainnet.
+          // Alchemy is primary here, as on every other chain: measured 20 of 20 at ~47 ms.
+          // Its free tier caps eth_getLogs at 10 BLOCKS, which is why the v4 log scan uses
+          // a public endpoint instead (see LOGS_RPC in uniswapV4.ts) -- exactly the split
+          // Robinhood already runs. Both backups answer full-range queries.
         },
       }
     : {}),
