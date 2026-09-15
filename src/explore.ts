@@ -190,6 +190,12 @@ const TOKEN_POOL_FIELDS = `
     cumulativeVolume(duration: DAY) { value }
     token0 { symbol address }
     token1 { symbol address }`;
+const V4_ONLY_QUERY = `query V4PoolsForToken($chain: Chain!, $n: Int!, $t: String!) {
+  topV4Pools(chain: $chain, first: $n, tokenFilter: $t) {${TOKEN_POOL_FIELDS}
+    tickSpacing
+    hook { address }
+  }
+}`;
 const TOKEN_QUERY = `query PoolsForToken($chain: Chain!, $n: Int!, $t: String!) {
   topV3Pools(chain: $chain, first: $n, tokenFilter: $t) {${TOKEN_POOL_FIELDS}
   }
@@ -198,6 +204,66 @@ const TOKEN_QUERY = `query PoolsForToken($chain: Chain!, $n: Int!, $t: String!) 
     hook { address }
   }
 }`;
+
+/**
+ * Chains where Uniswap is NOT the default venue, yet its v4 pools still exist and are
+ * worth offering. The value is the gateway's own Chain enum.
+ */
+const UNISWAP_V4_ONLY_CHAIN: Record<string, string> = { bsc: 'BNB' };
+
+/** The gateway's v4 pools for one token, mapped like the main path maps them. */
+async function gatewayV4Pools(ctx: ChainCtx, token: string): Promise<TokenPool[]> {
+  const chain = UNISWAP_V4_ONLY_CHAIN[ctx.key];
+  if (!chain) return [];
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12_000);
+  try {
+    const res = await fetch(GATEWAY, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://app.uniswap.org' },
+      body: JSON.stringify({ query: V4_ONLY_QUERY, variables: { chain, n: 40, t: token } }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`gateway ${res.status}`);
+    const json: any = await res.json();
+    const out: TokenPool[] = [];
+    for (const p of json?.data?.topV4Pools ?? []) {
+      const t0 = p.token0, t1 = p.token1;
+      if (!t0 || !t1) continue;
+      const b0 = baseKindOf(t0.symbol, t0.address, ctx);
+      const b1 = baseKindOf(t1.symbol, t1.address, ctx);
+      if ((b0 && b1) || (!b0 && !b1)) continue; // single-sided needs exactly one base side
+      if (p.hook?.address && p.hook.address !== '0x0000000000000000000000000000000000000000') continue; // hooked pools are not handed to an automatic LP
+      const fee = p.feeTier ?? 0;
+      if (fee <= 0) continue;
+      const baseIsCurrency0 = !!b0;
+      const vol = p.cumulativeVolume?.value ?? 0;
+      const tvl = p.totalLiquidity?.value ?? 0;
+      out.push({
+        protocol: 'v4',
+        base: (b0 ?? b1)!,
+        baseSymbol: (baseIsCurrency0 ? t0.symbol : t1.symbol) ?? ctx.bases.find((b) => b.kind === (b0 ?? b1))?.symbol ?? 'BASE',
+        otherSymbol: (baseIsCurrency0 ? t1.symbol : t0.symbol) ?? '?',
+        fee,
+        tvlUsd: tvl,
+        vol24hUsd: vol,
+        aprPct: aprOf(vol, fee, tvl),
+        otherAddr: baseIsCurrency0 ? t1.address : t0.address,
+        baseIsCurrency0,
+        poolKey: {
+          currency0: t0.address,
+          currency1: t1.address,
+          fee,
+          tickSpacing: Number(p.tickSpacing ?? 0),
+          hooks: p.hook?.address ?? '0x0000000000000000000000000000000000000000',
+        },
+      });
+    }
+    return out;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** A pool token's base side, matched against THIS chain's base list
  *  (WETH/WBNB, USDG, USDT). null means it is not a base asset. */
@@ -227,7 +293,23 @@ export const baseKindOf = (
  */
 export async function poolsForToken(ctx: ChainCtx, token: string): Promise<TokenPool[]> {
   const chain = UNISWAP_CHAIN[ctx.key];
-  if (!chain) return poolsForTokenDex(ctx, token);
+  if (!chain) {
+    // A chain whose default venue is NOT Uniswap (BSC, where it is PancakeSwap) is
+    // discovered through DexScreener plus the chain itself. That path cannot see Uniswap
+    // v4 pools: DexScreener only labels some of them, and the on-chain v4 scan takes its
+    // candidates from DexScreener too. Measured 15 Sep 2026 -- CAKE has two v4 pools on
+    // BSC holding $29k and $6k that were invisible to every source the bot had.
+    //
+    // So the gateway is asked for v4 ONLY, and merged in. v3 is deliberately left out of
+    // this query: on BSC a Uniswap v3 pool and a PancakeSwap pool can share base and fee,
+    // and the merge in /add keys v3 on (venue, base, fee) -- gateway rows carry no venue,
+    // so they would collide with Pancake's and one of the two would vanish.
+    const [dex, v4] = await Promise.all([
+      poolsForTokenDex(ctx, token),
+      UNISWAP_V4_ONLY_CHAIN[ctx.key] ? gatewayV4Pools(ctx, token).catch(() => []) : Promise.resolve([]),
+    ]);
+    return [...dex, ...v4];
+  }
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20_000);
