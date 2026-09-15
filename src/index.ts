@@ -619,6 +619,10 @@ async function renderStatus(ctx: any, edit: boolean) {
           const stables: Array<{ symbol: string; amount: string; usd: number | null }> = [];
           for (const b of basesFor(c)) {
             if (!isStableBase(b.kind)) continue;
+            // On a chain with no wrapped native, the native asset IS this stablecoin -- Arc
+            // pays gas in USDC and exposes the same balance through an ERC-20. Listing both
+            // would print the holding twice and DOUBLE the chain's value on the card.
+            if (!c.hasWethBase) continue;
             try {
               const erc = new ethers.Contract(b.address, ERC20_ABI, c.provider);
               const raw: bigint = await erc.balanceOf(c.wallet.address);
@@ -633,11 +637,17 @@ async function renderStatus(ctx: any, edit: boolean) {
             const amt = Number(ethers.formatEther(b));
             // The native price comes from THAT chain's own wrapped native: BNB priced
             // with WBNB, not with ETH. Unreadable gives null ("$?") and is not summed.
-            const px = await getEthUsd(c.wethAddress, c).catch(() => null);
+            // A stablecoin-gas chain needs no price lookup: its native asset is the dollar.
+            const px = c.hasWethBase ? await getEthUsd(c.wethAddress, c).catch(() => null) : 1;
             const usd = px !== null ? amt * px : amt === 0 ? 0 : null;
-            return { label: c.label, amount: amt.toFixed(4), symbol: c.nativeSymbol, usd, stables };
+            // …and it reads to 2 decimals like money, not to 4 like a coin balance.
+            // Plain, NOT localised: the card filters chains with Number(amount), and
+            // "8,29" parses as NaN -- the row would vanish. Two decimals for a dollar-gas
+            // chain, four for a coin.
+            const amount = c.hasWethBase ? amt.toFixed(4) : amt.toFixed(2);
+            return { label: c.label, amount, symbol: c.nativeSymbol, usd, stables, stableNative: !c.hasWethBase };
           } catch {
-            return { label: c.label, amount: '?', symbol: c.nativeSymbol, usd: null, stables };
+            return { label: c.label, amount: '?', symbol: c.nativeSymbol, usd: null, stables, stableNative: !c.hasWethBase };
           }
         }),
       ),

@@ -188,6 +188,9 @@ type Def = {
   noBatch?: boolean; // public RPCs that refuse JSON-RPC batching, bsc-dataseed for one
   slipstream?: boolean; // venue Velodrome Slipstream (ABI int24 tickSpacing + mint sqrtPriceX96)
   routerHasDeadline?: boolean; // default false (SwapRouter02 Uniswap)
+  /** This chain's per-transaction gas ceiling, in ITS native units. Only set where the
+   *  global default does not translate -- a chain whose gas token is a dollar. */
+  maxTxFeeNative?: string;
   fallbackRpc?: string[]; // backup RPCs for when the primary `rpc` is down (FallbackProvider, in priority order)
   privateRpc?: string; // a private relay for broadcasting, which protects against MEV and sandwiching
 };
@@ -347,10 +350,15 @@ const DEFS: Record<string, Def> = {
           // assumption until feeAmountTickSpacing is read on a live Arc pool -- the pool
           // sampled during the survey used fee 10000 / spacing 200, which fits it.
           routerHasDeadline: false, // SwapRouter02, which dropped the deadline field
+          // Gas here is USDC, so this ceiling reads in DOLLARS: 5 cents a transaction. The
+          // global 0.005 default is calibrated for ETH and BNB; on Arc it means half a cent,
+          // and it refused an ordinary CCTP mint costing 0.0064 USDC (16 Sep 2026).
+          maxTxFeeNative: '0.05',
           // Alchemy is primary here, as on every other chain: measured 20 of 20 at ~47 ms.
           // Its free tier caps eth_getLogs at 10 BLOCKS, which is why the v4 log scan uses
           // a public endpoint instead (see LOGS_RPC in uniswapV4.ts) -- exactly the split
           // Robinhood already runs. Both backups answer full-range queries.
+          fallbackRpc: ['https://rpc.mainnet.arc.io', 'https://rpc.arc-scan.org'],
         },
       }
     : {}),
@@ -455,7 +463,13 @@ function build(key: string, d: Def): ChainCtx {
   // whatever happens to go through one helper. A 400k-gas tx costs ~0.00003 native
   // on all five chains, so the 0.005 default leaves ~170x of headroom: it never
   // interferes with normal operation but still stops something genuinely wild.
-  const feeCap = parseFeeCap(config.safety.maxTxFeeNative);
+  //
+  // EXCEPT where the native asset is a DOLLAR. The default is calibrated for ETH and BNB,
+  // where 0.005 native is $20 or $3; on Arc the gas token is USDC, so the same number means
+  // half a cent -- and a perfectly ordinary CCTP mint at 0.0065 USDC was refused as
+  // "genuinely wild" (measured 16 Sep 2026). A chain whose gas is a stablecoin states its
+  // own ceiling, in the same units everything else there is priced in.
+  const feeCap = parseFeeCap(d.maxTxFeeNative ?? config.safety.maxTxFeeNative);
   if (feeCap !== null) {
     const beforeCap = provider.broadcastTransaction.bind(provider);
     provider.broadcastTransaction = async (signedTx: string) => {

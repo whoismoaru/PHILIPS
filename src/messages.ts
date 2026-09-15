@@ -629,6 +629,9 @@ export function msgStatus(opts: {
     symbol: string;
     usd: number | null;
     stables?: Array<{ symbol: string; amount: string; usd: number | null }>;
+    /** True where the chain's GAS token is the stablecoin itself (Arc pays gas in USDC), so
+     *  amount and value are one number and the row must not print it twice. */
+    stableNative?: boolean;
   }>;
   totalUsd: number | null; // null means the native price could not be read; never 0
   lpUsd?: number | null; // the value of the active LP positions
@@ -676,6 +679,13 @@ export function msgStatus(opts: {
       bold('BY CHAIN :'),
       ...tree(
         held.map((c) => {
+          // A chain whose GAS is a stablecoin holds one asset whose amount and value are the
+          // same number. Printing "$8,29 (8.29 USDC)" says it twice in two formats, so the
+          // row reads "Arc: $8,29 USDC" instead.
+          if (c.stableNative && !(c.stables ?? []).length) {
+            const v = c.usd === null || c.usd === undefined ? '—' : usdPlain(c.usd);
+            return `${bold(esc(SHORT[c.label] ?? c.label))}: ${v} ${italic(esc(c.symbol))}`;
+          }
           const assets: string[] = [];
           if (Number(c.amount) > 0) assets.push(`${esc(c.amount)} ${esc(c.symbol)}`);
           for (const t of c.stables ?? []) assets.push(`${esc(t.amount)} ${esc(t.symbol)}`);
