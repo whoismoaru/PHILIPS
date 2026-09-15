@@ -99,6 +99,22 @@ function resolveAssets(from: ChainCtx, to: ChainCtx, kind: BaseKind) {
   const srcBase = from.bases.find((b) => b.kind === kind);
   if (!srcBase) throw new Error(`${from.label} has no ${kind.toUpperCase()}`);
   if (kind === 'weth') {
+    // A chain with no wrapped native has no native ASSET to receive either: on Arc the gas
+    // token IS USDC, exposed as an ERC-20. Asking an aggregator for "native on Arc" names
+    // something that does not exist, which is how ETH → Arc failed with "no route" while
+    // USDC → Arc worked (16 Sep 2026). Land it in the destination's own base instead.
+    if (!to.hasWethBase) {
+      const dstStable = to.bases.find((b) => isStableBase(b.kind));
+      if (!dstStable) throw new Error(`${to.label} has nothing to receive ${from.nativeSymbol}.`);
+      return {
+        originCurrency: NATIVE,
+        destinationCurrency: dstStable.address,
+        srcDecimals: 18,
+        dstDecimals: dstStable.decimals,
+        srcSymbol: from.nativeSymbol,
+        dstSymbol: dstStable.symbol,
+      };
+    }
     return {
       originCurrency: NATIVE,
       destinationCurrency: NATIVE,
