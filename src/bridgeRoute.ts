@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { type ChainCtx } from './chains.js';
 import { getBridgeQuote, executeBridge, lifiPreferred, NATIVE, type BridgeQuote } from './relay.js';
 import { lifiBridgeQuote, lifiSupports } from './lifi.js';
+import { cctpRoute, cctpTransfer } from './cctp.js';
 
 export type BridgeAssets = { originCurrency?: string; destinationCurrency?: string };
 
@@ -13,7 +14,7 @@ export type BridgeAssets = { originCurrency?: string; destinationCurrency?: stri
  * user confirmed.
  */
 
-export type BridgeProvider = 'relay' | 'lifi';
+export type BridgeProvider = 'relay' | 'lifi' | 'cctp';
 
 /** Race both providers and return the better quote. Throws when neither has a route. */
 export async function bestBridgeQuote(
@@ -27,6 +28,27 @@ export async function bestBridgeQuote(
   ];
   if (lifiSupports(from) && lifiSupports(to)) {
     tasks.push(lifiBridgeQuote(from, to, amountWei, assets).then((quote) => ({ provider: 'lifi' as const, quote })));
+  }
+  // CCTP is only a candidate for USDC-to-USDC. It is Circle burning and minting its own
+  // token, so there is no pool to price against: the amount that arrives is the amount that
+  // left, and the only cost is gas on both ends. That makes it the best possible "quote"
+  // whenever it applies -- and on Arc it is the ONLY one, since no aggregator routes there.
+  const cctpUsdc = await cctpUsdcRoute(from, to, assets);
+  if (cctpUsdc) {
+    tasks.push(
+      Promise.resolve({
+        provider: 'cctp' as const,
+        quote: {
+          inLabel: `${ethers.formatUnits(amountWei, 6)} USDC`,
+          outLabel: `${ethers.formatUnits(amountWei, 6)} USDC`,
+          outWei: amountWei, // burn-and-mint: 1:1, no slippage and no relayer cut
+          impactPct: 0,
+          feeUsd: 0,
+          etaSec: 90, // Circle's standard attestation, measured in minutes at worst
+          steps: [], // executed through cctpTransfer, not as calldata
+        },
+      }),
+    );
   }
   const settled = await Promise.allSettled(tasks);
   const ok = settled.filter((s): s is PromiseFulfilledResult<{ provider: BridgeProvider; quote: BridgeQuote }> => s.status === 'fulfilled').map((s) => s.value);
@@ -48,6 +70,10 @@ export async function bestBridgeQuote(
   // LI.FI is the PRIMARY provider here too, as on the swap side: it goes first while its
   // output is no worse than Relay's beyond the tolerance. Without this the bridge would be
   // purely "highest output", and a fraction of a percent would be enough to move it.
+  // CCTP first when it is on the table: 1:1 with no counterparty beats any quote that
+  // routes through a pool, and it is the only thing that reaches Arc at all.
+  const cctp = ok.find((o) => o.provider === 'cctp');
+  if (cctp) return cctp;
   const lifi = ok.find((o) => o.provider === 'lifi');
   const relay = ok.find((o) => o.provider === 'relay');
   if (lifi && (!relay || lifiPreferred(lifi.quote.outWei, relay.quote.outWei))) return lifi;
@@ -55,6 +81,18 @@ export async function bestBridgeQuote(
 }
 
 /** Execute a bridge through the chosen provider: the quote is re-requested and held to minOut. */
+/**
+ * Is this a USDC transfer that CCTP can carry? Both ends must be enabled, and BOTH
+ * currencies must be the chain's own CCTP USDC -- bridging USDG or USDT through it is not
+ * a thing, and silently swapping the asset would be worse than having no route.
+ */
+async function cctpUsdcRoute(from: ChainCtx, to: ChainCtx, assets: BridgeAssets) {
+  const route = await cctpRoute(from, to).catch(() => null);
+  if (!route) return null;
+  const same = (a: string | undefined, b: string) => !!a && a.toLowerCase() === b.toLowerCase();
+  return same(assets.originCurrency, route.src.usdc) && same(assets.destinationCurrency, route.dst.usdc) ? route : null;
+}
+
 export async function executeBridgeVia(
   provider: BridgeProvider,
   from: ChainCtx,
@@ -65,6 +103,12 @@ export async function executeBridgeVia(
 ): Promise<{ txHashes: string[]; outWei: bigint }> {
   // Relay includes the token approval as a step of its own.
   if (provider === 'relay') return executeBridge(from, to, amountWei, minOutWei, assets);
+  if (provider === 'cctp') {
+    const r = await cctpTransfer(from, to, amountWei, { dryRun: false });
+    // Burn-and-mint moves the exact amount, so minOut cannot be missed -- there is nothing
+    // to slip. Both hashes are returned so the card shows the whole journey.
+    return { txHashes: [r.burnTx!, r.mintTx!].filter(Boolean), outWei: amountWei };
+  }
   // LI.FI: re-quote (target and spender are already pinned to the diamond in lifiBridgeQuote) and check minOut.
   const fresh = await lifiBridgeQuote(from, to, amountWei, assets);
   if (fresh.outWei < minOutWei) {

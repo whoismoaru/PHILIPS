@@ -6,6 +6,7 @@ import { CHAINS, getChain, isStableBase, type ChainCtx, type BaseKind } from '..
 import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridgeRoute.js';
 import { NATIVE } from '../relay.js';
 import { lifiSupports } from '../lifi.js';
+import { cctpSupport } from '../cctp.js';
 import { ERC20_ABI } from '../chain.js';
 import { getEthUsd } from '../screening.js';
 import * as store from '../store.js';
@@ -143,17 +144,55 @@ async function assetBalance(cc: ChainCtx, kind: BaseKind): Promise<{ wei: bigint
  * LI.FI's diamond map is the test: every chain in it has been quoted against. Relay is
  * not consulted here because it covers a superset of those chains today.
  */
-const bridgeable = (cc: ChainCtx): boolean => lifiSupports(cc);
+/**
+ * Can these two chains actually be bridged BETWEEN?
+ *
+ * Tested as a PAIR, not per chain. Arc is reachable only through CCTP, so "Arc is
+ * bridgeable" plus "Robinhood is bridgeable" does not make Robinhood → Arc a route --
+ * LI.FI does not carry Arc, and Circle has not enabled burning on Robinhood. Offering it
+ * anyway gives a button that fails after the amount is typed.
+ */
+const routable = (a: ChainCtx, b: ChainCtx): boolean =>
+  (lifiSupports(a) && lifiSupports(b)) || (cctpChains.has(a.key) && cctpChains.has(b.key));
+
+/**
+ * Chains reachable by CCTP, resolved ONCE at startup.
+ *
+ * The check is an on-chain read, and the route list is built on every /bridge -- doing it
+ * per tap would put five RPC round-trips in front of the menu. A chain that switches on
+ * later (Circle has CCTP deployed on Robinhood and BSC with burning still disabled) is
+ * picked up on the next restart.
+ */
+const cctpChains = new Set<string>();
+
+/**
+ * Refresh which chains CCTP can reach. Called before the menu is drawn, not once at
+ * startup: Arc's public RPC drops calls often enough that a single failed probe at boot
+ * would hide its only route until the next restart. cctpSupport caches a success for good,
+ * so this is a no-op read once each chain has answered.
+ */
+async function refreshCctpChains(): Promise<void> {
+  await Promise.all(
+    Object.values(CHAINS).map(async (cc) => {
+      const ok = await cctpSupport(cc).then((x) => !!x).catch(() => false);
+      if (ok) cctpChains.add(cc.key);
+    }),
+  );
+}
+void refreshCctpChains().then(() => {
+  if (cctpChains.size) console.log(`[cctp] USDC transfers available on: ${[...cctpChains].join(', ')}`);
+});
 
 /** Every direction between the active chains. With one chain there is nothing to bridge. */
 function routes(): Array<{ from: ChainCtx; to: ChainCtx }> {
-  const list = Object.values(CHAINS).filter(bridgeable);
+  const list = Object.values(CHAINS);
   const out: Array<{ from: ChainCtx; to: ChainCtx }> = [];
-  for (const from of list) for (const to of list) if (from.key !== to.key) out.push({ from, to });
+  for (const from of list) for (const to of list) if (from.key !== to.key && routable(from, to)) out.push({ from, to });
   return out;
 }
 
 export async function cmdBridge(ctx: any) {
+  await refreshCctpChains();
   const rs = routes();
   if (rs.length === 0) return ctx.reply(msg.msgBridgeUnavailable(), html);
   flows.delete(ctx.from.id);
