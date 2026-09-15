@@ -1539,6 +1539,10 @@ type PosRow = {
   mcRange?: string | null; // the range read as market cap, pinned to the entry values
   feesLabel?: string | null;
   feesUsdLabel?: string | null;
+  /** The same fee as a NUMBER of dollars. A ladder sums these; it used to parse its own
+   *  printed labels back apart, and the id-ID format ("+$0,10") turned every fee into a
+   *  hundred times itself -- five legs of 10 cents added up to a reported "+$50,00". */
+  feesUsd?: number | null;
   converted?: boolean;
   convertedInto?: string | null;
   feesBase?: number; // unclaimed fees in the base, for the footer total
@@ -1576,10 +1580,13 @@ function collapseLadderRows(rows: PosRow[]): void {
       const sumFee = feeVals.reduce((a, b) => a + b, 0);
       base.feesBase = sumFee;
       base.feesLabel = `${sumFee.toFixed(sumFee >= 1 ? 4 : 6)} ${base.investUnit ?? ""}`.trim();
-      const usdVals = legs
-        .map((r) => (r.feesUsdLabel ? Number(r.feesUsdLabel.replace(/[^0-9.-]/g, '')) : null))
-        .filter((v): v is number => v !== null && Number.isFinite(v));
-      base.feesUsdLabel = usdVals.length === feeVals.length ? `+${msg.usdPlain(usdVals.reduce((a, b) => a + b, 0))}` : null;
+      // Summed from the CARRIED figure. Reading it back out of the label parsed "+$0,10"
+      // as 10 dollars -- the id-ID format puts the decimal in a comma, which the digit
+      // filter dropped -- so a five-leg ladder earning 50 cents reported "+$50,00".
+      const usdVals = legs.map((r) => r.feesUsd).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+      const usdSum = usdVals.reduce((a, b) => a + b, 0);
+      base.feesUsd = usdVals.length === feeVals.length ? usdSum : null;
+      base.feesUsdLabel = usdVals.length === feeVals.length ? `+${msg.usdPlain(usdSum)}` : null;
     }
     // Drop every leg but the first from the array.
     for (const r of legs.slice(1)) {
@@ -1694,9 +1701,9 @@ async function cmdPositions(ctx: any, edit = false) {
         feesLabel: `${Number(ethers.formatUnits(d.feesBaseWei, dec)).toFixed(dec >= 18 ? 5 : 2)} ${d.baseSymbol}`,
         // Fees in USD (the design uses dollars). An unreadable price gives null and the
         // card falls back to base units; NEVER show a fake $0.00.
-        feesUsdLabel: await baseToUsd(d.baseKind, Number(ethers.formatUnits(d.feesBaseWei, dec)), rcc)
-          .then((v) => (v === null ? null : `+${msg.usdPlain(v)}`))
-          .catch(() => null),
+        ...(await baseToUsd(d.baseKind, Number(ethers.formatUnits(d.feesBaseWei, dec)), rcc)
+          .then((v) => ({ feesUsd: v, feesUsdLabel: v === null ? null : `+${msg.usdPlain(v)}` }))
+          .catch(() => ({ feesUsd: null, feesUsdLabel: null }))),
         feesBase: Number(ethers.formatUnits(d.feesBaseWei, dec)),
       };
     } catch (e) {
@@ -1794,6 +1801,7 @@ async function cmdPositions(ctx: any, edit = false) {
             return {
               feesLabel: `${f.toFixed(dec >= 18 ? 5 : 2)} ${sym}`,
               // An unreadable price gives null and the card falls back to base units. No fake $0.00.
+              feesUsd: usdPer !== null ? f * usdPer : null,
               feesUsdLabel: usdPer !== null ? `+${msg.usdPlain(f * usdPer)}` : null,
               feesBase: f,
             };

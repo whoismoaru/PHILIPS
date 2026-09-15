@@ -41,3 +41,22 @@ assert.ok(!/parseFloat\(r\.investLabel\)/.test(collapse), 'the ladder is parsing
 assert.match(collapse, /r\.investNum \?\? 0/, 'the ladder no longer sums the carried figure');
 
 console.log('ok: the /positions row keeps its shape, and a ladder sums figures rather than text');
+
+// ── A ladder sums MONEY, never the text it printed.
+//
+// On 15 Sep 2026 a five-leg WAIFU ladder five minutes old reported "Total Fees: +$50,00"
+// beside "PnL: +0.1%". Each leg had earned about ten cents and was printed "+$0,10"; the
+// merge read that label back with a digits-only filter, which drops the id-ID decimal
+// comma and turns 0.10 into 10. Five legs, fifty dollars, all of it fictional.
+const indexSrc = readFileSync('src/index.ts', 'utf8');
+const merge = indexSrc.slice(indexSrc.indexOf('function collapseLadderRows'), indexSrc.indexOf('collapseLadderRows(rows);'));
+assert.ok(!/feesUsdLabel\.replace/.test(merge), 'the ladder is parsing its own fee label again');
+assert.match(merge, /legs\.map\(\(r\) => r\.feesUsd\)/, 'the ladder must sum the carried fee figure');
+assert.ok(!/parseFloat\(r\.(investLabel|feesLabel|feesUsdLabel)\)/.test(merge), 'a printed label is being parsed back into a number');
+
+// The trap in one line: this is what the old code did to a ten-cent fee.
+assert.equal(Number('+$0,10'.replace(/[^0-9.-]/g, '')), 10, 'the id-ID decimal comma no longer inflates — recheck the guard below');
+// And what the money path must do instead: keep the number.
+assert.equal(Number((0.1).toFixed(2)), 0.1);
+
+console.log('ok: a ladder adds up its legs from figures, never from formatted text');
