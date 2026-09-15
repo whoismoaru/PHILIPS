@@ -774,21 +774,23 @@ export function msgPnl(opts: {
 }
 
 /**
- * A fully converted position. `tokenSide` sets the direction: the base side turns
+ * A fully converted position: the base side turned
  * into the token as price FALLS, the token side turns into base as price RISES — so
  * the recovery advice is inverted too.
  */
-export function msgConverted(tokenId: string, baseSym: string, tokenSym: string, tokenSide: boolean): string {
-  const from = tokenSide ? tokenSym : baseSym;
-  const into = tokenSide ? baseSym : tokenSym;
+export function msgConverted(tokenId: string, baseSym: string, tokenSym: string): string {
+  // One direction only: the base was deposited and price fell through the whole range, so
+  // it is now the token.
+  const from = baseSym;
+  const into = tokenSym;
   return [
-    `🔴 ${bold('Alert: Position Converted')} ${tokenSide ? '⬆️' : '⬇️'}`,
+    `🔴 ${bold('Alert: Position Converted')} \u2B07\uFE0F`,
     '',
     `🆔 ${bold('Position ID:')} #${esc(tokenId)}`,
     `🔗 ${bold('Pair:')} ${esc(baseSym)} / ${esc(tokenSym)}`,
     '',
     `⚠️ ${bold('RISK NOTICE:')} Your ${esc(from)} has been 100% converted to ${esc(into)}.`,
-    `💡 ${bold('Suggestion:')} Your principal will only recover if the ${esc(tokenSym)} price ${tokenSide ? 'falls' : 'rises'} again. Open the position to withdraw part of it, or /stop to close and cash out.`,
+    `💡 ${bold('Suggestion:')} Your principal will only recover if the ${esc(tokenSym)} price rises again. Open the position to withdraw part of it, or /stop to close and cash out.`,
     '',
     `⏱️ <i>Triggered at: ${nowWib()}</i>`,
   ].join('\n');
@@ -1107,7 +1109,7 @@ export function msgPositionCard(opts: {
   dryRun: boolean;
   chain?: string;
   baseSymbol?: string; // WETH (the default, and older positions) | USDG
-  side?: 'base' | 'token'; // the side deposited; empty means base, an older position
+  side?: 'base'; // kept so older records still read; the token side no longer exists
   converted?: boolean; // the price crossed the whole range, so the position is 100% the other asset
   feeIsTickSpacing?: boolean; // Velodrome Slipstream: `fee` is the tickSpacing, since its fee is dynamic
   /** The pool's own depth and activity. `onchain` marks a TVL measured from the pool
@@ -1128,7 +1130,7 @@ export function msgPositionCard(opts: {
 }): string {
   const base = esc(opts.baseSymbol ?? 'WETH');
   const sym = esc(opts.symbol);
-  const tokenSide = opts.side === 'token';
+
   // The status appears ONLY on its own line, not in the title too: one fact in one
   // place, so there is no chance of the two disagreeing after a change.
   const status = opts.inRange
@@ -1136,21 +1138,19 @@ export function msgPositionCard(opts: {
     : opts.converted
       ? `${bold('OUT OF RANGE')} — fully converted`
       : `${bold('OUT OF RANGE')} — waiting`;
-  const strategy = tokenSide ? 'Token Side (sell the rip)' : `${base} Side (buy the dip)`;
-  const investUnit = tokenSide ? sym : base;
+  const strategy = `${base} Single Side (buy the dip)`;
+  const investUnit = base;
   const range = esc(opts.range);
 
   // The closing sentence explains WHAT is happening to the money, and that differs by
   // status and by side — so do not collapse it into one generic sentence.
   const isLeg = opts.ladder && opts.ladder.legCount > 1;
   const explain = opts.converted && isLeg
-    ? `This rung has done its job: leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount} is now ${bold(`100% ${tokenSide ? (opts.baseSymbol ?? 'WETH') : opts.symbol}`)}. The remaining rungs are still waiting further down.`
+    ? `This rung has done its job: leg ${opts.ladder!.legIndex + 1} of ${opts.ladder!.legCount} is now ${bold(`100% ${opts.symbol}`)}. The remaining rungs are still waiting further down.`
     : opts.inRange
     ? `Your liquidity is ${bold('active')} and earning fees. Fees keep accruing as long as ${sym} stays inside this range.`
     : opts.converted
-      ? `Price moved through your entire range, so this position is now ${bold(`100% ${tokenSide ? (opts.baseSymbol ?? 'WETH') : opts.symbol}`)} and no longer earning fees. Your target is done — withdraw, or leave it and wait for price to come back into range.`
-      : tokenSide
-      ? `Your liquidity is not active yet. It converts to ${base} and starts earning fees once ${sym} ${bold('rises')} into your range (${range}).`
+      ? `Price moved through your entire range, so this position is now ${bold(`100% ${opts.symbol}`)} and no longer earning fees. Your target is done — withdraw, or leave it and wait for price to come back into range.`
       : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${range}).`;
 
   // Same tree block as the v4 card: one protocol must not read differently from the
@@ -1283,7 +1283,7 @@ export function msgPositionsList(opts: {
     mcRange?: string | null; // '$1.68M ⇄ $165.5K / now $1.70M'
     feesLabel?: string | null;
     feesUsdLabel?: string | null; // fees in USD, falling back to feesLabel when the price cannot be read
-    strategy?: string | null;
+    strategy?: string | null; // always the base side; kept for older callers
     baseSymbol?: string | null; // the asset DEPOSITED, used for the side label
     converted?: boolean; // the price has crossed the ENTIRE range, so the position is 100% the other asset
     convertedInto?: string | null; // the symbol of the asset it converted into
@@ -1296,8 +1296,7 @@ export function msgPositionsList(opts: {
     const pair = posPair(r.pair, base);
     // The side is written from the perspective of the asset DEPOSITED: "USDG Side" means
     // the base went in. Naming ETH on a USDG position would name an asset never deposited.
-    const tokenSide = r.strategy === 'token';
-    const side = tokenSide ? 'Token Single Side (sell the rip)' : `${base ?? 'Base'} Single Side (buy the dip)`;
+    const side = `${base ?? 'Base'} Single Side (buy the dip)`;
     // Three states, not two: not yet reached the range, inside it, and already through
     // the WHOLE range (capital fully converted, no longer earning). Without the third, a
     // position whose buy is FINISHED reads exactly like one that has not started.
@@ -1469,42 +1468,6 @@ export function msgPoolStep(
   return out.join('\n');
 }
 
-/** Step 2/5 — choose the deposit side. */
-export function msgStrategyStep(
-  pair: string,
-  baseSym: string,
-  tokenSym: string,
-  price: string | null,
-  /** The pool that was just picked, so the choice is visible on the next screen too. */
-  pool?: { ver: string; feeLabel: string; tvl: string; vol?: string; apr: string; tight: string },
-): string {
-  return [
-    bold('OPEN LP | Select Strategy'),
-    '',
-    `${bold(esc(pair))}${pool ? ` (${esc(pool.ver)}, ${esc(pool.feeLabel)} fee)` : ''}`,
-    // The numbers from the pool you tapped, carried forward. Several pools of the same
-    // pair differ ONLY by these, so without them the next screen cannot tell you which
-    // one you are about to deposit into.
-    ...(pool
-      ? [
-          `├ TVL: ${esc(pool.tvl)}`,
-          `├ Vol: ${esc(pool.vol ?? '—')} (24h)`,
-          `├ APR: ${esc(pool.apr)}`,
-          `└ Fills: ≤${esc(pool.tight)}`,
-        ]
-      : []),
-    ...(price ? ['', note(`1 ${esc(tokenSym)} = ${esc(price)} ${esc(baseSym)}`)] : []),
-    '',
-    `🟢 ${bold(`${baseSym} Side (buy the dip)`)}`,
-    `You deposit ${bold(baseSym)}. It converts to ${esc(tokenSym)} and earns fees when the price ${bold('drops')} into your range.`,
-    '',
-    `🔵 ${bold('Token Side (sell the rip)')}`,
-    `You deposit ${bold(tokenSym)}. It converts to ${esc(baseSym)} and earns fees when the price ${bold('rises')} into your range.`,
-    '',
-    note(nowWib()),
-  ].join('\n');
-}
-
 export function msgRangeStep(tokenSide = false): string {
   return [
     bold('OPEN LP | Set Price Range'),
@@ -1585,7 +1548,6 @@ export function msgPlanStep(opts: {
   costFailed?: boolean; // the cost estimate failed, so never claim the balance is sufficient
   priceLower?: string;
   priceUpper?: string;
-  side?: 'base' | 'token';
   depositSymbol?: string;
   protocol?: string; // 'V3' | 'V4'
   dryRun: boolean;
@@ -1593,7 +1555,6 @@ export function msgPlanStep(opts: {
   const body: string[] = [bold('OPEN LP · Step [5/5] Review & Confirm'), ''];
   if (opts.screenDanger) body.push(`⚠️ ${bold('AUDIT: HIGH RISK')} — consider cancelling.`, '');
   else if (opts.screenFailed) body.push(`🟡 ${bold('AUDIT: FAILED')} — token could not be verified.`, '');
-  const tokenSide = opts.side === 'token';
   // tickLower/Upper is TICK order; in PRICE terms it can be reversed depending on
   // which side the base sits on — sort ascending so "a - b" never displays backwards.
   let bounds: string | null = null;
@@ -1607,12 +1568,12 @@ export function msgPlanStep(opts: {
   body.push(
     `🔗 ${bold('Transaction Details :')}`,
     `• Pair: ${esc(opts.baseSymbol)} / ${esc(opts.symbol)} ${italic(`(${opts.protocol ?? 'V3'}, ${feeLabel(opts.fee)} Fee)`)}`,
-    `• Strategy: ${esc(tokenSide ? `${opts.symbol} Side (Sell the rip)` : `${opts.baseSymbol} Side (Buy the dip)`)}`,
+    `• Strategy: ${esc(`${opts.baseSymbol} Single Side (Buy the dip)`)}`,
     `• Depositing: ${bold(`${opts.depositAmount} ${opts.depositSymbol ?? opts.baseSymbol}`)}${opts.depositUsd ? ` ${italic(`(≈ ${usdPlain(opts.depositUsd)})`)}` : ''}`,
     `• Target Range: ${fmtPct(opts.pctLow)} → ${fmtPct(opts.pctHigh)} from market price`,
     ...(bounds ? [`• Estimated Bounds: ${esc(bounds)}`] : []),
     `• Market Price: 1 ${esc(opts.symbol)} = ${esc(opts.currentPrice)} ${esc(opts.baseSymbol)}`,
-    `• Status: ${italic(`Out of Range (Will activate on price ${tokenSide ? 'rise' : 'drop'})`)}`,
+    `• Status: ${italic('Out of Range (Will activate on price drop)')}`,
     // Gas and balance figures STAY on this card: it is the last one before money
     // moves, and "make sure you have enough ETH" without a number is not usable information.
     `• Est. Gas: ~${esc(opts.gasEth)} ETH`,
@@ -2127,14 +2088,9 @@ export function msgCashOut(opts: {
 // ─── monitor ───────────────────────────────────────────────────────
 
 /** Entering range: fees start flowing. `tokenSide` flips the conversion's direction. */
-export function msgRangeEnter(
-  tokenId: string,
-  symbol: string,
-  baseSymbol = 'WETH',
-  tokenSide = false,
-): string {
-  const from = tokenSide ? symbol : baseSymbol;
-  const into = tokenSide ? baseSymbol : symbol;
+export function msgRangeEnter(tokenId: string, symbol: string, baseSymbol = 'WETH'): string {
+  const from = baseSymbol;
+  const into = symbol;
   return [
     `🟢 ${bold('Alert: Position In Range')}`,
     '',
@@ -2142,7 +2098,7 @@ export function msgRangeEnter(
     `🔗 ${bold('Pair:')} ${esc(baseSymbol)} / ${esc(symbol)}`,
     '',
     `💧 ${bold('Fees are now flowing!')}`,
-    `Your liquidity is active. Your ${esc(from)} is currently converting to ${esc(into)} as the price ${tokenSide ? 'rises' : 'drops'} through your target range.`,
+    `Your liquidity is active. Your ${esc(from)} is currently converting to ${esc(into)} as the price ${bold('drops')} through your target range.`,
     '',
     `⏱️ <i>Triggered at: ${nowWib()}</i>`,
   ].join('\n');

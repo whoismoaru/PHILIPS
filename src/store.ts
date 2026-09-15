@@ -43,7 +43,9 @@ export type PosRecord = {
   resultEthWei?: string; // the ETH received at stop, for the final PnL
   imported?: boolean; // found on chain rather than opened by the bot, so its entry is unknown
   leftoverWei?: string; // tokens from this position not yet cashed out; it caps what auto-sweep may sell, protecting a spot bag
-  side?: 'base' | 'token'; // the side deposited at open; empty means base, an older position
+  /** The side deposited at open. Always 'base' since 16 Sep 2026 -- the token side was
+   *  removed. 'token' is still READ so records written before then keep working. */
+  side?: 'base' | 'token';
   nominalToken?: string; // the token amount deposited, on the token side
   groupId?: string; // a bid-ask or spot ladder: N legs sharing a groupId make one logical position; empty means a single position
   legIndex?: number; // the leg's order within the group (0 is nearest the price)

@@ -178,7 +178,9 @@ export type AddPlan = {
   currentPrice: string; // the token's current price, denominated in the base
   pctLow: number; // the far end as a % of the current price (the most negative)
   pctHigh: number; // the near end as a % of the current price
-  side: 'base' | 'token'; // the asset being deposited
+  /** Always 'base' -- the chain's native asset or its stablecoin. The token side was
+   *  removed on 16 Sep 2026; the field stays so older records still read. */
+  side: 'base';
   tokenAmountWei: bigint; // the token-side deposit (0 on the base side)
   tokenDecimals: number;
   position: TPosition;
@@ -384,97 +386,6 @@ export async function planLadderSingleSided(
   return plans;
 }
 
-/**
- * Plan a SINGLE-SIDED position on the TOKEN side: deposit the token alone into a
- * range ABOVE the current price. It behaves like a passive limit sell — the token
- * converts gradually into base as price rises through the range, harvesting fees on
- * the way.
- *
- * A mirror of planAddSingleSided with the tick side reversed, because a position
- * holds 100% token0 when price is BELOW its range and 100% token1 when price is
- * ABOVE it.
- */
-export async function planAddTokenSide(
-  tokenAddress: string,
-  fee: number,
-  amountToken: string,
-  rangePercentUp: number,
-  base: BaseAsset,
-  ctx: ChainCtx = getChain(),
-): Promise<AddPlan> {
-  const st = await loadPool(tokenAddress, fee, base, ctx);
-  const spacing = spacingOf(fee, ctx);
-  const width = widthInTicksUp(rangePercentUp, spacing);
-  const tokenWei = ethers.parseUnits(amountToken, st.tokenOther.decimals);
-
-  let tickLower: number;
-  let tickUpper: number;
-  let position: TPosition;
-
-  if (st.baseIsToken0) {
-    // Token is token1, so the position must hold only token1: range BELOW the tick.
-    let upper = Math.floor(st.currentTick / spacing) * spacing;
-    if (upper >= st.currentTick) upper -= spacing;
-    tickUpper = upper;
-    tickLower = upper - width;
-    position = Position.fromAmount1({ pool: st.sdkPool, tickLower, tickUpper, amount1: tokenWei.toString() });
-  } else {
-    // Token is token0, so the position must hold only token0: range ABOVE the tick.
-    let lower = Math.ceil(st.currentTick / spacing) * spacing;
-    if (lower <= st.currentTick) lower += spacing;
-    tickLower = lower;
-    tickUpper = lower + width;
-    position = Position.fromAmount0({
-      pool: st.sdkPool,
-      tickLower,
-      tickUpper,
-      amount0: tokenWei.toString(),
-      useFullPrecision: true,
-    });
-  }
-
-  const mint = position.mintAmounts;
-  const amount0 = BigInt(mint.amount0.toString());
-  const amount1 = BigInt(mint.amount1.toString());
-  const baseAmountWei = st.baseIsToken0 ? amount0 : amount1;
-  const tokenAmountWei = st.baseIsToken0 ? amount1 : amount0;
-
-  const pLower = tickToPrice(st.tokenOther, st.sdkBase, tickLower).toSignificant(6);
-  const pUpper = tickToPrice(st.tokenOther, st.sdkBase, tickUpper).toSignificant(6);
-  const [priceLower, priceUpper] =
-    Number(pLower) <= Number(pUpper) ? [pLower, pUpper] : [pUpper, pLower];
-
-  const currentPrice = st.sdkPool.priceOf(st.tokenOther).toSignificant(8);
-  const cur = Number(currentPrice);
-  const pctLow = cur > 0 ? (Number(priceLower) / cur - 1) * 100 : 0;
-  const pctHigh = cur > 0 ? (Number(priceUpper) / cur - 1) * 100 : 0;
-
-  return {
-    baseKind: base.kind,
-    baseSymbol: base.symbol,
-    baseDecimals: base.decimals,
-    baseIsToken0: st.baseIsToken0,
-    tickLower,
-    tickUpper,
-    priceLower,
-    priceUpper,
-    baseAmountWei,
-    otherAmountWei: tokenAmountWei,
-    otherSymbol: st.tokenOther.symbol!,
-    currentPrice,
-    pctLow,
-    pctHigh,
-    side: 'token',
-    tokenAmountWei,
-    tokenDecimals: st.tokenOther.decimals,
-    position,
-  };
-}
-
-/** Make sure the BASE balance and the Position Manager allowance are both in place.
- *  WETH (wrappable): wrap native ETH as needed. USDG (non-wrappable): must already be
- *  held, since it cannot be wrapped. Every amount is formatted with base.decimals. */
-/** Estimated gas units to open an LP (wrap + approve + mint). Also used by the cost preview. */
 export const ADD_GAS_UNITS = 700_000n;
 
 /**
@@ -560,32 +471,6 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
   return notes;
 }
 
-/** Make sure an ERC20 (an ordinary token) balance and Position Manager approval are
- *  in place. No wrapping here: an ordinary token has to be held already. */
-async function ensureErc20Ready(
-  address: string,
-  amountWei: bigint,
-  symbol: string,
-  decimals: number,
-  ctx: ChainCtx,
-): Promise<string[]> {
-  const { wallet } = ctx;
-  const notes: string[] = [];
-  const c = new ethers.Contract(address, ERC20_ABI, wallet);
-  const bal: bigint = await c.balanceOf(wallet.address);
-  if (bal < amountWei) {
-    throw new Error(
-      `Insufficient ${symbol} balance: need ${ethers.formatUnits(amountWei, decimals)}, ` +
-        `have ${ethers.formatUnits(bal, decimals)}. Buy some with /buy or lower the amount.`,
-    );
-  }
-  for (const h of await approveExact(address, ctx.pmAddress, amountWei, wallet)) {
-    notes.push(`Approve ${symbol} for Position Manager (tx ${h})`);
-  }
-  return notes;
-}
-
-/** Execute a single-sided LP add. Returns the new position's tokenId plus notes. */
 export async function executeAdd(
   plan: AddPlan,
   tokenAddress: string,
@@ -594,11 +479,7 @@ export async function executeAdd(
 ): Promise<{ tokenId: string; notes: string[] }> {
   const { positionManager, wallet } = ctx;
   const base = baseOf(ctx, plan.baseKind);
-  // Token side: it is the token that needs preparing, not the base (nothing is wrapped).
-  const notes =
-    plan.side === 'token'
-      ? await ensureErc20Ready(tokenAddress, plan.tokenAmountWei, plan.otherSymbol, plan.tokenDecimals, ctx)
-      : await ensureBaseReady(base, plan.baseAmountWei, ctx);
+  const notes = await ensureBaseReady(base, plan.baseAmountWei, ctx);
 
   const withSlip = plan.position.mintAmountsWithSlippage(SLIPPAGE);
   const params = {
@@ -627,11 +508,7 @@ export async function executeAdd(
     // STF means the base transfer failed (balance or allowance). Recover once, then retry.
     if (/STF/i.test((e as Error).message)) {
       notes.push(`Mint hit STF — re-verifying assets and retrying...`);
-      notes.push(
-        ...(plan.side === 'token'
-          ? await ensureErc20Ready(tokenAddress, plan.tokenAmountWei, plan.otherSymbol, plan.tokenDecimals, ctx)
-          : await ensureBaseReady(base, plan.baseAmountWei, ctx)),
-      );
+      notes.push(...(await ensureBaseReady(base, plan.baseAmountWei, ctx)));
       const tx = await positionManager.mint({ ...params, deadline: Math.floor(Date.now() / 1000) + 600 });
       receipt = await tx.wait();
     } else {

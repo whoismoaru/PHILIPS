@@ -33,7 +33,6 @@ import {
   ladderWeights,
   executeAddBatch,
   executeRemoveBatch,
-  planAddTokenSide,
   ADD_GAS_UNITS,
   gasBuffer,
   executeAdd,
@@ -269,7 +268,9 @@ type AddFlow = {
   base?: BaseKind; // pasangan pool terpilih (weth | usdg)
   fee?: number;
   tokenDec?: number; // desimal token (sisi token)
-  strategy?: 'base' | 'token'; // the deposit side: base buys the dip, token sells the rally (phase 6)
+  /** Always 'base' since 16 Sep 2026. Kept so the amount step can tell a configured flow
+   *  from a fresh one; the token side it used to select no longer exists. */
+  strategy?: 'base';
   rangePct?: number; // v3: lebar rentang %. v4: -1 = default single-sided
   ethAmount?: string;
   awaitingAmount?: boolean; // waiting for the user to type an amount
@@ -858,7 +859,7 @@ async function buildPositionCard(
               lo: Math.min(Number(dd.priceLower), Number(dd.priceUpper)),
               hi: Math.max(Number(dd.priceLower), Number(dd.priceUpper)),
               inRange: dd.inRange,
-              converted: !dd.inRange && (l.side === 'token' ? dd.side === 'above' : dd.side === 'below'),
+              converted: !dd.inRange && dd.side === 'below',
             };
           } catch {
             return null;
@@ -984,8 +985,8 @@ async function buildPositionCard(
     dryRun: config.safety.dryRun,
     chain: cc.label,
     baseSymbol: d.baseSymbol,
-    side: rec.side,
-    converted: !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below'),
+    side: rec.side === 'token' ? undefined : rec.side, // an older token-side record still reads
+    converted: !d.inRange && d.side === 'below',
     feeIsTickSpacing: cc.slipstream,
     ladder,
   });
@@ -1676,13 +1677,14 @@ async function cmdPositions(ctx: any, edit = false) {
         // (depending which side the base sits on), so sort ascending first.
         // The card reads this back to decide the side, so use a stable marker
         // ('token'/'base') rather than a sentence that could change when text is reworded.
-        strategy: rec.side === 'token' ? 'token' : 'base',
+        strategy: 'base',
         baseSymbol: d.baseSymbol,
         // Fully converted means price has crossed the WHOLE range in its intended
         // direction: the base side waits for a FALL (done at 'below'), the token side
         // waits for a RISE (done at 'above').
-        converted: !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below'),
-        convertedInto: rec.side === 'token' ? d.baseSymbol : rec.symbol,
+        // Buy-the-dip only: price falling THROUGH the range leaves the position all token.
+        converted: !d.inRange && d.side === 'below',
+        convertedInto: rec.symbol,
         rangeLabel: (() => {
           const a = Number(d.priceLower), b = Number(d.priceUpper);
           const [lo, hi] = a <= b ? [d.priceLower, d.priceUpper] : [d.priceUpper, d.priceLower];
@@ -2103,40 +2105,14 @@ async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
 
-/** Step 2/5 — pick the deposit side (the strategy). */
-async function renderStrategyStep(ctx: any, flow: AddFlow, edit: boolean) {
-  const sel = flow.selected;
-  const base = wizardBase(flow);
-  // The SAME summary row the pool picker showed, for the pool actually chosen -- built
-  // from one formatter so the two screens cannot disagree about a pool's numbers.
-  const selSummary = sel ? poolSummaries([sel])[0] : undefined;
-  const text = msg.msgStrategyStep(
-    sel ? `$${sel.otherSymbol}/${sel.baseSymbol}` : '?',
-    base.symbol,
-    sel?.otherSymbol ?? 'token',
-    flow.plan?.currentPrice ? String(flow.plan.currentPrice) : null,
-    selSummary,
-  );
-  const extra = {
-    ...html,
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback(`🟢 ${base.symbol} Side (Buy ${sel?.otherSymbol ?? 'Token'})`, 'strat:base')],
-      [Markup.button.callback(`🔵 Token Side (Sell ${sel?.otherSymbol ?? 'Token'})`, 'strat:token')],
-      [Markup.button.callback('⬅️ Back', 'back:pool'), Markup.button.callback('❌ Cancel', 'cancel')],
-    ]),
-  };
-  await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
-}
-
-/** Step 4/5 — pick the range width (%). */
+/** Step 2/4 — how far BELOW the price the range sits. */
 async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
-  const up = flow.strategy === 'token';
-  const rows = RANGE_OPTIONS.map((o) => [
-    Markup.button.callback(`${up ? '📈 +' : '📉 -'}${o.pct}% ${o.label}`, `rng:${o.pct}`),
-  ]);
-  rows.push([Markup.button.callback('⬅️ Back', 'back:strategy'), Markup.button.callback('❌ Cancel', 'cancel')]);
+  // Always downwards: PHILIPS deposits the base and buys the dip. The upward variant
+  // belonged to the token side, which no longer exists.
+  const rows = RANGE_OPTIONS.map((o) => [Markup.button.callback(`📉 -${o.pct}% ${o.label}`, `rng:${o.pct}`)]);
+  rows.push([Markup.button.callback('⬅️ Back', 'back:pool'), Markup.button.callback('❌ Cancel', 'cancel')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
-  const text = msg.msgRangeStep(flow.strategy === 'token');
+  const text = msg.msgRangeStep();
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   await (edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra));
 }
@@ -2151,17 +2127,6 @@ const wizardCtx = (flow: AddFlow): ChainCtx => venueCtx(getChain(flow.chain), fl
 function amountCtx(flow: AddFlow) {
   const base = wizardBase(flow);
   const stable = isStableBase(base.kind);
-  // Token side: the unit is the token itself, so a fixed figure would be meaningless —
-  // MAX_ETH_PER_TX does not apply here. But a limit STILL EXISTS: the token balance
-  // actually held, read when the amount is typed (see the enforcement below).
-  if (flow.strategy === 'token') {
-    return {
-      symbol: flow.selected?.otherSymbol ?? 'TOKEN',
-      cap: Infinity, // replaced with the real balance before it is enforced
-      capLabel: 'your full balance',
-      example: '1000',
-    };
-  }
   // Each denomination has its own limit: ETH/BNB use MAX_ETH_PER_TX, USDT/USDG use
   // MAX_STABLE_PER_TX (a dollar figure, and not interchangeable).
   const cap = stable ? maxStable : maxEth;
@@ -2187,7 +2152,7 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
     [Markup.button.callback('❌ Cancel', 'cancel')],
   );
   // Balance (1 RPC; on failure '?' — never block this step).
-  const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
+  const dec = wizardBase(flow).decimals;
   const raw = await rawBalanceFor(flow).catch(() => null);
   const balLabel = raw === null ? '?' : `${msg.cleanUnits(raw, dec)} ${a.symbol}`;
   const text = msg.msgAmountStep(a.symbol, a.capLabel, balLabel, a.example);
@@ -2197,12 +2162,9 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
 
 /** Balance percentages offered at the amount step. */
 
-/** The raw balance of whichever side is being chosen (token / native / stablecoin). */
+/** The raw balance of the side being deposited: the chain's native asset or its stablecoin. */
 async function rawBalanceFor(flow: AddFlow): Promise<bigint> {
   const cc = wizardCtx(flow);
-  if (flow.strategy === 'token') {
-    return new ethers.Contract(flow.token, ERC20_ABI, cc.provider).balanceOf(cc.wallet.address);
-  }
   const base = wizardBase(flow);
   return base.wrappable
     ? cc.provider.getBalance(cc.wallet.address)
@@ -2212,12 +2174,12 @@ async function rawBalanceFor(flow: AddFlow): Promise<bigint> {
 /**
  * The balance that can ACTUALLY be deposited. For a native asset, gas is deducted
  * first: 90% of the raw balance would consume the gas, the wrap would succeed, the mint
- * would fail, and the money would be trapped as WETH. The token and stablecoin sides do
- * not pay gas out of themselves, so they are used in full.
+ * would fail, and the money would be trapped as WETH. A stablecoin does not pay gas out
+ * of itself, so it is used in full.
  */
 async function usableFor(flow: AddFlow): Promise<bigint> {
   const raw = await rawBalanceFor(flow);
-  if (flow.strategy === 'token' || !wizardBase(flow).wrappable) return raw;
+  if (!wizardBase(flow).wrappable) return raw;
   const buf = await gasBuffer(wizardCtx(flow));
   return raw > buf ? raw - buf : 0n;
 }
@@ -2233,7 +2195,7 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
   const pct = Number(ctx.match[1]);
   if (!pctPresets.get('add').includes(pct)) return;
 
-  const dec = flow.strategy === 'token' ? (flow.tokenDec ?? 18) : wizardBase(flow).decimals;
+  const dec = wizardBase(flow).decimals;
   const usable = await usableFor(flow).catch(() => null);
   if (usable === null) return ctx.reply(msg.msgError('amount', 'Balance read failed — type the amount instead.'), html);
   if (usable <= 0n) {
@@ -2290,17 +2252,13 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean, silent = f
   if (flow.selected?.protocol === 'v4') return renderPlanStepV4(ctx, flow, edit, silent);
   const cc = wizardCtx(flow);
   const base = baseOf(cc, flow.base ?? 'weth');
-  const isLadder = flow.strategy === 'base' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1;
+  const isLadder = flow.shape === 'bidask' && (flow.legs ?? 1) > 1;
   // The plan and the cost estimate run in parallel (they are independent).
-  const tokenSide = flow.strategy === 'token';
   const [planSettled, costSettled] = await Promise.allSettled([
-    tokenSide
-      ? planAddTokenSide(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc)
-      : isLadder
-        ? planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc).then((legs) => legs[0])
-        : planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc),
-    // The token side deposits no base, so only gas needs checking, not the base balance.
-    estimateAddCost(cc, base, tokenSide ? '0' : flow.ethAmount!),
+    isLadder
+      ? planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc).then((legs) => legs[0])
+      : planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc),
+    estimateAddCost(cc, base, flow.ethAmount!),
   ]);
   if (planSettled.status === 'rejected') throw planSettled.reason;
   const plan = planSettled.value;
@@ -2328,10 +2286,9 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean, silent = f
   let cost: Awaited<ReturnType<typeof estimateAddCost>> | null = null;
   if (costSettled.status === 'fulfilled') cost = costSettled.value;
   else console.log('[estimateAddCost] failed:', String(costSettled.reason).slice(0, 120));
-  const depositUsd = tokenSide ? undefined : (await baseToUsd(base.kind, Number(flow.ethAmount!), cc)) ?? undefined;
+  const depositUsd = (await baseToUsd(base.kind, Number(flow.ethAmount!), cc)) ?? undefined;
   const text = msg.msgPlanStep({
-    side: plan.side,
-    depositSymbol: tokenSide ? plan.otherSymbol : plan.baseSymbol,
+    depositSymbol: plan.baseSymbol,
     screenDanger: flow.screenBahaya,
     screenFailed: flow.screenFailed,
     baseSymbol: plan.baseSymbol,
@@ -2697,39 +2654,12 @@ bot.action(/^pick:(\d+)$/, async (ctx) => {
   flow.ethAmount = undefined;
   flow.rangePct = undefined;
   await ctx.answerCbQuery();
-  flow.strategy = undefined;
-  // The briefed order: pair -> strategy -> amount -> range -> confirm.
-  await renderStrategyStep(ctx, flow, true);
-});
-
-bot.action(/^strat:(base|token)$/, async (ctx) => {
-  const flow = getFlow(ctx);
-  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
-  if (flow.selected?.protocol === 'v4' && ctx.match[1] === 'token') {
-    return ctx.answerCbQuery('Token side is not supported on v4 pools — pick a v3 pool.');
-  }
-  flow.strategy = ctx.match[1] as 'base' | 'token';
-  if (flow.strategy === 'token' && flow.tokenDec === undefined) {
-    const cc = getChain(flow.chain);
-    flow.tokenDec = Number(
-      await new ethers.Contract(flow.token, ERC20_ABI, cc.provider).decimals().catch(() => 18),
-    );
-  }
-  await ctx.answerCbQuery();
-  // Range first, amount last: the amount is what fires the deposit now, so it has to be
-  // the final question rather than one asked three screens before anything happens.
+  // PHILIPS deposits the BASE side, always: the chain's native asset or its stablecoin.
+  // The "which side?" question was removed on 16 Sep 2026 -- the token side only ever
+  // worked on v3, and every card, alert and sweep had to branch on it.
+  flow.strategy = 'base';
+  // pool -> range -> amount -> confirm.
   await renderRangeStep(ctx, flow, true);
-});
-
-bot.action('back:strategy', async (ctx) => {
-  const flow = getFlow(ctx);
-  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
-  flow.strategy = undefined;
-  flow.ethAmount = undefined;
-  flow.rangePct = undefined;
-  flow.plan = undefined;
-  await ctx.answerCbQuery();
-  await renderStrategyStep(ctx, flow, true);
 });
 
 bot.action(/^rng:(\d+)$/, async (ctx) => {
@@ -3129,9 +3059,7 @@ async function execAdd(ctx: any) {
       () => ccAdd.positionManager.balanceOf(ccAdd.wallet.address) as Promise<bigint>,
       async () => {
         // Re-plan on every attempt: ticks and price are recomputed, never reused stale.
-        const p2 = await (flow.strategy === 'token'
-          ? planAddTokenSide(...args)
-          : planAddSingleSided(...args));
+        const p2 = await planAddSingleSided(...args);
         return { ...(await executeAdd(p2, flow.token!, flow.fee!, ccAdd)), plan: p2 };
       },
       { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
@@ -3144,18 +3072,8 @@ async function execAdd(ctx: any) {
       fee: flow.fee,
       symbol: plan.otherSymbol,
       baseKind: plan.baseKind,
-      // The token side deposits no base at all (baseAmountWei = 0). Its cost basis is
-      // recorded as the BASE EQUIVALENT at the price when it opened — without that, PnL has
-      // no zero point and the position reads "—" forever.
-      initialWethWei: (plan.side === 'token'
-        ? ethers.parseUnits(
-            (Number(flow.ethAmount) * Number(plan.currentPrice)).toFixed(plan.baseDecimals),
-            plan.baseDecimals,
-          )
-        : plan.baseAmountWei
-      ).toString(),
-      nominalEth: plan.side === 'token' ? undefined : flow.ethAmount,
-      nominalToken: plan.side === 'token' ? flow.ethAmount : undefined,
+      initialWethWei: plan.baseAmountWei.toString(),
+      nominalEth: flow.ethAmount,
       side: plan.side,
       rangeLowPct: plan.pctLow,
       rangeHighPct: plan.pctHigh,
@@ -5434,24 +5352,20 @@ bot.on(message('text'), async (ctx) => {
   }
   if (flow?.awaitingAmount && flow.strategy !== undefined) {
     const a = amountCtx(flow);
-    const dec =
-      flow.strategy === 'token'
-        ? (flow.tokenDec ?? 18)
-        : baseOf(getChain(flow.chain), flow.base ?? 'weth').decimals;
+    const dec = baseOf(getChain(flow.chain), flow.base ?? 'weth').decimals;
     const w = parseAmt(raw, dec);
     if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
     const num = Number(ethers.formatUnits(w, dec));
-    // The ceiling is the CAPITAL ACTUALLY HELD, not a policy number. usableFor() already
-    // handles both sides: the token side is the token balance, and a wrappable base side is
-    // the native balance minus the gas reserve (spend it all and the tx itself goes unpaid).
-    // Only the token side used to be balance-guarded; the base side leaned on the per-tx
-    // limit, so the moment that limit was switched off nothing held it back at all.
+    // The ceiling is the CAPITAL ACTUALLY HELD, not a policy number: for a wrappable base
+    // it is the native balance minus the gas reserve (spend it all and the tx itself goes
+    // unpaid), for a stablecoin the balance in full. The base side used to lean on the
+    // per-tx limit instead, so the moment that limit was switched off nothing held it back.
     // A failed read falls back to amountCtx's limit rather than blocking over a flaky RPC.
     let cap = a.cap;
     let capLabel = a.capLabel;
     const balWei = await usableFor(flow).catch(() => null);
     if (balWei !== null) {
-      const sym = flow.strategy === 'token' ? a.symbol : wizardBase(flow).wrappable ? wizardCtx(flow).nativeSymbol : a.symbol;
+      const sym = wizardBase(flow).wrappable ? wizardCtx(flow).nativeSymbol : a.symbol;
       cap = Number(ethers.formatUnits(balWei, dec));
       capLabel = `${cap.toLocaleString('id-ID', { maximumFractionDigits: 6 })} ${sym}`;
     }

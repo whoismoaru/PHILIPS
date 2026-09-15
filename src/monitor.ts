@@ -324,7 +324,7 @@ async function tick(bot: Telegraf) {
       if (cfg.rangeNotify && rec.lastInRange !== undefined && rec.lastInRange !== d.inRange) {
         if (d.inRange) {
           await notify(bot, 'rangeNotify',
-            msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol, rec.side === 'token'),
+            msgRangeEnter(rec.tokenId, rec.symbol, d.baseSymbol),
             {
               ...html,
               reply_markup: {
@@ -348,10 +348,11 @@ async function tick(bot: Telegraf) {
       // earning fees. That is a different event from merely leaving the range -- and the
       // one that most needs acting on, because the capital cannot recover on its own until
       // price comes back. Fires once per crossing, and re-arms when it returns in range.
-      const converted = !d.inRange && (rec.side === 'token' ? d.side === 'above' : d.side === 'below');
+      // Buy-the-dip only now: the base converts when price falls THROUGH the whole range.
+      const converted = !d.inRange && d.side === 'below';
       if (cfg.rangeNotify && converted && !rec.convertedAlerted) {
         await notify(bot, 'rangeNotify',
-          msgConverted(rec.tokenId, d.baseSymbol, rec.symbol, rec.side === 'token'),
+          msgConverted(rec.tokenId, d.baseSymbol, rec.symbol),
           {
             ...html,
             reply_markup: {
