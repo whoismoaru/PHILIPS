@@ -207,17 +207,37 @@ const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
 // where the last left off. The public RPC rate-limits full-range queries (observed
 // 429 after a handful in a row), and /positions is called often.
 const enumCache = new Map<string, { block: number; ids: Set<string> }>();
+/**
+ * When the scan FAILS, stop hammering it.
+ *
+ * The cursor only advances on success, so a failing endpoint was re-scanned in full on
+ * every single call -- each /positions tap paying the same 8-12 second timeout. The list
+ * still answers from the bot's own records during the cool-down, and still says it is
+ * degraded, so nothing is hidden; it simply stops charging the owner for a retry that has
+ * just failed.
+ */
+const ENUM_COOLDOWN_MS = 60_000;
+const enumCooldown = new Map<string, number>();
 
 /** Forget the incremental scan state and walk the chain again from block 0. */
 export function resetV4EnumCache(): void {
   enumCache.clear();
 }
 
+/**
+ * A full-range eth_getLogs against a PUBLIC endpoint, with a hard ceiling on how long a
+ * button may wait for it. Measured on 15 Sep 2026: with no timeout this call sat for 8.7 s
+ * ("context deadline exceeded") and then for 12.3 s on the next tap, and every /positions
+ * tap paid it again. The tap has to answer either way, so cap the wait and fall back.
+ */
+const LOGS_TIMEOUT_MS = 4_000;
+
 async function logsRpc(url: string, params: unknown): Promise<any[]> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { ...EXPLORER_HEADERS, 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getLogs', params: [params] }),
+    signal: AbortSignal.timeout(LOGS_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`logs HTTP ${res.status}`);
   const j: any = await res.json();
@@ -237,6 +257,12 @@ export async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
 
   const w = ethers.zeroPadValue(cc.wallet.address, 32);
   const cache = enumCache.get(cc.key);
+  const until = enumCooldown.get(cc.key) ?? 0;
+  if (Date.now() < until) {
+    enumDegraded = true;
+    if (cache) for (const id of cache.ids) ids.add(id);
+    return [...ids];
+  }
   const scanFrom = cache ? cache.block + 1 : 0;
   try {
     const scanTo = await cc.provider.getBlockNumber();
@@ -261,6 +287,7 @@ export async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
     for (const [, , topic, isIncoming] of ev) ownedNow.set(BigInt(topic).toString(), isIncoming);
     const owned = new Set([...ownedNow].filter(([, v]) => v).map(([k]) => k));
     enumCache.set(cc.key, { block: scanTo, ids: owned });
+    enumCooldown.delete(cc.key); // it works again, so stop holding it back
     for (const id of owned) ids.add(id);
     enumDegraded = false;
   } catch (e) {
@@ -268,7 +295,11 @@ export async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
     // to be visible. And not only in the server log -- whoever is looking at
     // /positions needs to know the list may be incomplete.
     enumDegraded = true;
-    console.log('[v4] log enumeration failed, falling back to v4store alone:', (e as Error).message.slice(0, 100));
+    enumCooldown.set(cc.key, Date.now() + ENUM_COOLDOWN_MS);
+    console.log(
+      `[v4] log enumeration failed, falling back to v4store alone (retry in ${ENUM_COOLDOWN_MS / 1000}s):`,
+      (e as Error).message.slice(0, 100),
+    );
     if (cache) for (const id of cache.ids) ids.add(id);
   }
   return [...ids];
