@@ -4156,12 +4156,17 @@ async function tswapQuoteConfirm(
   } catch {
     /* an unreadable balance hides the balance line rather than blocking */
   }
-  // A SWAP executes as soon as the amount is set: the owner asked for no confirm step on
-  // this side. The protections the Confirm button used to carry are all still on:
-  // quotedOutWei becomes the floor execTSwap holds the fill to, the per-tx limit was
-  // checked above, and a shortfall still stops here with a card instead of a send.
-  if (!tflow.buy && !shortLabel && !config.safety.dryRun) {
-    await editProgress(ctx, prog, msg.msgProgress(`swapping ${amountInLabel} → ${estOutLabel}…`));
+  // A swap executes as soon as the amount is set -- BUY and SELL alike (the buy side kept
+  // its Confirm button until 16 Sep 2026, when the owner asked for one behaviour, not two).
+  // The protections that button carried are all still on: quotedOutWei becomes the floor
+  // execTSwap holds the fill to, the per-tx limit was checked above, the token was screened
+  // before this step, and a shortfall still stops here with a card instead of a send.
+  if (!shortLabel && !config.safety.dryRun) {
+    await editProgress(
+      ctx,
+      prog,
+      msg.msgProgress(`${tflow.buy ? 'buying' : 'swapping'} ${amountInLabel} → ${estOutLabel}…`),
+    );
     // execTSwap is written for a button press: give it the two callback-only methods,
     // pointed at the progress bubble, rather than duplicating the money path for this
     // one entry point.
