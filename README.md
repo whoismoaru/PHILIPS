@@ -53,7 +53,7 @@ on your server (`data/keystore.json`, scrypt + AES, file mode 600).
 the chain correctly.
 
 **4.** Paste a token's contract address and walk through the wizard. The bot starts in
-**DRY RUN**, so it simulates everything and sends no transactions — and in that mode the
+**DRY RUN**, so it simulates everything and sends no transactions and in that mode the
 plan card is shown instead of a deposit being made.
 
 **5.** When all of that looks right, run `bash philips.sh` again and pick
@@ -99,7 +99,7 @@ base-side entry is laid out, so the wizard never asks.
   tapped. A leg that fills is doing its job, so it is marked filled rather than
   flagged as a position gone wrong.
 
-**Step 3b. How many legs** — only when LP shape is BID-ASK. The choices come from
+**Step 3b. How many legs** only when LP shape is BID-ASK. The choices come from
 `/settings` → **Ladder legs**, and anything from 15 up is marked as needing a paid RPC.
 
 **Step 4. How much.** Tap a percentage of your balance, or type an exact number.
@@ -140,7 +140,7 @@ hidden aliases.
 **Nothing asks twice.** Swapping, bridging, withdrawing and opening an LP all execute on
 the amount you enter, and **Close Position** and **Close All** execute on the tap. Every step still has
 **Back**, every money path is guarded against double-taps, and every one of them checks
-your balance, the per-transaction limit and the gas reserve *before* anything is sent —
+your balance, the per-transaction limit and the gas reserve *before* anything is sent
 what was removed is the second tap, not the guards.
 
 **`/swap` sees your whole wallet,** not just what the bot bought: it reads the token
