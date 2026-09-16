@@ -14,7 +14,15 @@ const fees = readFileSync('src/commands/feesAndRemove.ts', 'utf8');
 // --- both position cards use the same header, tree fields and footer shape ---
 for (const [name, fn] of [
   ['v3', m.slice(m.indexOf('export function msgPositionCard'), m.indexOf('export function msgPositionDetail'))],
-  ['v4', m.slice(m.indexOf('export function msgV4Position'), m.indexOf('export function msgV4Position') + 6000)],
+  // Slice to the NEXT export, never a fixed character count: the card grew past a
+  // hard-coded 6000 and the guard started reading half a function.
+  [
+    'v4',
+    m.slice(
+      m.indexOf('export function msgV4Position'),
+      m.indexOf('\nexport ', m.indexOf('export function msgV4Position') + 10),
+    ),
+  ],
 ] as Array<[string, string]>) {
   assert.ok(/posPair\(/.test(fn), `${name}: the card header must use posPair`);
   for (const field of ['Fee:', 'TVL:', 'Fills:', 'Volume:', 'Liquidity:', 'Range:'])

@@ -76,15 +76,13 @@ a simulated sell to catch honeypots.
 **Step 1. Pick a pool.** Up to three, ranked by liquidity and volume, gathered
 from the Uniswap gateway, Krystal, and on-chain scans.
 
-**Step 2. Pick which side you deposit.**
-
-- **Base side.** You deposit ETH / BNB / a stablecoin. The position waits *below*
-  the current price. It's a limit buy that earns fees while it waits.
-- **Token side.** You deposit the token itself. The position waits *above* the
-  price. A limit sell that earns fees while it waits.
-
-**Step 3. Pick how wide the range is.** Five buttons, **Tightest** (±10%) through
+**Step 2. Pick how wide the range is.** Five buttons, **Tightest** (±10%) through
 **Widest** (±90%).
+
+You always deposit the **base** side, ETH / BNB / a stablecoin, never the token
+itself. The position waits *below* the current price: a limit buy that earns fees
+while it waits. The base is fixed the moment you pick the pool, so there is no
+side to choose. (Token-side entries were removed in September 2026.)
 
 **The shape is a setting, not a step.** `/settings` → **LP Shape** decides how every
 base-side entry is laid out, so the wizard never asks.
@@ -210,6 +208,9 @@ BY CHAIN :
 13 Sep 2026, 14:06 WIB
 ```
 
+Anything under **$0.10** is left out of `/portfolio` and `/swap`: dust from an old
+position is not worth a line you have to read past.
+
 `/gas` answers the question you ask before every move, which chain is cheapest
 right now:
 
@@ -270,7 +271,7 @@ All figures on this page are examples, not anyone's real history.
 
 `/positions` lists what you have open and puts a close button on each one. Tapping close
 on any leg of a ladder closes the whole ladder in one batched transaction. Either
-way the bot withdraws the liquidity, collects the fees, swaps the token side back to
+way the bot withdraws the liquidity, collects the fees, swaps the token back to
 what you deposited, and sends you a result card: deposit, received, how long you held
 it, and the fees you earned.
 
@@ -312,13 +313,18 @@ everything out closes the position, and that has its own button. **Ladder legs**
 counts rather than percentages, so its range is 2 to 69, and **LP shape** is a toggle
 between SPOT and BID-ASK rather than a list of numbers.
 
-Your choices live in `data/pctpresets.json` and survive restarts.
+`/settings` also takes a **PnL card background**: send the bot a photo and it becomes
+the backdrop on every PnL card from then on.
+
+Your choices live in `data/pctpresets.json` and survive restarts. So does a prompt
+that is waiting on you: if the bot restarts while a settings card is asking for
+numbers, the prompt is still there when you answer.
 
 ---
 
 ## Chains
 
-Five are configured out of the box. Turn the extra ones on in `.env`:
+Six are configured out of the box. Turn the extra ones on in `.env`:
 
 | Chain | DEX | You can deposit | On by default |
 |---|---|---|---|
@@ -326,7 +332,14 @@ Five are configured out of the box. Turn the extra ones on in `.env`:
 | BSC | PancakeSwap v3 + Uniswap v3 + v4 | BNB · USDT | yes |
 | Base | Uniswap v3 + v4 | ETH · USDC | yes |
 | HyperEVM | HyperSwap v3 | HYPE · USDT0 | yes |
+| Arc | Uniswap v3 + v4 | USDC only | no, needs `ARC_RPC_URL` |
 | Ink | Velodrome Slipstream | ETH · USDT0 | no, too quiet to be worth the RPC |
+
+**Arc is the odd one.** Gas there IS USDC, so there is no wrapped native and no ETH
+base: USDC is the only asset you can deposit, and it pays its own gas. It stays out
+of the registry until you give it an RPC, even with `ARC_ENABLED=true`. Funding it
+goes through Circle's CCTP (about 30 seconds, a fraction of a cent); `/bridge` picks
+that route on its own when both sides are USDC, and falls back to LI.FI otherwise.
 
 `/positions` and `/portfolio` read v4 on **every** chain that has it, not just the
 one you are pointed at, so a BSC v4 ladder shows up while your primary chain is

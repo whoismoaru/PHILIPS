@@ -22,7 +22,10 @@ const pool = {
   feeTier: 50000,
   totalLiquidity: { value: 196206 },
   cumulativeVolume: null, // the field the gateway failed on
-  token0: { symbol: 'USDG', address: '0x' + '1'.repeat(40) },
+  // The real USDG address, not a placeholder: the base is now recognised by ADDRESS,
+  // so a made-up one makes the pool look base-less and it is dropped before the
+  // partial-response handling this guard is about is ever reached.
+  token0: { symbol: 'USDG', address: getChain('robinhood').bases.find((b) => b.symbol === 'USDG')!.address },
   token1: { symbol: 'RSTR', address: CA },
   tickSpacing: 60,
   hook: null,

@@ -11,6 +11,7 @@ import assert from 'node:assert';
 import { ethers } from 'ethers';
 import { getChain } from '../src/chains.js';
 import { walletV4TokenIds, v4ListDegraded, resetV4EnumCache } from '../src/uniswapV4.js';
+import { allV4 } from '../src/v4store.js';
 
 const cc = getChain('robinhood');
 const asli = globalThis.fetch;
@@ -52,7 +53,14 @@ async function main() {
   globalThis.fetch = stub([], [], true);
   const ps = await walletV4TokenIds(cc);
   assert.equal(v4ListDegraded(), true, 'a failed scan must mark the list incomplete');
-  assert.ok(ps.length > 0, 'a failed scan emptied the list, so the bot positions vanished');
+  // The fallback must hand back exactly what the bot tracks for this chain -- no more
+  // (invented ids), no less (positions vanishing). Asserting "length > 0" instead would
+  // pass or fail on whatever the live wallet happens to hold.
+  const tracked = allV4()
+    .filter((r) => r.chain === cc.key)
+    .map((r) => r.tokenId)
+    .sort();
+  assert.deepEqual([...ps].sort(), tracked, 'a failed scan did not fall back to v4store');
 
   globalThis.fetch = asli;
   console.log('ok: ownership ordering is correct, and a failure degrades gracefully to v4store');

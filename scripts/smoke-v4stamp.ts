@@ -9,7 +9,10 @@ assert.ok(!/selected\.base === 'usdg'/.test(src), "a v4 open path still tests `s
 
 for (const cc of Object.values(CHAINS).filter(v4Supported)) {
   const sym = v4BaseSymbol(cc, 'USDG');
-  assert.notEqual(sym, cc.nativeSymbol, `${cc.key}: the stable base resolves to the native symbol`);
+  // On a chain whose gas IS the stablecoin (Arc: USDC), stable === native is the
+  // correct answer, not the mix-up this guard exists to catch.
+  if (cc.hasWethBase)
+    assert.notEqual(sym, cc.nativeSymbol, `${cc.key}: the stable base resolves to the native symbol`);
   assert.ok(sym.length > 0, `${cc.key}: no stable base symbol`);
   assert.ok(cc.bases.some((b) => isStableBase(b.kind)), `${cc.key}: no stable base at all`);
 }

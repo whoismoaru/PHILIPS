@@ -212,7 +212,7 @@ const DEFS: Record<string, Def> = {
     router: config.uniswap.swapRouter,
     quoter: config.uniswap.quoter,
     weth: config.uniswap.weth,
-    usdg: '0x5fc5360d0400a0fd4f2af552add042d716f1d168', // Global Dollar (USDG), 6 decimals, verified on-chain
+    usdg: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', // Global Dollar (USDG), 6 decimals, verified on-chain
     // Alchemy stays primary. The backups take over on 403/503/stall — both have
     // been tested serving eth_call, eth_getCode and eth_getLogs (the old StableChain
     // RPC failed on exactly those, see .env line 40).
@@ -300,7 +300,7 @@ const DEFS: Record<string, Def> = {
           // quoter is a QuoterV2.
           factory: '0xB1c0fa0B789320044A6F623cFe5eBda9562602E3',
           pm: '0x6eDA206207c09e5428F281761DdC0D300851fBC8',
-          router: '0x4e2960a8cd19b467b82d26d83facb0fae26b094d',
+          router: '0x4E2960a8cd19B467b82d26D83fAcb0fAE26b094D',
           quoter: '0x03A918028f22D9E1473B7959C927AD7425A45C7C',
           weth: '0x5555555555555555555555555555555555555555', // WHYPE (18 desimal)
           wrappedSymbol: 'WHYPE',
@@ -331,10 +331,10 @@ const DEFS: Record<string, Def> = {
           // and verified on-chain on 15 Sep 2026: every address carries bytecode, the
           // position manager's factory() returns this factory, and the v4 position
           // manager's poolManager() returns this pool manager.
-          factory: '0xf0db7b58379503491d857db50ac9ece64c653918',
-          pm: '0x39654a85a4c05127f5fd6ed22caec077a0fb1377',
-          router: '0x53bf6b0684ec7ef91e1387da3d1a1769bc5a6f77', // SwapRouter02
-          quoter: '0x7dfd4f31be6814d2906bde155c3e1b146eac1468',
+          factory: '0xf0db7b58379503491d857dB50AC9ece64c653918',
+          pm: '0x39654A85A4C05127f5Fd6ED22CAeC077A0fB1377',
+          router: '0x53BF6B0684Ec7eF91e1387Da3D1a1769bC5A6F77', // SwapRouter02
+          quoter: '0x7DfD4F31be6814D2906BDE155c3e1B146EAc1468',
           // There is no wrapped native on Arc. The position manager's WETH9() points at a
           // 108-byte stub that reverts when called, so nothing may treat it as a token:
           // ZeroAddress plus hasWethBase:false is what the rest of the code reads.

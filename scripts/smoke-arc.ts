@@ -52,8 +52,8 @@ assert.match(arc, /hasWethBase: false/, 'Arc must not offer an ETH base');
 assert.match(arc, /usdcDecimals: 6/, "Arc's USDC is the 6-decimal ERC-20 interface, not the 18-decimal native one");
 
 const v4 = readFileSync('src/uniswapV4.ts', 'utf8');
-assert.ok(v4.includes("arc: '0x8366a39cc670b4001a1121b8f6a443a643e40951'"), 'the Arc v4 PoolManager is missing');
-assert.ok(v4.includes("arc: '0x6049c9a0e26405c0985f9e3685c87d0ae917f82b'"), 'the Arc v4 PositionManager is missing');
+assert.ok(v4.includes("arc: '0x8366a39CC670B4001A1121B8F6A443A643e40951'"), 'the Arc v4 PoolManager is missing');
+assert.ok(v4.includes("arc: '0x6049c9a0e26405C0985f9E3685C87d0aE917f82B'"), 'the Arc v4 PositionManager is missing');
 
 // Turning it on with no RPC must still leave it out -- config.arc.enabled requires both.
 const cfg = readFileSync('src/config.ts', 'utf8');

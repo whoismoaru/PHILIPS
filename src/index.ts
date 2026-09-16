@@ -2818,6 +2818,9 @@ bot.action('back:legs', async (ctx) => {
   await renderLegStep(ctx, flow, true);
 });
 
+// Step order: pool -> Range first, amount last (with the leg step in between for a
+// ladder). Token Side was removed on 16 Sep 2026, so the base is fixed the moment the
+// pool is picked and the range is the first thing the owner actually chooses.
 bot.action('back:amount', async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow || flow.strategy === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');

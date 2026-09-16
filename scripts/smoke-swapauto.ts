@@ -15,16 +15,17 @@ const src = readFileSync('src/index.ts', 'utf8');
 assert.equal((src.match(/async function execTSwap\(/g) ?? []).length, 1, 'execTSwap must exist exactly once');
 assert.ok(/bot\.action\('tswapok', execTSwap\)/.test(src), 'the Confirm button must call the same function');
 
-const auto = src.slice(src.indexOf('if (!tflow.buy && !shortLabel'), src.indexOf('const kb = shortLabel'));
+const auto = src.slice(src.indexOf('if (!shortLabel && !config.safety.dryRun)'), src.indexOf('const kb = shortLabel'));
 assert.ok(/return execTSwap\(auto\)/.test(auto), 'the automatic path must go through execTSwap');
 assert.ok(/!shortLabel/.test(auto), 'a shortfall must still stop before anything is sent');
 assert.ok(/!config\.safety\.dryRun/.test(auto), 'a dry run must never send');
-assert.ok(/!tflow\.buy/.test(auto), 'only swaps run automatically; buying still asks');
+// BUY and SELL both run automatically since 16 Sep 2026 -- one behaviour, not two.
+// The guards below are what replaced the Confirm button the buy side used to carry.
 
 // The floor the fill is held to is set BEFORE the auto branch runs; without it the
 // execution has no number to refuse a bad fill against.
 assert.ok(
-  src.indexOf('tflow.quotedOutWei = q.out;') < src.indexOf('if (!tflow.buy && !shortLabel'),
+  src.indexOf('tflow.quotedOutWei = q.out;') < src.indexOf('if (!shortLabel && !config.safety.dryRun)'),
   'quotedOutWei must be set before the automatic execution',
 );
 assert.ok(/quotedOutWei/.test(src.slice(src.indexOf('async function execTSwap('))), 'the execution must hold the fill to the quoted floor');
