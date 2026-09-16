@@ -123,23 +123,29 @@ then, so the number you enter is the one that goes on chain.
 | `/pnl` | Pick a chain, then a period: the recap renders as a picture card |
 | paste a contract address | Audit the token, then open a position, buy, or sell |
 | `/claim_fees` | Take the fees, leave the position running |
-| `/swap` | Swap a token you hold, via the best available route |
+| `/swap` | Swap any token in your wallet, via the best available route |
 | `/bridge` | Move funds between chains |
 | `/withdraw` | Withdraw a token or native to another address |
 | `/gas` | What a transaction costs right now on every chain, in USD and Rupiah |
-| `/settings` | Mode, transaction limits, LP shape, quick percentages |
+| `/settings` | Mode, transaction limits, LP shape, quick percentages, PnL card background |
 | `/alerts` | Which notifications you want |
+| `/add_lp` | Open a position without pasting a contract address first |
 
 `/stop`, `/buy` and `/unwrap` still work when typed, but are kept off the menu: closing
 belongs to the position it closes, buying starts from a pasted contract address, and
 stray wrapped native is unwrapped by the monitor every minute. `/sell` and `/send` are
-the old names for `/swap` and `/withdraw`, kept alive as hidden aliases.
+the old names for `/swap` and `/withdraw`, and `/status` for `/portfolio`, kept alive as
+hidden aliases.
 
 **Nothing asks twice.** Swapping, bridging, withdrawing and opening an LP all execute on
 the amount you enter, and **Close Position** and **Close All** execute on the tap. Every step still has
 **Back**, every money path is guarded against double-taps, and every one of them checks
 your balance, the per-transaction limit and the gas reserve *before* anything is sent —
 what was removed is the second tap, not the guards.
+
+**`/swap` sees your whole wallet,** not just what the bot bought: it reads the token
+balances straight from the chain, so a coin you picked up somewhere else is still
+sellable here.
 
 `/positions` lists what is open, one block per position:
 
@@ -148,18 +154,20 @@ what was removed is the second tap, not the guards.
 
 🟢 $PONS/USDT | #1234567 (V3)
 ├ Chain: BSC
-├ Strategy: USDT Side (buy the dip)
+├ Strategy: USDT Single Side (buy the dip)
 ├ Invested: 197,2980 USDT
 ├ Total Fees: +$8,48
-├ PnL: +2,4%
+├ PnL: +2.4% / $5
+├ Range: $33.16M ⇄ $16.47M / now $34.06M
 └ Status: Active (in range), 30m
 
-🟢 $VYNEX/USDG ◣×8 | #1234568 (V4)
+🟢 $VYNEX/USDG | #1234568 (V4)
 ├ Chain: Robinhood
-├ Strategy: USDG Side (buy the dip)
+├ Strategy: USDG Single Side (buy the dip)
 ├ Invested: 199,0800 USDG
 ├ Total Fees: +$6,70
-├ PnL: +3,1%
+├ PnL: +3.1% / $7
+├ Range: $1.68M ⇄ $165.5K / now $1.70M
 └ Status: Active (in range), 25m
 
 Your liquidity is in range and earning fees.
@@ -174,10 +182,10 @@ opened:
 🟢 $VYNEX/USDG | #1234568 (V4)
 ├ Fee: 3.01%
 ├ TVL: $1.2M
+├ APR: 12.4%
 ├ Fills: 0%
 ├ Volume: $184.2K (24h)
-├ Liquidity: 12.480,55 USDG
-└ Range: $545,5K ⇄ $49,1K
+└ Liquidity: 12.480,55 USDG
 
 LADDER, 8 legs
 Deposit: 199,0807 USDG
@@ -203,7 +211,8 @@ BY CHAIN :
 ├  RH: $775,00 (0.3000 ETH / 25.00 USDG)
 ├  BSC: $68,00 (0.0800 BNB / 12.00 USDT)
 ├  BASE: $2,50 (0.0010 ETH)
-└  HyperEVM: $4,50 (0.0500 HYPE)
+├  HyperEVM: $4,50 (0.0500 HYPE)
+└  Arc: $8.29 USDC
 
 13 Sep 2026, 14:06 WIB
 ```
@@ -392,8 +401,14 @@ What the bot does do for you:
 
 Everything lives in `data/`, which is never committed to git:
 
-`keystore.json` (your encrypted key) · `positions.json` · `v4positions.json` ·
-`journal.jsonl` · `settings.json` · `alerts.json` · `pctpresets.json`
+Worth backing up: `keystore.json` (your encrypted key) · `positions.json` ·
+`v4positions.json` · `journal.jsonl`
+
+Settings, rebuilt by hand if lost: `alerts.json` · `pctpresets.json` · `lpshape.json` ·
+`pnl-bg.jpg` (the PnL card background you sent)
+
+Caches and scratch, safe to delete: `poolkeys.json` · `sweep.json` ·
+`pctpending.json` · `wallet.disconnected`
 
 **Back up that folder.** `journal.jsonl` and `positions.json` are the only record
 of what you paid for each position. If `positions.json` is ever corrupt, the bot
