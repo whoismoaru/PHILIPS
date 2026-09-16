@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeJson } from './store.js';
 
 /**
  * Notification settings (/alerts), stored in data/alerts.json.
@@ -42,7 +43,7 @@ export function get(): AlertSettings {
 
 export function set(patch: Partial<AlertSettings>): AlertSettings {
   cache = { ...get(), ...patch };
-  writeFileSync(FILE, JSON.stringify(cache, null, 2));
+  writeJson(FILE, cache);
   return cache;
 }
 

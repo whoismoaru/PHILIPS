@@ -64,7 +64,7 @@ function clone_repo() {
     git clone "$REPO" "$APP_DIR"
   fi
   info "Installing dependencies (this takes a minute or two)..."
-  ( cd "$APP_DIR" && npm ci )
+  ( cd "$APP_DIR" && npm ci --include=dev )  # tsx is a devDependency and ExecStart runs it
   ok "Code ready."
 }
 
@@ -153,7 +153,13 @@ function setup_env() {
   echo "  --- Primary chain ---"
   echo "  Use your own keyed RPC; public ones get rate limited."
   ask "RPC_URL" ""; local RPC="$REPLY_VAL"
+  # An empty RPC_URL is fatal, not optional: the bot exits 78 on it, and exit 78 is
+  # the one code the service never retries. Catch it here, where it is still one
+  # question, instead of in the journal after the install reports success.
+  [ -n "$RPC" ] || { warn "RPC_URL cannot be empty: the bot cannot read a chain without it."; return 1; }
+  [[ "$RPC" =~ ^https?:// ]] || { warn "RPC_URL must start with http:// or https://"; return 1; }
   ask "CHAIN_ID" "4663"; local CID="$REPLY_VAL"
+  [[ "$CID" =~ ^[0-9]+$ ]] || { warn "CHAIN_ID is digits only (Robinhood is 4663)."; return 1; }
 
   echo
   echo "  The Uniswap v3 contract addresses on that chain."
@@ -163,6 +169,13 @@ function setup_env() {
   ask "UNISWAP_V3_QUOTER"           "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"; local Q="$REPLY_VAL"
   ask "UNISWAP_V3_SWAP_ROUTER"      "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"; local R="$REPLY_VAL"
   ask "WETH_ADDRESS"                ""; local W="$REPLY_VAL"
+  # A typo here does not fail loudly: ethers treats a non-address as an ENS name and the
+  # bot dies at boot with "network does not support ENS", which names nothing the user
+  # typed. Addresses are 0x + 40 hex, or empty.
+  for a in "$F" "$PM" "$Q" "$R" "$W"; do
+    [ -z "$a" ] && continue
+    [[ "$a" =~ ^0x[0-9a-fA-F]{40}$ ]] || { warn "Not a contract address: $a (expected 0x + 40 hex characters)."; return 1; }
+  done
 
   echo
   echo "  --- Extra chains (optional) ---"
@@ -173,6 +186,21 @@ function setup_env() {
   ask "Enable Base? (y/N)" "N"; local BASE="false" BASE_RPC=""
   if [[ "$REPLY_VAL" =~ ^[Yy]$ ]]; then
     BASE="true"; ask "BASE_RPC_URL (Enter = mainnet.base.org)" ""; BASE_RPC="$REPLY_VAL"
+  fi
+  ask "Enable HyperEVM? (y/N)" "N"; local HYPE="false" HYPE_RPC=""
+  if [[ "$REPLY_VAL" =~ ^[Yy]$ ]]; then
+    HYPE="true"; ask "HYPEREVM_RPC_URL (Enter = the public endpoint)" ""; HYPE_RPC="$REPLY_VAL"
+  fi
+  ask "Enable Ink? (y/N)" "N"; local INK="false" INK_RPC=""
+  if [[ "$REPLY_VAL" =~ ^[Yy]$ ]]; then
+    INK="true"; ask "INK_RPC_URL (Enter = rpc-gel.inkonchain.com)" ""; INK_RPC="$REPLY_VAL"
+  fi
+  # Arc has no usable public RPC, and the chain stays out of the registry without one,
+  # so asking for the flag alone would enable nothing. The RPC is the question.
+  ask "Enable Arc? (y/N)" "N"; local ARC="false" ARC_RPC=""
+  if [[ "$REPLY_VAL" =~ ^[Yy]$ ]]; then
+    ask "ARC_RPC_URL (required: Arc has no dependable public endpoint)" ""; ARC_RPC="$REPLY_VAL"
+    if [ -n "$ARC_RPC" ]; then ARC="true"; else warn "No Arc RPC given, so Arc stays off."; fi
   fi
 
   local SECRET="" SECRET_NOTE="A WALLET_SECRET was generated for you."
@@ -208,8 +236,18 @@ BSC_RPC_URL=$BSC_RPC
 BASE_ENABLED=$BASE
 BASE_RPC_URL=$BASE_RPC
 
+HYPEREVM_ENABLED=$HYPE
+HYPEREVM_RPC_URL=$HYPE_RPC
+
+INK_ENABLED=$INK
+INK_RPC_URL=$INK_RPC
+
+ARC_ENABLED=$ARC
+ARC_RPC_URL=$ARC_RPC
+
 MAX_ETH_PER_TX=0.05
 MAX_STABLE_PER_TX=250
+MAX_TX_FEE_NATIVE=0.005
 
 # Keep this true until you have checked /status and /positions.
 DRY_RUN=true

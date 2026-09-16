@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeJson } from './store.js';
 
 /**
  * The percentages that appear as buttons on every amount step, stored in
@@ -108,7 +109,7 @@ export function set(flow: PctFlow, values: number[]): number[] | null {
   if (!ok) return null;
   const next = { ...load(), [flow]: ok };
   cache = next;
-  writeFileSync(FILE, JSON.stringify(next, null, 2));
+  writeJson(FILE, next);
   return ok;
 }
 
@@ -144,7 +145,7 @@ try {
 }
 const savePending = (): void => {
   try {
-    writeFileSync(PENDING_FILE, JSON.stringify([...pending]));
+    writeJson(PENDING_FILE, [...pending]);
   } catch {
     /* the prompt still works in memory; persistence is a convenience, not a guarantee */
   }
@@ -195,6 +196,6 @@ export function shape(): LpShape {
 }
 
 export function setShape(v: LpShape): LpShape {
-  writeFileSync(SHAPE_FILE, JSON.stringify({ shape: v }), 'utf8');
+  writeJson(SHAPE_FILE, { shape: v });
   return v;
 }
