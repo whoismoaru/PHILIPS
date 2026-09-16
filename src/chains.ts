@@ -350,10 +350,13 @@ const DEFS: Record<string, Def> = {
           // assumption until feeAmountTickSpacing is read on a live Arc pool -- the pool
           // sampled during the survey used fee 10000 / spacing 200, which fits it.
           routerHasDeadline: false, // SwapRouter02, which dropped the deadline field
-          // Gas here is USDC, so this ceiling reads in DOLLARS: 5 cents a transaction. The
-          // global 0.005 default is calibrated for ETH and BNB; on Arc it means half a cent,
-          // and it refused an ordinary CCTP mint costing 0.0064 USDC (16 Sep 2026).
-          maxTxFeeNative: '0.05',
+          // Gas here is USDC, so this ceiling reads in DOLLARS. It is sized the way the
+          // global default was: roughly 170x an ordinary 400k-gas transaction. Arc's base
+          // fee is not the flat 20 gwei it launched at -- measured 583 gwei worst case on
+          // 16 Sep 2026, where a three-leg ladder came to 0.69 USDC and an eight-leg one
+          // would reach 2.33. At 5 cents this refused routine work; at $2.50 it still stops
+          // anything genuinely wild.
+          maxTxFeeNative: '2.50',
           // Alchemy is primary here, as on every other chain: measured 20 of 20 at ~47 ms.
           // Its free tier caps eth_getLogs at 10 BLOCKS, which is why the v4 log scan uses
           // a public endpoint instead (see LOGS_RPC in uniswapV4.ts) -- exactly the split

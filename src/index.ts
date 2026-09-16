@@ -2197,8 +2197,14 @@ async function rawBalanceFor(flow: AddFlow): Promise<bigint> {
  */
 async function usableFor(flow: AddFlow): Promise<bigint> {
   const raw = await rawBalanceFor(flow);
-  if (!wizardBase(flow).wrappable) return raw;
-  const buf = await gasBuffer(wizardCtx(flow));
+  const cc = wizardCtx(flow);
+  // Gas comes out of the base itself in two cases: a wrappable native, and a chain whose
+  // GAS TOKEN IS the stablecoin. On Arc the deposit asset and the fee asset are the same
+  // USDC, so depositing the whole balance leaves nothing to pay the mint with -- the batch
+  // reverted with STF (16 Sep 2026) before the ceiling even had a say.
+  const paysOwnGas = wizardBase(flow).wrappable || !cc.hasWethBase;
+  if (!paysOwnGas) return raw;
+  const buf = await gasBuffer(cc);
   return raw > buf ? raw - buf : 0n;
 }
 
