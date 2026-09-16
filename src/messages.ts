@@ -489,7 +489,7 @@ export function msgV4Position(p: {
   const lines = [
     // Same header the list card uses, so the card you land on is recognisably the row
     // you tapped: state emoji, pair, id, protocol.
-    `${statusEmoji} ${bold(`$${esc(posPair(p.pair, p.baseSymbol))}`)} | #${esc(p.tokenId)} (V4)`,
+    `${statusEmoji} ${bold(`$${posPair(p.pair, p.baseSymbol)}`)} | #${esc(p.tokenId)} (V4)`,
     ...fields.map((f, i) => `${i === fields.length - 1 ? '└' : '├'} ${f}`),
     ...(isLeg
       ? [
@@ -566,7 +566,7 @@ export function msgV4Added(o: {
   return [
     `\u2705 ${bold('POSITION OPENED')}`,
     '',
-    `${bold(esc(o.pair ?? ''))} | #${esc(o.tokenId ?? '?')} (V4)`,
+    `${bold(o.pair ?? '')} | #${esc(o.tokenId ?? '?')} (V4)`,
     ...(o.txHash ? ['', `tx: ${code(o.txHash)}`] : []),
     '',
     note(nowWib()),
@@ -592,14 +592,14 @@ export function msgV4Range(tokenId: string, inRange: boolean): string {
     ? [
         `🟢 ${bold('Alert: v4 Position In Range')}`,
         '',
-        `Position ${bold(`#${esc(tokenId)}`)} (Uniswap v4) is back inside its price range — fees are flowing again.`,
+        `Position ${bold(`#${tokenId}`)} (Uniswap v4) is back inside its price range — fees are flowing again.`,
         '',
         `⏱️ <i>Triggered at: ${nowWib()}</i>`,
       ].join('\n')
     : [
         `🔴 ${bold('Alert: v4 Position Out of Range')}`,
         '',
-        `Position ${bold(`#${esc(tokenId)}`)} (Uniswap v4) has left its effective price range.`,
+        `Position ${bold(`#${tokenId}`)} (Uniswap v4) has left its effective price range.`,
         'Fee income has stopped. Consider closing or repositioning it.',
         '',
         `⏱️ <i>Triggered at: ${nowWib()}</i>`,
@@ -615,7 +615,7 @@ export function msgNumbersNoPrompt(txt: string): string {
   return [
     `\u{1F7E1} ${bold('NOTHING IS WAITING FOR A NUMBER')}`,
     '',
-    `You typed ${bold(esc(txt))}, but no step is asking for it — the prompt expired, or the bot restarted since.`,
+    `You typed ${bold(txt)}, but no step is asking for it — the prompt expired, or the bot restarted since.`,
     '',
     note('to set percentages: /settings, then the button for that flow'),
     note('to open a position: paste the CA again'),
@@ -714,7 +714,7 @@ export function msgStatus(opts: {
           // row reads "Arc: $8,29 USDC" instead.
           if (c.stableNative && !(c.stables ?? []).length) {
             const v = c.usd === null || c.usd === undefined ? '—' : usdPlain(c.usd);
-            return `${bold(esc(SHORT[c.label] ?? c.label))}: ${v} ${italic(esc(c.symbol))}`;
+            return `${bold(SHORT[c.label] ?? c.label)}: ${v} ${italic(c.symbol)}`;
           }
           const assets: string[] = [];
           if (Number(c.amount) > 0) assets.push(`${esc(c.amount)} ${esc(c.symbol)}`);
@@ -724,7 +724,7 @@ export function msgStatus(opts: {
           // number smaller than what the wallet really holds.
           const sum = chainUsd(c);
           const value = sum === null ? '—' : usdPlain(sum);
-          return `${bold(esc(SHORT[c.label] ?? c.label))}: ${value}${assets.length ? ` ${italic(`(${assets.join(' / ')})`)}` : ''}`;
+          return `${bold(SHORT[c.label] ?? c.label)}: ${value}${assets.length ? ` ${italic(`(${assets.join(' / ')})`)}` : ''}`;
         }),
       ),
     );
@@ -864,7 +864,7 @@ export function msgPriceDrop(
     `🆔 ${bold('Position ID:')} #${esc(tokenId)}`,
     `🔗 ${bold('Pair:')} ${esc(baseSymbol)} / ${esc(symbol)}`,
     '',
-    `📉 ${bold(`${esc(symbol)} is down ${fmtPct(-dropPct)} from your entry price.`)}`,
+    `📉 ${bold(`${symbol} is down ${fmtPct(-dropPct)} from your entry price.`)}`,
     '',
     // The '⛔ Close Now' button ships with this message (monitor.ts), so the microcopy
     // points at that button rather than asking the user to type a command as price falls.
@@ -927,7 +927,7 @@ export function msgSellNoHoldings(): string {
 }
 
 export function msgSellAmount(holdingLine: string): string {
-  return [bold(esc(holdingLine)), '', 'How much do you want to swap?'].join('\n');
+  return [bold(holdingLine), '', 'How much do you want to swap?'].join('\n');
 }
 
 /** One flow's card in /settings: the value currently in use. */
@@ -940,13 +940,13 @@ export function msgPctPreset(
   const same = values.length === defaults.length && values.every((v, i) => v === defaults[i]);
   const u = o.unit === '%' ? '%' : ` ${o.unit}`;
   return [
-    `⚙️ ${bold(`${esc(label)} · quick picks`)}`,
+    `⚙️ ${bold(`${label} · quick picks`)}`,
     '',
     `🎚 ${bold('Now:')} ${values.map((v) => code(`${v}${u}`)).join('  ')}`,
     `${note(`default: ${defaults.join(' / ')}${same ? ' (unchanged)' : ''}`)}`,
     '',
     o.unit === '%'
-      ? `These are the buttons shown when you pick an amount in ${bold(esc(label))}.`
+      ? `These are the buttons shown when you pick an amount in ${bold(label)}.`
       : 'These are the buttons shown when a bid-ask ladder asks how many legs to open.',
     ...(o.noteLine ? ['', note(o.noteLine)] : []),
   ].join('\n');
@@ -956,7 +956,7 @@ export function msgPctPreset(
 export function msgPctAsk(label: string, current: number[], o: { unit: string; min: number; max: number }): string {
   const example = o.unit === '%' ? '10 25 50 90' : '4 8 12 20';
   return [
-    `✏️ ${bold(`Edit ${esc(label)}`)}`,
+    `✏️ ${bold(`Edit ${label}`)}`,
     '',
     `💬 Type up to 6 numbers, separated by spaces. For example ${code(example)}.`,
     '',
@@ -975,8 +975,8 @@ export function msgPctInvalid(o: { unit: string; min: number; max: number }): st
 
 export function msgSellTypeAmount(holdingLine: string, sym: string): string {
   return [
-    ...(holdingLine ? [bold(esc(holdingLine)), ''] : []),
-    `Type how much ${bold(esc(sym))} to swap (or ${code('all')}).`,
+    ...(holdingLine ? [bold(holdingLine), ''] : []),
+    `Type how much ${bold(sym)} to swap (or ${code('all')}).`,
   ].join('\n');
 }
 
@@ -1027,7 +1027,7 @@ export function msgTSwapConfirm(o: {
   ];
   if (o.balanceLabel) body.push(`💰 ${bold('Balance:')} ${esc(o.balanceLabel)}`);
   if (o.shortLabel) {
-    body.push('', `🔴 ${bold(`Short by ${esc(o.shortLabel)}`)} — top up your wallet, then try again.`);
+    body.push('', `🔴 ${bold(`Short by ${o.shortLabel}`)} — top up your wallet, then try again.`);
   }
   if (o.danger) {
     body.push('', `⚠️ ${bold('AUDIT: HIGH RISK')} — this token may not be sellable again. Cancel if unsure.`);
@@ -1067,8 +1067,8 @@ export function msgTSwapDone(o: {
     return [
       `\u26AA ${bold('DRY RUN')}`,
       '',
-      `Would receive ${bold(`+${esc(o.outLabel)}`)}`,
-      `Paying ${bold(esc(o.amountInLabel))} using ${esc(routeLabel(o.route))}`,
+      `Would receive ${bold(`+${o.outLabel}`)}`,
+      `Paying ${bold(o.amountInLabel)} using ${esc(routeLabel(o.route))}`,
       '',
       note(`DRY RUN \u00B7 ${nowWib()}`),
     ].join('\n');
@@ -1082,8 +1082,8 @@ export function msgTSwapDone(o: {
   return [
     `\u2705 ${bold('ORDER FILLED')}`,
     '',
-    `Received ${bold(`+${esc(o.outLabel)}`)}`,
-    `Paid ${bold(esc(o.amountInLabel))} using ${esc(routeLabel(o.route))}`,
+    `Received ${bold(`+${o.outLabel}`)}`,
+    `Paid ${bold(o.amountInLabel)} using ${esc(routeLabel(o.route))}`,
     ...(cost.length ? [cost.join(' \u00B7 ')] : []),
     '',
     note(`LIVE \u00B7 ${nowWib()}`),
@@ -1109,7 +1109,7 @@ export function msgError(where: string, err: unknown): string {
   return [
     hdr('❌ TRANSACTION ERROR'),
     '',
-    `${esc('Step')}   : ${bold(esc(where))}`,
+    `${esc('Step')}   : ${bold(where)}`,
     `${esc('Reason')} : ${code(first)}`,
     '',
     landed
@@ -1214,7 +1214,7 @@ export function msgPositionCard(opts: {
   return [
     // Same header the list card uses, so the card you land on is recognisably the row
     // you tapped: state emoji, pair, id, protocol.
-    `${opts.inRange ? '🟢' : opts.converted ? '🟡' : '🔴'} ${bold(`$${esc(posPair(`${base} / ${sym}`, base))}`)} | #${esc(opts.tokenId)} (V3)`,
+    `${opts.inRange ? '🟢' : opts.converted ? '🟡' : '🔴'} ${bold(`$${posPair(`${base} / ${sym}`, base)}`)} | #${esc(opts.tokenId)} (V3)`,
     ...fields.map((f, i) => `${i === fields.length - 1 ? '└' : '├'} ${f}`),
     ...(isLeg
       ? [
@@ -1270,15 +1270,15 @@ export function msgPositionDetail(opts: {
 }): string {
   const base = opts.baseSymbol ?? 'WETH';
   return [
-    `\u{1F4C4} ${bold(`FULL DETAILS #${esc(opts.tokenId)}`)}`,
+    `\u{1F4C4} ${bold(`FULL DETAILS #${opts.tokenId}`)}`,
     '',
-    `Pair: ${bold(`$${esc(opts.symbol)}`)} / ${esc(base)} (${feeLabel(opts.fee)} fee)`,
+    `Pair: ${bold(`$${opts.symbol}`)} / ${esc(base)} (${feeLabel(opts.fee)} fee)`,
     `Protocol: Uniswap v3${opts.chain ? ` on ${esc(opts.chain)}` : ''}`,
     `Status: ${opts.inRange ? '🟢' : '🔴'} ${bold(opts.inRange ? 'IN RANGE' : 'OUT OF RANGE')}`,
     '',
     `Assets: ${esc(opts.composition)}`,
-    `Value: ${bold(esc(opts.value))}`,
-    `Unclaimed fees: ${bold(esc(opts.fees))}`,
+    `Value: ${bold(opts.value)}`,
+    `Unclaimed fees: ${bold(opts.fees)}`,
     '',
     note(nowWib()),
   ].join('\n');
@@ -1363,7 +1363,7 @@ export function msgPositionsList(opts: {
       `Status: ${esc(status)}, ${esc(r.age)}`,
     ];
     return [
-      `${r.inRange ? '🟢' : '🔴'} ${bold(`$${esc(pair)}`)} | #${esc(r.id)}${r.protocol ? ` (${esc(r.protocol)})` : ''}`,
+      `${r.inRange ? '🟢' : '🔴'} ${bold(`$${pair}`)} | #${esc(r.id)}${r.protocol ? ` (${esc(r.protocol)})` : ''}`,
       ...fields.map((f, i) => `${i === fields.length - 1 ? '└' : '├'} ${f}`),
     ].join('\n');
   });
@@ -1540,8 +1540,8 @@ export function msgLadderOpened(opened: number, total: number, pair: string, dep
   return [
     `\u2705 ${bold('POSITION OPENED')} \u00B7 ladder ${opened}/${total} legs`,
     '',
-    `${bold(esc(pair))}`,
-    `Deposit: ${bold(esc(deposit))}, split across ${opened} legs`,
+    `${bold(pair)}`,
+    `Deposit: ${bold(deposit)}, split across ${opened} legs`,
     ...(txHash ? ['', `tx: ${code(txHash)}`] : []),
     '',
     note(nowWib()),
@@ -1560,9 +1560,9 @@ export function msgAmountStep(
   return [
     bold('OPEN LP | Deposit Amount'),
     '',
-    `\u{1F4BC} ${bold('Balance')} = ${bold(esc(balanceLabel ?? '?'))}`,
+    `\u{1F4BC} ${bold('Balance')} = ${bold(balanceLabel ?? '?')}`,
     '',
-    italic(`tap a percentage below, or type the exact amount of ${esc(symbol)} in the chat.`),
+    italic(`tap a percentage below, or type the exact amount of ${symbol} in the chat.`),
     '',
     italic(`Example: ${example}`),
   ].join('\n');
@@ -1755,7 +1755,7 @@ export function msgLpOpened(
   protocol: 'V3' | 'V4' = 'V3',
 ): string {
   void rangeLabel; // the range is on the position card, one tap away
-  const out = [`\u2705 ${bold('POSITION OPENED')}`, '', `${bold(esc(pair ?? ''))} | #${esc(tokenId)} (${protocol})`];
+  const out = [`\u2705 ${bold('POSITION OPENED')}`, '', `${bold(pair ?? '')} | #${esc(tokenId)} (${protocol})`];
   // The FULL hash, as <code>: a shortened one cannot be pasted into an explorer, and this
   // is the only place the opening transaction is ever shown.
   for (const n of notes) {
@@ -1959,7 +1959,7 @@ export function msgNoFees(): string {
 
 export function msgClaimPick(rows: Array<{ symbol: string; id: string; label: string }>): string {
   const out = [`\u{1F4B5} ${bold('UNCLAIMED FEES')}`, '', 'Fees on your active positions :'];
-  rows.forEach((r, i) => out.push(`${i + 1}. ${bold(`$${esc(r.symbol)}`)} / #${esc(r.id)}: ${bold(esc(r.label))}`));
+  rows.forEach((r, i) => out.push(`${i + 1}. ${bold(`$${r.symbol}`)} / #${esc(r.id)}: ${bold(r.label)}`));
   out.push('', note('fees go straight to wallet and your LP position stays open.'));
   return out.join('\n');
 }
@@ -1992,8 +1992,8 @@ export function msgRemoveConfirm(id: string, symbol: string, pct: number, est: s
   return [
     `\u2796 ${bold('REMOVE LIQUIDITY REVIEW')}`,
     '',
-    `${bold(`${pct}%`)} of ${bold(`$${esc(symbol)}`)} / #${esc(id)}`,
-    `Estimated out: ${bold(esc(est))} plus any unclaimed fees`,
+    `${bold(`${pct}%`)} of ${bold(`$${symbol}`)} / #${esc(id)}`,
+    `Estimated out: ${bold(est)} plus any unclaimed fees`,
     `Left in the pool: ${bold(`${100 - pct}%`)}, still earning`,
     '',
     // The cost basis shrinks along with a partial removal -- without this note, the
@@ -2029,13 +2029,13 @@ export function msgStopConfirm(opts: {
   otherAmt: string;
 }): string {
   return [
-    `\u26D4 ${bold(`CLOSE POSITION #${esc(opts.tokenId)}`)}`,
+    `\u26D4 ${bold(`CLOSE POSITION #${opts.tokenId}`)}`,
     '',
-    `Pair: ${bold(`$${esc(opts.symbol)}`)} / ${esc(opts.baseSymbol)} (${feeLabel(opts.fee)} fee)`,
+    `Pair: ${bold(`$${opts.symbol}`)} / ${esc(opts.baseSymbol)} (${feeLabel(opts.fee)} fee)`,
     `Age: ${esc(opts.age)}`,
-    `Fees: ${bold(esc(opts.feeText))}`,
-    `Out: ${bold(`${esc(opts.baseAmt)} ${esc(opts.baseSymbol)}`)} + ${esc(opts.otherAmt)} ${esc(opts.symbol)}`,
-    `PnL: ${bold(esc(opts.pnlText))}`,
+    `Fees: ${bold(opts.feeText)}`,
+    `Out: ${bold(`${opts.baseAmt} ${opts.baseSymbol}`)} + ${esc(opts.otherAmt)} ${esc(opts.symbol)}`,
+    `PnL: ${bold(opts.pnlText)}`,
     '',
     // This one keeps its confirm step: closing burns the position and cannot be undone.
     note(`closing removes the liquidity and swaps everything to ${esc(opts.baseSymbol)}. This cannot be undone.`),
@@ -2085,7 +2085,7 @@ export function msgCashOut(opts: {
   const out = [
     `\u2705 ${bold('POSITION CLOSED')}`,
     '',
-    `${bold(esc(opts.pair ?? ''))} | #${esc(opts.tokenId)}${opts.protocol ? ` (${opts.protocol})` : ''}${ladder ? ` \u00B7 ladder, ${opts.legs} legs` : ''}`,
+    `${bold(opts.pair ?? '')} | #${esc(opts.tokenId)}${opts.protocol ? ` (${opts.protocol})` : ''}${ladder ? ` \u00B7 ladder, ${opts.legs} legs` : ''}`,
   ];
 
   // The steps that were ACTUALLY executed, straight from the executor, numbered. The tx
@@ -2113,8 +2113,8 @@ export function msgCashOut(opts: {
   out.push(
     '',
     opts.native
-      ? `The paired token was swapped and unwrapped back into ${bold(`native ${esc(sym)}`)}, now in your wallet.`
-      : `The paired token was swapped into ${bold(esc(sym))} and is in your wallet.`,
+      ? `The paired token was swapped and unwrapped back into ${bold(`native ${sym}`)}, now in your wallet.`
+      : `The paired token was swapped into ${bold(sym)} and is in your wallet.`,
   );
   if (opts.leftover) {
     out.push(note('some dust had no swap route and stays in your wallet, the monitor will retry, or swap it yourself.'));
@@ -2156,7 +2156,7 @@ export function msgRangeExit(
     `🔗 ${bold('Pair:')} ${esc(baseSymbol)} / ${esc(symbol)}`,
     '',
     up
-      ? `📈 The price moved ${bold('above')} your range. The position is back to ${bold(esc(baseSymbol))} plus collected fees, and has stopped earning.`
+      ? `📈 The price moved ${bold('above')} your range. The position is back to ${bold(baseSymbol)} plus collected fees, and has stopped earning.`
       : `📉 The price moved ${bold('below')} your range. Your ${esc(baseSymbol)} is now fully converted to ${esc(symbol)}, and the position has stopped earning.`,
     '',
     italic(
@@ -2273,7 +2273,7 @@ export function msgBridgePick(routes: Array<{ from: string; to: string }>): stri
 
 export function msgBridgeAsset(fromLabel: string, toLabel: string): string {
   return [
-    bold(`${esc(fromLabel)} \u2192 ${esc(toLabel)}`),
+    bold(`${fromLabel} \u2192 ${toLabel}`),
     '',
     'Which asset do you want to bridge?',
     '',
@@ -2283,10 +2283,10 @@ export function msgBridgeAsset(fromLabel: string, toLabel: string): string {
 
 export function msgBridgeAmount(fromLabel: string, toLabel: string, balanceLabel: string, symbol: string): string {
   return [
-    bold(`${esc(fromLabel)} \u2192 ${esc(toLabel)}`),
-    ...(balanceLabel ? [bold(esc(balanceLabel))] : []),
+    bold(`${fromLabel} \u2192 ${toLabel}`),
+    ...(balanceLabel ? [bold(balanceLabel)] : []),
     '',
-    `Please type the amount of ${bold(esc(symbol))} to bridge.`,
+    `Please type the amount of ${bold(symbol)} to bridge.`,
     // Gas is paid on the SOURCE chain: sending the entire balance makes the tx itself fail.
     note('leave some for gas on the origin chain, sending your whole balance will fail.'),
   ].join('\n');
@@ -2334,7 +2334,7 @@ export function msgBridgeDone(o: {
     `\u2705 ${bold(o.dryRun ? 'BRIDGE (DRY RUN)' : 'BRIDGE SUCCESS')}`,
     '',
     `${esc(o.fromLabel)} \u2192 ${esc(o.toLabel)}`,
-    `${bold(esc(o.inLabel))} \u2192 ${bold(esc(o.outLabel))}`,
+    `${bold(o.inLabel)} \u2192 ${bold(o.outLabel)}`,
   ];
   if (o.txHashes.length) {
     out.push('', `${bold('Tx Hash :')}`);
@@ -2401,7 +2401,7 @@ export function msgSendAmount(o: {
     `\u{1F4EE} ${bold('To:')} ${code(shortAddr(o.to))}`,
     // The holding line stays from the button that was tapped, so the figure being split
     // into a percentage is still on screen while the amount is chosen.
-    bold(`${esc(o.chainLabel)}: ${esc(o.usable)}`),
+    bold(`${o.chainLabel}: ${o.usable}`),
     '',
     'How much do you want to withdraw?',
     '',
@@ -2423,7 +2423,7 @@ export function msgSendConfirm(o: {
   const out = [
     `\u{1F4E4} ${bold('WITHDRAW REVIEW')}`,
     '',
-    `${bold(esc(o.amount))} on ${esc(o.chainLabel)}`,
+    `${bold(o.amount)} on ${esc(o.chainLabel)}`,
     // FULL address on the last screen before signing: the short form hides exactly the
     // middle characters that tell two similar addresses apart.
     `\u2192 ${code(o.to)}`,
@@ -2453,7 +2453,7 @@ export function msgSendDone(o: {
   const out = [
     `\u2705 ${bold(o.dryRun ? 'WITHDRAW (DRY RUN)' : 'WITHDRAW SUCCESS')}`,
     '',
-    `${bold(esc(o.amount))} on ${esc(o.chainLabel)}`,
+    `${bold(o.amount)} on ${esc(o.chainLabel)}`,
     `\u2192 ${code(o.to)}`,
   ];
   if (o.txHash) out.push('', bold('Tx Hash :'), code(o.txHash));
@@ -2479,7 +2479,7 @@ export function msgSwept(o: {
   return [
     `\u267B\uFE0F ${bold('LEFTOVER SWEPT')}`,
     '',
-    `${bold(`$${esc(o.symbol)}`)} / #${esc(o.tokenId)}: ${bold(`+${esc(o.amountLabel)}`)}`,
+    `${bold(`$${o.symbol}`)} / #${esc(o.tokenId)}: ${bold(`+${o.amountLabel}`)}`,
     'recovered from a closed position, and added to its PnL.',
     '',
     // Chain and route stay in the service log: neither changes what the reader does
