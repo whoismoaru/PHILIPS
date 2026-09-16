@@ -14,7 +14,7 @@ import { gasBuffer } from '../src/uniswap.js';
  * when Arc's base fee was a flat 20 gwei -- refused a three-leg ladder at 0.69 USDC.
  */
 const src = readFileSync('src/index.ts', 'utf8');
-assert.match(src, /const paysOwnGas = wizardBase\(flow\)\.wrappable \|\| !cc\.hasWethBase;/,
+assert.match(src, /const paysOwnGas = base\.wrappable \|\| !cc\.hasWethBase;/,
   'the amount step no longer reserves gas on a stablecoin-gas chain');
 
 const arc = CHAINS['arc'];
@@ -39,3 +39,22 @@ if (arc) {
   );
 }
 console.log('ok: on a stablecoin-gas chain the deposit reserves its own fee, and the ceiling clears ordinary work');
+
+// The buffer is quoted in the NATIVE unit (18 decimals); the balance it is subtracted from
+// is the BASE's. On Arc that is 6-decimal USDC, and subtracting one from the other wiped
+// the balance out: a 400 USDC deposit was refused as "above the 0 USDC limit".
+assert.match(src, /const buf = base\.decimals >= 18 \? buf18 : buf18 \/ 10n \*\* BigInt\(18 - base\.decimals\);/,
+  'the gas buffer is no longer scaled to the base decimals');
+if (arc) {
+  const b = arc.bases[0];
+  const raw: bigint = await new ethers.Contract(b.address, ['function balanceOf(address) view returns (uint256)'], arc.provider)
+    .balanceOf(arc.wallet.address).catch(() => 0n);
+  if (raw > 0n) {
+    const buf18 = await gasBuffer(arc);
+    const buf = b.decimals >= 18 ? buf18 : buf18 / 10n ** BigInt(18 - b.decimals);
+    const usable = raw > buf ? raw - buf : 0n;
+    // Nearly all of it must remain depositable: the fee is cents, the balance is hundreds.
+    assert.ok(usable * 100n > raw * 95n, `only ${ethers.formatUnits(usable, b.decimals)} of ${ethers.formatUnits(raw, b.decimals)} is depositable — the units are off again`);
+  }
+}
+console.log('ok: the gas reserve is a few cents, not the whole balance');

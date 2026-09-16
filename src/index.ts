@@ -2202,9 +2202,15 @@ async function usableFor(flow: AddFlow): Promise<bigint> {
   // GAS TOKEN IS the stablecoin. On Arc the deposit asset and the fee asset are the same
   // USDC, so depositing the whole balance leaves nothing to pay the mint with -- the batch
   // reverted with STF (16 Sep 2026) before the ceiling even had a say.
-  const paysOwnGas = wizardBase(flow).wrappable || !cc.hasWethBase;
+  const base = wizardBase(flow);
+  const paysOwnGas = base.wrappable || !cc.hasWethBase;
   if (!paysOwnGas) return raw;
-  const buf = await gasBuffer(cc);
+  // gasBuffer speaks in the NATIVE unit, which is 18 decimals. The balance here is the
+  // BASE's, and on Arc that is 6-decimal USDC: subtracting one from the other made the
+  // whole balance vanish and the amount step refused a 400 USDC deposit as "above the 0
+  // USDC limit" (16 Sep 2026).
+  const buf18 = await gasBuffer(cc);
+  const buf = base.decimals >= 18 ? buf18 : buf18 / 10n ** BigInt(18 - base.decimals);
   return raw > buf ? raw - buf : 0n;
 }
 
