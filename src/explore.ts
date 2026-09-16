@@ -274,11 +274,19 @@ export const baseKindOf = (
 ): BaseKind | null => {
   const s = (sym ?? '').toUpperCase();
   const a = (addr ?? '').toLowerCase();
-  for (const b of ctx.bases) {
-    if (a && a === b.address.toLowerCase()) return b.kind;
-    if (s && s === b.symbol.toUpperCase()) return b.kind;
+  // ADDRESS decides. A symbol is a string anyone can choose: 'UpSideDownCat' on Arc calls
+  // itself USDC with 18 decimals against the real USDC's 6, and matching on the symbol made
+  // it read as a BASE -- so its pool looked like base/base and was silently dropped from
+  // /add. Right answer, wrong reason. Now an impersonator is treated as the ordinary token
+  // it is, and the pool is offered or refused on its own merits.
+  if (a) {
+    for (const b of ctx.bases) if (a === b.address.toLowerCase()) return b.kind;
+    // Native ETH arrives as currency 0x0 in v4, with no address of its own to match.
+    return a === '0x0000000000000000000000000000000000000000' && ctx.hasWethBase ? 'weth' : null;
   }
-  // Native ETH (v4 currency0 = 0x0) uses the symbol 'ETH', not its wrapped symbol.
+  // No address at all (an indexer that returned only a symbol): fall back to the name, which
+  // is the best available and no worse than before.
+  for (const b of ctx.bases) if (s && s === b.symbol.toUpperCase()) return b.kind;
   if (s === 'ETH' && ctx.hasWethBase) return 'weth';
   return null;
 };
