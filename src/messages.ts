@@ -607,6 +607,23 @@ export function msgV4Range(tokenId: string, inRange: boolean): string {
 }
 
 
+/**
+ * Numbers arriving with nothing waiting for them. Almost always a reply to a prompt that
+ * expired or was lost to a restart, and the owner needs the next step, not a shrug.
+ */
+export function msgNumbersNoPrompt(txt: string): string {
+  return [
+    `\u{1F7E1} ${bold('NOTHING IS WAITING FOR A NUMBER')}`,
+    '',
+    `You typed ${bold(esc(txt))}, but no step is asking for it — the prompt expired, or the bot restarted since.`,
+    '',
+    note('to set percentages: /settings, then the button for that flow'),
+    note('to open a position: paste the CA again'),
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
+
 export function msgUnknown(txt: string): string {
   const shown = (txt || '').trim().slice(0, 40) || '…';
   return card(

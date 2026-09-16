@@ -126,18 +126,46 @@ export function reset(flow: PctFlow): number[] {
  * before the attempt was abandoned.
  */
 const PENDING_TTL_MS = 5 * 60_000;
+/**
+ * The prompt survives a RESTART.
+ *
+ * It used to live only in memory, so a restart between "type the numbers" and the answer
+ * left the bot with no idea what the numbers were for -- the reply fell through to the
+ * UNKNOWN handler, twice in a row, with nothing explaining why (16 Sep 2026). A deploy in
+ * the middle of someone typing is ordinary; losing their input over it is not.
+ */
+const PENDING_FILE = join(process.cwd(), 'data', 'pctpending.json');
 const pending = new Map<number, { flow: PctFlow; at: number }>();
-export const askEdit = (userId: number, flow: PctFlow): void => void pending.set(userId, { flow, at: Date.now() });
+try {
+  const raw = JSON.parse(readFileSync(PENDING_FILE, 'utf8')) as Array<[number, { flow: PctFlow; at: number }]>;
+  for (const [uid, p] of raw) if (Date.now() - p.at <= PENDING_TTL_MS) pending.set(uid, p);
+} catch {
+  /* no file, or unreadable: start with nothing pending, which is the safe state */
+}
+const savePending = (): void => {
+  try {
+    writeFileSync(PENDING_FILE, JSON.stringify([...pending]));
+  } catch {
+    /* the prompt still works in memory; persistence is a convenience, not a guarantee */
+  }
+};
+export const askEdit = (userId: number, flow: PctFlow): void => {
+  pending.set(userId, { flow, at: Date.now() });
+  savePending();
+};
 export function pendingEdit(userId: number): PctFlow | undefined {
   const p = pending.get(userId);
   if (!p) return undefined;
   if (Date.now() - p.at > PENDING_TTL_MS) {
     pending.delete(userId);
+    savePending();
     return undefined;
   }
   return p.flow;
 }
-export const clearEdit = (userId: number): void => void pending.delete(userId);
+export const clearEdit = (userId: number): void => {
+  if (pending.delete(userId)) savePending();
+};
 
 /** "10 25 50, 90" / "10/25/50/90" → [10,25,50,90]. Anything else returns null. */
 export function parseList(raw: string): number[] | null {

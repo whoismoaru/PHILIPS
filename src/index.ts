@@ -5480,6 +5480,12 @@ bot.on(message('text'), async (ctx) => {
     }
     return;
   }
+  // A bare list of numbers is almost always an answer to a prompt that is no longer
+  // waiting -- a settings edit, or an amount, interrupted by a restart or a timeout.
+  // "UNKNOWN" tells the owner nothing about what to do next; naming the likely cause does.
+  if (/^\s*\d{1,3}(\s*[\s,/|]\s*\d{1,3})*\s*%?\s*$/.test(raw)) {
+    return ctx.reply(msg.msgNumbersNoPrompt(raw), html);
+  }
   return ctx.reply(msg.msgUnknown(raw), html);
 });
 
