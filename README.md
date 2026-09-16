@@ -284,9 +284,16 @@ way the bot withdraws the liquidity, collects the fees, swaps the token back to
 what you deposited, and sends you a result card: deposit, received, how long you held
 it, and the fees you earned.
 
-The artwork behind that card is just a file. Drop your own `data/PHILIPS ANIME.jpg`
-in and every card uses it instead. Wide images with the subject on one side work
-best; the text sits on the other.
+The artwork behind that card is just a file. The one that ships lives in
+`assets/pnl-card.jpg`; to use your own, send the bot a photo from `/settings` and it
+becomes the backdrop on every card from then on (it is saved to `data/pnl-bg.jpg`, and
+it wins over the shipped one). Wide images with the subject on one side work best; the
+text sits on the other.
+
+The card draws its text in Liberation Sans and DejaVu Mono. A server with **no fonts
+installed** renders the artwork and no text at all — install them with
+`apt install fonts-liberation fonts-dejavu-core fonts-dejavu-mono` (the one-command
+installer does this for you).
 
 The result is reported **in dollars**, each side priced at its own moment: the deposit at
 the rate stored when the position opened, the proceeds at the rate now. For a stablecoin
