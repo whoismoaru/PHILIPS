@@ -286,7 +286,7 @@ it, and the fees you earned.
 
 ![Closed position card](assets/pnl-closed.jpg)
 
-The artwork behind that card is just a file — the two cards above use one, and the
+The artwork behind that card is just a file. The two cards above use one, and the
 repo ships a different one, which is the whole point. The shipped one lives in
 `assets/pnl-card.jpg`; to use your own, send the bot a photo from `/settings` and it
 becomes the backdrop on every card from then on (it is saved to `data/pnl-bg.jpg`, and
@@ -294,7 +294,7 @@ it wins over the shipped one). Wide images with the subject on one side work bes
 text sits on the other.
 
 The card draws its text in Liberation Sans and DejaVu Mono. A server with **no fonts
-installed** renders the artwork and no text at all — install them with
+installed** renders the artwork and no text at all. Install them with
 `apt install fonts-liberation fonts-dejavu-core fonts-dejavu-mono` (the one-command
 installer does this for you).
 
