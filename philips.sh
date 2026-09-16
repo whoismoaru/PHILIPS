@@ -266,13 +266,21 @@ EOF
 }
 
 # ── 4. systemd ──────────────────────────────────────────────────────
+# Ask systemd, not the filesystem. Reading /etc/systemd/system/<name>.service by hand
+# reported "does not exist" for three different situations -- the unit living somewhere
+# else (/lib, /usr/lib, a drop-in), a grep built without PCRE, and the file genuinely
+# missing -- and the caller then told the user to reinstall a bot that was running fine.
 function service_dir() {
-  local u="/etc/systemd/system/$1.service"
-  [ -f "$u" ] || return 0
-  grep -oP '(?<=^WorkingDirectory=).*' "$u" 2>/dev/null | head -1
+  systemctl show -p WorkingDirectory --value "$1" 2>/dev/null | head -1
+}
+
+# Whether the unit exists at all, which is a different question from where it points.
+function service_exists() {
+  [ -n "$(systemctl show -p FragmentPath --value "$1" 2>/dev/null)" ]
 }
 
 function ensure_free_service() {
+  service_exists "$SERVICE" || return 0
   local existing; existing="$(service_dir "$SERVICE")"
   [ -z "$existing" ] && return 0
   [ "$existing" = "$APP_DIR" ] && return 0
@@ -291,7 +299,7 @@ function ensure_free_service() {
   local suggest; suggest="philips-bot-$(basename "$APP_DIR")"
   ask "New service name" "$suggest"
   SERVICE="$REPLY_VAL"
-  [ -z "$(service_dir "$SERVICE")" ] || { warn "The name '$SERVICE' is taken as well. Try another."; return 1; }
+  ! service_exists "$SERVICE" || { warn "The name '$SERVICE' is taken as well. Try another."; return 1; }
   ok "Using service '$SERVICE'."
 }
 
@@ -345,10 +353,16 @@ function verify_running() {
 }
 
 function assert_ours() {
-  local d; d="$(service_dir "$SERVICE")"
-  if [ -z "$d" ]; then
+  if ! service_exists "$SERVICE"; then
     warn "Service '$SERVICE' does not exist yet; run option 1 first."
     return 1
+  fi
+  local d; d="$(service_dir "$SERVICE")"
+  # The unit is there but does not say where it runs: old unit, hand-edited, or a
+  # drop-in. Refusing here would be wrong -- it exists, and it is the one asked for.
+  if [ -z "$d" ]; then
+    warn "Service '$SERVICE' exists but names no WorkingDirectory; continuing anyway."
+    return 0
   fi
   if [ "$d" != "$APP_DIR" ]; then
     warn "Service '$SERVICE' belongs to $d, not $APP_DIR."
