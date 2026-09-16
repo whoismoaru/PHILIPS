@@ -168,7 +168,12 @@ function setup_env() {
   ask "UNISWAP_V3_POSITION_MANAGER" "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"; local PM="$REPLY_VAL"
   ask "UNISWAP_V3_QUOTER"           "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"; local Q="$REPLY_VAL"
   ask "UNISWAP_V3_SWAP_ROUTER"      "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"; local R="$REPLY_VAL"
-  ask "WETH_ADDRESS"                ""; local W="$REPLY_VAL"
+  # This one used to be the only address with no default, right after four that had one.
+  # Pressing Enter -- the natural thing by then -- wrote an empty WETH_ADDRESS, and the
+  # bot then died at startup with "an ENS name used for a contract target", which names
+  # nothing the user did. Robinhood's WETH is the default, and empty is refused below.
+  ask "WETH_ADDRESS"                "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73"; local W="$REPLY_VAL"
+  [ -n "$W" ] || { warn "WETH_ADDRESS cannot be empty: the chain's wrapped native is an LP base."; return 1; }
   # A typo here does not fail loudly: ethers treats a non-address as an ENS name and the
   # bot dies at boot with "network does not support ENS", which names nothing the user
   # typed. Addresses are 0x + 40 hex, or empty.
