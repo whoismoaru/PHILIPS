@@ -37,3 +37,11 @@ const usdt = prices.get(cc.usdtAddress!.toLowerCase());
 if (usdt) assert.ok(usdt > 0.5 && usdt < 2, `USDT priced at ${usdt}: the deepest-pool rule is not holding`);
 
 console.log(`ok: the wallet scan sees ${held.length} tokens on BSC and ${prices.size} of them have a market price`);
+
+// The same dust rule as /portfolio: a holding worth under a dime is left off the swap list
+// (the gas to sell it costs more than it returns), but an UNPRICED holding is kept --
+// unknown is not worthless, and hiding it would remove the only way out of that token.
+assert.match(src, /const SELL_DUST_USD = 0\.1;/, 'the swap dust threshold is gone');
+assert.match(src, /h\.usd === null \|\| h\.usd >= SELL_DUST_USD/, 'an unpriced holding must survive the dust filter');
+assert.equal((src.match(/\.filter\(sellable\)/g) ?? []).length, 2, 'both holdings paths must apply the filter');
+console.log('ok: the swap list hides sub-$0.10 dust and keeps what it cannot price');

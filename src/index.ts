@@ -116,6 +116,14 @@ import { swapExactInBest, previewSwapOut } from './swapRoute.js';
 const MAX_CLOSE_SWEEP = 4;
 /** Max token holdings shown in /portfolio (after filtering to balance > 0). */
 const SELL_HOLDINGS_CAP = 12; // the most tokens the /sell list will show
+/**
+ * Holdings worth less than this are left off the swap list: a row for four cents is noise,
+ * and the gas to sell it costs more than it returns. A holding whose value could NOT be
+ * read is kept -- unknown is not the same as worthless, and hiding it would quietly take
+ * away the only way out of a token the bot cannot price.
+ */
+const SELL_DUST_USD = 0.1;
+const sellable = (h: SellHolding): boolean => h.usd === null || h.usd >= SELL_DUST_USD;
 /** Max CA candidates whose balance gets checked (journal plus positions). */
 const HOLDINGS_CAND_MAX = 20;
 /** Concurrency while building position cards. */
@@ -3898,7 +3906,7 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
     await addStableBases(cc, out);
     await addNativeHolding(cc, out);
     out.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
-    return out.slice(0, SELL_HOLDINGS_CAP);
+    return out.filter(sellable).slice(0, SELL_HOLDINGS_CAP);
   }
   // No Blockscout on this chain (BSC, Base, HyperEVM, Arc). Candidates come from the WALLET
   // ITSELF where the RPC can enumerate them -- Alchemy answers alchemy_getTokenBalances --
@@ -3944,7 +3952,7 @@ async function sellHoldings(cc: ChainCtx): Promise<SellHolding[]> {
   out.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
   await addStableBases(cc, out);
   await addNativeHolding(cc, out);
-  return out.slice(0, SELL_HOLDINGS_CAP);
+  return out.filter(sellable).slice(0, SELL_HOLDINGS_CAP);
 }
 
 /** Native that MUST be left behind for gas — selling every last bit fails the tx itself. */
