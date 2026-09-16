@@ -14,6 +14,7 @@
  */
 import { getChain, venueCtx, venuesFor, type BaseKind, type ChainCtx } from './chains.js';
 import { gmgnPrice } from './gmgn.js';
+import { poolIdV4 } from './uniswapV4.js';
 import { v4Supported } from './uniswapV4.js';
 import type { PoolKeyV4 } from './uniswapV4.js';
 import { ethers } from 'ethers';
@@ -390,6 +391,13 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
   };
   for (const p of json?.data?.topV3Pools ?? []) push(p, 'v3');
   for (const p of json?.data?.topV4Pools ?? []) push(p, 'v4');
+  // The gateway can know a chain's v3 pools and none of its v4 ones (Arc, 17 Sep 2026:
+  // one dust v3 pool returned while a $52k v4 pool with $974k daily volume was missing).
+  // Testing for an empty result would miss exactly that case, so test for no V4.
+  if (!out.some((p) => p.protocol === 'v4')) {
+    const v4 = await dexV4Pools(ctx, token).catch(() => []);
+    out.push(...v4);
+  }
   out.sort((a, b) => b.tvlUsd - a.tvlUsd);
   return out;
 }
@@ -525,6 +533,84 @@ async function dexPairs(ctx: ChainCtx, tokenAddress: string): Promise<DexPair[]>
       symByAddr,
     });
   }
+  return out;
+}
+
+/**
+ * v4 pools discovered through DexScreener, for chains the Uniswap gateway does not index.
+ *
+ * DexScreener lists a v4 pool by its POOL ID, which is keccak(abi.encode(PoolKey)) -- an
+ * identifier, not an address, and not invertible. But the key has only two unknowns once
+ * the pair is known: the fee and the tick spacing. Hashing the plausible combinations and
+ * matching the result against the listed id recovers the whole PoolKey, which is what
+ * opening a position needs.
+ *
+ * It only works for pools with NO hook: a hook address is 160 bits and cannot be guessed.
+ * That costs nothing here, because hooked pools are skipped anyway.
+ *
+ * Found on Arc, 17 Sep 2026: a token whose liquidity sat in v4 showed ONE dust v3 pool in
+ * /add while a $52k v4 pool with $974k daily volume was invisible to every source.
+ */
+const V4_FEE_TIERS = [100, 500, 2500, 3000, 4000, 5000, 10000, 20000, 30000, 50000, 100000];
+/** The spacings Uniswap's own deployments pair with those fees, plus the fee/50 rule. */
+const V4_SPACINGS = [1, 2, 5, 10, 20, 30, 50, 60, 100, 120, 200, 500, 1000, 2000];
+
+async function dexV4Pools(ctx: ChainCtx, token: string): Promise<TokenPool[]> {
+  let pairs: Array<{ id: string; liq: number; vol: number; sym: Record<string, string> }> = [];
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    let json: any;
+    try {
+      const res = await fetch(`${DEXSCREENER_TOKENS}/${token}`, { signal: ctrl.signal });
+      if (!res.ok) throw new Error(`dexscreener ${res.status}`);
+      json = await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+    for (const p of json?.pairs ?? []) {
+      if (p?.chainId !== ctx.dexKey) continue;
+      if (!(p?.labels ?? []).includes('v4')) continue;
+      if (!p.pairAddress) continue;
+      const sym: Record<string, string> = {};
+      for (const t of [p?.baseToken, p?.quoteToken]) if (t?.address) sym[String(t.address).toLowerCase()] = t.symbol ?? '?';
+      pairs.push({ id: String(p.pairAddress).toLowerCase(), liq: Number(p?.liquidity?.usd ?? 0), vol: Number(p?.volume?.h24 ?? 0), sym });
+    }
+  } catch {
+    return []; // no DexScreener, no v4 discovery -- the other sources still run
+  }
+  if (!pairs.length) return [];
+
+  const byId = new Map(pairs.map((p) => [p.id, p]));
+  const out: TokenPool[] = [];
+  const tl = token.toLowerCase();
+  for (const base of ctx.bases) {
+    const bl = base.address.toLowerCase();
+    const [c0, c1] = [tl, bl].sort();
+    const baseIsCurrency0 = c0 === bl;
+    for (const fee of V4_FEE_TIERS) {
+      // fee/50 is the rule Uniswap's own pools follow; the list covers the rest.
+      for (const tickSpacing of new Set([...V4_SPACINGS, Math.round(fee / 50)])) {
+        if (!(tickSpacing > 0)) continue;
+        const poolKey = { currency0: c0, currency1: c1, fee, tickSpacing, hooks: ethers.ZeroAddress };
+        const hit = byId.get(poolIdV4(poolKey as any).toLowerCase());
+        if (!hit) continue;
+        out.push({
+          protocol: 'v4',
+          base: base.kind,
+          baseSymbol: base.symbol,
+          otherSymbol: hit.sym[tl] ?? '?',
+          fee,
+          tvlUsd: hit.liq,
+          vol24hUsd: hit.vol,
+          aprPct: aprOf(hit.vol, fee, hit.liq),
+          poolKey,
+          baseIsCurrency0,
+        });
+      }
+    }
+  }
+  out.sort((a, b) => b.tvlUsd - a.tvlUsd);
   return out;
 }
 
