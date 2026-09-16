@@ -42,15 +42,25 @@ function install_node() {
 
 # git and curl are NOT on a minimal Ubuntu image, and the first thing that needs them is
 # a clone that would otherwise die with "command not found" halfway through the install.
+# The FONTS matter just as much and fail far more quietly: the PnL card draws its text in
+# Liberation Sans and DejaVu Mono, and a server with no fonts installed renders the card
+# with the artwork and NO TEXT AT ALL -- no error anywhere, because a missing font is
+# caught and ignored so that a close never fails over decoration.
+FONT_PKGS=(fonts-liberation fonts-dejavu-core fonts-dejavu-mono)
+FONT_PROBE=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf
+
 function install_tools() {
   local missing=()
   for t in git curl; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
+  [ -f "$FONT_PROBE" ] || missing+=("${FONT_PKGS[@]}")
   [ ${#missing[@]} -eq 0 ] && return 0
   info "Installing ${missing[*]}..."
   sudo apt-get update -qq && sudo apt-get install -y "${missing[@]}"
-  for t in "${missing[@]}"; do
+  for t in git curl; do
     command -v "$t" >/dev/null 2>&1 || { warn "$t could not be installed. Install it by hand, then run this again."; return 1; }
   done
+  # Missing fonts do not stop the install -- the bot works, only its cards come out bare.
+  [ -f "$FONT_PROBE" ] || warn "The card fonts are still missing; PnL cards will render without text."
   ok "${missing[*]} installed."
 }
 

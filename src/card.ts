@@ -14,9 +14,13 @@ function ensureFonts() {
   if (fontsReady) return;
   const reg = (path: string, alias: string) => {
     try {
-      GlobalFonts.registerFromPath(path, alias);
-    } catch {
-      /* fall back to the canvas default when the font is missing */
+      // registerFromPath returns false for a file it could not read; it does not throw.
+      // Silence here is what made a server with no fonts installed render cards with the
+      // artwork and no text, and say nothing about it anywhere.
+      if (!GlobalFonts.registerFromPath(path, alias))
+        console.error(`[card] font not registered: ${path} — the card will draw without it (apt install fonts-liberation fonts-dejavu-core)`);
+    } catch (e) {
+      console.error(`[card] font not registered: ${path} — ${(e as Error).message}`);
     }
   };
   // Liberation Sans for the text: DejaVu sets about 22% wider at the same height, which
@@ -29,12 +33,15 @@ function ensureFonts() {
 }
 
 /**
- * The card's backdrop, an image in data/. Decoded ONCE and cached: closes can come
- * back-to-back and decoding the JPEG each time is wasted work. A missing or corrupt file
- * returns null and the card falls back to a gradient -- a close must never fail over
- * decoration.
+ * The card's backdrop. Decoded ONCE and cached: closes can come back-to-back and
+ * decoding the JPEG each time is wasted work. A missing or corrupt file returns null and
+ * the card falls back to a gradient -- a close must never fail over decoration.
+ *
+ * It lives in assets/, which git TRACKS. It used to live in data/, which .gitignore
+ * excludes, so a fresh clone had no backdrop at all and every PnL card came out as a
+ * plain gradient -- the design simply did not ship with the code.
  */
-const BG_FILE = join(process.cwd(), 'data', 'PHILIPS ANIME.jpg');
+const BG_FILE = join(process.cwd(), 'assets', 'pnl-card.jpg');
 /** The owner's own backdrop, sent to the bot as a photo. It WINS over the shipped one. */
 export const BG_CUSTOM = join(process.cwd(), 'data', 'pnl-bg.jpg');
 
