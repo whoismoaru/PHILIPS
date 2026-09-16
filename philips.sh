@@ -126,6 +126,44 @@ function warn_if_conflicting() {
   warn "with @BotFather and put its token in .env (option 3)."
 }
 
+# Ask the CHAIN whether these addresses belong together. Four of these used to default
+# to Ethereum mainnet's addresses under a label that said "Robinhood Chain defaults", and
+# three of the four DO carry bytecode on Robinhood -- something unrelated is deployed
+# there -- so "does the address exist" passed while every pool read returned 0x. Only a
+# real call catches it: the position manager must name the factory it was given, and the
+# wrapped native it was given.
+# eth_call selectors: factory() = 0xc45a0155, WETH9() = 0x4aa4a4fc.
+function rpc_call() { # $1 = rpc, $2 = to, $3 = data -> prints the last 40 hex chars
+  local r
+  r="$(curl -sS --max-time 20 -X POST "$1" -H 'content-type: application/json' \
+      --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_call\",\"params\":[{\"to\":\"$2\",\"data\":\"$3\"},\"latest\"]}" 2>/dev/null)"
+  sed -n 's/.*"result":"0x\([0-9a-fA-F]*\)".*/\1/p' <<<"$r" | tail -c 41
+}
+
+function verify_contracts() { # $1 = rpc, $2 = factory, $3 = position manager, $4 = weth
+  local got
+  info "Checking those addresses against the chain..."
+  got="$(rpc_call "$1" "$3" "0xc45a0155")"
+  if [ -z "$got" ]; then
+    warn "The position manager at $3 did not answer factory() on this RPC."
+    warn "Either the address is not a Uniswap v3 position manager, or CHAIN_ID/RPC_URL point elsewhere."
+    return 1
+  fi
+  if [ "$(tr '[:upper:]' '[:lower:]' <<<"${2#0x}")" != "$(tr '[:upper:]' '[:lower:]' <<<"$got")" ]; then
+    warn "These contracts do not belong together on this chain:"
+    warn "  the position manager says its factory is 0x$got"
+    warn "  you gave                                 $2"
+    warn "Swaps and pool reads would fail with \"could not decode result data\"."
+    return 1
+  fi
+  got="$(rpc_call "$1" "$3" "0x4aa4a4fc")"
+  if [ -n "$got" ] && [ "$(tr '[:upper:]' '[:lower:]' <<<"${4#0x}")" != "$(tr '[:upper:]' '[:lower:]' <<<"$got")" ]; then
+    warn "WETH_ADDRESS does not match this deployment: the position manager wraps 0x$got"
+    return 1
+  fi
+  ok "The factory, position manager and wrapped native agree on this chain."
+}
+
 # -- 3. Configuration -----------------------------------------------
 function setup_env() {
   local f="$APP_DIR/.env"
@@ -164,10 +202,10 @@ function setup_env() {
   echo
   echo "  The Uniswap v3 contract addresses on that chain."
   echo "  (Press Enter to accept the Robinhood Chain defaults)"
-  ask "UNISWAP_V3_FACTORY"          "0x1F98431c8aD98523631AE4a59f267346ea31F984"; local F="$REPLY_VAL"
-  ask "UNISWAP_V3_POSITION_MANAGER" "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"; local PM="$REPLY_VAL"
-  ask "UNISWAP_V3_QUOTER"           "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"; local Q="$REPLY_VAL"
-  ask "UNISWAP_V3_SWAP_ROUTER"      "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"; local R="$REPLY_VAL"
+  ask "UNISWAP_V3_FACTORY"          "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA"; local F="$REPLY_VAL"
+  ask "UNISWAP_V3_POSITION_MANAGER" "0x73991a25c818bf1f1128deaab1492d45638de0d3"; local PM="$REPLY_VAL"
+  ask "UNISWAP_V3_QUOTER"           "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7"; local Q="$REPLY_VAL"
+  ask "UNISWAP_V3_SWAP_ROUTER"      "0xcaf681a66d020601342297493863e78c959e5cb2"; local R="$REPLY_VAL"
   # This one used to be the only address with no default, right after four that had one.
   # Pressing Enter -- the natural thing by then -- wrote an empty WETH_ADDRESS, and the
   # bot then died at startup with "an ENS name used for a contract target", which names
@@ -181,6 +219,8 @@ function setup_env() {
     [ -z "$a" ] && continue
     [[ "$a" =~ ^0x[0-9a-fA-F]{40}$ ]] || { warn "Not a contract address: $a (expected 0x + 40 hex characters)."; return 1; }
   done
+
+  verify_contracts "$RPC" "$F" "$PM" "$W" || return 1
 
   echo
   echo "  --- Extra chains (optional) ---"
