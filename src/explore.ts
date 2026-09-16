@@ -141,7 +141,9 @@ export async function fetchTopPools(
     const feeTier = p.feeTier ?? 0;
     if (tvl < MIN_TVL_USD || vol <= 0 || feeTier <= 0) continue;
 
-    const apr = (vol * (feeTier / 1e6) * 365) / tvl * 100;
+    // aprOf, not a third copy: this path filters at MIN_TVL_USD above, so the shared
+    // floor changes nothing here -- but the formula now lives in exactly one place.
+    const apr = aprOf(vol, feeTier, tvl) ?? 0;
 
     // Base ditaruh belakang → baca "TOKEN/BASE".
     const s0 = t0.symbol ?? '?',
@@ -367,9 +369,11 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
     const fallbackSym = ctx.bases.find((b) => b.kind === base)?.symbol ?? 'BASE';
     const baseSymbol = (baseIsCurrency0 ? t0.symbol : t1.symbol) ?? fallbackSym;
     const otherSymbol = (baseIsCurrency0 ? t1.symbol : t0.symbol) ?? '?';
-    // APR is 24h fees annualised, the same formula as the /pools card.
+    // APR is 24h fees annualised. Through aprOf, not a second copy of the formula: the
+    // copy here kept its own `tvl > 0` test and went on printing nine-digit APRs after
+    // the shared one was given a floor.
     const vol = p.cumulativeVolume?.value ?? 0;
-    const aprPct = tvl > 0 && vol > 0 ? ((vol * (fee / 1e6) * 365) / tvl) * 100 : null;
+    const aprPct = aprOf(vol, fee, tvl);
     const tp: TokenPool = { protocol, base, baseSymbol, otherSymbol, fee, tvlUsd: tvl, vol24hUsd: vol, aprPct };
     if (protocol === 'v4') {
       tp.poolKey = {
@@ -542,8 +546,16 @@ async function verifyPool(
   }
 }
 
-const aprOf = (vol24h: number, fee: number, tvl: number): number | null =>
-  tvl > 0 && vol24h > 0 ? ((vol24h * (fee / 1e6) * 365) / tvl) * 100 : null;
+/**
+ * The smallest TVL an APR may be divided by. Below this the figure is not a yield, it is
+ * an artefact of the denominator: a pool holding a fraction of a cent with one $12 trade
+ * through it reported ~373,403,973%, which is arithmetic, not an opportunity. Such a pool
+ * also cannot absorb a deposit, so there is nothing the number could inform.
+ */
+const MIN_TVL_FOR_APR = 100;
+
+export const aprOf = (vol24h: number, fee: number, tvl: number): number | null =>
+  tvl >= MIN_TVL_FOR_APR && vol24h > 0 ? ((vol24h * (fee / 1e6) * 365) / tvl) * 100 : null;
 
 /**
  * Pools for one token on a chain with no Uniswap gateway.

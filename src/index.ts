@@ -1504,9 +1504,17 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
  * reads '?' -- an unknown yield is not a zero one, and printing 0% would state a fact
  * about the pool that nobody measured.
  */
+/**
+ * An APR past this is not information any more: nothing sustains it, and the digits only
+ * measure how thin the pool was when the volume went through. Saying ">1000%" reports the
+ * one true part (it is very high) without dressing an artefact up as a forecast.
+ */
+const APR_MAX_SHOWN = 1000;
+
 function aprLabel(pct: number | null | undefined): string {
   if (pct == null || !isFinite(pct)) return '?';
   if (pct === 0) return '0%';
+  if (pct >= APR_MAX_SHOWN) return `>${APR_MAX_SHOWN}%`;
   return `${pct >= 100 ? Math.round(pct) : Number(pct.toFixed(1))}%`;
 }
 
@@ -2072,7 +2080,9 @@ const poolSummaries = (pools: explore.TokenPool[]) =>
     vol: p.vol24hUsd != null && p.vol24hUsd > 0 ? msg.usdCompact(p.vol24hUsd) : '?',
     // A null APR means volume could not be read. '~0.0%' would invent a dead pool.
     // 'hook fee' says WHY it is absent, which '?' cannot.
-    apr: hookFee(p) ? 'hook fee' : p.aprPct == null ? '?' : `~${p.aprPct >= 100 ? Math.round(p.aprPct) : p.aprPct.toFixed(1)}%`,
+    // Through aprLabel, not a second copy of the formatting: this line printed
+    // "~373403973%" while the position cards were already capping the same figure.
+    apr: hookFee(p) ? 'hook fee' : p.aprPct == null ? '?' : `~${aprLabel(p.aprPct)}`,
     tight: tightLabel(p),
   }));
 
