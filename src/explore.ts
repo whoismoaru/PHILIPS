@@ -14,8 +14,7 @@
  */
 import { getChain, venueCtx, venuesFor, type BaseKind, type ChainCtx } from './chains.js';
 import { gmgnPrice } from './gmgn.js';
-import { poolIdV4 } from './uniswapV4.js';
-import { v4Supported } from './uniswapV4.js';
+import { poolIdV4, v4Supported } from './uniswapV4.js';
 import type { PoolKeyV4 } from './uniswapV4.js';
 import { ethers } from 'ethers';
 
@@ -319,7 +318,12 @@ export async function poolsForToken(ctx: ChainCtx, token: string): Promise<Token
       poolsForTokenDex(ctx, token),
       UNISWAP_V4_ONLY_CHAIN[ctx.key] ? gatewayV4Pools(ctx, token).catch(() => []) : Promise.resolve([]),
     ]);
-    return [...dex, ...v4];
+    // gatewayV4Pools leans on the same index that was blind to every Arc v4 pool, and
+    // poolsForTokenDex is v3-only (it enumerates through factory.getPool, which v4 has
+    // no equivalent of). Without this backstop a chain with v4 contracts can still show
+    // a token's dust v3 pool while its real liquidity sits in v4, unseen.
+    const v4dex = v4.length || !v4Supported(ctx) ? [] : await dexV4Pools(ctx, token).catch(() => []);
+    return [...dex, ...v4, ...v4dex];
   }
 
   const ctrl = new AbortController();
