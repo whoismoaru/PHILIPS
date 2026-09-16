@@ -2,8 +2,8 @@
 
 clear
 HEADER_WIDTH=52
-TITLE="PHILIPS LP BOT"
-SUB="single-sided liquidity, from Telegram"
+TITLE="PHILIPS"
+SUB="Single-Sided LP Bot by @moaru"
 
 printf '=%.0s' $(seq 1 $HEADER_WIDTH); echo
 printf "%*s%s\n" $(( (HEADER_WIDTH - ${#TITLE}) / 2 )) "" "$TITLE"
