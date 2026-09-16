@@ -284,7 +284,10 @@ way the bot withdraws the liquidity, collects the fees, swaps the token back to
 what you deposited, and sends you a result card: deposit, received, how long you held
 it, and the fees you earned.
 
-The artwork behind that card is just a file. The one that ships lives in
+![Closed position card](assets/pnl-closed.jpg)
+
+The artwork behind that card is just a file — the two cards above use one, and the
+repo ships a different one, which is the whole point. The shipped one lives in
 `assets/pnl-card.jpg`; to use your own, send the bot a photo from `/settings` and it
 becomes the backdrop on every card from then on (it is saved to `data/pnl-bg.jpg`, and
 it wins over the shipped one). Wide images with the subject on one side work best; the
