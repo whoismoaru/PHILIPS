@@ -4203,7 +4203,15 @@ async function tswapQuoteConfirm(
       return editProgress(
         ctx,
         prog,
-        msg.msgError('swap', `Above the ${capLabelFor(cap, base.symbol)}/tx limit — lower the amount.`),
+        // Name the knob. "Lower the amount" alone leaves the owner guessing where a
+        // number they never chose came from -- it is set in .env, not in /settings,
+        // which only displays it.
+        msg.msgError(
+          'swap',
+          `Above the ${capLabelFor(cap, base.symbol)}/tx limit — lower the amount, or raise ${
+            isStableBase(base.kind) ? 'MAX_STABLE_PER_TX' : 'MAX_ETH_PER_TX'
+          } in .env ('off' removes it) and restart.`,
+        ),
       );
     }
   }

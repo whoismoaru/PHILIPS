@@ -208,6 +208,12 @@ function setup_env() {
     if [ -n "$ARC_RPC" ]; then ARC="true"; else warn "No Arc RPC given, so Arc stays off."; fi
   fi
 
+  echo
+  echo "  --- Safety limits ---"
+  echo "  The most one transaction may spend. 'off' removes the cap."
+  ask "Max native per tx (ETH/BNB/HYPE)" "0.05"; local MAXETH="$REPLY_VAL"
+  ask "Max stablecoin per tx (USD)"      "250";  local MAXSTABLE="$REPLY_VAL"
+
   local SECRET="" SECRET_NOTE="A WALLET_SECRET was generated for you."
   for old in "$f" "$f".bak-*; do
     [ -f "$old" ] || continue
@@ -250,8 +256,8 @@ INK_RPC_URL=$INK_RPC
 ARC_ENABLED=$ARC
 ARC_RPC_URL=$ARC_RPC
 
-MAX_ETH_PER_TX=0.05
-MAX_STABLE_PER_TX=250
+MAX_ETH_PER_TX=$MAXETH
+MAX_STABLE_PER_TX=$MAXSTABLE
 MAX_TX_FEE_NATIVE=0.005
 
 # Keep this true until you have checked /status and /positions.

@@ -127,7 +127,7 @@ then, so the number you enter is the one that goes on chain.
 | `/bridge` | Move funds between chains |
 | `/withdraw` | Withdraw a token or native to another address |
 | `/gas` | What a transaction costs right now on every chain, in USD and Rupiah |
-| `/settings` | Mode, transaction limits, LP shape, quick percentages, PnL card background |
+| `/settings` | Mode, LP shape, quick percentages, PnL card background (it *shows* the per-tx limits; those are set in `.env`) |
 | `/alerts` | Which notifications you want |
 | `/add_lp` | Open a position without pasting a contract address first |
 

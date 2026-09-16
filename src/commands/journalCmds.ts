@@ -70,8 +70,11 @@ async function pnlChains(): Promise<Array<{ key: string; label: string; trades: 
     .map((key) => ({ key, label: chainLabel(key), ...statOf(key) }))
     .sort((a, b) => b.trades - a.trades || a.label.localeCompare(b.label));
   // All chains combined sits on top: the first question is usually "what's the total".
+  // It is listed whenever the per-chain buttons are -- those appear for every configured
+  // chain, trades or not, so hiding the TOTAL on a bot with no history yet (a fresh
+  // install) left the picker offering five chains and no way to ask for all of them.
   const all = statOf(undefined);
-  return all.trades > 0 ? [{ key: ALL, label: 'All chains', ...all }, ...per] : per;
+  return per.length > 0 ? [{ key: ALL, label: 'All chains', ...all }, ...per] : per;
 }
 
 /** Pseudo-key for the cross-chain total. */
