@@ -260,7 +260,7 @@ wallet's real transactions over 14 days, not a textbook estimate, because a v4
 The Rupiah column uses Indodax, the rate you actually face selling crypto locally.
 
 `/pnl` asks which chain first (or all of them), then sums up the trades you closed in
-that period — All time, 1 day, 1 week, 1 month, switchable in place:
+that period. All time, 1 day, 1 week, 1 month, switchable in place:
 
 ![Lifetime PnL recap](assets/pnl-recap.jpg)
 
@@ -301,7 +301,7 @@ installer does this for you).
 The result is reported **in dollars**, each side priced at its own moment: the deposit at
 the rate stored when the position opened, the proceeds at the rate now. For a stablecoin
 base both rates are 1, so nothing is folded in. For a native base the figure does include
-the base asset's own move — which is what your money actually did. If neither rate can be
+the base asset's own move, which is what your money actually did. If neither rate can be
 read, the card falls back to the deposited asset rather than inventing a dollar number.
 
 Withdrawals carry a price floor, on v3 and v4 alike. If someone pushes the pool

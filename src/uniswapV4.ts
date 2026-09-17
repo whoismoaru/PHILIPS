@@ -330,7 +330,7 @@ const V4_WRITE_ABI = [
 
 /** Note attached to the close card when a v4 burn had to run without a price floor. */
 export const V4_UNPROTECTED_NOTE = (ids: string) =>
-  `⚠️ #${ids} withdrawn WITHOUT a price floor — the pool could not be priced, so sandwich protection was off for this close.`;
+  `⚠️ #${ids} withdrawn WITHOUT a price floor: the pool could not be priced, so sandwich protection was off for this close.`;
 
 /**
  * amount0Min/amount1Min for BURN_POSITION.
@@ -909,7 +909,7 @@ export async function openPositionV4(
   const state = await readPoolState(cc, poolKey);
   // An empty slot0 means the poolKey matches no pool. Without this check the revert
   // only surfaces as an 'unknown custom error' (PoolNotInitialized) in the plan preview.
-  if (state.sqrtPriceX96 === 0n) throw new Error('This v4 pool is not initialised — pick another pool.');
+  if (state.sqrtPriceX96 === 0n) throw new Error('This v4 pool is not initialised. Pick another pool.');
   const current = state.tick;
   const aligned = nearestUsableTick(current, spacing);
   let tickLower: number;
@@ -935,11 +935,11 @@ export async function openPositionV4(
     // clear whether this is too small a deposit (USDG wei at 6 decimals) or too wide
     // a range (large spacing).
     console.log(
-      `[v4] liquidity 0 — pool=${poolKey.currency0}/${poolKey.currency1} fee=${poolKey.fee} spacing=${spacing}` +
+      `[v4] liquidity 0: pool=${poolKey.currency0}/${poolKey.currency1} fee=${poolKey.fee} spacing=${spacing}` +
         ` baseIsC0=${baseIsCurrency0} amountWei=${baseAmountWei} widthTicks=${tickUpper - tickLower} [${tickLower},${tickUpper}]`,
     );
     throw new Error(
-      `Computed liquidity is 0 — the deposit is too small for this pool's range (spacing ${spacing}, width ${tickUpper - tickLower} ticks). Increase the amount, narrow the range %, or pick a finer-spacing pool.`,
+      `Computed liquidity is 0: the deposit is too small for this pool's range (spacing ${spacing}, width ${tickUpper - tickLower} ticks). Increase the amount, narrow the range %, or pick a finer-spacing pool.`,
     );
   }
 
@@ -1025,7 +1025,7 @@ export async function planLadderV4(
 ): Promise<V4LadderLeg[]> {
   const spacing = poolKey.tickSpacing;
   const state = await readPoolState(cc, poolKey);
-  if (state.sqrtPriceX96 === 0n) throw new Error('This v4 pool is not initialised — pick another pool.');
+  if (state.sqrtPriceX96 === 0n) throw new Error('This v4 pool is not initialised. Pick another pool.');
   const current = state.tick;
   const frac = Math.min(Math.max(rangePercent, 0.1), 95) / 100;
   const fullWidth = Math.max(spacing, Math.ceil(Math.abs(Math.log(1 - frac)) / Math.log(1.0001) / spacing) * spacing);

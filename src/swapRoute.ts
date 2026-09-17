@@ -114,7 +114,7 @@ async function uniExec(
   minOut: bigint,
   ctx: ChainCtx,
 ): Promise<{ outWei: bigint; txHashes: string[] }> {
-  if (minOut <= 0n) throw new Error('quoter returned 0 — swap cancelled (sandwich protection)');
+  if (minOut <= 0n) throw new Error('quoter returned 0. Swap cancelled (sandwich protection)');
   const txHashes: string[] = [];
   txHashes.push(...(await approveExact(fromAddr, ctx.routerAddress, amountInWei, ctx.wallet)));
   const router = new ethers.Contract(

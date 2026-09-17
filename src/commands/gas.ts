@@ -201,7 +201,7 @@ export async function gasCard(): Promise<string> {
   const down = all.filter((x) => x[1] === null).map((x) => x[0]);
 
   if (!chains.length)
-    return [bold('⛽️ GAS FEE'), '', italic('No chain responded — every RPC is down. Try again shortly.')].join('\n');
+    return [bold('⛽️ GAS FEE'), '', italic('No chain responded: every RPC is down. Try again shortly.')].join('\n');
 
   return [
     bold('⛽️ GAS FEE'),

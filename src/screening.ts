@@ -70,10 +70,10 @@ async function simulateSellPath(
       });
       baseBack = BigInt(q[0]);
     } catch {
-      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Sell simulation reverted — this token may be unsellable' } };
+      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Sell simulation reverted: this token may be unsellable' } };
     }
     if (baseBack === 0n)
-      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Sell simulation returned 0 — no exit route' } };
+      return { status: 'blocked', flag: { level: 'BAHAYA', msg: 'Sell simulation returned 0: no exit route' } };
 
     const loss = 1 - Number(baseBack) / Number(baseIn);
     const feeRoundtrip = (2 * best.fee) / 1_000_000; // 3000 → 0.006
@@ -256,7 +256,7 @@ export async function screenToken(
     isProxy = goplus?.isProxy ?? null;
   }
   if (verified === false) flags.push({ level: 'HATI-HATI', msg: 'Contract is NOT verified (source code unavailable)' });
-  if (isProxy) flags.push({ level: 'INFO', msg: 'Upgradeable contract (proxy) — the dev can change its logic' });
+  if (isProxy) flags.push({ level: 'INFO', msg: 'Upgradeable contract (proxy): the dev can change its logic' });
 
   // --- Holder concentration ---
   let top1Pct: number | null = null;
@@ -330,7 +330,7 @@ export async function screenToken(
       flags.push({ level: 'HATI-HATI', msg: `Pool is very new (${pairAgeHours.toFixed(0)}h old)` });
 
     if (buys24h !== null && sells24h !== null && buys24h > 20 && sells24h === 0)
-      flags.push({ level: 'BAHAYA', msg: 'Many buys but almost no sells — possible honeypot' });
+      flags.push({ level: 'BAHAYA', msg: 'Many buys but almost no sells: possible honeypot' });
 
     if (volume24h !== null && volume24h < 1000)
       flags.push({ level: 'HATI-HATI', msg: 'Almost no trades in the last 24h' });
@@ -366,7 +366,7 @@ export async function screenToken(
   if (takTerbaca.length >= 3) {
     flags.push({
       level: 'HATI-HATI',
-      msg: `${takTerbaca.length} safety checks unreadable (${takTerbaca.slice(0, 2).join(', ')}…) — not verified as safe`,
+      msg: `${takTerbaca.length} safety checks unreadable (${takTerbaca.slice(0, 2).join(', ')}…), not verified as safe`,
     });
   }
 

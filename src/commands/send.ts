@@ -154,7 +154,7 @@ export async function handleSendAddress(ctx: any, raw: string): Promise<boolean>
 
 bot.action(/^snd:(\w+):(native|0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const flow = flows.get(ctx.from!.id);
-  if (!flow?.to) return ctx.answerCbQuery('Expired — start again with /send.');
+  if (!flow?.to) return ctx.answerCbQuery('Expired. Start again with /send.');
   const cc = CHAINS[ctx.match[1]];
   if (!cc) return ctx.answerCbQuery('Chain unavailable.');
   await ctx.answerCbQuery();
@@ -164,7 +164,7 @@ bot.action(/^snd:(\w+):(native|0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const addr = ctx.match[2] === 'native' ? null : ctx.match[2].toLowerCase();
   const list = await assetsOn(cc).catch(() => []);
   const a = list.find((x) => (x.address?.toLowerCase() ?? 'native') === (addr ?? 'native'));
-  if (!a) return ctx.editMessageText(msg.msgError('send', 'That balance is gone — start again with /withdraw.'), html);
+  if (!a) return ctx.editMessageText(msg.msgError('send', 'That balance is gone. Start again with /withdraw.'), html);
   flow.chainKey = cc.key;
   flow.asset = { address: a.address, symbol: a.symbol, decimals: a.decimals };
   flow.isContract = (await cc.provider.getCode(flow.to).catch(() => '0x')) !== '0x';
@@ -214,7 +214,7 @@ async function renderAmount(ctx: any, flow: SendFlow, balWei: bigint) {
 
 bot.action(/^sndpct:(\d+)$/, async (ctx) => {
   const flow = flows.get(ctx.from!.id);
-  if (!flow?.awaitingAmount || !flow.asset) return ctx.answerCbQuery('Expired — start again with /send.');
+  if (!flow?.awaitingAmount || !flow.asset) return ctx.answerCbQuery('Expired. Start again with /send.');
   await ctx.answerCbQuery();
   const cc = CHAINS[flow.chainKey!]!;
   const usable = await sendableWei(cc, flow);
@@ -318,7 +318,7 @@ async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
 async function execSend(ctx: any) {
   const uid = ctx.from!.id;
   const flow = flows.get(uid);
-  if (!flow?.amountWei || !flow.asset || !flow.to) return ctx.answerCbQuery('Expired — start again with /send.');
+  if (!flow?.amountWei || !flow.asset || !flow.to) return ctx.answerCbQuery('Expired. Start again with /send.');
   if (sending.has(uid)) return ctx.answerCbQuery('Processing…');
   sending.add(uid);
   store.beginMoneyOp();

@@ -351,7 +351,7 @@ bot.action(/^bra:(\w+):(\w+):(\w+)$/, async (ctx) => {
  */
 bot.action(/^brpct:(\d+)$/, async (ctx) => {
   const flow = flows.get(ctx.from!.id);
-  if (!flow?.awaitingAmount) return ctx.answerCbQuery('Expired — start again with /bridge.');
+  if (!flow?.awaitingAmount) return ctx.answerCbQuery('Expired. Start again with /bridge.');
   const from = CHAINS[flow.fromKey];
   if (!from) return ctx.answerCbQuery('Chain unavailable.');
   await ctx.answerCbQuery();
@@ -486,11 +486,11 @@ async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<voi
 async function execBridge(ctx: any) {
   const uid = ctx.from!.id;
   const flow = flows.get(uid);
-  if (!flow?.amountWei || flow.minOutWei === undefined) return ctx.answerCbQuery('Expired — start again with /bridge.');
+  if (!flow?.amountWei || flow.minOutWei === undefined) return ctx.answerCbQuery('Expired. Start again with /bridge.');
   if (Date.now() - (flow.quotedAt ?? 0) > QUOTE_TTL_MS) {
     flows.delete(uid);
     await ctx.answerCbQuery('Quote expired.');
-    return ctx.reply(msg.msgError('bridge', 'The quote is older than 2 minutes — run /bridge again for fresh numbers.'), html);
+    return ctx.reply(msg.msgError('bridge', 'The quote is older than 2 minutes. Run /bridge again for fresh numbers.'), html);
   }
   if (inFlight.has(uid)) return ctx.answerCbQuery('Processing…');
   inFlight.add(uid);

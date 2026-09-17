@@ -455,14 +455,14 @@ async function ensureBaseReady(base: BaseAsset, amountWei: bigint, ctx: ChainCtx
         throw new Error(
           `Wrap fell short by ${ethers.formatEther(short)} ${native} and the remaining ` +
             `${ethers.formatEther(nativeNow)} ${native} cannot cover it plus gas. ` +
-            `Your wrapped ${base.symbol} is safe in the wallet — use /unwrap to convert it back.`,
+            `Your wrapped ${base.symbol} is safe in the wallet. Use /unwrap to convert it back.`,
         );
       }
       const tx2 = await ctx.weth.deposit({ value: short });
       await tx2.wait();
       notes.push(`Wrap extra ${ethers.formatEther(short)} ${native} (tx ${tx2.hash})`);
       bal = await baseC.balanceOf(wallet.address);
-      if (bal < amountWei) throw new Error('Wrap still short after retry — try again.');
+      if (bal < amountWei) throw new Error('Wrap still short after retry. Try again.');
     }
   }
   for (const h of await approveExact(base.address, ctx.pmAddress, amountWei, wallet)) {
@@ -507,7 +507,7 @@ export async function executeAdd(
   } catch (e) {
     // STF means the base transfer failed (balance or allowance). Recover once, then retry.
     if (/STF/i.test((e as Error).message)) {
-      notes.push(`Mint hit STF — re-verifying assets and retrying...`);
+      notes.push(`Mint hit STF: re-verifying assets and retrying...`);
       notes.push(...(await ensureBaseReady(base, plan.baseAmountWei, ctx)));
       const tx = await positionManager.mint({ ...params, deadline: Math.floor(Date.now() / 1000) + 600 });
       receipt = await tx.wait();
@@ -537,7 +537,7 @@ export async function executeAdd(
   }
   if (tokenId === null) {
     // Last-ditch fallback (should never happen).
-    notes.push('⚠️ Mint event not found in receipt — falling back to last index.');
+    notes.push('⚠️ Mint event not found in receipt: falling back to last index.');
     const bal: bigint = await positionManager.balanceOf(wallet.address);
     tokenId = BigInt(await positionManager.tokenOfOwnerByIndex(wallet.address, bal - 1n));
   }
@@ -711,7 +711,7 @@ export async function executeRemoveBatch(
           throw new Error(
             movedPrice
               ? `Price moved faster than the withdrawal floor could be set (${built.live} legs), so nothing was sent. ` +
-                'Your positions are untouched — try again in a moment.'
+                'Your positions are untouched. Try again in a moment.'
               : `Ladder close batch would revert (${built.live} legs): ${emsg.slice(0, 140)}`,
           );
         }
@@ -829,7 +829,7 @@ const WITHDRAW_FALLBACK_BPS = 200n; // 2%
 
 /** Note attached to the close card when a withdrawal had to run without a price floor. */
 const WITHDRAW_UNPROTECTED_NOTE = (tokenId: string) =>
-  `⚠️ #${tokenId} withdrawn WITHOUT a price floor — the pool could not be priced, so sandwich protection was off for this close.`;
+  `⚠️ #${tokenId} withdrawn WITHOUT a price floor: the pool could not be priced, so sandwich protection was off for this close.`;
 
 /** Expected token0/token1 out of burning `liquidity`, computed from the CURRENT POOL
  *  PRICE via the SDK (no decreaseLiquidity simulation). Also supplies the price band
@@ -919,7 +919,7 @@ export async function removeLiquidityPct(
 
   // Integer division: the remainder stays in the pool, it is not lost.
   const part = (liquidity * BigInt(Math.round(pct))) / 100n;
-  if (part === 0n) throw new Error('withdraw amount rounds to 0 — use 100% instead');
+  if (part === 0n) throw new Error('withdraw amount rounds to 0. Use 100% instead');
 
   const iface = positionManager.interface;
   const deadline = Math.floor(Date.now() / 1000) + 600;

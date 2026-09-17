@@ -367,8 +367,8 @@ export function msgSecretLeakWarning(): string {
     '',
     `If you meant to connect a wallet, open ${code('/settings')} and follow the steps there. Never paste a key loosely into a chat.`,
     '',
-    note('any key that has already been sent to a chat should be treated as compromised — move the funds.'),
-    note('if that was just a tx hash (0x + 64 chars), ignore this — the bot never takes a tx hash as input.'),
+    note('any key that has already been sent to a chat should be treated as compromised. Move the funds.'),
+    note('if that was just a tx hash (0x + 64 chars), ignore this: the bot never takes a tx hash as input.'),
   ].join('\n');
 }
 
@@ -444,7 +444,7 @@ export function msgV4Position(p: {
           : `${bold('OUT OF RANGE')} — waiting`;
   const explain =
     p.inRange === null
-      ? `Range status could not be read — the value above may be stale.`
+      ? `Range status could not be read: the value above may be stale.`
       : p.inRange
         ? `Your liquidity is ${bold('active')} and earning fees. Fees keep accruing as long as ${sym} stays inside this range.`
         : p.converted
@@ -513,7 +513,7 @@ export function msgV4Position(p: {
   // is already implied by the card's contents, and the line only added length without
   // supporting a decision.
   lines.push('', note(nowWib()));
-  if (!p.tracked) lines.push(note('read-only — opened outside the bot'));
+  if (!p.tracked) lines.push(note('read-only: opened outside the bot'));
   return lines.join('\n');
 }
 
@@ -529,7 +529,7 @@ export function msgV4Closed(o: {
 }): string {
   if (o.dryRun) {
     return card(`⚪ ${title('CLOSE v4 (DRY)', `#${o.tokenId}`)}`, [
-      note(`simulation valid — when live, funds return${o.base ? ` and are cashed out to ${o.base}` : ''}.`),
+      note(`simulation valid: when live, funds return${o.base ? ` and are cashed out to ${o.base}` : ''}.`),
     ]);
   }
   const body: string[] = [];
@@ -558,7 +558,7 @@ export function msgV4Added(o: {
         ['Range', o.rangeLabel],
       ]),
       '',
-      note('simulation valid — no transaction was sent.'),
+      note('simulation valid: no transaction was sent.'),
     ]);
   }
   // Same card as the v3 path: one shape for "a position now exists", whichever protocol
@@ -580,7 +580,7 @@ export function msgV4CloseConfirm(tokenId: string): string {
     '',
     `🆔 ${bold('Position ID:')} #${esc(tokenId)} (Uniswap v4)`,
     '',
-    '⚠️ The position is burned; ALL liquidity plus fees (both tokens) return to your wallet — with no auto-swap.',
+    '⚠️ The position is burned; ALL liquidity plus fees (both tokens) return to your wallet: with no auto-swap.',
     '',
     bold('Close this position?'),
   ].join('\n');
@@ -592,7 +592,7 @@ export function msgV4Range(tokenId: string, inRange: boolean): string {
     ? [
         `🟢 ${bold('Alert: v4 Position In Range')}`,
         '',
-        `Position ${bold(`#${tokenId}`)} (Uniswap v4) is back inside its price range — fees are flowing again.`,
+        `Position ${bold(`#${tokenId}`)} (Uniswap v4) is back inside its price range: fees are flowing again.`,
         '',
         `⏱️ <i>Triggered at: ${nowWib()}</i>`,
       ].join('\n')
@@ -615,7 +615,7 @@ export function msgNumbersNoPrompt(txt: string): string {
   return [
     `\u{1F7E1} ${bold('NOTHING IS WAITING FOR A NUMBER')}`,
     '',
-    `You typed ${bold(txt)}, but no step is asking for it — the prompt expired, or the bot restarted since.`,
+    `You typed ${bold(txt)}, but no step is asking for it: the prompt expired, or the bot restarted since.`,
     '',
     note('to set percentages: /settings, then the button for that flow'),
     note('to open a position: paste the CA again'),
@@ -842,7 +842,7 @@ export function msgIlAlert(tokenId: string, symbol: string, lossPct: number, lim
     '',
     `📉 Position value plus fees is now ${bold(`${lossPct.toFixed(1)}% below your deposit`)} (your threshold: ${limit}%).`,
     '',
-    note('this already accounts for the fees collected — it is not theoretical IL.'),
+    note('this already accounts for the fees collected: it is not theoretical IL.'),
     '',
     `⏱️ <i>Triggered at: ${nowWib()}</i>`,
   ].join('\n');
@@ -1113,8 +1113,8 @@ export function msgError(where: string, err: unknown): string {
     `${esc('Reason')} : ${code(first)}`,
     '',
     landed
-      ? note('the transaction DID land on-chain — check /positions before retrying.')
-      : note('try again — full details are in the service log.'),
+      ? note('the transaction DID land on-chain. Check /positions before retrying.')
+      : note('try again. Full details are in the service log.'),
     note(nowWib()),
   ].join('\n');
 }
@@ -1130,7 +1130,7 @@ export function msgCancelled(): string {
 export function msgChainPick(): string {
   return card(
     title('CHAIN'),
-    [note('token found on several chains — pick one below.')],
+    [note('token found on several chains. Pick one below.')],
   );
 }
 
@@ -1188,7 +1188,7 @@ export function msgPositionCard(opts: {
     : opts.inRange
     ? `Your liquidity is ${bold('active')} and earning fees. Fees keep accruing as long as ${sym} stays inside this range.`
     : opts.converted
-      ? `Price moved through your entire range, so this position is now ${bold(`100% ${opts.symbol}`)} and no longer earning fees. Your target is done — withdraw, or leave it and wait for price to come back into range.`
+      ? `Price moved through your entire range, so this position is now ${bold(`100% ${opts.symbol}`)} and no longer earning fees. Your target is done. Withdraw, or leave it and wait for price to come back into range.`
       : `Your liquidity is not active yet. It converts to ${sym} and starts earning fees once the price ${bold('drops')} into your range (${range}).`;
 
   // Same tree block as the v4 card: one protocol must not read differently from the
@@ -1243,7 +1243,7 @@ export function msgPositionGone(tokenId: string, symbol: string, baseSymbol = 'W
     `✅ ${title('CLOSED', `#${tokenId}`)}`,
     [
       fieldBlock([['pair', `${baseSymbol} / ${symbol}`]]),
-      note('already closed on-chain — removed from the active list.'),
+      note('already closed on-chain: removed from the active list.'),
     ],
     nowWib(),
   );
@@ -1461,10 +1461,10 @@ export function msgJournal(
     `💰 ${bold('Net')} of the ${sameBase.length} ETH trades shown : ${dot(net)} ${bold(`${net >= 0 ? '+' : ''}${net.toFixed(5)} ETH`)}`,
   ];
   if (otherCount > 0) {
-    out.push(note(`${otherCount} more closed trade${otherCount > 1 ? 's' : ''} in other denominations (stablecoin / other chain) — not summed above.`));
+    out.push(note(`${otherCount} more closed trade${otherCount > 1 ? 's' : ''} in other denominations (stablecoin / other chain), not summed above.`));
   }
   if (totalInJournal && totalInJournal > items.length) {
-    out.push(`📜 ${bold('Journal total')} : ${totalInJournal} trades stored — full recap in /pnl`);
+    out.push(`📜 ${bold('Journal total')} : ${totalInJournal} trades stored: full recap in /pnl`);
   }
   out.push('', note(nowWib()));
   return out.join('\n');
@@ -1626,7 +1626,7 @@ export function msgPlanStep(opts: {
   body.push(
     italic(
       opts.dryRun
-        ? '*DRY RUN — no transaction will be sent.'
+        ? '*DRY RUN: no transaction will be sent.'
         : '*PHILIPS will auto-sign this transaction using your connected wallet. Ensure you have enough ETH balance for gas fees.',
     ),
   );
@@ -1666,7 +1666,7 @@ export function msgPlanStepV4(opts: {
     '',
     italic(
       opts.dryRun
-        ? '*DRY RUN — no transaction will be sent.'
+        ? '*DRY RUN: no transaction will be sent.'
         : '*PHILIPS will auto-sign this transaction using your connected wallet. Ensure you have enough ETH balance for gas fees.',
     ),
   );
@@ -1676,7 +1676,7 @@ export function msgPlanStepV4(opts: {
 /** A v4 pool was picked but its base is not native ETH (not supported for opening yet). */
 export function msgV4BaseUnsupported(): string {
   return card(`ℹ️ ${title('V4 POOL USES WRAPPED WETH')}`, [
-    note('this v4 pool pairs wrapped WETH (not native ETH) — not supported yet.'),
+    note('this v4 pool pairs wrapped WETH (not native ETH), not supported yet.'),
     note('pick a native-ETH / USDG v4 pool, or a v3 pool from the list.'),
   ]);
 }
@@ -1687,7 +1687,7 @@ export function msgPairPicker(n: number): string {
     '',
     'Provide liquidity with only one token. The position works like a passive limit order: you earn trading fees while waiting for the price to reach your target.',
     '',
-    n ? bold('Pick the pair you want :') : italic('Top pools failed to load — use "Search Your Own Pair".'),
+    n ? bold('Pick the pair you want :') : italic('Top pools failed to load. Use "Search Your Own Pair".'),
   ].join('\n');
 }
 
@@ -1721,7 +1721,7 @@ export function msgNoPools(baseLabel = 'WETH/USDG'): string {
 export function msgScreeningFailed(): string {
   return card(
     title('SCREENING'),
-    [note('could not reach the data sources — continuing without the audit.')],
+    [note('could not reach the data sources: continuing without the audit.')],
   );
 }
 
@@ -1917,7 +1917,7 @@ export function msgDisconnectConfirm(addr: string, openLp: number): string {
     '',
     `⚠️ ${bold('Warning :')}`,
     '• Your encrypted key will be permanently DELETED from this server.',
-    '• Your funds are not lost — but you will have to manage your LP positions yourself in the Robinhood/Uniswap app.',
+    '• Your funds are not lost, but you will have to manage your LP positions yourself in the Robinhood/Uniswap app.',
   ];
   if (openLp) {
     out.push(
@@ -1969,7 +1969,7 @@ export function msgClaimDone(id: string, label: string, txHash: string | null): 
     `✅ ${bold('Fees Harvested!')}`,
     '',
     `Position ${bold(`#${id}`)} → ${bold(label)} is now in your wallet.`,
-    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — no transaction was sent.')]),
+    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN: no transaction was sent.')]),
     '',
     note(nowWib()),
   ].join('\n');
@@ -2180,7 +2180,7 @@ export function msgCrash(kind: string, err: string): string {
       `😵 unexpected error (${bold(kind)}).`,
       '',
       note(`technical: ${firstLine}`),
-      note('the bot restarts automatically — funds and positions are safe on-chain.'),
+      note('the bot restarts automatically: funds and positions are safe on-chain.'),
     ],
     nowWib(),
   );
@@ -2192,7 +2192,7 @@ export function msgInvalidAmount(): string {
 
 /** A wizard or swap session expired (left too long). */
 export function msgSessionExpired(): string {
-  return card(`⌛ ${title('SESSION EXPIRED')}`, [note('the old session was closed — start again from the menu.')]);
+  return card(`⌛ ${title('SESSION EXPIRED')}`, [note('the old session was closed. Start again from the menu.')]);
 }
 
 export function msgOverLimit(maxLabel: string): string {
@@ -2238,7 +2238,7 @@ export function msgUnwrapConfirm(
     multi
       ? `All of it will be unwrapped back to each chain's native asset. One transaction per chain, no swap, no slippage.`
       : `All of it will be unwrapped back to native ${esc(native)}. One transaction, no swap, no slippage.`,
-    ...(dryRun ? ['', note('DRY RUN — no transaction will be sent.')] : []),
+    ...(dryRun ? ['', note('DRY RUN: no transaction will be sent.')] : []),
   ].join('\n');
 }
 
@@ -2247,7 +2247,7 @@ export function msgUnwrapDone(amount: string, txHash: string | null, wrapped = '
     `✅ ${bold('Unwrapped')}`,
     '',
     `${bold(amount)} ${esc(wrapped)} → native ${esc(native)}, now in your wallet.`,
-    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN — no transaction was sent.')]),
+    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN: no transaction was sent.')]),
     '',
     note(nowWib()),
   ].join('\n');
@@ -2341,7 +2341,7 @@ export function msgBridgeDone(o: {
     // Own line each, as <code>: a hash is copied, and a wrapped one copies broken.
     for (const h of o.txHashes) out.push(code(h));
   }
-  if (o.dryRun) out.push('', note('DRY RUN — no transaction was sent.'));
+  if (o.dryRun) out.push('', note('DRY RUN: no transaction was sent.'));
   out.push(
     '',
     'Funds usually arrive within seconds. Check /portfolio once the destination chain updates.',

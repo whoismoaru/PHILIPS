@@ -51,7 +51,7 @@ export async function swapTokenViaRelay(
       // here safe rather than fatal.
       const value = d.value ? BigInt(d.value) : 0n;
       if (value > 0n) {
-        throw new Error(`relay step unexpectedly requires ${value} native on a token sell — aborted for safety`);
+        throw new Error(`relay step unexpectedly requires ${value} native on a token sell: aborted for safety`);
       }
       const tx = await sendTxNonceSafe(wallet as ethers.Wallet, { to: d.to, data: d.data, value });
       const rc = await tx.wait();
@@ -231,10 +231,10 @@ async function swapViaUniswap(
     });
     minOut = (BigInt(q[0]) * BigInt(Math.floor((100 - slippagePct) * 100))) / 10000n;
   } catch (err) {
-    throw new Error(`quoter failed (${(err as Error).message.slice(0, 60)}) — swap cancelled to avoid minOut=0`);
+    throw new Error(`quoter failed (${(err as Error).message.slice(0, 60)}). Swap cancelled to avoid minOut=0`);
   }
   if (minOut <= 0n) {
-    throw new Error('quoter returned 0 — swap cancelled (sandwich protection)');
+    throw new Error('quoter returned 0. Swap cancelled (sandwich protection)');
   }
 
   const { router, params } = routerCall(ctx, wallet as unknown as ethers.Signer, {
@@ -669,7 +669,7 @@ export async function getBridgeQuote(
   }
   if (steps.length === 0) throw new Error('Relay returned no executable step for this route.');
   const outWei = BigInt(d?.currencyOut?.amount ?? '0');
-  if (outWei <= 0n) throw new Error('Relay quote returned zero output — route unusable right now.');
+  if (outWei <= 0n) throw new Error('Relay quote returned zero output: route unusable right now.');
   // Relay returns full precision (18 decimal places). Six is enough to decide on, and does
   // not fill a phone screen.
   const trim = (v: unknown, fallback: bigint): string =>
@@ -700,7 +700,7 @@ export async function executeBridge(
   const fresh = await getBridgeQuote(from, to, amountWei, opts);
   if (fresh.outWei < minOutWei) {
     throw new Error(
-      `Route moved: now ${fresh.outLabel}, below the confirmed minimum. Nothing was sent — try again.`,
+      `Route moved: now ${fresh.outLabel}, below the confirmed minimum. Nothing was sent. Try again.`,
     );
   }
   const txHashes: string[] = [];

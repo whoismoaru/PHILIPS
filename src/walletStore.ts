@@ -31,7 +31,7 @@ const TOMBSTONE = join(process.cwd(), 'data', 'wallet.disconnected');
 
 function passphrase(): string {
   const s = process.env.WALLET_SECRET || config.telegram.botToken;
-  if (!s) throw new Error('WALLET_SECRET / bot token is empty — cannot encrypt the keystore');
+  if (!s) throw new Error('WALLET_SECRET / bot token is empty: cannot encrypt the keystore');
   return `philips:${s}`;
 }
 

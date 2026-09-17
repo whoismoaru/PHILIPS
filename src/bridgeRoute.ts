@@ -141,7 +141,7 @@ export async function executeBridgeVia(
   // LI.FI: re-quote (target and spender are already pinned to the diamond in lifiBridgeQuote) and check minOut.
   const fresh = await lifiBridgeQuote(from, to, amountWei, assets);
   if (fresh.outWei < minOutWei) {
-    throw new Error(`Route moved: now ${fresh.outLabel}, below the confirmed minimum. Nothing was sent — try again.`);
+    throw new Error(`Route moved: now ${fresh.outLabel}, below the confirmed minimum. Nothing was sent. Try again.`);
   }
   const txHashes: string[] = [];
   const origin = assets.originCurrency ?? NATIVE;

@@ -159,7 +159,7 @@ async function sweepTokenToBase(
     const bal = total > keepFloor ? total - keepFloor : 0n;
     if (bal === 0n) break;
     if (bal === prev) {
-      notes.push(`${bal} token units left and not decreasing — swap stopped (needs a manual sweep).`);
+      notes.push(`${bal} token units left and not decreasing. Swap stopped (needs a manual sweep).`);
       break;
     }
     prev = bal;
@@ -191,7 +191,7 @@ async function sweepTokenToBase(
         const nowSell = nowBal > keepFloor ? nowBal - keepFloor : 0n;
         if (nowSell < bal) {
           landed = true;
-          notes.push(`↳ but the token left the wallet — the swap actually landed (orphaned tx). Recounting.`);
+          notes.push(`↳ but the token left the wallet: the swap actually landed (orphaned tx). Recounting.`);
           break;
         }
       }
@@ -1294,7 +1294,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     const ratio = mcPool / mcMarket;
     if (ratio > 1.25 || ratio < 0.8) {
       const x = ratio >= 1 ? ratio : 1 / ratio;
-      priceWarn = `this pool prices the token ${x.toFixed(1)}× the market (market ${explore.usdShort(mcMarket)}) — liquidity is thin, and the value and range above follow this pool, not the market.`;
+      priceWarn = `this pool prices the token ${x.toFixed(1)}× the market (market ${explore.usdShort(mcMarket)}): liquidity is thin, and the value and range above follow this pool, not the market.`;
     }
   }
   // A summary of the WHOLE ladder for a single leg's card. What the user deposited is a
@@ -2237,7 +2237,7 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
 
   const dec = wizardBase(flow).decimals;
   const usable = await usableFor(flow).catch(() => null);
-  if (usable === null) return ctx.reply(msg.msgError('amount', 'Balance read failed — type the amount instead.'), html);
+  if (usable === null) return ctx.reply(msg.msgError('amount', 'Balance read failed. Type the amount instead.'), html);
   if (usable <= 0n) {
     return ctx.reply(
       msg.msgError('amount', 'Nothing available to deposit on this side after the gas reserve.'),
@@ -2319,7 +2319,7 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean, silent = f
       legPlans
         .map((lp, i) => `  ${i + 1}. ${msg.fmtPct(lp.pctHigh)}…${msg.fmtPct(lp.pctLow)} · ${(w[i] * 100).toFixed(0)}% of capital`)
         .join('\n') +
-      `\n<i>Bigger size the lower the price — that is the buy-the-dip shape.</i>`;
+      `\n<i>Bigger size the lower the price: that is the buy-the-dip shape.</i>`;
   } else {
     flow.ladderPlans = undefined;
   }
@@ -2396,7 +2396,7 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean, silent =
       legs
         .map((l, i) => `  ${i + 1}. ${msg.fmtPct(l.pctHigh)}…${msg.fmtPct(l.pctLow)} · ${((Number(l.baseAmountWei) / Number(total)) * 100).toFixed(0)}% of capital`)
         .join('\n') +
-      `\n<i>Bigger size the lower the price — that is the buy-the-dip shape.</i>`;
+      `\n<i>Bigger size the lower the price: that is the buy-the-dip shape.</i>`;
   } else {
     flow.v4LadderLegs = undefined;
     const widthSpacings = rangePctToSpacings(flow.rangePct!, pk.tickSpacing);
@@ -2674,9 +2674,9 @@ const getFlow = (ctx: any): AddFlow | undefined => flows.get(ctx.from!.id);
 
 bot.action(/^pick:(\d+)$/, async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  if (!flow) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
   const sel = flow.pools[Number(ctx.match[1])];
-  if (!sel) return ctx.answerCbQuery('Invalid choice — start again with /add_lp.');
+  if (!sel) return ctx.answerCbQuery('Invalid choice. Start again with /add_lp.');
   // v4: supports a native-ETH base and USDG. Wrapped WETH (not native) is skipped — the
   // wallet holds native ETH rather than WETH, so it could not fund it.
   if (sel.protocol === 'v4') {
@@ -2704,7 +2704,7 @@ bot.action(/^pick:(\d+)$/, async (ctx) => {
 
 bot.action(/^rng:(\d+)$/, async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
   flow.rangePct = Number(ctx.match[1]);
   flow.plan = undefined;
   flow.ladderPlans = undefined;
@@ -2747,7 +2747,7 @@ async function renderLegStep(ctx: any, flow: AddFlow, edit: boolean) {
 
 bot.action(/^shape:(spot|bidask)$/, async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
   flow.shape = ctx.match[1] as 'spot' | 'bidask';
   flow.plan = undefined;
   flow.ladderPlans = undefined;
@@ -2762,7 +2762,7 @@ bot.action(/^shape:(spot|bidask)$/, async (ctx) => {
 
 bot.action(/^leg:(\d+)$/, async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
   flow.shape = 'bidask';
   flow.legs = Math.max(2, Math.min(69, Number(ctx.match[1])));
   flow.plan = undefined;
@@ -2775,7 +2775,7 @@ bot.action(/^leg:(\d+)$/, async (ctx) => {
 
 bot.action('pool:refresh', async (ctx: any) => {
   const flow = flows.get(ctx.from!.id);
-  if (!flow?.token) return ctx.answerCbQuery('Expired — paste the CA again.');
+  if (!flow?.token) return ctx.answerCbQuery('Expired. Paste the CA again.');
   await ctx.answerCbQuery('Re-reading pools…');
   // Refresh re-reads the POOLS, nothing else. The screening verdict from this same flow is
   // carried through: without it `pre` was undefined, the audit ran again, and every tap
@@ -2792,7 +2792,7 @@ bot.action('pool:refresh', async (ctx: any) => {
 
 bot.action('back:pool', async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  if (!flow) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
   flow.selected = undefined;
   flow.base = undefined;
   flow.fee = undefined;
@@ -2804,7 +2804,7 @@ bot.action('back:pool', async (ctx) => {
 
 bot.action('back:range', async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  if (!flow || flow.fee === undefined) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
   flow.rangePct = undefined;
   flow.plan = undefined;
   await ctx.answerCbQuery();
@@ -2814,14 +2814,14 @@ bot.action('back:range', async (ctx) => {
 // Buttons on cards sent before the shape step was removed still land somewhere sensible.
 bot.action('back:shape', async (ctx: any) => {
   const flow = flows.get(ctx.from!.id);
-  if (!flow) return ctx.answerCbQuery('Expired — start again by pasting the CA.');
+  if (!flow) return ctx.answerCbQuery('Expired. Start again by pasting the CA.');
   await ctx.answerCbQuery();
   return renderRangeStep(ctx, flow, true);
 });
 
 bot.action('back:legs', async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  if (!flow || flow.rangePct === undefined) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
   flow.plan = undefined;
   flow.ladderPlans = undefined;
   await ctx.answerCbQuery();
@@ -2833,7 +2833,7 @@ bot.action('back:legs', async (ctx) => {
 // pool is picked and the range is the first thing the owner actually chooses.
 bot.action('back:amount', async (ctx) => {
   const flow = getFlow(ctx);
-  if (!flow || flow.strategy === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+  if (!flow || flow.strategy === undefined) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
   flow.ethAmount = undefined;
   // The range is picked BEFORE the amount now, so stepping back here must leave it alone;
   // clearing it would drop the user into a flow with no range and no way to see that.
@@ -2852,7 +2852,7 @@ async function execAdd(ctx: any) {
   // --- v4 LADDER path (batched modifyLiquidities: N legs in 1 atomic tx) ---
   if (flow?.selected?.protocol === 'v4' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1) {
     if (!flow.ethAmount || flow.rangePct === undefined || !flow.v4LadderLegs?.length)
-      return ctx.answerCbQuery('Expired — start again with /add_lp.');
+      return ctx.answerCbQuery('Expired. Start again with /add_lp.');
     const { selected, ethAmount, chain } = flow;
     flows.delete(ctx.from!.id);
     await ctx.answerCbQuery('Processing…');
@@ -2937,7 +2937,7 @@ async function execAdd(ctx: any) {
   }
   // --- v4 path (open a single-sided ETH position in a v4 pool) ---
   if (flow?.selected?.protocol === 'v4') {
-    if (!flow.ethAmount || flow.rangePct === undefined) return ctx.answerCbQuery('Expired — start again with /add_lp.');
+    if (!flow.ethAmount || flow.rangePct === undefined) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
     const { selected, ethAmount, chain, rangePct } = flow;
     flows.delete(ctx.from!.id); // idempotency: a double-tap must not open twice
     await ctx.answerCbQuery('Processing…');
@@ -2955,7 +2955,7 @@ async function execAdd(ctx: any) {
         'add v4',
         () => v4PositionCount(cc),
         () => openPositionV4(cc, pk, selected.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: false }),
-        { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+        { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed: retrying…'), html)) },
       );
       if (r.tokenId) {
         const tokenAddr = r.baseIsCurrency0 ? pk.currency1 : pk.currency0;
@@ -3005,7 +3005,7 @@ async function execAdd(ctx: any) {
   // --- Bid-Ask LADDER path (v3, base side): mint N legs sharing a groupId ---
   if (flow?.shape === 'bidask' && (flow.legs ?? 1) > 1 && flow.strategy === 'base') {
     if (flow.fee === undefined || !flow.ethAmount || flow.rangePct === undefined)
-      return ctx.answerCbQuery('Expired — start again with /add_lp.');
+      return ctx.answerCbQuery('Expired. Start again with /add_lp.');
     flows.delete(ctx.from!.id);
     await ctx.answerCbQuery('Processing…');
     if (config.safety.dryRun) return void (await ctx.editMessageText(msg.msgDryRunAddDone(), html));
@@ -3069,7 +3069,7 @@ async function execAdd(ctx: any) {
     return;
   }
   if (!flow?.plan || flow.fee === undefined || !flow.ethAmount || flow.rangePct === undefined)
-    return ctx.answerCbQuery('Expired — start again with /add_lp.');
+    return ctx.answerCbQuery('Expired. Start again with /add_lp.');
   // Idempotency: the flow is deleted BEFORE execution (synchronously, before the first
   // await), so double-tapping Confirm cannot open two positions (and spend twice the ETH).
   // If the open fails the flow is already gone and the user simply runs /add again — safe.
@@ -3105,7 +3105,7 @@ async function execAdd(ctx: any) {
         const p2 = await planAddSingleSided(...args);
         return { ...(await executeAdd(p2, flow.token!, flow.fee!, ccAdd)), plan: p2 };
       },
-      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed: retrying…'), html)) },
     );
     store.add({
       tokenId,
@@ -3354,7 +3354,7 @@ async function buySafetyStep(ctx: any, flow: TSwapFlow, prog: { message_id: numb
       flow.tokenDec = Number(dec);
     } catch {
       tswapFlows.delete(ctx.from.id);
-      return editProgress(ctx, prog, msg.msgError('buy', 'Could not read token decimals — aborted (amounts could be off by 10^12).'));
+      return editProgress(ctx, prog, msg.msgError('buy', 'Could not read token decimals: aborted (amounts could be off by 10^12).'));
     }
   }
   if (flow.screenText === undefined) {
@@ -3497,7 +3497,7 @@ async function renderTokenHub(
     sym = String(sm);
     dec = Number(dc);
   } catch {
-    return editProgress(ctx, prog, msg.msgError('token', 'Could not read token decimals — aborted (amounts could be off by 10^12).'));
+    return editProgress(ctx, prog, msg.msgError('token', 'Could not read token decimals: aborted (amounts could be off by 10^12).'));
   }
 
   const [screened, balRes] = await Promise.allSettled([
@@ -3573,7 +3573,7 @@ async function renderTokenHub(
 bot.action(/^ca:refresh:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const ca = ethers.getAddress(ctx.match[1]);
   const h = hubs.get(ctx.from!.id);
-  if (!h || h.ca.toLowerCase() !== ca.toLowerCase()) return ctx.answerCbQuery('Expired — paste the CA again.');
+  if (!h || h.ca.toLowerCase() !== ca.toLowerCase()) return ctx.answerCbQuery('Expired. Paste the CA again.');
   await ctx.answerCbQuery('Refreshing…');
   // The 60-second cache is dropped first; otherwise this button just redraws the same
   // numbers and feels like it did nothing.
@@ -3587,7 +3587,7 @@ bot.action(/^ca:refresh:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
 bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const [, what, ca] = ctx.match as unknown as [string, 'add' | 'buy' | 'close' | 'sell', string];
   const h = hubs.get(ctx.from!.id);
-  if (!h || h.ca.toLowerCase() !== ca.toLowerCase()) return ctx.answerCbQuery('Expired — paste the CA again.');
+  if (!h || h.ca.toLowerCase() !== ca.toLowerCase()) return ctx.answerCbQuery('Expired. Paste the CA again.');
   const cc = getChain(h.chainKey);
   await ctx.answerCbQuery();
   const prog = ctx.callbackQuery?.message
@@ -3603,7 +3603,7 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   // button on an older card can still be tapped after the state has changed.
   if ((what === 'buy' || what === 'sell') && !swapTokenChains().some((c) => c.key === h.chainKey)) {
     return ctx.editMessageText(
-      msg.msgError(what === 'buy' ? 'buy' : 'sell', `${cc.label} has no bot swap route — only Add LP / Close LP are available there.`),
+      msg.msgError(what === 'buy' ? 'buy' : 'sell', `${cc.label} has no bot swap route: only Add LP / Close LP are available there.`),
       html,
     );
   }
@@ -3628,7 +3628,7 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
     const bal: bigint = await new ethers.Contract(ca, ERC20_ABI, cc.provider)
       .balanceOf(cc.wallet.address)
       .catch(() => 0n);
-    if (bal <= 0n) return ctx.editMessageText(msg.msgError('sell', 'Balance is 0 — nothing to sell.'), html);
+    if (bal <= 0n) return ctx.editMessageText(msg.msgError('sell', 'Balance is 0: nothing to sell.'), html);
     const flow: TSwapFlow = {
       chainKey: h.chainKey,
       buy: false,
@@ -3712,7 +3712,7 @@ bot.action(/^hubchn:(\w+):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
 /** Back to the hub from any flow — re-rendered from memory (zero RPC). */
 bot.action('hub:back', async (ctx) => {
   const h = hubs.get(ctx.from!.id);
-  if (!h) return ctx.answerCbQuery('Expired — paste the CA again.');
+  if (!h) return ctx.answerCbQuery('Expired. Paste the CA again.');
   flows.delete(ctx.from!.id);
   tswapFlows.delete(ctx.from!.id);
   await ctx.answerCbQuery();
@@ -3753,7 +3753,7 @@ bot.command('buy', cmdBuy);
 
 bot.action(/^buychain:(\w+)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.token) return ctx.answerCbQuery('Expired — start again with /buy.');
+  if (!flow?.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
   if (!CHAINS[ctx.match[1]]) return ctx.answerCbQuery('Chain unavailable.');
   flow.chainKey = ctx.match[1];
   flow.screenText = undefined; // ganti chain → screening ulang
@@ -3763,14 +3763,14 @@ bot.action(/^buychain:(\w+)$/, async (ctx) => {
 
 bot.action('buy:go', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.token) return ctx.answerCbQuery('Expired — start again with /buy.');
+  if (!flow?.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
   await ctx.answerCbQuery();
   await buyBaseStep(ctx, flow, true);
 });
 
 bot.action(/^buybase:(weth|usdg|usdt)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.token) return ctx.answerCbQuery('Expired — start again with /buy.');
+  if (!flow?.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
   flow.base = baseOf(CHAINS[flow.chainKey]!, ctx.match[1] as BaseKind);
   await ctx.answerCbQuery();
   await buySizeStep(ctx, flow, true);
@@ -3779,7 +3779,7 @@ bot.action(/^buybase:(weth|usdg|usdt)$/, async (ctx) => {
 // The /buy Back button.
 bot.action('buyback:ca', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow) return ctx.answerCbQuery('Expired — start again with /buy.');
+  if (!flow) return ctx.answerCbQuery('Expired. Start again with /buy.');
   flow.awaitingCA = true;
   flow.screenText = undefined;
   await ctx.answerCbQuery();
@@ -3787,26 +3787,26 @@ bot.action('buyback:ca', async (ctx) => {
 });
 bot.action('buyback:chain', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.chainOptions?.length) return ctx.answerCbQuery('Expired — start again with /buy.');
+  if (!flow?.chainOptions?.length) return ctx.answerCbQuery('Expired. Start again with /buy.');
   await ctx.answerCbQuery();
   await buyChainStep(ctx, flow, flow.chainOptions, true);
 });
 bot.action('buyback:safety', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.token) return ctx.answerCbQuery('Expired — start again with /buy.');
+  if (!flow?.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
   await ctx.answerCbQuery();
   await buySafetyStep(ctx, flow, null, true);
 });
 bot.action('buyback:base', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.token) return ctx.answerCbQuery('Expired — start again with /buy.');
+  if (!flow?.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
   await ctx.answerCbQuery();
   await buyBaseStep(ctx, flow, true);
 });
 /** A percentage of the balance to a buy amount. The source is the USABLE balance (gas already set aside). */
 bot.action(/^buypct:(\d+)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired — start again with /buy.');
+  if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
   const cc = CHAINS[flow.chainKey]!;
   const base = flow.base!;
   const sym = base.wrappable ? cc.nativeSymbol : base.symbol;
@@ -3831,7 +3831,7 @@ async function buyFromPct(ctx: any, flow: TSwapFlow, pct: number): Promise<unkno
 
 bot.action('buyback:size', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired — start again with /buy.');
+  if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
   await ctx.answerCbQuery();
   await buySizeStep(ctx, flow, true);
 });
@@ -4137,7 +4137,7 @@ bot.action('sell:start', async (ctx) => {
 
 bot.action(/^sellpick:(\d+)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.sellList) return ctx.answerCbQuery('Expired — start again with /sell.');
+  if (!flow?.sellList) return ctx.answerCbQuery('Expired. Start again with /sell.');
   const h = flow.sellList[Number(ctx.match[1])];
   if (h?.chainKey) flow.chainKey = h.chainKey; // execution MUST happen on that token's chain
   if (!h) return ctx.answerCbQuery('Invalid choice.');
@@ -4153,7 +4153,7 @@ bot.action(/^sellpick:(\d+)$/, async (ctx) => {
 
 bot.action(/^sellpct:(\d+|custom)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.token || flow.tokenBalWei === undefined) return ctx.answerCbQuery('Expired — start again with /sell.');
+  if (!flow?.token || flow.tokenBalWei === undefined) return ctx.answerCbQuery('Expired. Start again with /sell.');
   if (ctx.match[1] === 'custom') {
     await ctx.answerCbQuery();
     // The holding line stays: without it the prompt asks "how much" with the balance
@@ -4173,7 +4173,7 @@ bot.action(/^sellpct:(\d+|custom)$/, async (ctx) => {
 // The /sell Back button.
 bot.action('sellback:list', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.sellList) return ctx.answerCbQuery('Expired — start again with /sell.');
+  if (!flow?.sellList) return ctx.answerCbQuery('Expired. Start again with /sell.');
   flow.awaitingAmount = false;
   await ctx.answerCbQuery();
   await ctx.editMessageText(msg.msgSellList(flow.sellList.length), {
@@ -4183,7 +4183,7 @@ bot.action('sellback:list', async (ctx) => {
 });
 bot.action('sellback:amount', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.token) return ctx.answerCbQuery('Expired — start again with /sell.');
+  if (!flow?.token) return ctx.answerCbQuery('Expired. Start again with /sell.');
   await ctx.answerCbQuery();
   await sellAmountStep(ctx, flow, true);
 });
@@ -4218,7 +4218,7 @@ async function tswapQuoteConfirm(
         // which only displays it.
         msg.msgError(
           'swap',
-          `Above the ${capLabelFor(cap, base.symbol)}/tx limit — lower the amount, or raise ${
+          `Above the ${capLabelFor(cap, base.symbol)}/tx limit. Lower the amount, or raise ${
             isStableBase(base.kind) ? 'MAX_STABLE_PER_TX' : 'MAX_ETH_PER_TX'
           } in .env ('off' removes it) and restart.`,
         ),
@@ -4391,7 +4391,7 @@ async function execTSwap(ctx: any) {
   const uid = ctx.from!.id;
   const flow = tswapFlows.get(uid);
   if (!flow || flow.amountWei === undefined || !flow.base || !flow.token) {
-    return ctx.answerCbQuery('Expired — start again with /buy or /sell.');
+    return ctx.answerCbQuery('Expired. Start again with /buy or /sell.');
   }
   // The numbers on a Preview card have a shelf life. Without this limit, a confirm tapped
   // an hour later executes at that moment's price — the user agreed to different figures.
@@ -4399,7 +4399,7 @@ async function execTSwap(ctx: any) {
     tswapFlows.delete(uid);
     await ctx.answerCbQuery('Quote expired.');
     return ctx.reply(
-      msg.msgError('swap', 'The quote is older than 2 minutes — run /buy or /sell again for fresh numbers.'),
+      msg.msgError('swap', 'The quote is older than 2 minutes. Run /buy or /sell again for fresh numbers.'),
       html,
     );
   }
@@ -4491,7 +4491,7 @@ async function execTSwap(ctx: any) {
       'swap',
       probe,
       attempt,
-      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed: retrying…'), html)) },
     );
     // Gas actually burned, and how far the fill landed from the quote. Both are
     // measured after the fact -- the quote's own fee estimate is a guess, and slippage
@@ -4648,7 +4648,7 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
     }
     if (!p) throw new Error('All ladder legs already closed on-chain.');
     const base = detectBase(cc, p.token0, p.token1);
-    if (!base) throw new Error('This pool is not paired with WETH/USDG/USDT — close manually at app.uniswap.org.');
+    if (!base) throw new Error('This pool is not paired with WETH/USDG/USDT. Close manually at app.uniswap.org.');
     const otherAddr = base.address.toLowerCase() === p.token0.toLowerCase() ? p.token1 : p.token0;
     const otherC = new ethers.Contract(otherAddr, ERC20_ABI, cc.wallet);
     const baseC = base.wrappable ? cc.weth : new ethers.Contract(base.address, ERC20_ABI, cc.wallet);
@@ -4669,7 +4669,7 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
     // on 28 Aug 2026.
     if (!notes.some((n) => n.startsWith('Batch close ') && n.includes('tx '))) {
       throw new Error(
-        'No withdrawal transaction was sent, so nothing was closed. Your positions are untouched — try again.',
+        'No withdrawal transaction was sent, so nothing was closed. Your positions are untouched. Try again.',
       );
     }
     await sleep(1500);
@@ -4911,7 +4911,7 @@ async function execCloseV3(ctx: any) {
       'close',
       async () => BigInt((await ccClose.positionManager.positions(tokenId)).liquidity),
       () => stopAndCashOut(tokenId, ccClose),
-      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed: retrying…'), html)) },
     );
     // resultEthWei = 0 is a backfill PLACEHOLDER in the journal (excluded from PnL). A
     // genuinely unmeasurable result must be undefined, not 0.
@@ -4965,7 +4965,7 @@ async function stopAndCashOut(
   const base = detectBase(cc, p.token0, p.token1);
   if (!base) {
     throw new Error(
-      'This pool is not paired with WETH/USDG/USDT — the bot cannot cash out both sides. Close it manually at app.uniswap.org.',
+      'This pool is not paired with WETH/USDG/USDT: the bot cannot cash out both sides. Close it manually at app.uniswap.org.',
     );
   }
   const otherAddr = base.address.toLowerCase() === p.token0.toLowerCase() ? p.token1 : p.token0;
@@ -5043,7 +5043,7 @@ async function stopAndCashOut(
           notes.push(`Unwrap ${msg.fmtEth(wethBal - after)} WETH → ETH (confirmed by balance)`);
         } else {
           console.error(`[unwrap] failed during close #${tokenId}: ${(e as Error).message.slice(0, 160)}`);
-          notes.push('Unwrap failed — the WETH stays in your wallet (use /unwrap). Your result is unaffected.');
+          notes.push('Unwrap failed: the WETH stays in your wallet (use /unwrap). Your result is unaffected.');
         }
       }
     }
@@ -5056,7 +5056,7 @@ async function stopAndCashOut(
   }
 
   if (sw.leftover) {
-    notes.push('⚠️ Some tokens are left over — the monitor will retry automatically.');
+    notes.push('⚠️ Some tokens are left over: the monitor will retry automatically.');
   }
 
   // The unit follows the CHAIN rather than a hardcoded 'ETH': a close on BSC receives BNB
@@ -5193,7 +5193,7 @@ async function execCloseV4(ctx: any) {
       'close v4',
       () => v4Liquidity(cc, tokenId),
       () => closePositionV4(tokenId, cc, { dryRun: config.safety.dryRun }),
-      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed — retrying…'), html)) },
+      { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed: retrying…'), html)) },
     );
     if (!r.dryRun) {
       // Journal before we stop tracking it — without this /history and /pnl are blind to v4,
@@ -5512,7 +5512,7 @@ bot.on(message('text'), async (ctx) => {
 
 bot.catch((err, ctx) => {
   // The button spins until it times out if an error occurs before answerCbQuery.
-  if (ctx.callbackQuery) ctx.answerCbQuery('Failed — see the message.').catch(() => {});
+  if (ctx.callbackQuery) ctx.answerCbQuery('Failed. See the message.').catch(() => {});
   console.error('Bot error:', err);
   ctx.reply?.(msg.msgError('bot', (err as Error).message), html).catch(() => {});
 });
@@ -5649,7 +5649,7 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
       // saying "connect your wallet". Warn once per boot rather than staying silent.
       if (!process.env.WALLET_SECRET) {
         console.warn(
-          '[wallet] WARNING: WALLET_SECRET is not set — the keystore is encrypted with the bot token. ' +
+          '[wallet] WARNING: WALLET_SECRET is not set: the keystore is encrypted with the bot token. ' +
             'Rotating the token will make the stored key permanently unreadable. ' +
             'To fix: set WALLET_SECRET, restart, then reconnect the wallet via /settings.',
         );
@@ -5670,7 +5670,7 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
         const badToken = code === 401 || (code === 404 && /getMe/i.test(JSON.stringify((err as any)?.on ?? '')));
         if (badToken) {
           console.error(
-            'TELEGRAM_BOT_TOKEN is not valid — Telegram does not recognise it.\n' +
+            'TELEGRAM_BOT_TOKEN is not valid: Telegram does not recognise it.\n' +
               '  Open @BotFather, send /mybots, pick your bot, then "API Token".\n' +
               '  Copy the whole line (it looks like 1234567890:AA...) into .env and restart.',
           );
@@ -5679,7 +5679,7 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
         }
 
         console.error(
-          `Launch failed (attempt ${attempt}/${maxTries})${is409 ? ' [409 — another instance is still polling]' : ''}:`,
+          `Launch failed (attempt ${attempt}/${maxTries})${is409 ? ' [409: another instance is still polling]' : ''}:`,
           text.slice(0, 200),
         );
         if (attempt >= maxTries) {
@@ -5717,7 +5717,7 @@ function startWatchdog() {
       console.error(`[watchdog] getMe failed ${fails}/${MAX_FAILS}: ${(e as Error).message.slice(0, 80)}`);
       if (fails >= MAX_FAILS) {
         console.error('[watchdog] Telegram is unreachable, restarting through systemd.');
-        await notifyCrash('watchdog', 'long-poll ngadat — restart otomatis').catch(() => {});
+        await notifyCrash('watchdog', 'long-poll ngadat. Restart otomatis').catch(() => {});
         setTimeout(() => process.exit(1), 2000).unref();
       }
     }
