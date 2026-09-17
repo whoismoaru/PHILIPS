@@ -5106,7 +5106,9 @@ async function v4ChainOf(tokenId: string): Promise<ReturnType<typeof getChain> |
 
 bot.action(/^posv4:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
-  const cc = (await v4ChainOf(ctx.match[1])) ?? getChain();
+  // Same rule as the close path: no chain means no position, not "try the active chain".
+  const cc = await v4ChainOf(ctx.match[1]);
+  if (!cc) return ctx.editMessageText(msg.msgAlreadyClosed(ctx.match[1]), html).catch(() => {});
   try {
     const list = await listPositionsV4(cc);
     const p = list.find((x) => x.tokenId === ctx.match[1]);
@@ -5145,9 +5147,22 @@ async function execCloseV4(ctx: any) {
   if (closeLocked(key)) return ctx.answerCbQuery('Processing…');
   closingInFlight.set(key, Date.now());
   // The POSITION's chain, never the default one. With getChain() a BSC position was
-  // closed against Robinhood's PositionManager, which answers NOT_MINTED — reported as a
+  // closed against Robinhood's PositionManager, which answers NOT_MINTED, reported as a
   // failed close for a position that had not been touched at all.
-  const cc = (await v4ChainOf(tokenId)) ?? getChain();
+  //
+  // And NO fallback to the active chain. v4ChainOf already searched every v4 chain for a
+  // position this wallet owns; undefined is its answer that there is none, so falling back
+  // meant re-running the close against a DIFFERENT chain's token of the same number. On
+  // 17 Sep 2026 a stale card for an Arc ladder (#157580/#157581, closed an hour earlier)
+  // was tapped again and the close ran against Robinhood, where those ids belong to
+  // strangers. The ownership check stopped it -- but had that number been one of ours on
+  // the active chain, the bot would have closed an unrelated position instead.
+  const cc = await v4ChainOf(tokenId);
+  if (!cc) {
+    closingInFlight.delete(key);
+    v4store.removeV4(tokenId);
+    return ctx.editMessageText(msg.msgAlreadyClosed(tokenId), html).catch(() => ctx.reply(msg.msgAlreadyClosed(tokenId), html));
+  }
   const tracked = v4store.getV4(tokenId); // captured BEFORE removeV4
   // The base is read from the poolKey BEFORE the close (after the burn, pool info is gone).
   const trackedBase = await getPoolKeyV4(cc, tokenId)

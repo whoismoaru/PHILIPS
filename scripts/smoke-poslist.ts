@@ -47,7 +47,9 @@ for (const [name, pattern] of [
 for (const [name, pattern] of [
   // The close handler became a named executor (reused by Close All), so the anchor is
   // the function rather than its registration line.
-  ['close v4', /async function execCloseV4\(ctx: any\) \{[\s\S]{0,900}?v4ChainOf\(tokenId\)/],
+  // The window is generous on purpose: it exists to prove the chain comes from the
+  // POSITION, not to police how much explanation sits above that line.
+  ['close v4', /async function execCloseV4\(ctx: any\) \{[\s\S]{0,2500}?v4ChainOf\(tokenId\)/],
   ['v4 card refresh', /posv4:\(\\d\+\)\$\/[\s\S]{0,200}?v4ChainOf\(ctx\.match\[1\]\)/],
   ['detail v4', /Object\.values\(CHAINS\)\.filter\(\(x\) => v4Supported\(x\)\)/],
 ] as const)
