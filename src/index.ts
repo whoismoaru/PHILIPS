@@ -1523,8 +1523,12 @@ function aprLabel(pct: number | null | undefined): string {
  * WETH' on a volatile one. The dollar sign is only honest where the unit really is a
  * dollar -- putting it in front of an ETH figure would state a price nobody quoted.
  */
-function investedLabel(amount: number, symbol: string, stable: boolean, decimals: number): string {
-  const n = amount.toFixed(decimals >= 18 ? 4 : 2);
+function investedLabel(amount: number, symbol: string, stable: boolean): string {
+  // Precision follows what the number MEANS, not how many decimals its token happens to
+  // carry. Keying on the token made the same dollar figure read "$197.30" on Robinhood
+  // (USDG, 6 dec) and "$398.7457" on BSC (USDT, 18 dec) -- the same card, two formats,
+  // for no reason the owner can see. Dollars get 2 places; a volatile base keeps 4.
+  const n = amount.toFixed(stable ? 2 : 4);
   return stable ? `$${n} ${symbol}` : `${n} ${symbol}`;
 }
 
@@ -1576,6 +1580,7 @@ type PosRow = {
   natSym?: string; // this position's chain native symbol; the total is only valid when they all match
   groupId?: string | null; // for a ladder, the leg rows are merged into one
   legShape?: string | null; // 'bidask' | 'spot'
+  legCount?: number | null; // legs in the ladder this row stands for; drawn as a badge
 };
 
 /** Merge one ladder group's leg rows into a SINGLE aggregate row (mutates the array). */
@@ -1591,9 +1596,14 @@ function collapseLadderRows(rows: PosRow[]): void {
     const sumWethEq = legs.reduce((s, r) => s + r.wethEq, 0);
     const wsum = legs.reduce((s, r) => s + r.wethEq, 0) || 1;
     const pct = legs.reduce((s, r) => s + (r.pnlPct ?? 0) * r.wethEq, 0) / wsum;
-    base.pair = `${base.pair}  ◣×${legs.length}`;
+    // The badge is its OWN field, never glued into the pair string. Appended to `pair` it
+    // went through posPair(), which splits on '/' and rebuilds TOKEN/BASE: whether the
+    // badge survived depended on which side the token sorted to. On BSC (token second) it
+    // came out inside the name as "天才  ◣×3/USDT"; on Robinhood (token first) it was
+    // dropped silently and the ladder looked like a single position.
+    base.legCount = legs.length;
     base.investNum = sumInvest;
-    base.investLabel = investedLabel(sumInvest, base.investUnit ?? '', !!base.investStable, sumInvest >= 1 ? 18 : 6).trim();
+    base.investLabel = investedLabel(sumInvest, base.investUnit ?? '', !!base.investStable).trim();
     base.pnlUsd = sumPnlUsd;
     base.pnlPct = pnlVals.length ? pct : null;
     base.wethEq = sumWethEq;
@@ -1687,7 +1697,7 @@ async function cmdPositions(ctx: any, edit = false) {
         // chain's label would be wrong for any position that is not on it.
         chain: rcc.label,
         protocol: 'V3',
-        investLabel: investedLabel(investNum, d.baseSymbol, isStableBase(d.baseKind), dec),
+        investLabel: investedLabel(investNum, d.baseSymbol, isStableBase(d.baseKind)),
         investNum,
         investUnit: d.baseSymbol,
         investStable: isStableBase(d.baseKind),
@@ -1795,7 +1805,7 @@ async function cmdPositions(ctx: any, edit = false) {
       pair: `${p.sym0} / ${p.sym1}`,
       protocol: 'V4',
       chain: pcc.label,
-      investLabel: investedLabel(investNum, sym, p.base === 'USDG', dec),
+      investLabel: investedLabel(investNum, sym, p.base === 'USDG'),
       investNum,
       investUnit: sym,
       investStable: p.base === 'USDG',

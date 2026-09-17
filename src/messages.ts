@@ -1321,6 +1321,7 @@ export function msgPositionsList(opts: {
     mcRange?: string | null; // '$1.68M ⇄ $165.5K / now $1.70M'
     feesLabel?: string | null;
     feesUsdLabel?: string | null; // fees in USD, falling back to feesLabel when the price cannot be read
+    legCount?: number | null; // a ladder's leg count, drawn as a badge beside the pair
     strategy?: string | null; // always the base side; kept for older callers
     baseSymbol?: string | null; // the asset DEPOSITED, used for the side label
     converted?: boolean; // the price has crossed the ENTIRE range, so the position is 100% the other asset
@@ -1363,7 +1364,9 @@ export function msgPositionsList(opts: {
       `Status: ${esc(status)}, ${esc(r.age)}`,
     ];
     return [
-      `${r.inRange ? '🟢' : '🔴'} ${bold(`$${pair}`)} | #${esc(r.id)}${r.protocol ? ` (${esc(r.protocol)})` : ''}`,
+      // The badge sits AFTER the pair, outside the bold, and is never part of the name:
+      // it describes the position, not the token.
+      `${r.inRange ? '🟢' : '🔴'} ${bold(`$${pair}`)}${r.legCount && r.legCount > 1 ? ` ◣×${esc(r.legCount)}` : ''} | #${esc(r.id)}${r.protocol ? ` (${esc(r.protocol)})` : ''}`,
       ...fields.map((f, i) => `${i === fields.length - 1 ? '└' : '├'} ${f}`),
     ].join('\n');
   });

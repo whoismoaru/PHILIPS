@@ -53,8 +53,12 @@ console.log('smoke-pnlaudit OK');
 const me = journal.currentWallet();
 if (me) {
   const foreign = (xs: Array<{ wallet?: string }>) => xs.filter((e) => e.wallet !== me).length;
-  assert.equal(foreign(journal.readMine(999)), 0, 'readMine leaks another wallet');
-  assert.equal(journal.statsFor(0).count, journal.readMine(999).length, 'cakupan /pnl ≠ cakupan riwayat');
+  // The limit has to sit ABOVE the journal, or this compares a truncated read with a full
+  // count and fails on size alone: at 1019 entries the old 999 made a healthy journal look
+  // like a coverage leak.
+  const semua = journal.statsFor(0).count + 1000;
+  assert.equal(foreign(journal.readMine(semua)), 0, 'readMine leaks another wallet');
+  assert.equal(journal.statsFor(0).count, journal.readMine(semua).length, 'cakupan /pnl ≠ cakupan riwayat');
 
   // Any reader touching money or showing history MUST go through readMine.
   for (const [file, pattern] of [
