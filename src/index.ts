@@ -1272,6 +1272,28 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
     const tokenAddr = [p.poolKey.currency0, p.poolKey.currency1].find((a) => !isEth(a) && !isUsdg(a));
     const mcNow = tokenAddr ? await explore.tokenMarketCap(cc, tokenAddr).catch(() => null) : null;
     mcMarket = mcNow;
+    // RECOVER a missing entry market cap, exactly rather than by guessing.
+    //
+    // entryMcap is read once, when the position opens -- from sources that frequently do
+    // not carry a token in its first minutes (DexScreener had NO BSC pair for NEWTON at
+    // all on 18 Sep 2026; only GMGN did). One miss there and the Range row was gone from
+    // /positions for that position's entire life.
+    //
+    // The tick delta since entry IS the price ratio since entry, so the entry value can be
+    // computed back from the current one: entryMcap = mcNow / ratio(currentTick). mcNow is
+    // already in hand here, so this costs nothing, and it is stored so the list row -- which
+    // has no market cap of its own -- picks it up too. Every leg of a ladder shares one
+    // entry, so the whole group is repaired at once.
+    if (tracked && !tracked.entryMcap && tracked.entryTick !== undefined && mcNow !== null && p.currentTick !== null) {
+      const sgn = tracked.baseIsCurrency0 ? -1 : 1;
+      const ratio = Math.pow(1.0001, sgn * (p.currentTick - tracked.entryTick));
+      const pulih = ratio > 0 ? mcNow / ratio : null;
+      if (pulih !== null && Number.isFinite(pulih) && pulih > 0) {
+        const kena = tracked.groupId ? v4store.groupV4(tracked.groupId) : [tracked];
+        for (const leg of kena) v4store.updateV4(leg.tokenId, { entryMcap: pulih });
+        tracked.entryMcap = pulih;
+      }
+    }
     // The mcap bounds are PINNED to entryMcap plus the range % from entry, so they stay
     // still. mcNow is shown as "now" (a live reference). Falls back to live when no
     // entry value is stored.
