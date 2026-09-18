@@ -771,6 +771,20 @@ const mcapCache = new Map<string, { t: number; v: number | null }>();
 // pool price it reads on every refresh, so this cache only serves the fallback path and
 // token exploration -- where two minutes is too stale for a fast-moving token.
 const MCAP_TTL_MS = 30_000;
+/**
+ * A FAILED lookup is held for far less time than a good one.
+ *
+ * Both used to share the 30 s TTL, and the entry market cap is read once, at open, and
+ * stored forever. So a miss during the audit card (a pool seconds old, DexScreener not
+ * indexed yet) was replayed from cache when the position opened moments later -- without
+ * even retrying -- and that position carried `entryMcap: null` for its whole life, with
+ * no Range row on any card. Seen on BSC #1311649, 18 Sep 2026: the same token priced fine
+ * at $388K one minute later.
+ *
+ * It is not zero: a token DexScreener genuinely does not carry would otherwise be
+ * re-fetched on every card refresh.
+ */
+const MCAP_MISS_TTL_MS = 3_000;
 
 /**
  * A token's market cap from DexScreener. null means unread -- never 0, which reads as the
@@ -780,7 +794,7 @@ const MCAP_TTL_MS = 30_000;
 export async function tokenMarketCap(ctx: ChainCtx, token: string): Promise<number | null> {
   const key = `${ctx.dexKey}:${token.toLowerCase()}`;
   const hit = mcapCache.get(key);
-  if (hit && Date.now() - hit.t < MCAP_TTL_MS) return hit.v;
+  if (hit && Date.now() - hit.t < (hit.v === null ? MCAP_MISS_TTL_MS : MCAP_TTL_MS)) return hit.v;
   let v: number | null = null;
   try {
     const res = await fetch(`${DEXSCREENER_TOKENS}/${token}`, { signal: AbortSignal.timeout(10_000) });
