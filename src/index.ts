@@ -30,6 +30,7 @@ import { provider, ERC20_ABI, EXPLORER_HEADERS } from './chain.js';
 import { retryOnce } from './retry.js';
 import * as walletStore from './walletStore.js';
 import {
+  v3StillOpen,
   planAddSingleSided,
   planLadderSingleSided,
   ladderWeights,
@@ -4799,6 +4800,15 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
       totalOut = baseAfter > baseBefore ? baseAfter - baseBefore : sw.baseOut;
     }
 
+    // PROVE the burn, exactly as the single-position and v4 paths do. A ladder is where it
+    // matters most: the legs are closed together, so a silent failure orphans all of them.
+    const aliveLegsV3 = await v3StillOpen(cc, legs.map((l) => l.tokenId));
+    if (aliveLegsV3.length > 0) {
+      throw new Error(
+        `The close did NOT take effect: ${aliveLegsV3.length} of ${legs.length} legs still hold liquidity on-chain (#${aliveLegsV3.join(', #')}), ` +
+          `so the ladder is still yours and still tracked. Try again.`,
+      );
+    }
     // Split the proceeds proportionally to each leg's capital, so the per-leg PnL journal
     // still makes sense.
     const totalInit = legs.reduce((s, l) => s + BigInt(l.initialWethWei || '0'), 0n);
@@ -5026,6 +5036,15 @@ async function execCloseV3(ctx: any) {
       () => stopAndCashOut(tokenId, ccClose),
       { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed: retrying…'), html)) },
     );
+    // PROVE the close before journalling or dropping it. Same rule as the v4 paths: a
+    // function that returned is not a position that closed.
+    const aliveV3 = await v3StillOpen(ccClose, [tokenId]);
+    if (aliveV3.length > 0) {
+      throw new Error(
+        `The close did NOT take effect: position #${tokenId} still holds liquidity on-chain, so it is still yours and still tracked. ` +
+          `The transaction reverted after simulating cleanly, which usually means the price moved past the close's own price floor. Try again.`,
+      );
+    }
     // resultEthWei = 0 is a backfill PLACEHOLDER in the journal (excluded from PnL). A
     // genuinely unmeasurable result must be undefined, not 0.
     finalizeClose(tokenId, {

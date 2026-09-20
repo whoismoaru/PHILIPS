@@ -742,6 +742,33 @@ export type PositionInfo = {
 };
 
 /** Every LP position the bot's wallet holds (per chain). */
+/**
+ * Prove a v3 close actually happened, on-chain, before anything is journalled or dropped.
+ *
+ * The v4 twin of this (v4StillOpen) exists because on 20 Sep 2026 a BSC v4 close reported
+ * "✅ POSITION CLOSED" for a transaction that had REVERTED, then untracked the position
+ * while it was still alive and still holding liquidity. The v3 path had exactly the same
+ * shape: finalizeClose ran because stopAndCashOut RETURNED, and returning is not evidence.
+ *
+ * Only LIQUIDITY STILL PRESENT counts as proof of failure. A burned position makes
+ * positions(tokenId) revert, and so does a dead RPC, so "unreadable" cannot be told apart
+ * from "successfully closed" and must never decide anything. Unreadable therefore changes
+ * nothing and the close proceeds exactly as before, which keeps this strictly additive:
+ * it can only catch the proven failure, never invent a new one.
+ */
+export async function v3StillOpen(ctx: ChainCtx, tokenIds: string[]): Promise<string[]> {
+  const reads = await Promise.all(
+    tokenIds.map(async (id) => {
+      try {
+        return { id, liq: BigInt((await ctx.positionManager.positions(id)).liquidity) };
+      } catch {
+        return { id, liq: -1n };
+      }
+    }),
+  );
+  return reads.filter((r) => r.liq > 0n).map((r) => r.id);
+}
+
 export async function listPositions(ctx: ChainCtx = getChain()): Promise<PositionInfo[]> {
   const { positionManager, wallet } = ctx;
   const n: bigint = await positionManager.balanceOf(wallet.address);
