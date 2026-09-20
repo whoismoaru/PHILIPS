@@ -9,6 +9,11 @@ perbaikan.md
 FLOW.md
 scripts/*
 !scripts/smoke*.ts
+# Recorded API payloads the smoke tests run against. They MUST be tracked: a guard that
+# reads a fixture missing from a fresh clone fails for a reason that has nothing to do
+# with the code it guards.
+!scripts/fixtures/
+!scripts/fixtures/*.json
 docs/
 
 # Salinan .env (backup sebelum diedit) — isinya PRIVATE_KEY & WALLET_SECRET.

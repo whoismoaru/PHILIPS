@@ -1509,6 +1509,78 @@ export function msgPoolStep(
   return out.join('\n');
 }
 
+/**
+ * The Solana token card: market data and the DLMM pools we could actually use.
+ *
+ * Every figure arrives pre-formatted, exactly as the v3/v4 pool card above takes its
+ * strings. That is not laziness, it is what keeps aprLabel's cap in ONE place: the caller
+ * already owns that formatting, and a second copy here is how "~373,403,973%" reached a
+ * card in the first place.
+ *
+ * The three counts at the bottom carry the whole point of the card. Filtering to DLMM
+ * discards live pools, so a token with none of ours is a token we cannot serve YET, not a
+ * token that does not exist. Saying "not found" there would be a lie the owner would act
+ * on.
+ */
+export function msgSolToken(opts: {
+  symbol: string;
+  name: string;
+  ca: string;
+  rows: Array<[string, string]>;
+  pools: Array<{ baseSymbol: string; binStep: string; fee: string; tvl: string; vol: string; apr: string }>;
+  otherVenueCount: number;
+  offBaseCount: number;
+  chainReadSkipped: boolean;
+  dryRun?: boolean;
+}): string {
+  const out: string[] = [];
+  // bold() and italic() escape their own argument. Wrapping esc() around them turns
+  // AT&T into "AT&amp;amp;T", which is the exact bug that guard smoke-doubleescape exists
+  // for, so the raw value goes in here.
+  const sym = opts.symbol.replace(/^\$+/, '');
+  // No blank line pushed after the header: card() inserts one itself, and two in a row
+  // renders as a visible gap in Telegram.
+  out.push(`⚪ ${bold(`$${sym}`)} | ${esc(opts.name)} ${italic('(Solana)')}`);
+  const w = Math.max(...opts.rows.map(([k]) => k.length));
+  out.push(`<pre>${opts.rows.map(([k, v]) => pre(`${k.padEnd(w)} : ${v}`)).join('\n')}</pre>`);
+  out.push('');
+
+  if (opts.pools.length > 0) {
+    out.push(bold('DLMM POOLS :'));
+    opts.pools.forEach((p, i) => {
+      out.push(`${i + 1}. ${italic(`(${p.baseSymbol}, bin ${p.binStep}, fee ${p.fee})`)}`);
+      out.push(`  TVL: ${esc(p.tvl)} / Vol 24h: ${esc(p.vol)} / APR: ${esc(p.apr)}`);
+    });
+  } else {
+    // The distinction the owner has to be able to act on.
+    out.push(bold(opts.otherVenueCount > 0 ? 'NO DLMM POOL' : 'NO POOL'));
+    out.push(
+      opts.otherVenueCount > 0
+        ? note(
+            `this token trades on ${opts.otherVenueCount} other pool${opts.otherVenueCount === 1 ? '' : 's'} (DAMM v2, Raydium, pumpswap), none of which PHILIPS uses. The token is real; the venue is not one we LP in.`,
+          )
+        : note('DexScreener lists no Solana pool for this address at all.'),
+    );
+  }
+
+  if (opts.offBaseCount > 0) {
+    out.push(
+      '',
+      note(
+        `${opts.offBaseCount} DLMM pool${opts.offBaseCount === 1 ? ' is' : 's are'} quoted in something other than SOL or USDC, so ${opts.offBaseCount === 1 ? 'it is' : 'they are'} not offered.`,
+      ),
+    );
+  }
+  if (opts.chainReadSkipped && opts.pools.length > 0) {
+    // Not '?': a question mark reads as "the data is unavailable" when the real cause is
+    // "you have not configured this", and the two need different actions.
+    out.push('', note('bin step and fee need SOLANA_RPC_URL; set it in .env to see them.'));
+  }
+  out.push('', note('market data only: safety screening is not wired for Solana yet.'));
+  out.push('', esc(opts.ca));
+  return card(out.shift() as string, out, footerMode(opts.dryRun));
+}
+
 export function msgRangeStep(tokenSide = false): string {
   return [
     bold('OPEN LP | Set Price Range'),

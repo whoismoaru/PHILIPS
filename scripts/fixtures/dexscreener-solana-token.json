@@ -1,0 +1,554 @@
+{
+ "pairs": [
+  {
+   "chainId": "solana",
+   "dexId": "pumpswap",
+   "pairAddress": "2fwy38cJcChCVySA9cd5SAFaEPtZQWN2ssFip43hnsHU",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "So11111111111111111111111111111111111111112",
+    "name": "Wrapped SOL",
+    "symbol": "SOL"
+   },
+   "priceUsd": "0.002758",
+   "liquidity": {
+    "usd": 190395.48,
+    "base": 34775422,
+    "quote": 858.1493
+   },
+   "volume": {
+    "h24": 6242469.89,
+    "h6": 1662697.13,
+    "h1": 65768.89,
+    "m5": 3362.89
+   },
+   "txns": {
+    "m5": {
+     "buys": 20,
+     "sells": 24
+    },
+    "h1": {
+     "buys": 253,
+     "sells": 267
+    },
+    "h6": {
+     "buys": 4703,
+     "sells": 5150
+    },
+    "h24": {
+     "buys": 22605,
+     "sells": 22411
+    }
+   },
+   "marketCap": 2692096,
+   "fdv": 2692096,
+   "pairCreatedAt": 1789729613000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "meteora",
+   "labels": [
+    "DLMM"
+   ],
+   "pairAddress": "5TTHzu39BskPAz2Vdju6txDuKRPjUoPG5LNSkExV5CBt",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "So11111111111111111111111111111111111111112",
+    "name": "Wrapped SOL",
+    "symbol": "SOL"
+   },
+   "priceUsd": "0.002757",
+   "liquidity": {
+    "usd": 150035.51,
+    "base": 7852849,
+    "quote": 1166.0763
+   },
+   "volume": {
+    "h24": 2017848.38,
+    "h6": 327019.52,
+    "h1": 23077.51,
+    "m5": 1175.71
+   },
+   "txns": {
+    "m5": {
+     "buys": 9,
+     "sells": 5
+    },
+    "h1": {
+     "buys": 78,
+     "sells": 68
+    },
+    "h6": {
+     "buys": 773,
+     "sells": 666
+    },
+    "h24": {
+     "buys": 4846,
+     "sells": 4947
+    }
+   },
+   "marketCap": 2691072,
+   "fdv": 2691101,
+   "pairCreatedAt": 1789738990000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "meteora",
+   "labels": [
+    "DLMM"
+   ],
+   "pairAddress": "AGVxQPJkDmRRwu13UMudpKSuEEwF6BgfViAxS95NpduT",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "So11111111111111111111111111111111111111112",
+    "name": "Wrapped SOL",
+    "symbol": "SOL"
+   },
+   "priceUsd": "0.002768",
+   "liquidity": {
+    "usd": 40033.12,
+    "base": 3595962,
+    "quote": 273.04231
+   },
+   "volume": {
+    "h24": 300263.81,
+    "h6": 93486.3,
+    "h1": 4872.69,
+    "m5": 0
+   },
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h1": {
+     "buys": 11,
+     "sells": 19
+    },
+    "h6": {
+     "buys": 349,
+     "sells": 350
+    },
+    "h24": {
+     "buys": 1336,
+     "sells": 1579
+    }
+   },
+   "marketCap": 2702098,
+   "fdv": 2702127,
+   "pairCreatedAt": 1789730415000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "meteora",
+   "labels": [
+    "DLMM"
+   ],
+   "pairAddress": "HrqPvukxpCmr6uthRbCZ4aSoUZroHrXi92xAQVxHCbPK",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "So11111111111111111111111111111111111111112",
+    "name": "Wrapped SOL",
+    "symbol": "SOL"
+   },
+   "priceUsd": "0.002736",
+   "liquidity": {
+    "usd": 1037.79,
+    "base": 37591,
+    "quote": 8.5023
+   },
+   "volume": {
+    "h24": 51976.19,
+    "h6": 2384.19,
+    "h1": 122.04,
+    "m5": 0
+   },
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h1": {
+     "buys": 10,
+     "sells": 17
+    },
+    "h6": {
+     "buys": 172,
+     "sells": 211
+    },
+    "h24": {
+     "buys": 925,
+     "sells": 1040
+    }
+   },
+   "marketCap": 2671167,
+   "fdv": 2671195,
+   "pairCreatedAt": 1789739549000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "meteora",
+   "labels": [
+    "DLMM"
+   ],
+   "pairAddress": "F3jn7uk9yxrC5xV1dzTveQyLAJpDcm7RgtLC3mLt4Edf",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "name": "USD Coin",
+    "symbol": "USDC"
+   },
+   "priceUsd": "0.002538",
+   "liquidity": {
+    "usd": 159.7,
+    "base": 48208,
+    "quote": 37.3186
+   },
+   "volume": {
+    "h24": 15188.01,
+    "h6": 0,
+    "h1": 0,
+    "m5": 0
+   },
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h1": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h6": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h24": {
+     "buys": 949,
+     "sells": 1324
+    }
+   },
+   "marketCap": 2478037,
+   "fdv": 2478063,
+   "pairCreatedAt": 1789768743000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "meteora",
+   "labels": [
+    "DLMM"
+   ],
+   "pairAddress": "8KNqzUr3syNoJXABeWbsuTzRT3uAqL7wUXxcZ98X9tgQ",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "name": "USD Coin",
+    "symbol": "USDC"
+   },
+   "priceUsd": "0.002587",
+   "liquidity": {
+    "usd": 3393.91,
+    "base": 1114628,
+    "quote": 509.8921
+   },
+   "volume": {
+    "h24": 24394.98,
+    "h6": 0,
+    "h1": 0,
+    "m5": 0
+   },
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h1": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h6": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h24": {
+     "buys": 311,
+     "sells": 398
+    }
+   },
+   "marketCap": 2525533,
+   "fdv": 2525560,
+   "pairCreatedAt": 1789767347000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "meteora",
+   "labels": [
+    "DLMM"
+   ],
+   "pairAddress": "8H17AQ1rLAKbRypgSYsWVJTBRjPsvzuPnHcjh5FF3Yiy",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "So11111111111111111111111111111111111111112",
+    "name": "Wrapped SOL",
+    "symbol": "SOL"
+   },
+   "priceUsd": "0.002336",
+   "liquidity": {
+    "usd": 28.88,
+    "base": 1751.1154,
+    "quote": 0.2218
+   },
+   "volume": {
+    "h24": 4889.38,
+    "h6": 0,
+    "h1": 0,
+    "m5": 0
+   },
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h1": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h6": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h24": {
+     "buys": 121,
+     "sells": 224
+    }
+   },
+   "marketCap": 2281063,
+   "fdv": 2281087,
+   "pairCreatedAt": 1789786190000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "raydium",
+   "labels": [
+    "CLMM"
+   ],
+   "pairAddress": "HdRG8EXssrHJZ2HcsKiQmfcnooL3Wx81V6xKNqQmKTwT",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "So11111111111111111111111111111111111111112",
+    "name": "Wrapped SOL",
+    "symbol": "SOL"
+   },
+   "priceUsd": "0.003168",
+   "liquidity": {
+    "usd": 2.05,
+    "base": 290.7155,
+    "quote": 0.01014
+   },
+   "volume": {
+    "h24": 7.28,
+    "h6": 0,
+    "h1": 0,
+    "m5": 0
+   },
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h1": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h6": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h24": {
+     "buys": 0,
+     "sells": 2
+    }
+   },
+   "marketCap": 3092392,
+   "fdv": 3092425,
+   "pairCreatedAt": 1789766358000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "meteora",
+   "labels": [
+    "DYN2"
+   ],
+   "pairAddress": "GpNm9pCKREsPBnRDN6ZMmHTWuG6s6ymxES7RHAMztMv1",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "So11111111111111111111111111111111111111112",
+    "name": "Wrapped SOL",
+    "symbol": "SOL"
+   },
+   "priceUsd": "0.002843",
+   "liquidity": {
+    "usd": 0,
+    "base": 0.1576,
+    "quote": 4.066e-06
+   },
+   "volume": {
+    "h24": 0.09,
+    "h6": 0,
+    "h1": 0,
+    "m5": 0
+   },
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h1": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h6": {
+     "buys": 5,
+     "sells": 2
+    },
+    "h24": {
+     "buys": 49,
+     "sells": 40
+    }
+   },
+   "marketCap": 2775815,
+   "fdv": 2775815,
+   "pairCreatedAt": 1789768236000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "meteora",
+   "labels": [
+    "DYN2"
+   ],
+   "pairAddress": "HyYrBMvVsYVuDEvnvRaEjcexhg2kz2t64paJvbYxWFNi",
+   "baseToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "quoteToken": {
+    "address": "F8Sc8HoZvJcMrTY6vBsetTqGPv6XQmM2XgVAZo1sSTNK",
+    "name": "LINK MARINES",
+    "symbol": "MARINE"
+   },
+   "volume": {
+    "h24": 0,
+    "h6": 0,
+    "h1": 0,
+    "m5": 0
+   },
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h1": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h6": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h24": {
+     "buys": 18,
+     "sells": 36
+    }
+   },
+   "pairCreatedAt": 1789757625000
+  },
+  {
+   "chainId": "solana",
+   "dexId": "raydium",
+   "labels": [
+    "CLMM"
+   ],
+   "pairAddress": "13r7puGC1ULTSSQRUioHMd7r7YPMfQrdCgsNZ9o81Umt",
+   "baseToken": {
+    "address": "5NJfQ6UQ1LJTxtKLrsZQcbiSUWequSD6aZLNJaN7Zviv",
+    "name": "Vicce Citty 6",
+    "symbol": "VICI6"
+   },
+   "quoteToken": {
+    "address": "91ryaCo5yGpYZM3bs6GUPs97VWJQj7RozBmqPULgpump",
+    "name": "Leopardus Tilcayo",
+    "symbol": "TIGRINO"
+   },
+   "priceUsd": "0.001179",
+   "liquidity": {
+    "usd": 3.9,
+    "base": 2015.1523,
+    "quote": 526.6235
+   },
+   "volume": {
+    "h24": 6.47,
+    "h6": 0.47,
+    "h1": 0,
+    "m5": 0
+   },
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h1": {
+     "buys": 0,
+     "sells": 0
+    },
+    "h6": {
+     "buys": 12,
+     "sells": 10
+    },
+    "h24": {
+     "buys": 110,
+     "sells": 82
+    }
+   },
+   "marketCap": 70741,
+   "fdv": 70741,
+   "pairCreatedAt": 1789750421000
+  }
+ ]
+}

@@ -21,6 +21,8 @@ import {
 } from './core.js';
 import { renderProfitCard } from './card.js';
 import { onchainV4Pools } from './onchainPools.js';
+import { isSolAddress } from './solana/addr.js';
+import { solTokenView } from './solana/pools.js';
 import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
 import { config, EXIT_CONFIG } from './config.js';
@@ -1538,6 +1540,15 @@ function aprLabel(pct: number | null | undefined): string {
   if (pct === 0) return '0%';
   if (pct >= APR_MAX_SHOWN) return `>${APR_MAX_SHOWN}%`;
   return `${pct >= 100 ? Math.round(pct) : Number(pct.toFixed(1))}%`;
+}
+
+/**
+ * APR the way it is read on a card: '~12%', but never '~>1000%'. The cap already says
+ * "more than", and stacking "about" on top of it reads as neither.
+ */
+function aprApprox(pct: number | null | undefined): string {
+  const s = aprLabel(pct);
+  return s === '?' || s.startsWith('>') ? s : `~${s}`;
 }
 
 /**
@@ -3712,6 +3723,65 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
 });
 
 /** Hub entry from a bare CA: detect the chain first (with a picker when there is more than one). */
+/**
+ * The Solana side of a pasted CA: market data and the DLMM pools we could use.
+ *
+ * Read-only by construction. There is no wallet on this path, nothing is signed, and the
+ * card carries no action buttons, so the worst a bad address can do is produce a card that
+ * says it found nothing.
+ *
+ * It deliberately does NOT reuse renderTokenHub: that function reads an ERC20 contract for
+ * symbol and decimals and screens through a ChainCtx, none of which exist here.
+ */
+async function startSolToken(ctx: any, mint: string) {
+  resetFlows(ctx.from.id);
+  const prog = await ctx.reply(msg.msgProgress('reading Solana…'), html);
+  let view: Awaited<ReturnType<typeof solTokenView>>;
+  try {
+    view = await solTokenView(mint);
+  } catch (e) {
+    return editProgress(ctx, prog, msg.msgError('token', (e as Error).message));
+  }
+  const f = view.facts;
+  // No facts means DexScreener knows no Solana pair at all, so not even the symbol is
+  // known. That is a different answer from "no DLMM pool", which the card handles itself.
+  if (!f) {
+    return editProgress(
+      ctx,
+      prog,
+      msg.msgError('token', 'DexScreener lists no Solana pair for this address, so there is nothing to read yet.'),
+    );
+  }
+  const rows: Array<[string, string]> = [
+    ['price', f.priceUsd ? `$${f.priceUsd}` : '—'],
+    ['mcap', f.marketCapUsd != null ? msg.usdCompact(f.marketCapUsd) : '—'],
+    ['liq', f.liquidityUsd != null ? msg.usdCompact(f.liquidityUsd) : '—'],
+    ['vol 24h', f.volume24h != null ? msg.usdCompact(f.volume24h) : '—'],
+    ['age', f.pairAgeHours != null ? msg.fmtAge(f.pairAgeHours * 3_600_000) : '—'],
+  ];
+  const text = msg.msgSolToken({
+    symbol: f.symbol,
+    name: f.name,
+    ca: mint,
+    rows,
+    pools: view.pools.map((p) => ({
+      baseSymbol: p.baseSymbol,
+      binStep: p.binStep == null ? '?' : String(p.binStep),
+      fee: p.baseFeePct == null ? '?' : `${Number(p.baseFeePct.toFixed(2))}%`,
+      tvl: msg.usdCompact(p.liquidityUsd),
+      vol: msg.usdCompact(p.vol24hUsd),
+      // Through the shared label, never a second copy of the cap: that is how nine-digit
+      // APRs got printed the first time.
+      apr: aprApprox(p.aprPct),
+    })),
+    otherVenueCount: view.otherVenueCount,
+    offBaseCount: view.offBaseCount,
+    chainReadSkipped: view.chainReadSkipped,
+    dryRun: config.safety.dryRun,
+  });
+  return editProgress(ctx, prog, text);
+}
+
 async function startTokenHub(ctx: any, ca: string) {
   resetFlows(ctx.from.id);
   const prog = await ctx.reply(msg.msgProgress('detecting chain…'), html);
@@ -5537,6 +5607,14 @@ bot.on(message('text'), async (ctx) => {
   // (the cast is needed because isAddress is a type guard: without it TS narrows `raw` to never below)
   const isCa = ethers.isAddress(raw) as boolean;
   if (isCa) return startTokenHub(ctx, ethers.getAddress(raw));
+
+  // A Solana mint, checked BEFORE the "unknown" fallback. The two address forms cannot be
+  // confused -- an EVM address starts '0x' and neither character survives the base58
+  // alphabet -- so the shape alone decides the chain with no network call. Note what is
+  // NOT done here: no getAddress, no lowercasing. Base58 is case-sensitive and normalising
+  // it would silently ask about a different token. Until this branch existed a Solana CA
+  // fell straight through to msgUnknown and the bot simply said nothing useful.
+  if (isSolAddress(raw)) return startSolToken(ctx, raw);
 
   // Not a command (commands are handled elsewhere), so it is unknown.
   // Ignore empty strings and bare numbers with no context.

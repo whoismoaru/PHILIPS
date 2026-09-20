@@ -63,6 +63,22 @@ export const config = {
     enabled: (process.env.ARC_ENABLED ?? 'false').toLowerCase() === 'true' && !!process.env.ARC_RPC_URL,
     rpcUrl: process.env.ARC_RPC_URL || '',
   },
+  /**
+   * Solana (Meteora DLMM). NOT an entry in the CHAINS registry: a ChainCtx is an ethers
+   * object (provider, Contract, Wallet) and Solana has none of those, so it lives in
+   * src/solana/ behind its own context. Same rule as Arc, and for the same reason: no
+   * default URL, because the free endpoints are not good enough to run on. During the
+   * Meteora survey publicnode DISABLED getProgramAccounts outright and mainnet-beta
+   * rate-limited every burst, and reading positions depends on exactly that call.
+   *
+   * An empty SOLANA_RPC_URL does not hide the feature, it degrades it: token screening is
+   * pure HTTP and still works, while anything needing chain reads says so on the card
+   * rather than printing '?' and letting it look like missing data.
+   */
+  solana: {
+    enabled: (process.env.SOLANA_ENABLED ?? 'false').toLowerCase() === 'true',
+    rpcUrl: process.env.SOLANA_RPC_URL || '',
+  },
   wallet: {
     // Optional since /connect exists: used once to adopt an older installation into the
     // encrypted keystore (walletStore.ts), and safe to delete afterwards.

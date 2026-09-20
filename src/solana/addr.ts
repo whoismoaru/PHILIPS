@@ -47,8 +47,12 @@ function decodeBase58(s: string): Uint8Array | null {
  * Also the chain detector at the paste site. An EVM address starts '0x', and neither '0'
  * nor 'x' after it survives the base58 alphabet, so the two forms can never be confused
  * and no network call is needed to tell them apart.
+ *
+ * Returns a plain boolean, NOT an `s is string` predicate. A predicate narrows the caller's
+ * already-string variable to `never` on the false branch, which is the same trap the
+ * ethers.isAddress call site carries a comment about.
  */
-export function isSolAddress(s: unknown): s is string {
+export function isSolAddress(s: unknown): boolean {
   if (typeof s !== 'string') return false;
   const t = s.trim();
   if (t.length < 32 || t.length > 44) return false;
