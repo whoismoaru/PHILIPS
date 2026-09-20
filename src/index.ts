@@ -47,7 +47,7 @@ import {
   type AddPlan,
   type PositionDetail,
 } from './uniswap.js';
-import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnerOf, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
+import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4StillOpen, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnerOf, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import * as pctPresets from './pctPresets.js';
 import { screenToken, formatScreen, bustScreenCache, getEthUsd, getTokenEthPrice } from './screening.js';
@@ -4881,6 +4881,17 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
       )
     ).reduce((a, b) => a + b, 0n);
     const r = await closeLadderV4(tokenIds, cc, { dryRun: false });
+    // PROVE the burn, exactly as the single-position path does. A ladder is where this
+    // matters most: one batched transaction covers every leg, so a silent revert would
+    // orphan all of them at once.
+    const aliveLegs = await v4StillOpen(cc, tokenIds);
+    if (aliveLegs.length > 0) {
+      throw new Error(
+        `The close did NOT take effect: ${aliveLegs.length} of ${tokenIds.length} legs still hold liquidity on-chain (#${aliveLegs.join(', #')}), ` +
+          `so the ladder is still yours and still tracked. The batch reverted after simulating cleanly, which usually means the price moved past the close's own price floor. ` +
+          `Try again${r.txHash ? ` (failed tx ${r.txHash})` : ''}.`,
+      );
+    }
     // Split the proceeds proportionally to each leg's capital, keeping the per-leg PnL journal correct.
     const totalInit = legs.reduce((s, l) => s + BigInt(l.entryBaseWei || '0'), 0n);
     let attributed = 0n;
@@ -5313,6 +5324,18 @@ async function execCloseV4(ctx: any) {
       { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed: retrying…'), html)) },
     );
     if (!r.dryRun) {
+      // PROVE the burn before journalling or untracking. A close that returns is not a
+      // close that happened: on 20 Sep 2026 a reverted BSC transaction produced a
+      // "✅ POSITION CLOSED" card, the position was dropped from tracking, and it stayed
+      // alive on-chain holding liquidity that the bot could no longer see.
+      const alive = await v4StillOpen(cc, [tokenId]);
+      if (alive.length > 0) {
+        throw new Error(
+          `The close did NOT take effect: position #${tokenId} still holds liquidity on-chain, so it is still yours and still tracked. ` +
+            `The transaction reverted after simulating cleanly, which usually means the price moved past the close's own price floor. ` +
+            `Try again${r.txHash ? ` (failed tx ${r.txHash})` : ''}.`,
+        );
+      }
       // Journal before we stop tracking it — without this /history and /pnl are blind to v4,
       // and leftover v4 tokens never become sweep candidates (the ca lives only in the journal).
       if (r.base === 'ETH' || r.base === 'USDG') {

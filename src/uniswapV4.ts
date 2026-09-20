@@ -98,6 +98,33 @@ export async function v4Liquidity(cc: ChainCtx, tokenId: string): Promise<bigint
   return BigInt(await c.getPositionLiquidity(tokenId));
 }
 
+/**
+ * Prove the close actually happened, on-chain, before anything is journalled or untracked.
+ *
+ * On 20 Sep 2026 a BSC v4 close reported "✅ POSITION CLOSED" for a transaction that had
+ * REVERTED. The card carried its hash, the position was dropped from tracking, and
+ * the position stayed alive with 9179.88 units of liquidity still owned by the
+ * wallet: money in a live LP that PHILIPS no longer knew about. The only reason the bot
+ * believed it had closed was that closePositionV4 returned without throwing.
+ *
+ * So returning is not evidence. The burn is evidence. This reads the liquidity back and
+ * refuses to call anything closed while it is still there, whatever the transaction
+ * receipt claimed.
+ *
+ * The test is deliberately one-sided: only LIQUIDITY STILL PRESENT counts as proof of
+ * failure. A burned position makes getPositionLiquidity revert, and so does an RPC that is
+ * simply down, so "unreadable" cannot be told apart from "successfully burned" and must
+ * never be treated as either. Unreadable therefore changes nothing and the close proceeds
+ * exactly as it did before this check existed. That keeps the guard strictly additive: it
+ * can only catch the proven failure, never invent a new one.
+ */
+export async function v4StillOpen(cc: ChainCtx, tokenIds: string[]): Promise<string[]> {
+  const reads = await Promise.all(
+    tokenIds.map(async (id) => ({ id, liq: await v4Liquidity(cc, id).catch(() => -1n) })),
+  );
+  return reads.filter((r) => r.liq > 0n).map((r) => r.id);
+}
+
 const V4_ABI = [
   'function getPoolAndPositionInfo(uint256) view returns (tuple(address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) poolKey, uint256 info)',
   'function getPositionLiquidity(uint256) view returns (uint128)',
