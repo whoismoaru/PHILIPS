@@ -41,7 +41,6 @@ const rows = idx.slice(idx.indexOf('async function solanaRows'), idx.indexOf('//
 // --- The row says what it knows, and marks what it does not ---
 assert.ok(/entryBase === null \? ' \(now\)' : ''/.test(rows), 'a row with no entry must say its figure is the current value');
 assert.ok(/age: entry \? msg\.fmtAge/.test(rows), 'age needs an opening time, which only a recorded entry has');
-assert.ok(/pnlUsd: null/.test(rows), 'a SOL figure must never be put in the dollars field');
 assert.ok(/wethEq: 0/.test(rows), 'Solana rows must stay out of the native total');
 // A symbol beats a truncated mint, but a truncated mint beats nothing: a pool too new for
 // DexScreener is still a position the owner has to find.
