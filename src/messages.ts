@@ -1653,7 +1653,7 @@ export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: s
     `\u2705 ${bold('ORDER FILLED')}`,
     [
       // One line, one trade: what went out and what came back, in the direction it happened.
-      `${bold(`${esc(o.spendSol)} SOL`)} \u2192 ${bold(`${esc(o.received)} $${esc(sym)}`)}`,
+      `${bold(`${o.spendSol} SOL`)} \u2192 ${bold(`${o.received} $${sym}`)}`,
       '',
       `${bold('Tx')} : ${code(o.sig)}`,
     ],
