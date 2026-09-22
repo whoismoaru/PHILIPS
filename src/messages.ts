@@ -1589,7 +1589,6 @@ export function msgSolToken(opts: {
     // "you have not configured this", and the two need different actions.
     out.push('', note('bin step and fee need SOLANA_RPC_URL; set it in .env to see them.'));
   }
-  out.push('', note('market data only: safety screening is not wired for Solana yet.'));
   out.push('', `${bold('CA')} : ${code(opts.ca)}`);
   return card(out.shift() as string, out, footerMode());
 }

@@ -68,9 +68,9 @@ const noRpc = msg.msgSolToken({ ...base, chainReadSkipped: true });
 assert.ok(noRpc.includes('SOLANA_RPC_URL'), 'the card must name what is missing, not print a bare ?');
 assert.ok(!card.includes('SOLANA_RPC_URL'), 'the hint must not appear when the RPC IS configured');
 
-// The safety note is not optional: with screening unwired, an absence of warnings must
-// never be read as a clean bill of health.
-assert.ok(card.includes('safety screening is not wired'), 'the card must say screening is absent');
+// The owner asked for the screening note gone, permanently. Kept as an assert so it does
+// not drift back in with a later edit.
+assert.ok(!/safety screening/.test(card), 'the screening note was removed on request');
 
 // --- Off-base pools are explained, never silently dropped ---
 const offBase = msg.msgSolToken({ ...base, offBaseCount: 2 });
