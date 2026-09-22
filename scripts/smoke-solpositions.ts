@@ -61,6 +61,17 @@ assert.ok(/console\.error\('\[sol-lp\] opened but not recorded/.test(open), 'a f
 // Entries for positions that are gone are dropped, or the file grows forever.
 assert.ok(/solStore\.keepOnly/.test(rows), 'dead entries must be cleaned up');
 
+// --- The range reads as MARKET CAP, the same way every other row does ---
+// Market cap scales linearly with price, so mc(edge) = mcNow x (edge price / current
+// price), and the ratio comes from the BINS -- the one price on this row that cannot drift.
+assert.ok(/mcRange: mcapRangeRow\(/.test(rows), 'the Solana range must read as market cap like the rest');
+assert.ok(/p\.upperPrice \/ p\.currentPrice/.test(rows) && /p\.lowerPrice \/ p\.currentPrice/.test(rows), 'the edges must be ratios against the current price');
+// Dollars are only reachable through a SOL-QUOTED pair: priceUsd / priceNative is dollars
+// per SOL, and read off a USDC-quoted pair it is nonsense.
+assert.ok(/f\.quoteMint === WSOL_MINT/.test(rows), 'the SOL price must come from a pair actually quoted in SOL');
+assert.ok(/baseSym === 'USDC' \? 1 : baseSym === 'SOL' \? solUsd : null/.test(rows), 'an unknown base must not be given a dollar price');
+assert.ok(/pnlUsd: pnlBase !== null && usdPer !== null/.test(rows), 'the dollars field must hold dollars or nothing');
+
 // --- An entry the bot did not record is RECOVERED, not invented ---
 // A position opened on Meteora's own site had no entry and no age, so its row read
 // "PnL: — (entry unknown)" forever. Both are in its own transaction history: the deposit is

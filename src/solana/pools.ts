@@ -45,6 +45,11 @@ export type SolTokenFacts = {
   name: string;
   symbol: string;
   priceUsd: string | null;
+  /** The same price in the pair's QUOTE asset. With a SOL-quoted pair the two together
+   *  give the SOL price, which is the only way a Solana row reaches dollars at all. */
+  priceNative: string | null;
+  /** The quote mint the price above is denominated in. */
+  quoteMint: string | null;
   marketCapUsd: number | null;
   liquidityUsd: number | null;
   volume24h: number | null;
@@ -107,6 +112,8 @@ export function classifyPairs(mint: string, allPairs: any[]): Classified {
     name: String(tok?.name ?? '?'),
     symbol: String(tok?.symbol ?? '?'),
     priceUsd: deepest?.priceUsd ?? null,
+    priceNative: deepest?.priceNative ?? null,
+    quoteMint: deepest?.quoteToken?.address ?? null,
     marketCapUsd: Number(deepest?.marketCap ?? deepest?.fdv ?? 0) || null,
     liquidityUsd: Number(deepest?.liquidity?.usd ?? 0) || null,
     volume24h: Number(deepest?.volume?.h24 ?? 0) || null,

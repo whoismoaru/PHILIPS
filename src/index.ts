@@ -26,6 +26,7 @@ import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
+import { WSOL as WSOL_MINT } from './solana/jupiter.js';
 import { binsForRange, openPosition } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
@@ -1684,12 +1685,24 @@ async function solanaRows(): Promise<PosRow[]> {
   if (!enabled || !rpcUrl || !wallet || !isSolAddress(wallet)) return [];
   const list = await solPositions(wallet).catch(() => []);
   solStore.keepOnly(list.map((p) => p.position));
-  // One symbol lookup per distinct token, not per position.
+  // One lookup per distinct token, not per position: symbol, market cap, and the SOL
+  // price the dollar figures come from.
   const symbols = new Map<string, string>();
+  const mcaps = new Map<string, number>();
+  let solUsd: number | null = null;
   await Promise.all(
     [...new Set(list.map((p) => p.tokenMint))].map(async (m) => {
-      const v = await solTokenView(m).catch(() => null);
-      if (v?.facts?.symbol) symbols.set(m, v.facts.symbol.replace(/^\$+/, ''));
+      const f = (await solTokenView(m).catch(() => null))?.facts;
+      if (!f) return;
+      if (f.symbol) symbols.set(m, f.symbol.replace(/^\$+/, ''));
+      if (f.marketCapUsd) mcaps.set(m, f.marketCapUsd);
+      // The SOL price, taken from a pair that is QUOTED in SOL: priceUsd / priceNative is
+      // dollars per SOL. Read off a USDC-quoted pair it would be nonsense, so the quote
+      // mint is checked rather than assumed.
+      if (solUsd === null && f.quoteMint === WSOL_MINT && f.priceUsd && f.priceNative) {
+        const p = Number(f.priceUsd) / Number(f.priceNative);
+        if (isFinite(p) && p > 0) solUsd = p;
+      }
     }),
   );
   // Positions opened elsewhere have no entry here, so it is recovered from their own
@@ -1723,6 +1736,10 @@ async function solanaRows(): Promise<PosRow[]> {
     const entry = solStore.getEntry(p.position);
     const entryBase = entry ? Number(entry.entryBase) / Math.pow(10, p.base?.decimals ?? 9) : null;
     const pnlBase = entryBase !== null ? p.valueBase + p.feeBase - entryBase : null;
+    // Dollars are only reachable for a SOL-based position, and only when a SOL-quoted pair
+    // gave a price. A USDC base is already dollars; anything else stays in its own unit.
+    const usdPer = baseSym === 'USDC' ? 1 : baseSym === 'SOL' ? solUsd : null;
+    const mcNow = mcaps.get(p.tokenMint);
     return {
       // The first eight characters, not the whole key. A Solana position id is 44 base58
       // characters and wrapped onto two lines of its own, pushing the row it labels off
@@ -1738,9 +1755,9 @@ async function solanaRows(): Promise<PosRow[]> {
       investUnit: baseSym,
       investStable: baseSym === 'USDC',
       age: entry ? msg.fmtAge(Date.now() - entry.openedAt) : '—',
-      // PnL in the BASE, converted to nothing: pnlUsd is dollars everywhere else, so a SOL
-      // figure must not be put in it. Only the percentage is shared.
-      pnlUsd: null,
+      // Dollars only when a real SOL price was read. Never a base figure in the dollars
+      // field: every other row's pnlUsd is dollars, and the totals add them together.
+      pnlUsd: pnlBase !== null && usdPer !== null ? pnlBase * usdPer : null,
       pnlPct: pnlBase !== null && entryBase ? (pnlBase / entryBase) * 100 : null,
       inRange: p.inRange,
       // Solana rows stay out of the native total: adding SOL to ETH would be fiction.
@@ -1752,12 +1769,25 @@ async function solanaRows(): Promise<PosRow[]> {
       convertedInto: sym,
       feesBase: p.feeBase,
       feesLabel: `${num(p.feeBase, 6)} ${baseSym}`,
+      ...(usdPer !== null
+        ? { feesUsd: p.feeBase * usdPer, feesUsdLabel: `+${msg.usdPlain(p.feeBase * usdPer)}` }
+        : {}),
       rangeLabel:
         p.lowerPrice === null || p.upperPrice === null
           ? `${p.upperBinId - p.lowerBinId + 1} bins · step ${p.binStep}`
           : // toPrecision, not toFixed: a DLMM token price is routinely 5e-6, and toFixed(4)
             // would print every bound of such a pool as "0.0000".
             `${p.lowerPrice.toPrecision(4)} — ${p.upperPrice.toPrecision(4)} ${baseSym} per ${sym}`,
+      // The range read as MARKET CAP, exactly as the EVM rows read it. Market cap scales
+      // linearly with price, so mc(edge) = mcNow x (edge price / current price) -- and the
+      // ratio comes from the bins, which is the one price on this row that cannot drift.
+      mcRange: mcapRangeRow(
+        mcNow,
+        mcNow && p.currentPrice && p.lowerPrice !== null && p.upperPrice !== null
+          ? [p.upperPrice / p.currentPrice, p.lowerPrice / p.currentPrice]
+          : null,
+        1,
+      ),
     };
   });
 }
