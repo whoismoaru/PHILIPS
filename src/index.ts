@@ -3860,7 +3860,7 @@ async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any
  *
  * Jupiter rather than LI.FI: see src/solana/jupiter.ts.
  */
-type SolBuyFlow = { mint: string; symbol: string; decimals: number | null; lamports?: bigint; quote?: jupiter.Quote };
+type SolBuyFlow = { mint: string; symbol: string; decimals: number | null; startedAt: number; lamports?: bigint; quote?: jupiter.Quote };
 const solBuyFlows = new Map<number, SolBuyFlow>();
 registerFlowReset((uid) => solBuyFlows.delete(uid));
 
@@ -3893,7 +3893,7 @@ bot.action(/^solbuy:(.+)$/, async (ctx) => {
   }
   const view = await solTokenView(mint).catch(() => null);
   const symbol = view?.facts?.symbol ?? '?';
-  solBuyFlows.set(ctx.from!.id, { mint, symbol, decimals: await mintDecimals(mint) });
+  solBuyFlows.set(ctx.from!.id, { mint, symbol, decimals: await mintDecimals(mint), startedAt: Date.now() });
   const rows = pctPresets.chunkButtons(
     pctPresets.get('buy').map((p) => Markup.button.callback(`${p}%`, `solamt:${p}`)),
   );
@@ -3909,32 +3909,29 @@ bot.action(/^solbuy:(.+)$/, async (ctx) => {
   );
 });
 
-bot.action(/^solamt:(\d+)$/, async (ctx) => {
-  const f = solBuyFlows.get(ctx.from!.id);
-  if (!f) return ctx.answerCbQuery('Expired. Paste the CA again.');
-  const kp = solWallet.keypair();
-  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
-  const pct = Number((ctx.match as RegExpMatchArray)[1]);
-  await ctx.answerCbQuery('Quoting…');
-  const bal = await jupiter.solBalance(kp.publicKey).catch(() => 0n);
-  const spendable = bal > SOL_RESERVE_LAMPORTS ? bal - SOL_RESERVE_LAMPORTS : 0n;
-  // Integer arithmetic on lamports throughout: a float here rounds a 9-decimal amount and
-  // the swap asks for an amount the wallet does not have.
-  const lamports = (spendable * BigInt(pct)) / 100n;
-  if (lamports <= 0n) return ctx.editMessageText(msg.msgError('buy', 'That share of the balance rounds to zero.'), html);
+/**
+ * Quote a spend and draw the confirm card. Shared by the percentage buttons and by a typed
+ * amount: the card, the guards and the confirm button must be identical whichever way the
+ * number arrived, or one of the two paths quietly grows its own rules.
+ */
+async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: boolean): Promise<unknown> {
+  const show = (text: string, extra: Record<string, unknown> = html) =>
+    edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+  if (lamports <= 0n) return show(msg.msgError('buy', 'That amount rounds to zero.'));
   let q: jupiter.Quote;
   try {
     q = await jupiter.quote(jupiter.WSOL, f.mint, lamports, SOL_SLIPPAGE_BPS);
   } catch (e) {
-    return ctx.editMessageText(msg.msgError('buy', (e as Error).message), html);
+    return show(msg.msgError('buy', (e as Error).message));
   }
   f.lamports = lamports;
   f.quote = q;
   const dec = f.decimals;
   // Unknown decimals means the OUT amount cannot be stated. It is shown in base units
   // rather than scaled by a guess: a wrong guess here misstates the trade by 1000x.
-  const amt = (v: string) => (dec === null ? `${v} base units` : Number(Number(v) / Math.pow(10, dec)).toLocaleString('en-US', { maximumFractionDigits: 4 }));
-  return ctx.editMessageText(
+  const amt = (v: string) =>
+    dec === null ? `${v} base units` : Number(Number(v) / Math.pow(10, dec)).toLocaleString('en-US', { maximumFractionDigits: 4 });
+  return show(
     msg.msgSolBuyConfirm({
       symbol: f.symbol,
       spendSol: fmtSol(lamports),
@@ -3954,6 +3951,63 @@ bot.action(/^solamt:(\d+)$/, async (ctx) => {
       ]),
     },
   );
+}
+
+/** The spendable balance: everything except the reserve kept back for fees and rent. */
+async function solSpendable(owner: string): Promise<bigint> {
+  const bal = await jupiter.solBalance(owner).catch(() => 0n);
+  return bal > SOL_RESERVE_LAMPORTS ? bal - SOL_RESERVE_LAMPORTS : 0n;
+}
+
+/**
+ * An amount typed instead of tapped, e.g. "0.001". The card invites a share of the
+ * balance, and the first thing actually typed at it was a figure in SOL -- so both are
+ * accepted. Returns true when the message was consumed.
+ */
+export async function handleSolBuyAmount(ctx: any, raw: string): Promise<boolean> {
+  const f = solBuyFlows.get(ctx.from.id);
+  if (!f) return false;
+  // An abandoned buy card must not keep claiming bare numbers hours later: a "2" typed at
+  // something else entirely would come back as a two-SOL quote.
+  if (isStaleFlow(f.startedAt)) {
+    solBuyFlows.delete(ctx.from.id);
+    return false;
+  }
+  const t = raw.trim().replace(',', '.');
+  if (!/^\d*\.?\d+$/.test(t)) return false;
+  const kp = solWallet.keypair();
+  if (!kp) return false;
+  const n = Number(t);
+  if (!isFinite(n) || n <= 0) {
+    await ctx.reply(msg.msgError('buy', 'Enter an amount in SOL, for example 0.25.'), html);
+    return true;
+  }
+  // Lamports as an integer, via a fixed 9-decimal string: Number arithmetic on 0.001 SOL
+  // leaves a float that rounds into an amount the wallet does not hold.
+  const lamports = BigInt(n.toFixed(9).replace('.', ''));
+  const spendable = await solSpendable(kp.publicKey);
+  if (lamports > spendable) {
+    await ctx.reply(
+      msg.msgError('buy', `Only ${fmtSol(spendable)} SOL is spendable (${fmtSol(SOL_RESERVE_LAMPORTS)} is kept for fees).`),
+      html,
+    );
+    return true;
+  }
+  await solBuyQuoteCard(ctx, f, lamports, false);
+  return true;
+}
+
+bot.action(/^solamt:(\d+)$/, async (ctx) => {
+  const f = solBuyFlows.get(ctx.from!.id);
+  if (!f) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  const kp = solWallet.keypair();
+  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  const pct = Number((ctx.match as RegExpMatchArray)[1]);
+  await ctx.answerCbQuery('Quoting…');
+  // Integer arithmetic on lamports throughout: a float here rounds a 9-decimal amount and
+  // the swap asks for an amount the wallet does not have.
+  const lamports = ((await solSpendable(kp.publicKey)) * BigInt(pct)) / 100n;
+  return solBuyQuoteCard(ctx, f, lamports, true);
 });
 
 bot.action('solgo', async (ctx) => {
@@ -5763,6 +5817,10 @@ bot.on(message('text'), async (ctx) => {
 
   // /bridge waiting on an amount — checked first because its state is separate.
   if (await handleBridgeAmount(ctx, raw)) return;
+
+  // A Solana buy waiting on an amount. Checked here, alongside the other amount flows: a
+  // bare number typed at that card used to fall all the way through to msgUnknown.
+  if (await handleSolBuyAmount(ctx, raw)) return;
 
   // /buy and /sell: wait for a contract address, then an amount, then quote the best route, then confirm.
   const tflow = tswapFlows.get(ctx.from.id);

@@ -93,8 +93,23 @@ assert.ok(go.indexOf('solBuyFlows.delete') < go.indexOf('executeSwap'), 'the flo
 assert.ok(/config\.safety\.dryRun/.test(go), 'DRY_RUN must be honoured on a money path');
 // Lamports are integers. Percent arithmetic in floats rounds a 9-decimal amount and asks
 // for SOL the wallet does not have.
-assert.ok(/\(spendable \* BigInt\(pct\)\) \/ 100n/.test(idx), 'the spend must be computed in bigint lamports');
+assert.ok(/solSpendable\(kp\.publicKey\)\) \* BigInt\(pct\)\) \/ 100n/.test(idx), 'the spend must be computed in bigint lamports');
 assert.ok(/SOL_RESERVE_LAMPORTS/.test(idx), 'a reserve must be kept back for fees and rent');
+
+// --- A typed amount is an amount, not an unknown command ---
+// The amount card says "pick a share, or type an amount in SOL", and the first thing
+// actually typed at it was "0.001". That fell through every handler to msgUnknown.
+const handler = idx.slice(idx.indexOf('export async function handleSolBuyAmount'), idx.indexOf("bot.action(/^solamt"));
+assert.ok(/\^\\d\*\\\.\?\\d\+\$/.test(handler), 'a bare decimal must be recognised as an amount');
+// toFixed(9) then strip the dot: Number arithmetic on 0.001 SOL leaves a float that rounds
+// into an amount the wallet does not hold.
+assert.ok(/toFixed\(9\)\.replace\('\.', ''\)/.test(handler), 'lamports must be built as an integer string');
+assert.ok(/isStaleFlow/.test(handler), 'an abandoned buy card must stop claiming bare numbers');
+assert.ok(/lamports > spendable/.test(handler), 'a typed amount must respect the reserve');
+// Both entry points draw the SAME confirm card, so the guards cannot drift apart.
+assert.equal((idx.match(/solBuyQuoteCard\(/g) ?? []).length, 3, 'the confirm card must have one builder and two callers');
+// And the handler has to be wired into the text router, not merely defined.
+assert.ok(/if \(await handleSolBuyAmount\(ctx, raw\)\) return;/.test(idx), 'the amount handler is never called');
 
 // --- The two keystores never meet ---
 const solStore = readFileSync('src/solana/walletStore.ts', 'utf8');

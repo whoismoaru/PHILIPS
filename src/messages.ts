@@ -1605,7 +1605,7 @@ export function msgSolBuyAmount(o: { symbol: string; balanceSol: string; spendab
       '',
       note('the reserve covers network fees and the token account rent; it is never spent.'),
       '',
-      'Pick a share of the spendable balance.',
+      'Pick a share of the spendable balance, or type an amount in SOL.',
     ],
     footerMode(),
   );
