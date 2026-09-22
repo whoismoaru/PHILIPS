@@ -78,6 +78,12 @@ export const config = {
   solana: {
     enabled: (process.env.SOLANA_ENABLED ?? 'false').toLowerCase() === 'true',
     rpcUrl: process.env.SOLANA_RPC_URL || '',
+    /**
+     * The wallet to READ positions for. An address, never a key: stage 2 is read-only and
+     * signing lives in its own keystore later. Left blank until the owner sets it, which
+     * keeps /positions exactly as it was for anyone not using Solana.
+     */
+    wallet: process.env.SOLANA_WALLET || '',
   },
   wallet: {
     // Optional since /connect exists: used once to adopt an older installation into the

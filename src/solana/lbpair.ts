@@ -26,13 +26,20 @@
  * traded price sitting just inside the active bin is exactly the expected relationship.
  * A wrong offset could not produce that agreement.
  */
+import { encodeBase58 } from './addr.js';
 import { accountData } from './rpc.js';
 
 const OFF_BASE_FACTOR = 8; // StaticParameters.base_factor, u16
 const OFF_BASE_FEE_POWER = 8 + 26; // StaticParameters.base_fee_power_factor, u8
 const OFF_ACTIVE_ID = 76; // i32
 const OFF_BIN_STEP = 80; // u16
-const MIN_LEN = OFF_BIN_STEP + 2;
+// ...then status(1) require_base_factor_seed(1) base_factor_seed(2) activation_type(1)
+// creator_pool_on_off_control(1) lands the mints at 88 and 120. Verified against pool
+// 5TTHzu39...: token_x decodes to the 91ryaCo5...pump mint and token_y to WSOL, which is
+// exactly the pair DexScreener reports for it.
+const OFF_TOKEN_X = 88; // pubkey
+const OFF_TOKEN_Y = 120; // pubkey
+const MIN_LEN = OFF_TOKEN_Y + 32;
 
 /** Meteora prices in fee PRECISION of 1e9; see getBaseFee in @meteora-ag/dlmm. */
 const FEE_PRECISION = 1e9;
@@ -40,6 +47,9 @@ const FEE_PRECISION = 1e9;
 export type LbPairInfo = {
   binStep: number;
   activeId: number;
+  /** Mint of token X, the bin ladder's numerator side. */
+  tokenX: string;
+  tokenY: string;
   /** Base fee as a PERCENT (1 means 1%), before any dynamic/volatility component. */
   baseFeePct: number;
   /** Width of one bin as a percent, which is also the price resolution of the pool. */
@@ -60,11 +70,14 @@ export function decodeLbPair(data: Uint8Array): LbPairInfo | null {
   const baseFactor = v.getUint16(OFF_BASE_FACTOR, true);
   const powerFactor = v.getUint8(OFF_BASE_FEE_POWER);
   const activeId = v.getInt32(OFF_ACTIVE_ID, true);
+  const b58 = (off: number) => encodeBase58(data.subarray(off, off + 32));
   // base_fee_rate = base_factor * bin_step * 10 * 10^base_fee_power_factor, over 1e9.
   const feeFraction = (baseFactor * binStep * 10 * Math.pow(10, powerFactor)) / FEE_PRECISION;
   return {
     binStep,
     activeId,
+    tokenX: b58(OFF_TOKEN_X),
+    tokenY: b58(OFF_TOKEN_Y),
     baseFeePct: feeFraction * 100,
     binWidthPct: binStep / 100,
   };

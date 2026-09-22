@@ -23,6 +23,7 @@ import { renderProfitCard } from './card.js';
 import { onchainV4Pools } from './onchainPools.js';
 import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
+import { solPositions } from './solana/positions.js';
 import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
 import { config, EXIT_CONFIG } from './config.js';
@@ -1667,6 +1668,45 @@ function collapseLadderRows(rows: PosRow[]): void {
   }
 }
 
+/**
+ * Meteora DLMM positions as /positions rows.
+ *
+ * Deliberately VALUELESS rows: no invest figure, no PnL. Turning a bin's liquidity share
+ * into token amounts needs the BinArray account behind every one of up to 70 bins, and an
+ * estimate printed beside real v3/v4 dollars would be indistinguishable from a measured
+ * one. A range and an in/out answer are exact, so those are what this reports.
+ *
+ * wethEq stays 0 and natSym is left unset, which keeps these rows out of the native total
+ * rather than adding SOL into an ETH sum.
+ */
+async function solanaRows(): Promise<PosRow[]> {
+  const { enabled, rpcUrl, wallet } = config.solana;
+  if (!enabled || !rpcUrl || !isSolAddress(wallet)) return [];
+  const list = await solPositions(wallet).catch(() => []);
+  return list.map((p) => ({
+    id: p.position,
+    pair: `${p.tokenMint.slice(0, 4)}… / ${p.base?.symbol ?? '?'}`,
+    protocol: 'DLMM',
+    chain: 'Solana',
+    investLabel: 'value not read',
+    // Age needs an open time, and an account carries none; the journal does not have these
+    // positions either. An em dash is the same thing an untracked v4 position shows.
+    age: '—',
+    pnlUsd: null,
+    pnlPct: null,
+    inRange: p.inRange,
+    wethEq: 0,
+    baseSymbol: p.base?.symbol ?? null,
+    strategy: 'base',
+    rangeLabel:
+      p.lowerPrice === null || p.upperPrice === null
+        ? `${p.upperBinId - p.lowerBinId + 1} bins · step ${p.binStep}`
+        : // toPrecision, not toFixed: a DLMM token price is routinely 5e-6, and toFixed(4)
+          // would print every bound of such a pool as "0.0000".
+          `${p.lowerPrice.toPrecision(4)} — ${p.upperPrice.toPrecision(4)} ${p.base?.symbol ?? ''} per token`,
+  }));
+}
+
 // /positions — ONE consolidated message: a summary plus a per-position tree (v3 + v4).
 async function cmdPositions(ctx: any, edit = false) {
   const cc = getChain();
@@ -1689,7 +1729,11 @@ async function cmdPositions(ctx: any, edit = false) {
         .map(async (c) => (await listPositionsV4(c).catch(() => [])).map((p) => ({ cc: c, p }))),
     )
   ).flat();
-  if (active.length === 0 && v4.length === 0) {
+  // Meteora DLMM, read from an ADDRESS only. Off entirely unless the owner set all three
+  // env vars, and fail-safe: an RPC that refuses getProgramAccounts must not take the EVM
+  // list down with it.
+  const solRows = await solanaRows();
+  if (active.length === 0 && v4.length === 0 && solRows.length === 0) {
     const t = msg.msgNoPositions();
     return edit ? ctx.editMessageText(t, html).catch(() => {}) : ctx.reply(t, html);
   }
@@ -1797,7 +1841,7 @@ async function cmdPositions(ctx: any, edit = false) {
     }
   });
 
-  const rows: PosRow[] = v3rows.filter((r): r is PosRow => r !== null);
+  const rows: PosRow[] = v3rows.filter((r): r is PosRow => r !== null).concat(solRows);
 
   // Each chain's native price, read once. Using the active chain's price for all of them
   // once inflated HyperEVM LP value 30-fold (see the same note in /pnl).

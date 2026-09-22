@@ -42,6 +42,27 @@ function decodeBase58(s: string): Uint8Array | null {
 }
 
 /**
+ * 32 raw bytes back into an address string, for pubkeys read out of account data.
+ *
+ * The inverse of the decoder above and it must stay that way: an address that survives a
+ * round trip through both is the only proof that account offsets were read correctly.
+ */
+export function encodeBase58(bytes: Uint8Array): string {
+  let n = 0n;
+  for (const b of bytes) n = (n << 8n) | BigInt(b);
+  let s = '';
+  while (n > 0n) {
+    const r = Number(n % 58n);
+    s = ALPHABET[r] + s;
+    n /= 58n;
+  }
+  // Leading zero bytes carry no value but do carry position, and each one is a '1'.
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  return '1'.repeat(zeros) + s;
+}
+
+/**
  * True when this is a Solana address: base58 decoding to exactly 32 bytes.
  *
  * Also the chain detector at the paste site. An EVM address starts '0x', and neither '0'
