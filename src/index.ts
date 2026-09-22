@@ -3931,6 +3931,7 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
   // rather than scaled by a guess: a wrong guess here misstates the trade by 1000x.
   const amt = (v: string) =>
     dec === null ? `${v} base units` : Number(Number(v) / Math.pow(10, dec)).toLocaleString('en-US', { maximumFractionDigits: 4 });
+
   // No confirm tap, matching the EVM swap since 16 Sep 2026: one behaviour, not two. The
   // protections that button carried are all still on -- the quote's own slippage floor is
   // enforced on-chain by Jupiter, the reserve was held back before this point, and the
@@ -3940,13 +3941,25 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
     const prog = edit
       ? { message_id: (ctx.callbackQuery!.message as { message_id: number }).message_id }
       : undefined;
-    const say = (text: string) =>
-      prog ? editProgress(ctx, prog, text) : ctx.reply(text, html);
+    const say = (text: string, extra: Record<string, unknown> = html) =>
+      prog ? editProgress(ctx, prog, text, extra) : ctx.reply(text, extra);
     // Cleared BEFORE the send: a second tap or a second typed amount must not buy twice.
     solBuyFlows.delete(ctx.from!.id);
     try {
       const sig = await jupiter.executeSwap(q, kp);
-      return say(msg.msgSolBuyDone({ symbol: f.symbol, spendSol: fmtSol(lamports), sig }));
+      return say(
+        msg.msgSolBuyDone({ symbol: f.symbol, spendSol: fmtSol(lamports), received: amt(q.outAmount), sig }),
+        {
+          ...html,
+          ...Markup.inlineKeyboard([
+            [
+              // Solscan, because the signature alone is not something anyone reads.
+              Markup.button.url('🔍 Solscan', `https://solscan.io/tx/${sig}`),
+              Markup.button.callback('💰 Portfolio', 'portfolio'),
+            ],
+          ]),
+        },
+      );
     } catch (e) {
       return say(msg.msgError('buy', (e as Error).message));
     }
@@ -4037,20 +4050,15 @@ bot.action('solgo', async (ctx) => {
   if (!f?.quote || f.lamports === undefined) return ctx.answerCbQuery('Expired. Paste the CA again.');
   const kp = solWallet.keypair();
   if (!kp) return ctx.answerCbQuery('No Solana key connected.');
-  // Cleared before the send, not after: a second tap must not be able to buy twice.
-  solBuyFlows.delete(ctx.from!.id);
   await ctx.answerCbQuery();
   if (config.safety.dryRun) {
+    solBuyFlows.delete(ctx.from!.id);
     return ctx.editMessageText(msg.msgDryRunAddDone(), html);
   }
-  const prog = { message_id: (ctx.callbackQuery!.message as { message_id: number }).message_id };
-  await editProgress(ctx, prog, msg.msgProgress('swapping on Jupiter…'));
-  try {
-    const sig = await jupiter.executeSwap(f.quote, kp);
-    return editProgress(ctx, prog, msg.msgSolBuyDone({ symbol: f.symbol, spendSol: fmtSol(f.lamports), sig }));
-  } catch (e) {
-    return editProgress(ctx, prog, msg.msgError('buy', (e as Error).message));
-  }
+  // Only reachable from a card drawn under DRY_RUN, so the quote behind it may be old.
+  // Re-quoting is the point: executing a stale quote is how a "confirmed" price turns into
+  // a different trade.
+  return solBuyQuoteCard(ctx, f, f.lamports, true, kp);
 });
 
 bot.action(/^solref:(.+)$/, async (ctx) => {

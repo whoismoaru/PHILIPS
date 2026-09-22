@@ -110,7 +110,9 @@ assert.ok(/toFixed\(9\)\.replace\('\.', ''\)/.test(handler), 'lamports must be b
 assert.ok(/isStaleFlow/.test(handler), 'an abandoned buy card must stop claiming bare numbers');
 assert.ok(/lamports > spendable/.test(handler), 'a typed amount must respect the reserve');
 // Both entry points draw the SAME confirm card, so the guards cannot drift apart.
-assert.equal((idx.match(/solBuyQuoteCard\(/g) ?? []).length, 3, 'the confirm card must have one builder and two callers');
+// One builder, and every entry point goes through it: the percentage buttons, a typed
+// amount, and the DRY_RUN card's own confirm button.
+assert.equal((idx.match(/solBuyQuoteCard\(/g) ?? []).length, 4, 'a buy entry point bypasses the shared builder');
 // And the handler has to be wired into the text router, not merely defined.
 assert.ok(/if \(await handleSolBuyAmount\(ctx, raw\)\) return;/.test(idx), 'the amount handler is never called');
 

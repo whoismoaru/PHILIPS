@@ -1647,17 +1647,17 @@ export function msgSolBuyConfirm(o: {
 }
 
 /** The result of a Solana buy that landed. */
-export function msgSolBuyDone(o: { symbol: string; spendSol: string; sig: string }): string {
+export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: string; sig: string }): string {
   const sym = o.symbol.replace(/^\$+/, '');
   return card(
-    `\u2705 ${bold('BOUGHT')} $${esc(sym)}`,
+    `\u2705 ${bold('ORDER FILLED')}`,
     [
-      `\u251C Spent: ${esc(o.spendSol)} SOL`,
-      `\u2514 Tx: ${code(o.sig)}`,
+      // One line, one trade: what went out and what came back, in the direction it happened.
+      `${bold(`${esc(o.spendSol)} SOL`)} \u2192 ${bold(`${esc(o.received)} $${esc(sym)}`)}`,
       '',
-      note('the token is in your Solana wallet.'),
+      `${bold('Tx')} : ${code(o.sig)}`,
     ],
-    footerMode(false),
+    footerMode(),
   );
 }
 
