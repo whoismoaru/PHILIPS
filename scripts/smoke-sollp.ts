@@ -94,6 +94,17 @@ for (const [file, src, tag] of [
   assert.ok(src.includes(`console.error(\`${tag}`), `${file} fails silently: the error card promises a log entry that is never written`);
 }
 
+// --- Every step has a way back, and back never opens anything ---
+// The range card goes back to the CA card the pool was picked from; the amount card goes
+// back to the range card. A dead end here means pasting the address again.
+assert.ok(/Markup\.button\.callback\('⬅️ Back', `solref:\$\{pick\.mint\}`\)/.test(idx), 'the range card must go back to the token card');
+assert.ok(/Markup\.button\.callback\('⬅️ Back', 'sollpback'\)/.test(idx), 'the amount card must go back to the range card');
+// Going back DROPS the chosen range. Leaving it set would let a typed amount open at a
+// range the card no longer shows.
+const back = idx.slice(idx.indexOf("bot.action('sollpback'"), idx.indexOf("bot.action('sollpback'") + 700);
+assert.ok(/f\.rangePct = undefined/.test(back), 'Back must clear the range it is going back to choose');
+assert.ok(!/openPosition|solLpOpen/.test(back), 'Back must never open a position');
+
 // --- The result card states the range that was OPENED, not the one asked for ---
 // Bins round up and a range wider than 69 bins is trimmed, so the two differ: 5% at bin
 // step 100 opens as 6 bins, which is 5.8%, and 90% opens as 69 bins, which is 50%.

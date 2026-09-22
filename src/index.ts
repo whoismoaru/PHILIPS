@@ -3843,6 +3843,8 @@ async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any
       at: Date.now(),
       pools: shown.map((p) => ({
         pool: p.pairAddress,
+        // Carried so Back can redraw the card this pool was picked from.
+        mint,
         pair: `$${sym}/$${p.baseSymbol}`,
         baseSymbol: p.baseSymbol,
         binStep: p.binStep,
@@ -3890,7 +3892,7 @@ const fmtSol = (lamports: bigint): string => (Number(lamports) / jupiter.LAMPORT
  * confirmation" rule the EVM flows use. Both preset sets are editable from /settings, so
  * the numbers on the buttons are the owner's, not mine.
  */
-type SolPoolPick = { pool: string; pair: string; baseSymbol: string; binStep: number | null; baseFeePct: number | null };
+type SolPoolPick = { pool: string; pair: string; baseSymbol: string; binStep: number | null; baseFeePct: number | null; mint: string };
 /** What the last CA card offered, per user: the buttons carry an index, not an address. */
 const solPoolPicks = new Map<number, { at: number; pools: SolPoolPick[] }>();
 type SolLpFlow = { pick: SolPoolPick; startedAt: number; rangePct?: number; bins?: number };
@@ -3916,6 +3918,28 @@ function rangeOpenedPct(bins: number, binStep: number | null): string {
 /** Rent named on the amount card: position + two bin arrays, the SDK's own constants. */
 const SOL_RENT_ESTIMATE = 0.0574 + 0.0714;
 
+/** The range step. Drawn fresh when a pool is picked, and again when Back is tapped. */
+async function solLpRangeCard(ctx: any, pick: SolPoolPick, edit: boolean): Promise<unknown> {
+  const rows = pctPresets.chunkButtons(
+    pctPresets.get('solrange').map((p) => Markup.button.callback(`${p}%`, `sollpr:${p}`)),
+  );
+  // Back goes to the CA card this pool came from, not to the menu: the owner is choosing
+  // between pools, and a dead end here means pasting the address again.
+  rows.push([
+    Markup.button.callback('⬅️ Back', `solref:${pick.mint}`),
+    Markup.button.callback('❌ Cancel', 'cancel'),
+  ]);
+  const info = await lbPair(pick.pool).catch(() => null);
+  const text = msg.msgSolLpRange({
+    pair: pick.pair,
+    binStep: pick.binStep == null ? '?' : String(pick.binStep),
+    fee: pick.baseFeePct == null ? '?' : `${Number(pick.baseFeePct.toFixed(2))}%`,
+    priceLabel: info ? `bin ${info.activeId}` : 'unknown',
+  });
+  const extra = { ...html, ...Markup.inlineKeyboard(rows) };
+  return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+}
+
 bot.action(/^sollp:(\d+)$/, async (ctx) => {
   const picks = solPoolPicks.get(ctx.from!.id);
   const pick = picks?.pools[Number((ctx.match as RegExpMatchArray)[1])];
@@ -3929,23 +3953,19 @@ bot.action(/^sollp:(\d+)$/, async (ctx) => {
   }
   await ctx.answerCbQuery();
   solLpFlows.set(ctx.from!.id, { pick, startedAt: Date.now() });
-  const rows = pctPresets.chunkButtons(
-    pctPresets.get('solrange').map((p) => Markup.button.callback(`${p}%`, `sollpr:${p}`)),
-  );
-  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
-  const priceLabel = await (async () => {
-    const info = await lbPair(pick.pool).catch(() => null);
-    return info ? `bin ${info.activeId}` : 'unknown';
-  })();
-  return ctx.reply(
-    msg.msgSolLpRange({
-      pair: pick.pair,
-      binStep: pick.binStep == null ? '?' : String(pick.binStep),
-      fee: pick.baseFeePct == null ? '?' : `${Number(pick.baseFeePct.toFixed(2))}%`,
-      priceLabel,
-    }),
-    { ...html, ...Markup.inlineKeyboard(rows) },
-  );
+  return solLpRangeCard(ctx, pick, false);
+});
+
+/** Back, from the amount step to the range step. */
+bot.action('sollpback', async (ctx) => {
+  const f = solLpFlows.get(ctx.from!.id);
+  if (!f || isStaleFlow(f.startedAt)) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  await ctx.answerCbQuery();
+  // The chosen range is dropped: coming back here means it is being chosen again, and a
+  // leftover value would let a typed amount open at a range the card no longer shows.
+  f.rangePct = undefined;
+  f.bins = undefined;
+  return solLpRangeCard(ctx, f.pick, true);
 });
 
 bot.action(/^sollpr:(\d+)$/, async (ctx) => {
@@ -3966,7 +3986,7 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
     pctPresets.get('solsize').map((v) => Markup.button.callback(`${v} SOL`, `sollpa:${Math.round(v * jupiter.LAMPORTS)}`)),
   );
   rows.push(...pctPresets.chunkButtons(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `sollpp:${p}`))));
-  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  rows.push([Markup.button.callback('⬅️ Back', 'sollpback'), Markup.button.callback('❌ Cancel', 'cancel')]);
   return ctx.editMessageText(
     msg.msgSolLpAmount({
       pair: f.pick.pair,
