@@ -24,6 +24,7 @@ import { onchainV4Pools } from './onchainPools.js';
 import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
+import * as solStore from './solana/store.js';
 import { binsForRange, openPosition } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
@@ -1666,13 +1667,13 @@ function collapseLadderRows(rows: PosRow[]): void {
 /**
  * Meteora DLMM positions as /positions rows.
  *
- * Deliberately VALUELESS rows: no invest figure, no PnL. Turning a bin's liquidity share
- * into token amounts needs the BinArray account behind every one of up to 70 bins, and an
- * estimate printed beside real v3/v4 dollars would be indistinguishable from a measured
- * one. A range and an in/out answer are exact, so those are what this reports.
+ * The chain knows what is in a position, never what it cost. Deposits this bot made are in
+ * solStore, so those rows carry an entry, an age and a PnL; a position opened on Meteora's
+ * own site has none, and the row says so rather than inventing one.
  *
- * wethEq stays 0 and natSym is left unset, which keeps these rows out of the native total
- * rather than adding SOL into an ETH sum.
+ * Values are in the BASE (SOL or USDC), not dollars. A dollar figure here would need a SOL
+ * price on a path that has none, and a made-up one beside real v3/v4 dollars would be
+ * indistinguishable from a measured figure.
  */
 async function solanaRows(): Promise<PosRow[]> {
   const { enabled, rpcUrl } = config.solana;
@@ -1681,28 +1682,58 @@ async function solanaRows(): Promise<PosRow[]> {
   const wallet = solWallet.address();
   if (!enabled || !rpcUrl || !wallet || !isSolAddress(wallet)) return [];
   const list = await solPositions(wallet).catch(() => []);
-  return list.map((p) => ({
-    id: p.position,
-    pair: `${p.tokenMint.slice(0, 4)}… / ${p.base?.symbol ?? '?'}`,
-    protocol: 'DLMM',
-    chain: 'Solana',
-    investLabel: 'value not read',
-    // Age needs an open time, and an account carries none; the journal does not have these
-    // positions either. An em dash is the same thing an untracked v4 position shows.
-    age: '—',
-    pnlUsd: null,
-    pnlPct: null,
-    inRange: p.inRange,
-    wethEq: 0,
-    baseSymbol: p.base?.symbol ?? null,
-    strategy: 'base',
-    rangeLabel:
-      p.lowerPrice === null || p.upperPrice === null
-        ? `${p.upperBinId - p.lowerBinId + 1} bins · step ${p.binStep}`
-        : // toPrecision, not toFixed: a DLMM token price is routinely 5e-6, and toFixed(4)
-          // would print every bound of such a pool as "0.0000".
-          `${p.lowerPrice.toPrecision(4)} — ${p.upperPrice.toPrecision(4)} ${p.base?.symbol ?? ''} per token`,
-  }));
+  solStore.keepOnly(list.map((p) => p.position));
+  // One symbol lookup per distinct token, not per position.
+  const symbols = new Map<string, string>();
+  await Promise.all(
+    [...new Set(list.map((p) => p.tokenMint))].map(async (m) => {
+      const v = await solTokenView(m).catch(() => null);
+      if (v?.facts?.symbol) symbols.set(m, v.facts.symbol.replace(/^\$+/, ''));
+    }),
+  );
+  const num = (v: number, dp = 4) => Number(v.toFixed(dp)).toLocaleString('en-US', { maximumFractionDigits: dp });
+  return list.map((p): PosRow => {
+    const baseSym = p.base?.symbol ?? '?';
+    // The mint's first four characters only when DexScreener knows no symbol: a pool too
+    // new to be indexed is still a position the owner has to be able to find.
+    const sym = symbols.get(p.tokenMint) ?? `${p.tokenMint.slice(0, 4)}…`;
+    const entry = solStore.getEntry(p.position);
+    const entryBase = entry ? Number(entry.entryBase) / Math.pow(10, p.base?.decimals ?? 9) : null;
+    const pnlBase = entryBase !== null ? p.valueBase + p.feeBase - entryBase : null;
+    return {
+      id: p.position,
+      pair: `${sym} / ${baseSym}`,
+      protocol: 'DLMM',
+      chain: 'Solana',
+      // The deposit when it is known, the CURRENT value when it is not -- and the label
+      // says which, because "invested" and "worth now" are not the same number.
+      investLabel: `${num(entryBase ?? p.valueBase)} ${baseSym}${entryBase === null ? ' (now)' : ''}`,
+      investNum: entryBase ?? p.valueBase,
+      investUnit: baseSym,
+      investStable: baseSym === 'USDC',
+      age: entry ? msg.fmtAge(Date.now() - entry.openedAt) : '—',
+      // PnL in the BASE, converted to nothing: pnlUsd is dollars everywhere else, so a SOL
+      // figure must not be put in it. Only the percentage is shared.
+      pnlUsd: null,
+      pnlPct: pnlBase !== null && entryBase ? (pnlBase / entryBase) * 100 : null,
+      inRange: p.inRange,
+      // Solana rows stay out of the native total: adding SOL to ETH would be fiction.
+      wethEq: 0,
+      baseSymbol: baseSym,
+      strategy: 'base',
+      // Fully converted: price has fallen through the whole range and the base side is gone.
+      converted: !p.inRange && p.baseAmount === 0 && p.tokenAmount > 0,
+      convertedInto: sym,
+      feesBase: p.feeBase,
+      feesLabel: `${num(p.feeBase, 6)} ${baseSym}`,
+      rangeLabel:
+        p.lowerPrice === null || p.upperPrice === null
+          ? `${p.upperBinId - p.lowerBinId + 1} bins · step ${p.binStep}`
+          : // toPrecision, not toFixed: a DLMM token price is routinely 5e-6, and toFixed(4)
+            // would print every bound of such a pool as "0.0000".
+            `${p.lowerPrice.toPrecision(4)} — ${p.upperPrice.toPrecision(4)} ${baseSym} per ${sym}`,
+    };
+  });
 }
 
 // /positions — ONE consolidated message: a summary plus a per-position tree (v3 + v4).
@@ -4030,6 +4061,23 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
   await say(msg.msgProgress(`opening ${fmtSol(lamports)} SOL into ${f.pick.pair}…`));
   try {
     const r = await openPosition(f.pick.pool, lamports, f.rangePct ?? 10, pctPresets.shape(), kp);
+    // Recorded AFTER the chain confirmed it, so /positions never carries an entry for a
+    // position that does not exist. Failing to record costs a PnL, not a position.
+    try {
+      solStore.record({
+        position: r.position,
+        pool: f.pick.pool,
+        mint: f.pick.mint,
+        symbol: f.pick.pair.split('/')[0].replace(/^\$+/, '').trim(),
+        baseSymbol: f.pick.baseSymbol,
+        entryBase: lamports.toString(),
+        openedAt: Date.now(),
+        rangePct: f.rangePct ?? 10,
+        bins: r.plan.bins,
+      });
+    } catch (e) {
+      console.error('[sol-lp] opened but not recorded:', (e as Error).message);
+    }
     return say(
       msg.msgSolLpOpened({
         pair: f.pick.pair,
