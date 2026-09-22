@@ -1667,24 +1667,13 @@ export function msgSolLpRange(o: { pair: string }): string {
 }
 
 /** Step 2: how much. */
-export function msgSolLpAmount(o: {
-  pair: string;
-  rangePct: string;
-  bins: string;
-  balanceSol: string;
-  spendableSol: string;
-  rentSol: string;
-}): string {
+export function msgSolLpAmount(o: { pair: string; rangePct: string; bins: string; balanceSol: string }): string {
   return card(
-    `\u{1F4A7} ${bold('OPEN LP')} ${esc(o.pair)}`,
+    `${bold('OPEN LP')} | ${esc(o.pair)}`,
     [
-      `\u251C Range: ${esc(o.rangePct)} (${esc(o.bins)} bins)`,
-      `\u251C Balance: ${esc(o.balanceSol)} SOL`,
-      `\u2514 Spendable: ${esc(o.spendableSol)} SOL`,
-      '',
-      // Rent is real money leaving the wallet, and part of it does not come back. A card
-      // that only named the deposit would understate what opening costs.
-      italic(`rent: about ${o.rentSol} SOL for the position and its bin arrays. The position rent returns on close; the bin array rent does not.`),
+      // The bins are what the range BECAME, so the two are read together on one line.
+      `${bold('Range')}: ${esc(o.rangePct)} (${esc(o.bins)} bins)`,
+      `${bold('Balance')}: ${esc(o.balanceSol)} SOL`,
       '',
       'Pick an amount in SOL, a share of the balance, or type an amount.',
     ],

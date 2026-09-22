@@ -111,11 +111,15 @@ assert.ok(!/openPosition|solLpOpen/.test(back), 'Back must never open a position
 assert.ok(/rangeOpenedPct\(r\.plan\.bins, f\.pick\.binStep\)/.test(idx), 'the card must derive its range from the plan, not the request');
 assert.ok(/r\.plan\.baseIsX \? '\+' : '-'/.test(idx), 'the sign must follow the side the deposit sits on');
 
-// --- Rent is disclosed before the deposit, because part of it never comes back ---
-const messages = readFileSync('src/messages.ts', 'utf8');
-const amountCard = messages.slice(messages.indexOf('export function msgSolLpAmount'), messages.indexOf('export function msgSolLpOpened'));
-assert.ok(/rent/i.test(amountCard), 'the amount card must name the rent');
-assert.ok(/does not/.test(amountCard), 'the card must say which part of the rent is NOT returned');
+// --- Rent is held back, because an LP pays it and part of it never comes back ---
+// Opening pays 0.0574 SOL for the position (returned on close) and 0.0714 for a bin array
+// (not returned). The buy path's 0.01 reserve does not cover that, so an LP that spent it
+// would fail on-chain at exactly the moment the rent is charged.
+assert.ok(/SOL_LP_RESERVE_LAMPORTS = 140_000_000n/.test(idx), 'an LP must reserve rent, not only fees');
+assert.ok(/solSpendable\(kp\.publicKey, SOL_LP_RESERVE_LAMPORTS\)/.test(open), 'the opener must size against the LP reserve');
+assert.ok(/position rent/.test(open), 'the message that stops the deposit must say what the reserve is for');
+// The buy path keeps its own, smaller reserve: a swap pays no rent.
+assert.ok(/SOL_RESERVE_LAMPORTS = 10_000_000n/.test(idx), 'the swap reserve must stay as it was');
 
 // --- Both preset sets are the owner's, and SOL amounts may have decimals ---
 const presets = readFileSync('src/pctPresets.ts', 'utf8');

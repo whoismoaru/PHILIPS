@@ -3902,6 +3902,16 @@ registerFlowReset((uid) => {
 });
 
 /**
+ * Held back on an LP: fees AND rent.
+ *
+ * Opening a position pays rent for the position account (0.0574 SOL, returned on close)
+ * and for any bin array it has to create (0.0714 SOL, NOT returned). The buy path's 0.01
+ * reserve does not cover that, so depositing "100%" of it would leave the wallet short at
+ * exactly the moment the rent is charged and the transaction would fail on-chain.
+ */
+const SOL_LP_RESERVE_LAMPORTS = 140_000_000n;
+
+/**
  * The range a position really covers, as a percentage.
  *
  * The inverse of binsForRange: bins are geometric, so n of them at this step span
@@ -3913,9 +3923,6 @@ function rangeOpenedPct(bins: number, binStep: number | null): string {
   const span = 1 - 1 / Math.pow(1 + binStep / 10_000, bins);
   return String(Number((span * 100).toFixed(span * 100 >= 10 ? 0 : 1)));
 }
-
-/** Rent named on the amount card: position + two bin arrays, the SDK's own constants. */
-const SOL_RENT_ESTIMATE = 0.0574 + 0.0714;
 
 /** The range step. Drawn fresh when a pool is picked, and again when Back is tapped. */
 async function solLpRangeCard(ctx: any, pick: SolPoolPick, edit: boolean): Promise<unknown> {
@@ -3974,7 +3981,6 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
   // can hold; saying "50%" alone would hide that.
   f.bins = f.pick.binStep ? binsForRange(f.pick.binStep, rangePct) : undefined;
   const bal = await jupiter.solBalance(kp.publicKey).catch(() => 0n);
-  const spendable = await solSpendable(kp.publicKey);
   const rows = pctPresets.chunkButtons(
     pctPresets.get('solsize').map((v) => Markup.button.callback(`${v} SOL`, `sollpa:${Math.round(v * jupiter.LAMPORTS)}`)),
   );
@@ -3986,8 +3992,6 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
       rangePct: `${rangePct}%`,
       bins: f.bins === undefined ? '?' : String(f.bins),
       balanceSol: fmtSol(bal),
-      spendableSol: fmtSol(spendable),
-      rentSol: SOL_RENT_ESTIMATE.toFixed(4),
     }),
     { ...html, ...Markup.inlineKeyboard(rows) },
   );
@@ -4002,10 +4006,17 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
   if (!kp) return ctx.reply(msg.msgError('add', 'No Solana key connected.'), html);
   const show = (text: string, extra: Record<string, unknown> = html) =>
     edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
-  const spendable = await solSpendable(kp.publicKey);
+  const spendable = await solSpendable(kp.publicKey, SOL_LP_RESERVE_LAMPORTS);
   if (lamports <= 0n) return show(msg.msgError('add', 'That amount rounds to zero.'));
   if (lamports > spendable) {
-    return show(msg.msgError('add', `Only ${fmtSol(spendable)} SOL is spendable (${fmtSol(SOL_RESERVE_LAMPORTS)} is kept for fees and rent).`));
+    // The reserve is named here rather than on the card, so the number appears exactly
+    // where it stops something happening.
+    return show(
+      msg.msgError(
+        'add',
+        `Only ${fmtSol(spendable)} SOL is spendable: ${fmtSol(SOL_LP_RESERVE_LAMPORTS)} is kept for fees and position rent (about 0.057 SOL comes back when you close).`,
+      ),
+    );
   }
   if (config.safety.dryRun) {
     solLpFlows.delete(ctx.from.id);
@@ -4061,7 +4072,7 @@ bot.action(/^sollpp:(\d+)$/, async (ctx) => {
   if (!kp) return ctx.answerCbQuery('No Solana key connected.');
   await ctx.answerCbQuery();
   const pct = BigInt((ctx.match as RegExpMatchArray)[1]);
-  return solLpOpen(ctx, f, ((await solSpendable(kp.publicKey)) * pct) / 100n, true);
+  return solLpOpen(ctx, f, ((await solSpendable(kp.publicKey, SOL_LP_RESERVE_LAMPORTS)) * pct) / 100n, true);
 });
 
 /** An amount typed at the LP card. Returns true when the message was consumed. */
@@ -4206,9 +4217,9 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
 }
 
 /** The spendable balance: everything except the reserve kept back for fees and rent. */
-async function solSpendable(owner: string): Promise<bigint> {
+async function solSpendable(owner: string, reserve: bigint = SOL_RESERVE_LAMPORTS): Promise<bigint> {
   const bal = await jupiter.solBalance(owner).catch(() => 0n);
-  return bal > SOL_RESERVE_LAMPORTS ? bal - SOL_RESERVE_LAMPORTS : 0n;
+  return bal > reserve ? bal - reserve : 0n;
 }
 
 /**
