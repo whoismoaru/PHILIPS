@@ -82,7 +82,7 @@ assert.equal(routeLabel({ routePlan: [{ swapInfo: { label: 'Meteora DLMM' } }] }
 assert.equal(routeLabel({} as any), 'Jupiter', 'a route with no venues still needs a name');
 
 // --- A transaction that lands and FAILS is not a completed buy ---
-assert.ok(/if \(s\.err\) throw/.test(jup), 'an on-chain error must stop the flow, not be reported as success');
+assert.ok(/if \(s\.err\) \{[\s\S]{0,200}throw new Error/.test(jup), 'an on-chain error must stop the flow, not be reported as success');
 assert.ok(/confirmationStatus === 'confirmed'/.test(jup), 'the swap is only done once the network confirms it');
 assert.ok(/not confirmed within/.test(jup), 'a timeout must be said out loud, never treated as success');
 
