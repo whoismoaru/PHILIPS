@@ -24,6 +24,8 @@ import { onchainV4Pools } from './onchainPools.js';
 import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
+import { binsForRange, openPosition } from './solana/lp.js';
+import { lbPair } from './solana/lbpair.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
 import * as solWallet from './solana/walletStore.js';
@@ -3833,11 +3835,20 @@ async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any
   // opening an LP on Solana is not built yet, and a button that promised it would be a lie.
   const kb: any[][] = [];
   if (shown.length > 0) {
-    kb.push(
-      shown.map((p, i) =>
-        Markup.button.url(`${i + 1}. $${p.baseSymbol} ${p.binStep ?? '?'}`, `https://app.meteora.ag/dlmm/${p.pairAddress}`),
-      ),
-    );
+    // The pools are CALLBACKS now, not links: tapping one opens the LP flow for that pool.
+    // The card index is what travels, not the address -- a pool key plus a prefix does not
+    // fit Telegram's 64-byte callback limit alongside the mint.
+    kb.push(shown.map((p, i) => Markup.button.callback(`${i + 1}. $${p.baseSymbol} ${p.binStep ?? '?'}`, `sollp:${i}`)));
+    solPoolPicks.set(ctx.from.id, {
+      at: Date.now(),
+      pools: shown.map((p) => ({
+        pool: p.pairAddress,
+        pair: `$${sym}/$${p.baseSymbol}`,
+        baseSymbol: p.baseSymbol,
+        binStep: p.binStep,
+        baseFeePct: p.baseFeePct,
+      })),
+    });
   }
   kb.push([
     // 'solref:' + a 44-character base58 mint is 51 bytes, inside Telegram's 64-byte limit.
@@ -3871,6 +3882,178 @@ const SOL_RESERVE_LAMPORTS = 10_000_000n;
 const SOL_SLIPPAGE_BPS = 300;
 
 const fmtSol = (lamports: bigint): string => (Number(lamports) / jupiter.LAMPORTS).toFixed(4);
+
+/**
+ * Opening a Meteora DLMM position from a pool button.
+ *
+ * Range first, then amount, then it opens -- the same order and the same "the amount is the
+ * confirmation" rule the EVM flows use. Both preset sets are editable from /settings, so
+ * the numbers on the buttons are the owner's, not mine.
+ */
+type SolPoolPick = { pool: string; pair: string; baseSymbol: string; binStep: number | null; baseFeePct: number | null };
+/** What the last CA card offered, per user: the buttons carry an index, not an address. */
+const solPoolPicks = new Map<number, { at: number; pools: SolPoolPick[] }>();
+type SolLpFlow = { pick: SolPoolPick; startedAt: number; rangePct?: number; bins?: number };
+const solLpFlows = new Map<number, SolLpFlow>();
+registerFlowReset((uid) => {
+  solLpFlows.delete(uid);
+  solPoolPicks.delete(uid);
+});
+
+/** Rent named on the amount card: position + two bin arrays, the SDK's own constants. */
+const SOL_RENT_ESTIMATE = 0.0574 + 0.0714;
+
+bot.action(/^sollp:(\d+)$/, async (ctx) => {
+  const picks = solPoolPicks.get(ctx.from!.id);
+  const pick = picks?.pools[Number((ctx.match as RegExpMatchArray)[1])];
+  if (!pick || !picks || isStaleFlow(picks.at)) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  if (!solWallet.keypair()) {
+    await ctx.answerCbQuery();
+    return ctx.reply(
+      msg.msgError('add', 'No Solana key is connected. Send /connect_sol and paste the private key of the wallet you want to LP with.'),
+      html,
+    );
+  }
+  await ctx.answerCbQuery();
+  solLpFlows.set(ctx.from!.id, { pick, startedAt: Date.now() });
+  const rows = pctPresets.chunkButtons(
+    pctPresets.get('solrange').map((p) => Markup.button.callback(`${p}%`, `sollpr:${p}`)),
+  );
+  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  const priceLabel = await (async () => {
+    const info = await lbPair(pick.pool).catch(() => null);
+    return info ? `bin ${info.activeId}` : 'unknown';
+  })();
+  return ctx.reply(
+    msg.msgSolLpRange({
+      pair: pick.pair,
+      binStep: pick.binStep == null ? '?' : String(pick.binStep),
+      fee: pick.baseFeePct == null ? '?' : `${Number(pick.baseFeePct.toFixed(2))}%`,
+      priceLabel,
+    }),
+    { ...html, ...Markup.inlineKeyboard(rows) },
+  );
+});
+
+bot.action(/^sollpr:(\d+)$/, async (ctx) => {
+  const f = solLpFlows.get(ctx.from!.id);
+  if (!f || isStaleFlow(f.startedAt)) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  const kp = solWallet.keypair();
+  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  const rangePct = Number((ctx.match as RegExpMatchArray)[1]);
+  await ctx.answerCbQuery();
+  f.rangePct = rangePct;
+  // The bins are computed from the POOL's bin step, so the card says what the range really
+  // became. A 50% range at bin step 100 wants 69 bins and is trimmed to the 69 a position
+  // can hold; saying "50%" alone would hide that.
+  f.bins = f.pick.binStep ? binsForRange(f.pick.binStep, rangePct) : undefined;
+  const bal = await jupiter.solBalance(kp.publicKey).catch(() => 0n);
+  const spendable = await solSpendable(kp.publicKey);
+  const rows = pctPresets.chunkButtons(
+    pctPresets.get('solsize').map((v) => Markup.button.callback(`${v} SOL`, `sollpa:${Math.round(v * jupiter.LAMPORTS)}`)),
+  );
+  rows.push(...pctPresets.chunkButtons(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `sollpp:${p}`))));
+  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  return ctx.editMessageText(
+    msg.msgSolLpAmount({
+      pair: f.pick.pair,
+      rangePct: `${rangePct}%`,
+      bins: f.bins === undefined ? '?' : String(f.bins),
+      balanceSol: fmtSol(bal),
+      spendableSol: fmtSol(spendable),
+      rentSol: SOL_RENT_ESTIMATE.toFixed(4),
+    }),
+    { ...html, ...Markup.inlineKeyboard(rows) },
+  );
+});
+
+/**
+ * Open the position. Shared by the SOL buttons, the percentage buttons and a typed amount,
+ * for the same reason the buy path shares its builder: one set of guards, not three.
+ */
+async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean): Promise<unknown> {
+  const kp = solWallet.keypair();
+  if (!kp) return ctx.reply(msg.msgError('add', 'No Solana key connected.'), html);
+  const show = (text: string, extra: Record<string, unknown> = html) =>
+    edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+  const spendable = await solSpendable(kp.publicKey);
+  if (lamports <= 0n) return show(msg.msgError('add', 'That amount rounds to zero.'));
+  if (lamports > spendable) {
+    return show(msg.msgError('add', `Only ${fmtSol(spendable)} SOL is spendable (${fmtSol(SOL_RESERVE_LAMPORTS)} is kept for fees and rent).`));
+  }
+  if (config.safety.dryRun) {
+    solLpFlows.delete(ctx.from.id);
+    return show(msg.msgDryRunAddDone());
+  }
+  // Cleared BEFORE the send: a second tap must not open a second position.
+  solLpFlows.delete(ctx.from.id);
+  const prog = edit ? { message_id: (ctx.callbackQuery!.message as { message_id: number }).message_id } : undefined;
+  const say = (text: string, extra: Record<string, unknown> = html) =>
+    prog ? editProgress(ctx, prog, text, extra) : ctx.reply(text, extra);
+  await say(msg.msgProgress(`opening ${fmtSol(lamports)} SOL into ${f.pick.pair}…`));
+  try {
+    const r = await openPosition(f.pick.pool, lamports, f.rangePct ?? 10, pctPresets.shape(), kp);
+    return say(
+      msg.msgSolLpOpened({
+        pair: f.pick.pair,
+        amountSol: fmtSol(lamports),
+        rangeLabel: `${f.rangePct}% below`,
+        bins: String(r.plan.bins),
+        sig: r.signature,
+      }),
+      {
+        ...html,
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.url('🔍 Meteora', `https://app.meteora.ag/dlmm/${f.pick.pool}`),
+            Markup.button.callback('📊 Positions', 'positions'),
+          ],
+          [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
+        ]),
+      },
+    );
+  } catch (e) {
+    return say(msg.msgError('add', (e as Error).message));
+  }
+}
+
+bot.action(/^sollpa:(\d+)$/, async (ctx) => {
+  const f = solLpFlows.get(ctx.from!.id);
+  if (!f || isStaleFlow(f.startedAt)) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  await ctx.answerCbQuery();
+  return solLpOpen(ctx, f, BigInt((ctx.match as RegExpMatchArray)[1]), true);
+});
+
+bot.action(/^sollpp:(\d+)$/, async (ctx) => {
+  const f = solLpFlows.get(ctx.from!.id);
+  if (!f || isStaleFlow(f.startedAt)) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  const kp = solWallet.keypair();
+  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  await ctx.answerCbQuery();
+  const pct = BigInt((ctx.match as RegExpMatchArray)[1]);
+  return solLpOpen(ctx, f, ((await solSpendable(kp.publicKey)) * pct) / 100n, true);
+});
+
+/** An amount typed at the LP card. Returns true when the message was consumed. */
+export async function handleSolLpAmount(ctx: any, raw: string): Promise<boolean> {
+  const f = solLpFlows.get(ctx.from.id);
+  if (!f || f.rangePct === undefined) return false;
+  if (isStaleFlow(f.startedAt)) {
+    solLpFlows.delete(ctx.from.id);
+    return false;
+  }
+  const t = raw.trim().replace(',', '.');
+  if (!/^\d*\.?\d+$/.test(t)) return false;
+  const n = Number(t);
+  if (!isFinite(n) || n <= 0) {
+    await ctx.reply(msg.msgError('add', 'Enter an amount in SOL, for example 0.25.'), html);
+    return true;
+  }
+  // Lamports as an integer string: float arithmetic on 0.001 SOL rounds into an amount the
+  // wallet does not hold.
+  await solLpOpen(ctx, f, BigInt(n.toFixed(9).replace('.', '')), false);
+  return true;
+}
 
 bot.action(/^solbuy:(.+)$/, async (ctx) => {
   const mint = (ctx.match as RegExpMatchArray)[1];
@@ -5851,6 +6034,7 @@ bot.on(message('text'), async (ctx) => {
   // A Solana buy waiting on an amount. Checked here, alongside the other amount flows: a
   // bare number typed at that card used to fall all the way through to msgUnknown.
   if (await handleSolBuyAmount(ctx, raw)) return;
+  if (await handleSolLpAmount(ctx, raw)) return;
 
   // /buy and /sell: wait for a contract address, then an amount, then quote the best route, then confirm.
   const tflow = tswapFlows.get(ctx.from.id);

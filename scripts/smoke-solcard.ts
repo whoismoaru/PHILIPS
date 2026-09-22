@@ -81,7 +81,9 @@ assert.ok(!/(\*\*|__|\[.+\]\(.+\))/.test(card), 'Markdown leaked into an HTML ca
 assert.ok(!card.includes('\n\n\n'), 'a double blank line renders as a visible gap');
 
 // --- The buttons: three pools, a refresh that carries the mint, and a way back ---
-assert.ok(/Markup\.button\.url\(`\$\{i \+ 1\}/.test(idxSrc), 'each shown pool must get its own button');
+// A pool button is a CALLBACK into the LP flow, not a link out: tapping a pool is how a
+// position is opened.
+assert.ok(/Markup\.button\.callback\(`\$\{i \+ 1\}[^`]*`, `sollp:\$\{i\}`\)/.test(idxSrc), 'each shown pool must open the LP flow');
 assert.ok(/solref:\$\{mint\}/.test(idxSrc), 'refresh must carry the mint it is refreshing');
 // Callback data is capped at 64 bytes by Telegram; 'solref:' plus a 44-character mint is 51.
 assert.ok('solref:'.length + 44 <= 64, 'the refresh callback would exceed 64 bytes');

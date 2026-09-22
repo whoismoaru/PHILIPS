@@ -132,6 +132,12 @@ export async function cmdSettings(ctx: any) {
     Markup.button.callback('🌉 Bridge %', 'pct:bridge'),
     Markup.button.callback('📤 Withdraw %', 'pct:send'),
   ]);
+  // The Solana LP flow asks two questions the EVM flows do not: how wide, and how much in
+  // SOL rather than as a share. Both sets of buttons are edited from here like the rest.
+  rows.push([
+    Markup.button.callback('🎯 SOL Range %', 'pct:solrange'),
+    Markup.button.callback('🪙 SOL Amount', 'pct:solsize'),
+  ]);
   // The LP shape is a one-off choice, so it lives here rather than being asked on every
   // deposit. The label carries the current value -- a toggle that does not say what it is
   // set to makes you tap it to find out.
@@ -258,7 +264,11 @@ function pctOpts(flow: pctPresets.PctFlow) {
         ? '100% is not allowed here. Withdrawing everything closes the position, which has its own button.'
         : flow === 'legs'
           ? 'More legs means a smoother ladder but more RPC calls. Above 15 you want a paid endpoint.'
-          : undefined,
+          : flow === 'solsize'
+            ? 'Amounts in SOL, decimals allowed: 0.1 0.25 0.5 1.'
+            : flow === 'solrange'
+              ? 'A DLMM position holds 70 bins. A range wider than those bins cover is trimmed to fit.'
+              : undefined,
   };
 }
 
@@ -270,7 +280,7 @@ function pctCardKb(flow: pctPresets.PctFlow) {
   ]);
 }
 
-bot.action(/^pct:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
+bot.action(/^pct:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   // Going back from the prompt means abandoning it. Without this the marker persists and
   // swallows the next text message, whichever flow it belonged to.
@@ -282,7 +292,7 @@ bot.action(/^pct:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
   );
 });
 
-bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
+bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.askEdit(ctx.from!.id, flow);
   await ctx.answerCbQuery();
@@ -292,7 +302,7 @@ bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
   });
 });
 
-bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs|send)$/, async (ctx) => {
+bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.clearEdit(ctx.from!.id);
   const v = pctPresets.reset(flow);

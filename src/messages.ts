@@ -1661,6 +1661,71 @@ export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: s
   );
 }
 
+/** Step 1 of a Solana LP: how wide. */
+export function msgSolLpRange(o: { pair: string; binStep: string; fee: string; priceLabel: string }): string {
+  return card(
+    `\u{1F4A7} ${bold('OPEN LP')} ${esc(o.pair)}`,
+    [
+      `\u251C Bin step: ${esc(o.binStep)}`,
+      `\u251C Fee: ${esc(o.fee)}`,
+      `\u2514 Price: ${esc(o.priceLabel)}`,
+      '',
+      // The direction is the whole meaning of the position, so it is stated, not implied.
+      italic('the deposit sits below the current price and converts into the token as price falls.'),
+      '',
+      'How wide should the range be?',
+    ],
+    footerMode(),
+  );
+}
+
+/** Step 2: how much. */
+export function msgSolLpAmount(o: {
+  pair: string;
+  rangePct: string;
+  bins: string;
+  balanceSol: string;
+  spendableSol: string;
+  rentSol: string;
+}): string {
+  return card(
+    `\u{1F4A7} ${bold('OPEN LP')} ${esc(o.pair)}`,
+    [
+      `\u251C Range: ${esc(o.rangePct)} (${esc(o.bins)} bins)`,
+      `\u251C Balance: ${esc(o.balanceSol)} SOL`,
+      `\u2514 Spendable: ${esc(o.spendableSol)} SOL`,
+      '',
+      // Rent is real money leaving the wallet, and part of it does not come back. A card
+      // that only named the deposit would understate what opening costs.
+      italic(`rent: about ${o.rentSol} SOL for the position and its bin arrays. The position rent returns on close; the bin array rent does not.`),
+      '',
+      'Pick an amount in SOL, a share of the balance, or type an amount.',
+    ],
+    footerMode(),
+  );
+}
+
+/** The result of an LP that opened. */
+export function msgSolLpOpened(o: {
+  pair: string;
+  amountSol: string;
+  rangeLabel: string;
+  bins: string;
+  sig: string;
+}): string {
+  return card(
+    `\u2705 ${bold('POSITION OPENED')}`,
+    [
+      `${bold(`${o.amountSol} SOL`)} \u2192 ${bold(o.pair)}`,
+      '',
+      `\u251C Range: ${esc(o.rangeLabel)}`,
+      `\u251C Bins: ${esc(o.bins)}`,
+      `\u2514 Tx: ${code(o.sig)}`,
+    ],
+    footerMode(),
+  );
+}
+
 export function msgRangeStep(tokenSide = false): string {
   return [
     bold('OPEN LP | Set Price Range'),

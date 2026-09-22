@@ -10,7 +10,7 @@ import { writeJson } from './store.js';
  * 30/50/70/90 while the rest offered 25/50/75/100. Changing one meant editing four places
  * and restarting, so in practice they were never changed at all.
  */
-export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs' | 'send';
+export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs' | 'send' | 'solrange' | 'solsize';
 
 export const FLOW_LABEL: Record<PctFlow, string> = {
   buy: 'Buy',
@@ -20,6 +20,9 @@ export const FLOW_LABEL: Record<PctFlow, string> = {
   bridge: 'Bridge',
   legs: 'Ladder legs',
   send: 'Send',
+  solrange: 'SOL range %',
+  // Not a percentage either: amounts in SOL, for the LP deposit buttons.
+  solsize: 'SOL amount',
 };
 
 // `stop` deliberately omits 100: pulling everything out means closing the position, which
@@ -33,6 +36,8 @@ const DEFAULTS: Record<PctFlow, number[]> = {
   // Not a percentage: the number of rungs in a bid-ask ladder.
   legs: [8, 9, 10, 69],
   send: [25, 50, 75, 100],
+  solrange: [5, 10, 25, 50],
+  solsize: [0.1, 0.25, 0.5, 1],
 };
 
 const FILE = join(process.cwd(), 'data', 'pctpresets.json');
@@ -66,17 +71,26 @@ const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
   bridge: { min: 1, max: 100 },
   legs: { min: 2, max: 69 },
   send: { min: 1, max: 100 },
+  // A DLMM position holds 70 bins, so a range wide enough to need more cannot be opened as
+  // one position. 90% at bin step 100 is already 231 bins; the flow caps what it asks for.
+  solrange: { min: 1, max: 99 },
+  // SOL, not percent. Fractions are the whole point here: the usual deposit is under 1.
+  solsize: { min: 0.001, max: 1000 },
 };
 export const boundsFor = (flow: PctFlow) => BOUNDS[flow];
 /** The unit the settings card shows: '%' for amounts, 'legs' for a ladder. */
-export const unitFor = (flow: PctFlow): string => (flow === 'legs' ? 'legs' : '%');
+export const unitFor = (flow: PctFlow): string => (flow === 'legs' ? 'legs' : flow === 'solsize' ? 'SOL' : '%');
 
 /** Valid values: whole numbers inside the flow's range, ascending, no duplicates, at most 4. */
 export function sanitize(values: number[], flow: PctFlow): number[] | null {
   // Out-of-range numbers are REJECTED rather than quietly filtered: "0 50" is almost certainly
   // a typo, and storing it as "50" would let the user believe the 0 was accepted.
   const { min, max } = BOUNDS[flow];
-  if (values.some((v) => !Number.isInteger(v) || v < min || v > max)) return null;
+  // solsize is an AMOUNT in SOL, so 0.25 is a legitimate value there and nowhere else.
+  // Everywhere else a non-integer is a typo, and storing "0.5" as a percentage would make
+  // a button that deposits nothing.
+  const decimals = flow === 'solsize';
+  if (values.some((v) => (decimals ? !(v > 0) : !Number.isInteger(v)) || v < min || v > max)) return null;
   const clean = [...new Set(values)].sort((a, b) => a - b);
   if (clean.length === 0 || clean.length > MAX_BUTTONS) return null;
   return clean;
