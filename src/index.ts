@@ -25,7 +25,6 @@ import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
 import { binsForRange, openPosition } from './solana/lp.js';
-import { lbPair } from './solana/lbpair.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
 import * as solWallet from './solana/walletStore.js';
@@ -3929,13 +3928,7 @@ async function solLpRangeCard(ctx: any, pick: SolPoolPick, edit: boolean): Promi
     Markup.button.callback('⬅️ Back', `solref:${pick.mint}`),
     Markup.button.callback('❌ Cancel', 'cancel'),
   ]);
-  const info = await lbPair(pick.pool).catch(() => null);
-  const text = msg.msgSolLpRange({
-    pair: pick.pair,
-    binStep: pick.binStep == null ? '?' : String(pick.binStep),
-    fee: pick.baseFeePct == null ? '?' : `${Number(pick.baseFeePct.toFixed(2))}%`,
-    priceLabel: info ? `bin ${info.activeId}` : 'unknown',
-  });
+  const text = msg.msgSolLpRange({ pair: pick.pair });
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
