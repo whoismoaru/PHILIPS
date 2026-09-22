@@ -86,11 +86,14 @@ assert.ok(/if \(s\.err\) throw/.test(jup), 'an on-chain error must stop the flow
 assert.ok(/confirmationStatus === 'confirmed'/.test(jup), 'the swap is only done once the network confirms it');
 assert.ok(/not confirmed within/.test(jup), 'a timeout must be said out loud, never treated as success');
 
-// --- The flow: one tap, one buy ---
+// --- The flow: the amount IS the confirmation, and one amount is one buy ---
+// No confirm tap on the live path, matching the EVM swap since 16 Sep 2026.
 const idx = readFileSync('src/index.ts', 'utf8');
-const go = idx.slice(idx.indexOf("bot.action('solgo'"), idx.indexOf("bot.action('solgo'") + 1200);
-assert.ok(go.indexOf('solBuyFlows.delete') < go.indexOf('executeSwap'), 'the flow must be cleared BEFORE the send, or a double tap buys twice');
-assert.ok(/config\.safety\.dryRun/.test(go), 'DRY_RUN must be honoured on a money path');
+const quoteFn = idx.slice(idx.indexOf('async function solBuyQuoteCard'), idx.indexOf('async function solSpendable'));
+assert.ok(/if \(!config\.safety\.dryRun\)[\s\S]{0,600}executeSwap/.test(quoteFn), 'the buy must execute as soon as the amount is set');
+assert.ok(quoteFn.indexOf('solBuyFlows.delete') < quoteFn.indexOf('executeSwap'), 'the flow must be cleared BEFORE the send, or a second amount buys twice');
+// DRY_RUN keeps the card instead, so the numbers can still be read without a send.
+assert.ok(quoteFn.indexOf('msgSolBuyConfirm') > quoteFn.indexOf('executeSwap'), 'DRY_RUN must fall through to the card, not to a send');
 // Lamports are integers. Percent arithmetic in floats rounds a 9-decimal amount and asks
 // for SOL the wallet does not have.
 assert.ok(/solSpendable\(kp\.publicKey\)\) \* BigInt\(pct\)\) \/ 100n/.test(idx), 'the spend must be computed in bigint lamports');

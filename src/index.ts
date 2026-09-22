@@ -24,7 +24,7 @@ import { onchainV4Pools } from './onchainPools.js';
 import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
-import { keypairFromSecret } from './solana/keys.js';
+import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
 import * as solWallet from './solana/walletStore.js';
 import { message } from 'telegraf/filters';
@@ -3910,11 +3910,11 @@ bot.action(/^solbuy:(.+)$/, async (ctx) => {
 });
 
 /**
- * Quote a spend and draw the confirm card. Shared by the percentage buttons and by a typed
- * amount: the card, the guards and the confirm button must be identical whichever way the
- * number arrived, or one of the two paths quietly grows its own rules.
+ * Quote a spend and BUY. Shared by the percentage buttons and by a typed amount: the
+ * guards must be identical whichever way the number arrived, or one of the two paths
+ * quietly grows its own rules.
  */
-async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: boolean): Promise<unknown> {
+async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: boolean, kp: SolKeypair): Promise<unknown> {
   const show = (text: string, extra: Record<string, unknown> = html) =>
     edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
   if (lamports <= 0n) return show(msg.msgError('buy', 'That amount rounds to zero.'));
@@ -3931,6 +3931,28 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
   // rather than scaled by a guess: a wrong guess here misstates the trade by 1000x.
   const amt = (v: string) =>
     dec === null ? `${v} base units` : Number(Number(v) / Math.pow(10, dec)).toLocaleString('en-US', { maximumFractionDigits: 4 });
+  // No confirm tap, matching the EVM swap since 16 Sep 2026: one behaviour, not two. The
+  // protections that button carried are all still on -- the quote's own slippage floor is
+  // enforced on-chain by Jupiter, the reserve was held back before this point, and the
+  // amount was checked against the spendable balance.
+  if (!config.safety.dryRun) {
+    await show(msg.msgProgress(`buying ${fmtSol(lamports)} SOL of $${f.symbol}…`));
+    const prog = edit
+      ? { message_id: (ctx.callbackQuery!.message as { message_id: number }).message_id }
+      : undefined;
+    const say = (text: string) =>
+      prog ? editProgress(ctx, prog, text) : ctx.reply(text, html);
+    // Cleared BEFORE the send: a second tap or a second typed amount must not buy twice.
+    solBuyFlows.delete(ctx.from!.id);
+    try {
+      const sig = await jupiter.executeSwap(q, kp);
+      return say(msg.msgSolBuyDone({ symbol: f.symbol, spendSol: fmtSol(lamports), sig }));
+    } catch (e) {
+      return say(msg.msgError('buy', (e as Error).message));
+    }
+  }
+
+  // DRY_RUN keeps the card and its button, so the numbers can be read without a send.
   return show(
     msg.msgSolBuyConfirm({
       symbol: f.symbol,
@@ -3993,7 +4015,7 @@ export async function handleSolBuyAmount(ctx: any, raw: string): Promise<boolean
     );
     return true;
   }
-  await solBuyQuoteCard(ctx, f, lamports, false);
+  await solBuyQuoteCard(ctx, f, lamports, false, kp);
   return true;
 }
 
@@ -4007,7 +4029,7 @@ bot.action(/^solamt:(\d+)$/, async (ctx) => {
   // Integer arithmetic on lamports throughout: a float here rounds a 9-decimal amount and
   // the swap asks for an amount the wallet does not have.
   const lamports = ((await solSpendable(kp.publicKey)) * BigInt(pct)) / 100n;
-  return solBuyQuoteCard(ctx, f, lamports, true);
+  return solBuyQuoteCard(ctx, f, lamports, true, kp);
 });
 
 bot.action('solgo', async (ctx) => {
