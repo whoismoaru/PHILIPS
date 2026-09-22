@@ -319,6 +319,9 @@ export const startKeyboard = () => {
 export function startCard(o: { imported?: number; gone?: number } = {}): string {
   const cc = getChain();
   const addr = walletStore.address();
+  // All three, or none: an RPC without a wallet reads nothing, and a wallet without an RPC
+  // has nothing to read with. Either way the card must not advertise Solana.
+  const solConfigured = config.solana.enabled && !!config.solana.rpcUrl && !!config.solana.wallet;
   return msg.msgStarted({
     dryRun: config.safety.dryRun,
     chainLabel: cc.label,
@@ -327,12 +330,16 @@ export function startCard(o: { imported?: number; gone?: number } = {}): string 
     imported: o.imported ?? 0,
     gone: o.gone ?? 0,
     walletShort: addr ? msg.shortAddr(addr) : null,
+    // Shortened here rather than through shortAddr(): that helper cuts 6 and 4 around an
+    // ellipsis, which is right for '0x'-prefixed hex where the first two characters carry
+    // no identity. A base58 key has no prefix, so all six leading characters are kept.
+    solShort: solConfigured ? `${config.solana.wallet.slice(0, 6)}…${config.solana.wallet.slice(-4)}` : null,
     // Solana is not in CHAINS and never will be (it is not a ChainCtx), so the label is
     // appended here. Only when it is actually configured: an unreachable chain listed on
     // the welcome card is a promise the bot cannot keep.
     chainLabels: [
       ...Object.values(CHAINS).map((c) => c.label),
-      ...(config.solana.enabled && config.solana.rpcUrl && config.solana.wallet ? ['Solana'] : []),
+      ...(solConfigured ? ['Solana'] : []),
     ],
   });
 }

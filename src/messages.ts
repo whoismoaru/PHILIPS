@@ -296,6 +296,10 @@ export function msgStarted(o: {
   imported: number;
   gone: number;
   walletShort?: string | null;
+  /** The Solana wallet, already shortened. Absent when Solana is not configured, and the
+   *  row is then left out entirely rather than printed as "not connected": an owner who
+   *  does not use Solana should not be told about a wallet they never set. */
+  solShort?: string | null;
   /** Every chain the bot is configured for, in menu order. Falls back to chainLabel. */
   chainLabels?: string[];
 }): string {
@@ -303,13 +307,12 @@ export function msgStarted(o: {
   const out = [
     bold('WELCOME TO PHILIPS!'),
     '',
-    'Your ultimate assistant for managing Single-Side Liquidity Pools on EVM chains. ' +
+    'Your ultimate assistant for managing Single-Side Liquidity Pools on EVM & SOL chains. ' +
       'Streamline your DeFi strategy, from automated dip-buying and profit-taking to effortless fee tracking.',
     '',
-    `\u{1F45B} ${bold('Wallet')} : ${code(o.walletShort ?? 'not connected')}`,
+    `\u{1F4B3} ${bold('EVM Address')} : ${code(o.walletShort ?? 'not connected')}`,
+    ...(o.solShort ? [`\u{1F4B3} ${bold('SOL Address')} : ${code(o.solShort)}`] : []),
     `\u{26D3}\u{FE0F} ${bold('Chain')} : ${esc(chains)}`,
-    '',
-    'Pick a command below to begin.',
   ];
   // Position drift is reported only when it happened: silence means nothing moved, and
   // a line reading "0 imported, 0 gone" is noise on every single start.
