@@ -303,7 +303,7 @@ export function msgStarted(o: {
   const out = [
     bold('WELCOME TO PHILIPS!'),
     '',
-    'Your ultimate assistant for managing Single-Side Liquidity Pools on EVM Chain. ' +
+    'Your ultimate assistant for managing Single-Side Liquidity Pools on EVM chains. ' +
       'Streamline your DeFi strategy, from automated dip-buying and profit-taking to effortless fee tracking.',
     '',
     `\u{1F45B} ${bold('Wallet')} : ${code(o.walletShort ?? 'not connected')}`,

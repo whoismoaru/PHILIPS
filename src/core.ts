@@ -327,6 +327,12 @@ export function startCard(o: { imported?: number; gone?: number } = {}): string 
     imported: o.imported ?? 0,
     gone: o.gone ?? 0,
     walletShort: addr ? msg.shortAddr(addr) : null,
-    chainLabels: Object.values(CHAINS).map((c) => c.label),
+    // Solana is not in CHAINS and never will be (it is not a ChainCtx), so the label is
+    // appended here. Only when it is actually configured: an unreachable chain listed on
+    // the welcome card is a promise the bot cannot keep.
+    chainLabels: [
+      ...Object.values(CHAINS).map((c) => c.label),
+      ...(config.solana.enabled && config.solana.rpcUrl && config.solana.wallet ? ['Solana'] : []),
+    ],
   });
 }
