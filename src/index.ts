@@ -1701,7 +1701,10 @@ async function solanaRows(): Promise<PosRow[]> {
     const entryBase = entry ? Number(entry.entryBase) / Math.pow(10, p.base?.decimals ?? 9) : null;
     const pnlBase = entryBase !== null ? p.valueBase + p.feeBase - entryBase : null;
     return {
-      id: p.position,
+      // The first eight characters, not the whole key. A Solana position id is 44 base58
+      // characters and wrapped onto two lines of its own, pushing the row it labels off
+      // the screen. Nothing here is looked up by it -- DLMM rows carry no buttons.
+      id: p.position.slice(0, 8),
       pair: `${sym} / ${baseSym}`,
       protocol: 'DLMM',
       chain: 'Solana',

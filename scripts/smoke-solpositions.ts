@@ -47,6 +47,12 @@ assert.ok(/wethEq: 0/.test(rows), 'Solana rows must stay out of the native total
 // DexScreener is still a position the owner has to find.
 assert.ok(/symbols\.get\(p\.tokenMint\) \?\? `\$\{p\.tokenMint\.slice\(0, 4\)\}/.test(rows), 'the row needs a symbol with a fallback');
 assert.ok(/rangeLabel:/.test(rows) && /toPrecision\(4\)/.test(rows), 'a DLMM range must be printed at precision, not fixed decimals');
+// The list printed the MARKET CAP range only, and a DLMM position has no entry market cap
+// to pin one to -- so those rows showed no range at all. The price range is the fallback.
+const messages = readFileSync('src/messages.ts', 'utf8');
+assert.ok(/r\.mcRange \|\| r\.rangeLabel/.test(messages), 'a row with no market-cap range must still show its price range');
+// A 44-character position key wraps onto its own two lines and pushes the row off screen.
+assert.ok(/p\.position\.slice\(0, 8\)/.test(rows), 'the position id must be shortened for the list');
 
 // --- The entry is recorded only after the chain confirmed the open ---
 const open = idx.slice(idx.indexOf('async function solLpOpen'), idx.indexOf("bot.action(/^sollpa"));

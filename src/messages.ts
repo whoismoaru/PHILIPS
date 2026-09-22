@@ -1360,10 +1360,13 @@ export function msgPositionsList(opts: {
       `Invested: ${esc(r.investLabel)}`,
       `Total Fees: ${esc(r.feesUsdLabel ?? r.feesLabel ?? '—')}`,
       `PnL: ${pnl}`,
-      // The range in MARKET CAP, the same reading the detail card gives. Dropped entirely
-      // when the entry values needed to pin it were never stored -- a wobbling range is
-      // worse than no range.
-      ...(r.mcRange ? [`Range: ${esc(r.mcRange)}`] : []),
+      // The range in MARKET CAP, the same reading the detail card gives, pinned to the
+      // stored entry values -- a wobbling range is worse than no range.
+      //
+      // Falling back to the PRICE range matters for Solana: a DLMM position has no entry
+      // market cap to pin anything to, so the market-cap line was simply never emitted and
+      // those rows printed no range at all.
+      ...(r.mcRange || r.rangeLabel ? [`Range: ${esc(r.mcRange || r.rangeLabel!)}`] : []),
       `Status: ${esc(status)}, ${esc(r.age)}`,
     ];
     return [
