@@ -5952,7 +5952,10 @@ const BOT_COMMANDS = [
 // and none of them has a button there. Closing belongs to the position it closes in
 // /positions, buying starts from a pasted CA, and stray wrapped native is unwrapped by
 // the monitor every minute. All three still work when typed.
-const HIDDEN_COMMANDS = new Set(['status', 'add_lp', 'stop', 'buy', 'unwrap', 'sell', 'send']);
+// connect_sol is hidden for the same reason /connect is reached from /settings: it is a
+// one-off setup step, and a key-pasting command sitting in the menu invites pasting a key
+// into the wrong chat.
+const HIDDEN_COMMANDS = new Set(['status', 'add_lp', 'stop', 'buy', 'unwrap', 'sell', 'send', 'connect_sol']);
 
 function assertMenuComplete(): void {
   const inMenu = new Set(BOT_COMMANDS.map((c) => c.command));
