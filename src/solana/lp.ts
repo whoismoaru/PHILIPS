@@ -16,10 +16,11 @@
  * into the token. The token side is never deposited.
  */
 import { createRequire } from 'node:module';
-import { Connection, Keypair, PublicKey, sendAndConfirmTransaction, type Transaction } from '@solana/web3.js';
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey, type Transaction } from '@solana/web3.js';
 import { rpcUrl } from './rpc.js';
 import { baseOfMint } from './bases.js';
 import type { SolKeypair } from './keys.js';
+import { encodeBase58 } from './addr.js';
 
 const req = createRequire(import.meta.url);
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -125,11 +126,85 @@ export async function openPosition(
       strategyType: shape === 'bidask' ? DLMM.StrategyType.BidAsk : DLMM.StrategyType.Spot,
     },
   });
-  const signature = await sendAndConfirmTransaction(conn, tx, [user, positionKp], {
-    commitment: 'confirmed',
+  // A PRICE for the compute units, which the SDK does not set.
+  //
+  // It emits SetComputeUnitLimit and nothing else, so the transaction goes out bidding
+  // zero. On 22 Sep 2026 at 21:15 WIB that is exactly what happened: signature 2kwdfKed…
+  // never landed and died with "block height exceeded" after sitting behind everything
+  // that did pay. The Jupiter buy path has always set a fee; this one now matches it.
+  await addPriorityFee(conn, tx, pool);
+
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = user.publicKey;
+  // Signed here rather than inside sendAndConfirmTransaction, because the SIGNATURE is what
+  // makes an expiry answerable: without it there is nothing to ask the chain about.
+  tx.sign(user, positionKp);
+  const signature = encodeBase58(Uint8Array.from(tx.signature!));
+  await conn.sendRawTransaction(tx.serialize(), {
     // The position keypair is single-use, so a resend cannot duplicate the position: the
     // second attempt collides with an account that already exists and fails.
     maxRetries: 3,
   });
+
+  try {
+    const r = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+    if (r.value.err) throw new Error(`the position failed on-chain (${signature})`);
+  } catch (e) {
+    // An expiry is not an answer, it is the absence of one. A transaction whose blockhash
+    // ran out can still have landed, and telling the owner to "try again" then opens a
+    // SECOND position. So the chain is asked before anything is claimed -- the same rule
+    // the four EVM close paths carry since 20 Sep 2026.
+    const landed = await landedStatus(conn, signature);
+    if (landed === 'ok') return { signature, position: positionKp.publicKey.toBase58(), plan };
+    if (landed === 'failed') throw new Error(`the position failed on-chain (${signature})`);
+    console.error(`[sol-lp] open did not land: ${signature} — ${(e as Error).message}`);
+    throw new Error(`the transaction never landed (${signature}); nothing was deposited, so it is safe to try again`);
+  }
   return { signature, position: positionKp.publicKey.toBase58(), plan };
+}
+
+/**
+ * Did this signature actually land? 'ok', 'failed', or 'absent'.
+ *
+ * Polled for a few seconds rather than asked once: a transaction that lands in the same
+ * moment its blockhash expires shows up a beat later, and answering "absent" too early is
+ * what would let a second position be opened on top of a first.
+ */
+async function landedStatus(conn: Connection, signature: string): Promise<'ok' | 'failed' | 'absent'> {
+  for (let i = 0; i < 5; i++) {
+    const st = await conn
+      .getSignatureStatus(signature, { searchTransactionHistory: true })
+      .catch(() => null);
+    const v = st?.value;
+    if (v) return v.err ? 'failed' : 'ok';
+    await new Promise((r) => setTimeout(r, 3_000));
+  }
+  return 'absent';
+}
+
+/** Total priority fee this path will pay, at most. Matches the Jupiter buy path's cap. */
+const MAX_PRIORITY_LAMPORTS = 2_000_000;
+/** A floor, so a quiet market still does not bid zero. */
+const MIN_MICRO_LAMPORTS = 50_000;
+
+/**
+ * Add SetComputeUnitPrice, priced off what the pool's own writers have been paying.
+ *
+ * The unit LIMIT the SDK already set is what the price is multiplied by, so it is read back
+ * out of the instruction rather than guessed: paying per unit while assuming the wrong
+ * number of units is how a fee cap stops capping anything.
+ */
+async function addPriorityFee(conn: Connection, tx: Transaction, pool: string): Promise<void> {
+  const cbIx = tx.instructions.find((i) => i.programId.equals(ComputeBudgetProgram.programId));
+  // 0x02 is SetComputeUnitLimit, followed by a u32 of units.
+  const cuLimit = cbIx && cbIx.data[0] === 2 ? Buffer.from(cbIx.data).readUInt32LE(1) : 200_000;
+  const recent = await conn.getRecentPrioritizationFees({ lockedWritableAccounts: [new PublicKey(pool)] }).catch(() => []);
+  const paid = recent.map((r) => r.prioritizationFee).filter((f) => f > 0).sort((a, b) => a - b);
+  // The 75th percentile, not the median: this is a race against other openers, and the
+  // median only ever buys a tie.
+  const p75 = paid.length ? paid[Math.floor(paid.length * 0.75)] : 0;
+  const ceiling = Math.floor((MAX_PRIORITY_LAMPORTS * 1e6) / cuLimit);
+  const microLamports = Math.min(ceiling, Math.max(MIN_MICRO_LAMPORTS, p75));
+  tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports }));
 }

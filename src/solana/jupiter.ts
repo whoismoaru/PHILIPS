@@ -119,9 +119,13 @@ async function sendAndConfirm(signedBase64: string): Promise<string> {
     // An error here is the whole point of waiting. A transaction that lands and FAILS is
     // not a completed buy, and reporting the signature as success is the same mistake that
     // untracked a live BSC position on 20 Sep.
-    if (s.err) throw new Error(`the swap failed on-chain (${sig})`);
+    if (s.err) {
+      console.error(`[sol-swap] ${sig} landed and failed:`, JSON.stringify(s.err));
+      throw new Error(`the swap failed on-chain (${sig})`);
+    }
     if (s.confirmationStatus === 'confirmed' || s.confirmationStatus === 'finalized') return sig;
   }
+  console.error(`[sol-swap] ${sig} not confirmed within 60s`);
   throw new Error(`the swap was sent but not confirmed within 60s (${sig})`);
 }
 

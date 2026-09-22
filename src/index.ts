@@ -4013,6 +4013,7 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
       },
     );
   } catch (e) {
+    console.error(`[sol-lp] ${f.pick.pool} ${fmtSol(lamports)} SOL failed:`, (e as Error).message);
     return say(msg.msgError('add', (e as Error).message));
   }
 }
@@ -4144,6 +4145,10 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
         },
       );
     } catch (e) {
+      // Logged, because the card tells the owner the details are in the service log. Until
+      // this line existed that sentence was simply untrue: journald held nothing at all
+      // for a failed Solana money path.
+      console.error(`[sol-buy] ${f.mint} ${fmtSol(lamports)} SOL failed:`, (e as Error).message);
       return say(msg.msgError('buy', (e as Error).message));
     }
   }

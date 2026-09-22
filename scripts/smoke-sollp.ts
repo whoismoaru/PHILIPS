@@ -66,6 +66,34 @@ assert.ok(/if \(await handleSolLpAmount\(ctx, raw\)\) return;/.test(idx), 'a typ
 assert.ok(/app\.meteora\.ag\/dlmm\/\$\{f\.pick\.pool\}/.test(open), 'the result card must link the pool on Meteora');
 assert.ok(/'positions'\)/.test(open) && /positions_back/.test(open), 'the result card must offer Positions and a way back');
 
+// --- The transaction bids for a slot, and an expiry is answered, not assumed ---
+// On 22 Sep 2026 at 21:15 WIB signature 2kwdfKed… died with "block height exceeded". The
+// SDK emits SetComputeUnitLimit (0x02) and NO price, so the transaction went out bidding
+// zero and sat behind everything that paid. Verified after the fact: the signature was
+// absent from the chain entirely, so nothing had been deposited.
+assert.ok(/setComputeUnitPrice/.test(lp), 'the open must pay a priority fee, or it loses every contested slot');
+// The price is multiplied by the LIMIT the SDK already set, so the limit is read back out
+// of the instruction. Assuming it is how a fee cap stops capping anything.
+assert.ok(/cbIx\.data\[0\] === 2/.test(lp), 'the compute unit limit must be read from the instruction, not guessed');
+assert.ok(/MAX_PRIORITY_LAMPORTS = 2_000_000/.test(lp), 'the LP fee cap must match the Jupiter buy path');
+assert.ok(/MIN_MICRO_LAMPORTS/.test(lp), 'a quiet market must still not bid zero');
+// An expiry is the ABSENCE of an answer. Telling the owner to retry without asking the
+// chain is how a second position gets opened on top of a first -- the 20 Sep BSC mistake.
+assert.ok(/landedStatus/.test(lp), 'an expiry must be checked against the chain before it is reported');
+assert.ok(/searchTransactionHistory: true/.test(lp), 'the status check must search history, not just the recent cache');
+assert.ok(/if \(landed === 'ok'\) return/.test(lp), 'a transaction that DID land must be reported as opened');
+assert.ok(/safe to try again/.test(lp), 'only an absent transaction may be described as safe to retry');
+// The signature is needed to ask at all, so the transaction is signed before it is sent.
+assert.ok(lp.indexOf('tx.sign(user, positionKp)') < lp.indexOf('sendRawTransaction'), 'the signature must exist before the send');
+
+// --- The card says the details are in the log, so they have to actually be there ---
+for (const [file, src, tag] of [
+  ['src/solana/lp.ts', lp, '[sol-lp]'],
+  ['src/index.ts', idx, '[sol-buy]'],
+] as const) {
+  assert.ok(src.includes(`console.error(\`${tag}`), `${file} fails silently: the error card promises a log entry that is never written`);
+}
+
 // --- Rent is disclosed before the deposit, because part of it never comes back ---
 const messages = readFileSync('src/messages.ts', 'utf8');
 const amountCard = messages.slice(messages.indexOf('export function msgSolLpAmount'), messages.indexOf('export function msgSolLpOpened'));
