@@ -61,6 +61,20 @@ assert.ok(/console\.error\('\[sol-lp\] opened but not recorded/.test(open), 'a f
 // Entries for positions that are gone are dropped, or the file grows forever.
 assert.ok(/solStore\.keepOnly/.test(rows), 'dead entries must be cleaned up');
 
+// --- An entry the bot did not record is RECOVERED, not invented ---
+// A position opened on Meteora's own site had no entry and no age, so its row read
+// "PnL: — (entry unknown)" forever. Both are in its own transaction history: the deposit is
+// base arriving at the POOL account, the opening time is the oldest signature. Checked
+// against AJYVacgq… on 23 Sep 2026: 1.97183098 + 0.02816901 = the 2.0 SOL deposited.
+const bf = readFileSync('src/solana/backfill.ts', 'utf8');
+assert.ok(/p\.mint !== baseMint \|\| p\.owner !== pool/.test(bf), 'a deposit is base arriving at the POOL, not at any account holding that mint');
+assert.ok(/if \(delta > 0n\) deposited \+= delta/.test(bf), 'only deposits count toward the basis');
+assert.ok(/tx\.meta\.err/.test(bf), 'a failed transaction must not count as a deposit');
+assert.ok(/sigs\[sigs\.length - 1\]/.test(bf), 'the OLDEST signature is the one that opened the position');
+// Bounded: each recovery costs a signature listing plus a transaction read.
+assert.ok(/\.slice\(0, 3\)/.test(rows), '/positions must not turn into a crawl over every foreign position');
+assert.ok(/solStore\.record/.test(rows), 'a recovered entry must be stored, not re-derived on every refresh');
+
 // --- /positions must still ask for them ---
 assert.ok(/const solRows = await solanaRows\(\)/.test(idx), '/positions must ask for Solana rows');
 assert.ok(/v4\.length === 0 && solRows\.length === 0/.test(idx), 'the empty check must count Solana rows');

@@ -25,6 +25,7 @@ import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
 import * as solStore from './solana/store.js';
+import { backfillEntry } from './solana/backfill.js';
 import { binsForRange, openPosition } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
@@ -1689,6 +1690,28 @@ async function solanaRows(): Promise<PosRow[]> {
     [...new Set(list.map((p) => p.tokenMint))].map(async (m) => {
       const v = await solTokenView(m).catch(() => null);
       if (v?.facts?.symbol) symbols.set(m, v.facts.symbol.replace(/^\$+/, ''));
+    }),
+  );
+  // Positions opened elsewhere have no entry here, so it is recovered from their own
+  // transaction history ONCE and then stored like any other. Capped per refresh: each one
+  // costs a signature listing plus a transaction read, and /positions must not turn into a
+  // twenty-call crawl because a wallet holds twenty foreign positions.
+  const missing = list.filter((p) => !solStore.getEntry(p.position) && p.base).slice(0, 3);
+  await Promise.all(
+    missing.map(async (p) => {
+      const facts = await backfillEntry(p.position, p.pool, p.base!.mint).catch(() => null);
+      if (!facts) return;
+      solStore.record({
+        position: p.position,
+        pool: p.pool,
+        mint: p.tokenMint,
+        symbol: symbols.get(p.tokenMint) ?? '',
+        baseSymbol: p.base!.symbol,
+        entryBase: facts.entryBaseRaw.toString(),
+        openedAt: facts.openedAt,
+        rangePct: 0,
+        bins: p.upperBinId - p.lowerBinId + 1,
+      });
     }),
   );
   const num = (v: number, dp = 4) => Number(v.toFixed(dp)).toLocaleString('en-US', { maximumFractionDigits: dp });
