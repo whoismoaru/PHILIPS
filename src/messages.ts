@@ -1529,31 +1529,41 @@ export function msgSolToken(opts: {
   symbol: string;
   name: string;
   ca: string;
+  /** Pre-formatted, in display order. The caller owns the formatting so the shared usd
+   *  helpers stay in one place. */
   rows: Array<[string, string]>;
-  pools: Array<{ baseSymbol: string; binStep: string; fee: string; tvl: string; vol: string; apr: string }>;
+  pools: Array<{ pair: string; binStep: string; fee: string; tvl: string; vol: string; feeTvl: string }>;
   otherVenueCount: number;
   offBaseCount: number;
   chainReadSkipped: boolean;
-  dryRun?: boolean;
+  /** DLMM pools found beyond the ones listed, so the list can say it was trimmed. */
+  morePools?: number;
 }): string {
   const out: string[] = [];
   // bold() and italic() escape their own argument. Wrapping esc() around them turns
   // AT&T into "AT&amp;amp;T", which is the exact bug that guard smoke-doubleescape exists
   // for, so the raw value goes in here.
   const sym = opts.symbol.replace(/^\$+/, '');
-  // No blank line pushed after the header: card() inserts one itself, and two in a row
-  // renders as a visible gap in Telegram.
-  out.push(`⚪ ${bold(`$${sym}`)} | ${esc(opts.name)} ${italic('(Solana)')}`);
-  const w = Math.max(...opts.rows.map(([k]) => k.length));
-  out.push(`<pre>${opts.rows.map(([k, v]) => pre(`${k.padEnd(w)} : ${v}`)).join('\n')}</pre>`);
+  out.push(`\u{1F4CA} ${bold('TOKEN STATISTICS')}`);
+  out.push(`${bold(`$${sym}`)} | ${esc(opts.name)} ${italic('(Solana)')}`);
+  // A tree, not a <pre> block: these are five labelled facts, not a column of numbers to
+  // compare down the page, and the glyphs line them up without a monospace font.
+  opts.rows.forEach(([k, v], i) => {
+    out.push(`${i === opts.rows.length - 1 ? '\u2514' : '\u251C'} ${esc(k)}: ${esc(v)}`);
+  });
   out.push('');
 
   if (opts.pools.length > 0) {
-    out.push(bold('DLMM POOLS :'));
+    out.push(`${bold('DLMM Pools')} :`);
     opts.pools.forEach((p, i) => {
-      out.push(`${i + 1}. ${italic(`(${p.baseSymbol}, bin ${p.binStep}, fee ${p.fee})`)}`);
-      out.push(`  TVL: ${esc(p.tvl)} / Vol 24h: ${esc(p.vol)} / APR: ${esc(p.apr)}`);
+      out.push(`${i + 1}. ${esc(p.pair)} ${italic(`(bin ${p.binStep}, fee ${p.fee})`)}`);
+      // Fee over TVL for the last 24 hours, NOT an annualised APR. The two differ by 365x
+      // and a card that showed one under the other's name would be off by that much.
+      out.push(`   \u2514 TVL: ${esc(p.tvl)} | Vol: ${esc(p.vol)} | 24h Fee/TVL: ${esc(p.feeTvl)}`);
     });
+    if (opts.morePools && opts.morePools > 0) {
+      out.push('', note(`${opts.morePools} deeper pool${opts.morePools === 1 ? '' : 's'} not shown; these are the top ${opts.pools.length} by TVL.`));
+    }
   } else {
     // The distinction the owner has to be able to act on.
     out.push(bold(opts.otherVenueCount > 0 ? 'NO DLMM POOL' : 'NO POOL'));
@@ -1580,8 +1590,8 @@ export function msgSolToken(opts: {
     out.push('', note('bin step and fee need SOLANA_RPC_URL; set it in .env to see them.'));
   }
   out.push('', note('market data only: safety screening is not wired for Solana yet.'));
-  out.push('', esc(opts.ca));
-  return card(out.shift() as string, out, footerMode(opts.dryRun));
+  out.push('', `${bold('CA')} : ${code(opts.ca)}`);
+  return card(out.shift() as string, out, footerMode());
 }
 
 export function msgRangeStep(tokenSide = false): string {

@@ -1545,15 +1545,6 @@ function aprLabel(pct: number | null | undefined): string {
 }
 
 /**
- * APR the way it is read on a card: '~12%', but never '~>1000%'. The cap already says
- * "more than", and stacking "about" on top of it reads as neither.
- */
-function aprApprox(pct: number | null | undefined): string {
-  const s = aprLabel(pct);
-  return s === '?' || s.startsWith('>') ? s : `~${s}`;
-}
-
-/**
  * A deposit, written the way the owner reads it: '$1.00 USDG' on a stable base, '0.0500
  * WETH' on a volatile one. The dollar sign is only honest where the unit really is a
  * dollar -- putting it in front of an ETH figure would state a price nobody quoted.
@@ -3778,9 +3769,13 @@ bot.action(/^ca:(add|buy|close|sell):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
  * It deliberately does NOT reuse renderTokenHub: that function reads an ERC20 contract for
  * symbol and decimals and screens through a ChainCtx, none of which exist here.
  */
-async function startSolToken(ctx: any, mint: string) {
-  resetFlows(ctx.from.id);
-  const prog = await ctx.reply(msg.msgProgress('reading Solana…'), html);
+/** The top DLMM pools shown and offered as buttons. Three keeps the card scannable and
+ *  the keyboard to one row; the card says when more were found. */
+const SOL_POOLS_SHOWN = 3;
+
+async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any) {
+  if (!edit) resetFlows(ctx.from.id);
+  const prog = edit ? prevMsg : await ctx.reply(msg.msgProgress('reading Solana…'), html);
   let view: Awaited<ReturnType<typeof solTokenView>>;
   try {
     view = await solTokenView(mint);
@@ -3798,34 +3793,65 @@ async function startSolToken(ctx: any, mint: string) {
     );
   }
   const rows: Array<[string, string]> = [
-    ['price', f.priceUsd ? `$${f.priceUsd}` : '—'],
-    ['mcap', f.marketCapUsd != null ? msg.usdCompact(f.marketCapUsd) : '—'],
-    ['liq', f.liquidityUsd != null ? msg.usdCompact(f.liquidityUsd) : '—'],
-    ['vol 24h', f.volume24h != null ? msg.usdCompact(f.volume24h) : '—'],
-    ['age', f.pairAgeHours != null ? msg.fmtAge(f.pairAgeHours * 3_600_000) : '—'],
+    ['Price', f.priceUsd ? `$${f.priceUsd}` : '—'],
+    ['MCap', f.marketCapUsd != null ? msg.usdCompact(f.marketCapUsd) : '—'],
+    ['Liq', f.liquidityUsd != null ? msg.usdCompact(f.liquidityUsd) : '—'],
+    ['Vol 24h', f.volume24h != null ? msg.usdCompact(f.volume24h) : '—'],
+    ['Age', f.pairAgeHours != null ? msg.fmtAge(f.pairAgeHours * 3_600_000) : '—'],
   ];
+  const sym = f.symbol.replace(/^\$+/, '');
+  const shown = view.pools.slice(0, SOL_POOLS_SHOWN);
   const text = msg.msgSolToken({
     symbol: f.symbol,
     name: f.name,
     ca: mint,
     rows,
-    pools: view.pools.map((p) => ({
-      baseSymbol: p.baseSymbol,
+    pools: shown.map((p) => ({
+      pair: `$${sym}/$${p.baseSymbol}`,
       binStep: p.binStep == null ? '?' : String(p.binStep),
       fee: p.baseFeePct == null ? '?' : `${Number(p.baseFeePct.toFixed(2))}%`,
       tvl: msg.usdCompact(p.liquidityUsd),
       vol: msg.usdCompact(p.vol24hUsd),
-      // Through the shared label, never a second copy of the cap: that is how nine-digit
-      // APRs got printed the first time.
-      apr: aprApprox(p.aprPct),
+      // 24h fee over TVL, which is what aprPct is BEFORE its 365x annualisation -- so it
+      // is divided back out rather than recomputed from volume and fee a second time.
+      // Through the shared label either way, never a second copy of the cap: that is how
+      // nine-digit APRs got printed the first time.
+      feeTvl: aprLabel(p.aprPct == null ? null : p.aprPct / 365),
     })),
     otherVenueCount: view.otherVenueCount,
     offBaseCount: view.offBaseCount,
     chainReadSkipped: view.chainReadSkipped,
-    dryRun: config.safety.dryRun,
+    morePools: Math.max(0, view.pools.length - shown.length),
   });
-  return editProgress(ctx, prog, text);
+  // One button per shown pool, opening it on Meteora. They are URL buttons, not actions:
+  // opening an LP on Solana is not built yet, and a button that promised it would be a lie.
+  const kb: any[][] = [];
+  if (shown.length > 0) {
+    kb.push(
+      shown.map((p, i) =>
+        Markup.button.url(`${i + 1}. $${p.baseSymbol} ${p.binStep ?? '?'}`, `https://app.meteora.ag/dlmm/${p.pairAddress}`),
+      ),
+    );
+  }
+  kb.push([
+    // 'solref:' + a 44-character base58 mint is 51 bytes, inside Telegram's 64-byte limit.
+    Markup.button.callback('🔄 Refresh', `solref:${mint}`),
+    Markup.button.url('📈 Chart', `https://dexscreener.com/solana/${mint}`),
+  ]);
+  kb.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
+  // Spread over html: editProgress REPLACES its extra, so passing the keyboard alone
+  // would drop parse_mode and render the tags as literal text.
+  return editProgress(ctx, prog, text, { ...html, ...Markup.inlineKeyboard(kb) });
 }
+
+bot.action(/^solref:(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery('refreshing…').catch(() => {});
+  const mint = (ctx.match as RegExpMatchArray)[1];
+  // Validated again here, not trusted: callback data comes back from Telegram and a
+  // malformed mint would otherwise go straight into a URL.
+  if (!isSolAddress(mint)) return;
+  return startSolToken(ctx, mint, true, ctx.callbackQuery?.message);
+});
 
 async function startTokenHub(ctx: any, ca: string) {
   resetFlows(ctx.from.id);
