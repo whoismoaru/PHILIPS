@@ -1709,18 +1709,18 @@ export function msgSolLpAmount(o: {
 export function msgSolLpOpened(o: {
   pair: string;
   amountSol: string;
+  /** The range as the owner set it, e.g. '-5%'. Signed, because the direction IS the trade. */
   rangeLabel: string;
-  bins: string;
+  baseSymbol: string;
   sig: string;
 }): string {
   return card(
     `\u2705 ${bold('POSITION OPENED')}`,
     [
-      `${bold(`${o.amountSol} SOL`)} \u2192 ${bold(o.pair)}`,
+      // One line, one position: what went in, which pool, and which way it is pointing.
+      `${bold(`${o.amountSol} SOL`)} \u2192 ${bold(o.pair)} ${italic(`(${o.rangeLabel} $${o.baseSymbol} Single Side)`)}`,
       '',
-      `\u251C Range: ${esc(o.rangeLabel)}`,
-      `\u251C Bins: ${esc(o.bins)}`,
-      `\u2514 Tx: ${code(o.sig)}`,
+      `${bold('Tx')} : ${code(o.sig)}`,
     ],
     footerMode(),
   );

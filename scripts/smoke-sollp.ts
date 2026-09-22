@@ -94,6 +94,12 @@ for (const [file, src, tag] of [
   assert.ok(src.includes(`console.error(\`${tag}`), `${file} fails silently: the error card promises a log entry that is never written`);
 }
 
+// --- The result card states the range that was OPENED, not the one asked for ---
+// Bins round up and a range wider than 69 bins is trimmed, so the two differ: 5% at bin
+// step 100 opens as 6 bins, which is 5.8%, and 90% opens as 69 bins, which is 50%.
+assert.ok(/rangeOpenedPct\(r\.plan\.bins, f\.pick\.binStep\)/.test(idx), 'the card must derive its range from the plan, not the request');
+assert.ok(/r\.plan\.baseIsX \? '\+' : '-'/.test(idx), 'the sign must follow the side the deposit sits on');
+
 // --- Rent is disclosed before the deposit, because part of it never comes back ---
 const messages = readFileSync('src/messages.ts', 'utf8');
 const amountCard = messages.slice(messages.indexOf('export function msgSolLpAmount'), messages.indexOf('export function msgSolLpOpened'));

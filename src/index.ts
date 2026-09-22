@@ -3900,6 +3900,19 @@ registerFlowReset((uid) => {
   solPoolPicks.delete(uid);
 });
 
+/**
+ * The range a position really covers, as a percentage.
+ *
+ * The inverse of binsForRange: bins are geometric, so n of them at this step span
+ * (1 + binStep/10000)^n. Asked for 50% and trimmed to 69 bins, the card has to say what
+ * the position actually is.
+ */
+function rangeOpenedPct(bins: number, binStep: number | null): string {
+  if (!binStep) return '?';
+  const span = 1 - 1 / Math.pow(1 + binStep / 10_000, bins);
+  return String(Number((span * 100).toFixed(span * 100 >= 10 ? 0 : 1)));
+}
+
 /** Rent named on the amount card: position + two bin arrays, the SDK's own constants. */
 const SOL_RENT_ESTIMATE = 0.0574 + 0.0714;
 
@@ -3997,8 +4010,11 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
       msg.msgSolLpOpened({
         pair: f.pick.pair,
         amountSol: fmtSol(lamports),
-        rangeLabel: `${f.rangePct}% below`,
-        bins: String(r.plan.bins),
+        // Signed by the side the deposit actually sits on, read back from the PLAN rather
+        // than from the request: a range wider than 69 bins is trimmed, and the card must
+        // say the range that was opened, not the one that was asked for.
+        rangeLabel: `${r.plan.baseIsX ? '+' : '-'}${rangeOpenedPct(r.plan.bins, f.pick.binStep)}%`,
+        baseSymbol: f.pick.baseSymbol,
         sig: r.signature,
       }),
       {
