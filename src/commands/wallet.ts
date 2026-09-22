@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { bot, html, editProgress, maxEthLabel, registerFlowReset, startKeyboard, startCard } from '../core.js';
 import { getChain, rebuildChains, gasFeeCapLabel, CHAINS } from '../chains.js';
 import * as walletStore from '../walletStore.js';
+import * as solWallet from '../solana/walletStore.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
@@ -55,6 +56,57 @@ export async function handleSecret(ctx: any, raw: string): Promise<void> {
   }
 }
 
+/**
+ * The Solana key, connected separately from the EVM one.
+ *
+ * A parallel flow, deliberately not a branch inside the EVM one: the two keys are different
+ * curves from different wallets, and one prompt that accepts either would make a mis-paste
+ * silently connect the wrong chain.
+ */
+export const awaitingSolSecret = new Set<number>();
+
+export function cmdConnectSol(ctx: any) {
+  if (solWallet.isConnected()) return ctx.reply(msg.msgAlreadyConnected(solWallet.address()!), html);
+  awaitingSolSecret.add(ctx.from.id);
+  return ctx.reply(msg.msgConnectSolPrompt(), {
+    ...html,
+    ...Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel Connection', 'connectsol:cancel')]]),
+  });
+}
+bot.command('connect_sol', cmdConnectSol);
+bot.action('connectsol', async (ctx) => {
+  await ctx.answerCbQuery();
+  return cmdConnectSol(ctx);
+});
+bot.action('connectsol:cancel', async (ctx) => {
+  awaitingSolSecret.delete(ctx.from!.id);
+  await ctx.answerCbQuery('Cancelled');
+  await ctx.editMessageText(msg.msgCancelled(), html);
+});
+
+/** Called by the text handler when a Solana key is pasted during that flow. */
+export async function handleSolSecret(ctx: any, raw: string): Promise<void> {
+  awaitingSolSecret.delete(ctx.from.id);
+  // Delete FIRST, then process: the key must not sit in the chat for even a moment.
+  await ctx.deleteMessage().catch(() => {});
+  const prog = await ctx.reply(msg.msgConnectImporting(), html);
+  try {
+    const addr = solWallet.connect(raw);
+    await editProgress(ctx, prog, msg.msgConnected(addr), html);
+    await ctx.reply(startCard(), { ...html, ...startKeyboard() });
+  } catch (e) {
+    // keys.ts never puts the pasted value in its errors; this message is safe to show.
+    await editProgress(ctx, prog, msg.msgConnectFailed((e as Error).message));
+  }
+}
+
+bot.action('disconnectsol', async (ctx: any) => {
+  solWallet.disconnect();
+  await ctx.answerCbQuery('Solana wallet disconnected');
+  await ctx.deleteMessage().catch(() => {});
+  return cmdSettings(ctx);
+});
+
 export async function cmdSettings(ctx: any) {
   const addr = walletStore.address();
   const cc = getChain();
@@ -95,6 +147,13 @@ export async function cmdSettings(ctx: any) {
   ]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
+  // Its own row and its own pair of actions: disconnecting one chain must never take the
+  // other's key with it.
+  rows.push([
+    solWallet.isConnected()
+      ? Markup.button.callback('🔴 Disconnect SOL Wallet', 'disconnectsol')
+      : Markup.button.callback('🔗 Connect SOL Wallet', 'connectsol'),
+  ]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, gasCeil, pctPresets.shape()), {
     ...html,

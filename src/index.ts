@@ -23,7 +23,10 @@ import { renderProfitCard } from './card.js';
 import { onchainV4Pools } from './onchainPools.js';
 import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
-import { solPositions } from './solana/positions.js';
+import { solPositions, mintDecimals } from './solana/positions.js';
+import { keypairFromSecret } from './solana/keys.js';
+import * as jupiter from './solana/jupiter.js';
+import * as solWallet from './solana/walletStore.js';
 import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
 import { config, EXIT_CONFIG } from './config.js';
@@ -60,7 +63,7 @@ import * as journal from './journal.js';
 import * as msg from './messages.js';
 import * as explore from './explore.js';
 import * as krystal from './krystal.js';
-import { awaitingSecret, handleSecret } from './commands/wallet.js';
+import { awaitingSecret, handleSecret, awaitingSolSecret, handleSolSecret } from './commands/wallet.js';
 import { cmdHistory, cmdPnl } from './commands/journalCmds.js';
 import { cmdClaimFees } from './commands/feesAndRemove.js';
 import { tokenSymbol as v4TokenSymbol, poolDepthV4, poolIdV4, stableOf } from './uniswapV4.js';
@@ -1671,8 +1674,11 @@ function collapseLadderRows(rows: PosRow[]): void {
  * rather than adding SOL into an ETH sum.
  */
 async function solanaRows(): Promise<PosRow[]> {
-  const { enabled, rpcUrl, wallet } = config.solana;
-  if (!enabled || !rpcUrl || !isSolAddress(wallet)) return [];
+  const { enabled, rpcUrl } = config.solana;
+  // The connected keystore wins over the .env address, so /positions follows the wallet
+  // that is actually being traded with rather than the one first configured.
+  const wallet = solWallet.address();
+  if (!enabled || !rpcUrl || !wallet || !isSolAddress(wallet)) return [];
   const list = await solPositions(wallet).catch(() => []);
   return list.map((p) => ({
     id: p.position,
@@ -3836,13 +3842,140 @@ async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any
   kb.push([
     // 'solref:' + a 44-character base58 mint is 51 bytes, inside Telegram's 64-byte limit.
     Markup.button.callback('🔄 Refresh', `solref:${mint}`),
-    Markup.button.url('📈 Chart', `https://dexscreener.com/solana/${mint}`),
+    Markup.button.callback('🛒 Buy Token', `solbuy:${mint}`),
   ]);
   kb.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   // Spread over html: editProgress REPLACES its extra, so passing the keyboard alone
   // would drop parse_mode and render the tags as literal text.
   return editProgress(ctx, prog, text, { ...html, ...Markup.inlineKeyboard(kb) });
 }
+
+/**
+ * Buying on Solana, through Jupiter.
+ *
+ * A NEW money path, not a reuse: the EVM buy runs on ethers, a ChainCtx and the v3/v4
+ * routers, none of which exist here. What it does copy is the shape those flows earned --
+ * amount, then a confirm card naming the figure at stake, then one execute button -- and
+ * the rule that a transaction is only a success once the chain says so.
+ *
+ * Jupiter rather than LI.FI: see src/solana/jupiter.ts.
+ */
+type SolBuyFlow = { mint: string; symbol: string; decimals: number | null; lamports?: bigint; quote?: jupiter.Quote };
+const solBuyFlows = new Map<number, SolBuyFlow>();
+registerFlowReset((uid) => solBuyFlows.delete(uid));
+
+/** Left behind for fees and the token account's rent, so a 100% buy still lands.
+ *  0.01 covers a Jupiter swap's fee many times over; the token account rent is 0.00204. */
+const SOL_RESERVE_LAMPORTS = 10_000_000n;
+/** 3%, which is what a DLMM-era token actually needs. Not yet adjustable from /settings. */
+const SOL_SLIPPAGE_BPS = 300;
+
+const fmtSol = (lamports: bigint): string => (Number(lamports) / jupiter.LAMPORTS).toFixed(4);
+
+bot.action(/^solbuy:(.+)$/, async (ctx) => {
+  const mint = (ctx.match as RegExpMatchArray)[1];
+  if (!isSolAddress(mint)) return ctx.answerCbQuery('Not a Solana address.');
+  const kp = solWallet.keypair();
+  if (!kp) {
+    await ctx.answerCbQuery();
+    // The read-only address from .env is NOT a signer: say what is missing and how to fix
+    // it, rather than failing at the point of signing.
+    return ctx.reply(
+      msg.msgError('buy', 'No Solana key is connected. Send /connect_sol and paste the private key of the wallet you want to buy with.'),
+      html,
+    );
+  }
+  await ctx.answerCbQuery();
+  const bal = await jupiter.solBalance(kp.publicKey).catch(() => 0n);
+  const spendable = bal > SOL_RESERVE_LAMPORTS ? bal - SOL_RESERVE_LAMPORTS : 0n;
+  if (spendable <= 0n) {
+    return ctx.reply(msg.msgError('buy', `Not enough SOL: ${fmtSol(bal)} in the wallet, and ${fmtSol(SOL_RESERVE_LAMPORTS)} is kept for fees.`), html);
+  }
+  const view = await solTokenView(mint).catch(() => null);
+  const symbol = view?.facts?.symbol ?? '?';
+  solBuyFlows.set(ctx.from!.id, { mint, symbol, decimals: await mintDecimals(mint) });
+  const rows = pctPresets.chunkButtons(
+    pctPresets.get('buy').map((p) => Markup.button.callback(`${p}%`, `solamt:${p}`)),
+  );
+  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  return ctx.reply(
+    msg.msgSolBuyAmount({
+      symbol,
+      balanceSol: fmtSol(bal),
+      spendableSol: fmtSol(spendable),
+      reserveSol: fmtSol(SOL_RESERVE_LAMPORTS),
+    }),
+    { ...html, ...Markup.inlineKeyboard(rows) },
+  );
+});
+
+bot.action(/^solamt:(\d+)$/, async (ctx) => {
+  const f = solBuyFlows.get(ctx.from!.id);
+  if (!f) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  const kp = solWallet.keypair();
+  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  const pct = Number((ctx.match as RegExpMatchArray)[1]);
+  await ctx.answerCbQuery('Quoting…');
+  const bal = await jupiter.solBalance(kp.publicKey).catch(() => 0n);
+  const spendable = bal > SOL_RESERVE_LAMPORTS ? bal - SOL_RESERVE_LAMPORTS : 0n;
+  // Integer arithmetic on lamports throughout: a float here rounds a 9-decimal amount and
+  // the swap asks for an amount the wallet does not have.
+  const lamports = (spendable * BigInt(pct)) / 100n;
+  if (lamports <= 0n) return ctx.editMessageText(msg.msgError('buy', 'That share of the balance rounds to zero.'), html);
+  let q: jupiter.Quote;
+  try {
+    q = await jupiter.quote(jupiter.WSOL, f.mint, lamports, SOL_SLIPPAGE_BPS);
+  } catch (e) {
+    return ctx.editMessageText(msg.msgError('buy', (e as Error).message), html);
+  }
+  f.lamports = lamports;
+  f.quote = q;
+  const dec = f.decimals;
+  // Unknown decimals means the OUT amount cannot be stated. It is shown in base units
+  // rather than scaled by a guess: a wrong guess here misstates the trade by 1000x.
+  const amt = (v: string) => (dec === null ? `${v} base units` : Number(Number(v) / Math.pow(10, dec)).toLocaleString('en-US', { maximumFractionDigits: 4 }));
+  return ctx.editMessageText(
+    msg.msgSolBuyConfirm({
+      symbol: f.symbol,
+      spendSol: fmtSol(lamports),
+      receive: amt(q.outAmount),
+      worstCase: amt(q.otherAmountThreshold),
+      priceImpact: `${Number(Number(q.priceImpactPct) * 100).toFixed(2)}%`,
+      slippage: `${SOL_SLIPPAGE_BPS / 100}%`,
+      route: jupiter.routeLabel(q),
+      dryRun: config.safety.dryRun,
+    }),
+    {
+      ...html,
+      ...Markup.inlineKeyboard([
+        // Money on its own row, naming the amount, per the house rule.
+        [Markup.button.callback(`🟢 Confirm ${fmtSol(lamports)} SOL`, 'solgo')],
+        [Markup.button.callback('❌ Cancel', 'cancel')],
+      ]),
+    },
+  );
+});
+
+bot.action('solgo', async (ctx) => {
+  const f = solBuyFlows.get(ctx.from!.id);
+  if (!f?.quote || f.lamports === undefined) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  const kp = solWallet.keypair();
+  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  // Cleared before the send, not after: a second tap must not be able to buy twice.
+  solBuyFlows.delete(ctx.from!.id);
+  await ctx.answerCbQuery();
+  if (config.safety.dryRun) {
+    return ctx.editMessageText(msg.msgDryRunAddDone(), html);
+  }
+  const prog = { message_id: (ctx.callbackQuery!.message as { message_id: number }).message_id };
+  await editProgress(ctx, prog, msg.msgProgress('swapping on Jupiter…'));
+  try {
+    const sig = await jupiter.executeSwap(f.quote, kp);
+    return editProgress(ctx, prog, msg.msgSolBuyDone({ symbol: f.symbol, spendSol: fmtSol(f.lamports), sig }));
+  } catch (e) {
+    return editProgress(ctx, prog, msg.msgError('buy', (e as Error).message));
+  }
+});
 
 bot.action(/^solref:(.+)$/, async (ctx) => {
   await ctx.answerCbQuery('refreshing…').catch(() => {});
@@ -5555,6 +5688,24 @@ bot.action('cancel', async (ctx) => {
 // "12 lowercase words" pattern: an ordinary 12-word sentence would match that pattern and
 // an innocent user's message would be deleted with it.
 const PRIVKEY_RE = /^(0x)?[a-fA-F0-9]{64}$/;
+/**
+ * A Solana secret key: base58 decoding to exactly 64 bytes.
+ *
+ * The 64-byte form only. A 32-byte seed is also a usable key but in base58 it looks exactly
+ * like an address, so treating one as a secret would mean a pasted CA gets deleted from the
+ * chat and answered with "import failed". keys.ts refuses that form for the same reason.
+ */
+function looksLikeSolSecret(t: string): boolean {
+  const one = t.trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{86,90}$/.test(one)) return false;
+  try {
+    keypairFromSecret(one);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function looksLikeSecret(t: string): boolean {
   const one = t.replace(/\s+/g, ' ').trim();
   if (PRIVKEY_RE.test(one.replace(/\s/g, ''))) return true;
@@ -5597,8 +5748,15 @@ bot.on(message('text'), async (ctx) => {
     awaitingSecret.delete(ctx.from.id);
   }
 
+  // The Solana connect flow, same rule as the EVM one above: only something actually
+  // shaped like a key is taken, so an abandoned prompt cannot swallow the next message.
+  if (awaitingSolSecret.has(ctx.from.id)) {
+    if (looksLikeSolSecret(raw)) return handleSolSecret(ctx, raw);
+    awaitingSolSecret.delete(ctx.from.id);
+  }
+
   // Item 19 — a wallet secret outside the /connect flow: ignore it, delete it, warn.
-  if (looksLikeSecret(raw)) {
+  if (looksLikeSecret(raw) || looksLikeSolSecret(raw)) {
     await ctx.deleteMessage().catch(() => {}); // butuh hak admin di grup; di chat pribadi selalu boleh
     return ctx.reply(msg.msgSecretLeakWarning(), html);
   }

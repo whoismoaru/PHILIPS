@@ -1593,6 +1593,74 @@ export function msgSolToken(opts: {
   return card(out.shift() as string, out, footerMode());
 }
 
+/** The amount step of a Solana buy: how much SOL to spend. */
+export function msgSolBuyAmount(o: { symbol: string; balanceSol: string; spendableSol: string; reserveSol: string }): string {
+  const sym = o.symbol.replace(/^\$+/, '');
+  return card(
+    `\u{1F6D2} ${bold('BUY')} $${esc(sym)} ${italic('(Solana)')}`,
+    [
+      `\u251C Balance: ${esc(o.balanceSol)} SOL`,
+      `\u251C Reserved: ${esc(o.reserveSol)} SOL`,
+      `\u2514 Spendable: ${esc(o.spendableSol)} SOL`,
+      '',
+      note('the reserve covers network fees and the token account rent; it is never spent.'),
+      '',
+      'Pick a share of the spendable balance.',
+    ],
+    footerMode(),
+  );
+}
+
+/** The confirm step: the numbers being risked, before anything is signed. */
+export function msgSolBuyConfirm(o: {
+  symbol: string;
+  spendSol: string;
+  receive: string;
+  worstCase: string;
+  priceImpact: string;
+  slippage: string;
+  route: string;
+  dryRun: boolean;
+}): string {
+  const sym = o.symbol.replace(/^\$+/, '');
+  return card(
+    `\u{1F6D2} ${bold('CONFIRM BUY')} $${esc(sym)}`,
+    [
+      `\u251C Spend: ${esc(o.spendSol)} SOL`,
+      `\u251C Receive: \u2248 ${esc(o.receive)} $${esc(sym)}`,
+      `\u251C Worst case: ${esc(o.worstCase)} $${esc(sym)}`,
+      `\u251C Impact: ${esc(o.priceImpact)}`,
+      `\u251C Slippage: ${esc(o.slippage)}`,
+      `\u2514 Route: ${esc(o.route)}`,
+      '',
+      // The one number that is actually at stake, named rather than left to "are you sure?".
+      `\u{1F4B0} ${bold(`Spending ${o.spendSol} SOL`)}`,
+      '',
+      quoteHtml(
+        esc(
+          'a quote is a moment in time. If the price moves past the slippage before the swap lands, the transaction fails and the SOL stays in your wallet.',
+        ),
+      ),
+    ],
+    footerMode(o.dryRun),
+  );
+}
+
+/** The result of a Solana buy that landed. */
+export function msgSolBuyDone(o: { symbol: string; spendSol: string; sig: string }): string {
+  const sym = o.symbol.replace(/^\$+/, '');
+  return card(
+    `\u2705 ${bold('BOUGHT')} $${esc(sym)}`,
+    [
+      `\u251C Spent: ${esc(o.spendSol)} SOL`,
+      `\u2514 Tx: ${code(o.sig)}`,
+      '',
+      note('the token is in your Solana wallet.'),
+    ],
+    footerMode(false),
+  );
+}
+
 export function msgRangeStep(tokenSide = false): string {
   return [
     bold('OPEN LP | Set Price Range'),
@@ -1896,6 +1964,17 @@ export function msgConnectPrompt(): string {
     '',
     `Paste your ${bold('private key')} (0x\u2026) or ${bold('12/24-word seed phrase')} in this chat.`,
     'PHILIPS signs your LP and swap transactions with it.',
+    '',
+    note(`LIVE \u00B7 ${nowWib()}`),
+  ].join('\n');
+}
+
+export function msgConnectSolPrompt(): string {
+  return [
+    bold('CONNECT SOLANA WALLET'),
+    '',
+    `Paste the ${bold('private key')} of your Solana wallet in this chat, base58, the way Phantom exports it.`,
+    'It is stored in its own encrypted keystore and never touches your EVM key.',
     '',
     note(`LIVE \u00B7 ${nowWib()}`),
   ].join('\n');

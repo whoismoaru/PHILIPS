@@ -70,7 +70,7 @@ export type SolPosition = {
 /** Mint decimals, cached forever: a mint's decimals are fixed at creation. */
 const decimalsCache = new Map<string, number>();
 
-async function mintDecimals(mint: string): Promise<number | null> {
+export async function mintDecimals(mint: string): Promise<number | null> {
   const hit = decimalsCache.get(mint);
   if (hit !== undefined) return hit;
   try {

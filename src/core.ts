@@ -2,6 +2,7 @@ import { Telegraf, Markup } from 'telegraf';
 import { ethers } from 'ethers';
 import { config } from './config.js';
 import * as walletStore from './walletStore.js';
+import * as solWallet from './solana/walletStore.js';
 import * as store from './store.js';
 import * as msg from './messages.js';
 import { CHAINS, getChain } from './chains.js';
@@ -321,7 +322,10 @@ export function startCard(o: { imported?: number; gone?: number } = {}): string 
   const addr = walletStore.address();
   // All three, or none: an RPC without a wallet reads nothing, and a wallet without an RPC
   // has nothing to read with. Either way the card must not advertise Solana.
-  const solConfigured = config.solana.enabled && !!config.solana.rpcUrl && !!config.solana.wallet;
+  // The connected keystore first, the .env address second: once a key is connected it is
+  // the wallet that actually signs, and the card must name that one.
+  const solAddr = solWallet.address();
+  const solConfigured = config.solana.enabled && !!config.solana.rpcUrl && !!solAddr;
   return msg.msgStarted({
     dryRun: config.safety.dryRun,
     chainLabel: cc.label,
@@ -333,7 +337,7 @@ export function startCard(o: { imported?: number; gone?: number } = {}): string 
     // Shortened here rather than through shortAddr(): that helper cuts 6 and 4 around an
     // ellipsis, which is right for '0x'-prefixed hex where the first two characters carry
     // no identity. A base58 key has no prefix, so all six leading characters are kept.
-    solShort: solConfigured ? `${config.solana.wallet.slice(0, 6)}…${config.solana.wallet.slice(-4)}` : null,
+    solShort: solConfigured && solAddr ? `${solAddr.slice(0, 6)}…${solAddr.slice(-4)}` : null,
     // Solana is not in CHAINS and never will be (it is not a ChainCtx), so the label is
     // appended here. Only when it is actually configured: an unreachable chain listed on
     // the welcome card is a promise the bot cannot keep.
