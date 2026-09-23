@@ -24,6 +24,7 @@ import { onchainV4Pools } from './onchainPools.js';
 import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
+import { solHoldings } from './solana/holdings.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
@@ -628,6 +629,19 @@ async function renderStatus(ctx: any, edit: boolean) {
         return undefined;
       }
     });
+    // Every other token the wallets hold, read while the native balances load. Native and
+    // stablecoin bases are dropped here: the chain row below already carries them.
+    const tokensP = Promise.all(
+      Object.values(CHAINS).map(async (c) => {
+        const skip = new Set([c.wethAddress.toLowerCase(), ...basesFor(c).map((b) => b.address.toLowerCase())]);
+        const list = await sellHoldings(c).catch(() => [] as SellHolding[]);
+        return list
+          .filter((h) => !skip.has(h.ca.toLowerCase()))
+          .map((h) => ({ symbol: h.symbol, amount: h.amountNum, usd: h.usd }));
+      }),
+    );
+    const solAddr = solWallet.address();
+    const solP = solAddr && config.solana.enabled ? solHoldings(solAddr).catch(() => null) : Promise.resolve(null);
     const [network, chains] = await Promise.all([
       provider.getNetwork(),
       // Native balances on EVERY chain (in parallel; a failed chain gives amount '?' and null usd).
@@ -695,17 +709,21 @@ async function renderStatus(ctx: any, edit: boolean) {
     } catch {
       lpUsd = null;
     }
+    const tokenLists = await tokensP;
+    const solList = await solP;
+    const tokensUsd = tokenLists.flat().reduce((t, h) => t + (h.usd ?? 0), 0) + (solList ?? []).reduce((t, h) => t + (h.usd ?? 0), 0);
     // Total USD: null when the ETH price is unreadable (ETH dominates, so the total would not be sound).
     const stablesUsd = chains.reduce(
       (s, c) => s + (c.stables ?? []).reduce((t, x) => t + (x.usd ?? 0), 0),
       0,
     );
-    const totalUsd = ethUsd === null ? null : chains.reduce((s, c) => s + (c.usd ?? 0), 0) + stablesUsd;
+    const totalUsd = ethUsd === null ? null : chains.reduce((s, c) => s + (c.usd ?? 0), 0) + stablesUsd + tokensUsd;
 
     const text = msg.msgStatus({
       dryRun: config.safety.dryRun,
       positions: store.active().length,
-      chains,
+      chains: chains.map((c, i) => ({ ...c, tokens: tokenLists[i] })),
+      sol: solList,
       totalUsd,
       lpUsd,
       lpFailed,

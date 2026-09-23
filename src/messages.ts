@@ -640,6 +640,8 @@ export function msgUnknown(txt: string): string {
   );
 }
 
+type Holding = { symbol: string; amount: number; usd: number | null };
+
 export function msgStatus(opts: {
   dryRun: boolean;
   positions: number;
@@ -650,10 +652,13 @@ export function msgStatus(opts: {
     symbol: string;
     usd: number | null;
     stables?: Array<{ symbol: string; amount: string; usd: number | null }>;
-    /** True where the chain's GAS token is the stablecoin itself (Arc pays gas in USDC), so
-     *  amount and value are one number and the row must not print it twice. */
+    /** True where the chain's GAS token is the stablecoin itself (Arc pays gas in USDC). */
     stableNative?: boolean;
+    /** Every other token held there, already valued. */
+    tokens?: Holding[];
   }>;
+  /** The Solana wallet, native first; null when none is connected or it could not be read. */
+  sol?: Holding[] | null;
   totalUsd: number | null; // null means the native price could not be read; never 0
   lpUsd?: number | null; // the value of the active LP positions
   lpFailed?: number; // positions that failed to read, so the total is incomplete
@@ -662,90 +667,73 @@ export function msgStatus(opts: {
   const usdCol = (u: number | null | undefined) => (u === null || u === undefined ? '—' : usdPlain(u));
   const equity = opts.totalUsd === null ? '—' : usdPlain(opts.totalUsd + (opts.lpUsd ?? 0));
 
-  // Dust threshold: a chain worth less than a dime is not information, it is noise -- four
-  // rows of "$0,04" push the figures that matter off the first screen. An UNREADABLE value
-  // (null) is kept, because hiding it would quietly shrink the reported total.
-  const chainUsd = (c: (typeof opts.chains)[number]): number | null => {
-    const parts = [c.usd, ...(c.stables ?? []).map((t) => t.usd)];
-    if (parts.some((u) => u === null || u === undefined)) return null;
-    return parts.reduce<number>((a, u) => a + (u ?? 0), 0);
-  };
+  // Dust: anything under a dime is noise and is left off. An unpriced NATIVE balance is
+  // kept (unknown is not worthless), but an unpriced token is not: on Solana those are
+  // almost all airdropped spam, dozens of them.
   const DUST_USD = 0.1;
-  const held = opts.chains.filter((c) => {
-    if (!(Number(c.amount) > 0 || (c.stables ?? []).length > 0)) return false;
-    const v = chainUsd(c);
-    return v === null || v >= DUST_USD;
-  });
-  const assetNames = [
-    ...new Set(
-      held.flatMap((c) => [
-        ...(Number(c.amount) > 0 ? [c.symbol] : []),
-        ...(c.stables ?? []).map((t) => t.symbol),
-      ]),
-    ),
-  ];
+  const NAME: Record<string, string> = {
+    Robinhood: 'Robinhood (RH)',
+    BSC: 'Binance Smart Chain (BSC)',
+    HyperEVM: 'HyperEVM (HYPE)',
+    Base: 'Base (BASE)',
+    Arc: 'Arc (ARC)',
+    Ink: 'Ink (INK)',
+    Solana: 'Solana (SOL)',
+  };
+  const amt = (n: number) =>
+    n >= 1e6
+      ? `${(n / 1e6).toLocaleString('en-US', { maximumFractionDigits: 2 })}M`
+      : n >= 1e4
+        ? `${(n / 1e3).toLocaleString('en-US', { maximumFractionDigits: 1 })}K`
+        : n.toLocaleString('en-US', { maximumSignificantDigits: 4 });
 
-  // Short names specific to this card: the chain row is narrow and it is the numbers
-  // that matter. Presentation only — an unlisted chain keeps its label as-is.
-  const SHORT: Record<string, string> = { Robinhood: 'RH', Base: 'BASE' };
+  const groups: Array<{ name: string; rows: Holding[] }> = opts.chains.map((c) => ({
+    name: NAME[c.label] ?? c.label,
+    rows: [
+      { symbol: c.symbol, amount: Number(c.amount) || 0, usd: c.usd, native: true },
+      ...(c.stables ?? []).map((t) => ({ symbol: t.symbol, amount: Number(t.amount.replace(/\./g, '').replace(',', '.')), usd: t.usd })),
+      ...(c.tokens ?? []),
+    ] as Holding[],
+  }));
+  if (opts.sol?.length) groups.push({ name: NAME.Solana, rows: opts.sol.map((h, i) => ({ ...h, native: i === 0 }) as Holding) });
 
-  const tree = (rows: string[]): string[] =>
-    rows.map((r, i) => `${i === rows.length - 1 ? '└' : '├'}  ${r}`);
+  const shown = groups
+    .map((g) => {
+      const rows = g.rows
+        .filter((h: any) => (h.usd === null ? h.native && h.amount > 0 : h.usd >= DUST_USD))
+        .sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
+      const unread = rows.some((h) => h.usd === null);
+      return { name: g.name, rows, sum: unread ? null : rows.reduce((t, h) => t + (h.usd ?? 0), 0) };
+    })
+    .filter((g) => g.rows.length)
+    .sort((a, b) => (b.sum ?? 0) - (a.sum ?? 0));
+
+  const tree = (rows: string[], indent = ''): string[] =>
+    rows.map((r, i) => `${indent}${i === rows.length - 1 ? '└' : '├'}  ${r}`);
 
   const parts: string[] = [
     `\u{1F4B0} ${bold('PORTFOLIO')}`,
     '',
-    bold('EQUITY :'),
+    bold('TOTAL EQUITY :'),
     ...tree([
       `Total: ${bold(equity)}`,
       ...(opts.lpUsd === undefined
         ? []
-        : [`In LP: ${bold(usdCol(opts.lpUsd))} · ${opts.positions} position${opts.positions === 1 ? '' : 's'}`]),
-      `Free: ${bold(usdCol(opts.totalUsd))}`,
+        : [`In LP/Staked : ${bold(usdCol(opts.lpUsd))} | ${opts.positions} position${opts.positions === 1 ? '' : 's'}`]),
+      `Liquid/Free: ${bold(usdCol(opts.totalUsd))}`,
     ]),
   ];
 
-  // Broken down per CHAIN rather than per loose asset, so a stablecoin sits on the
-  // row of the chain it is actually on. A standalone "USDG" row used to hide its chain.
-  if (held.length) {
-    parts.push(
-      '',
-      bold('BY CHAIN :'),
-      ...tree(
-        held.map((c) => {
-          // A chain whose GAS is a stablecoin holds one asset whose amount and value are the
-          // same number. Printing "$8,29 (8.29 USDC)" says it twice in two formats, so the
-          // row reads "Arc: $8,29 USDC" instead.
-          if (c.stableNative && !(c.stables ?? []).length) {
-            const v = c.usd === null || c.usd === undefined ? '—' : usdPlain(c.usd);
-            return `${bold(SHORT[c.label] ?? c.label)}: ${v} ${italic(c.symbol)}`;
-          }
-          const assets: string[] = [];
-          if (Number(c.amount) > 0) assets.push(`${esc(c.amount)} ${esc(c.symbol)}`);
-          for (const t of c.stables ?? []) assets.push(`${esc(t.amount)} ${esc(t.symbol)}`);
-          // A chain's value is native plus every stablecoin on it. One unreadable USD
-          // figure makes the WHOLE row '—': quietly summing the rest would show a
-          // number smaller than what the wallet really holds.
-          const sum = chainUsd(c);
-          const value = sum === null ? '—' : usdPlain(sum);
-          return `${bold(SHORT[c.label] ?? c.label)}: ${value}${assets.length ? ` ${italic(`(${assets.join(' / ')})`)}` : ''}`;
-        }),
-      ),
-    );
+  if (shown.length) {
+    parts.push('', bold('BY CHAIN :'));
+    for (const g of shown) {
+      parts.push(`➤ ${bold(esc(g.name))} | ${usdCol(g.sum)}`);
+      parts.push(...tree(g.rows.map((h) => `${esc(amt(h.amount))} ${esc(h.symbol)} / ${usdCol(h.usd)}`), '    '));
+    }
   }
 
   if (opts.lpFailed) parts.push('', `⚠️ ${note(`${opts.lpFailed} position(s) failed to read — total is incomplete`)}`);
-
-  // The wallet address, the per-tx limits and the /sell prompt were all dropped from
-  // this card: the first two already live in /settings, and the third is advice rather
-  // than a portfolio state. The warning above STAYS, because it only appears when a
-  // source failed to read — without it the numbers read as fact while part of the data
-  // is missing.
-  //
-  // LIVE mode is no longer labelled: that is the normal state, and printing it on
-  // every card is what stops "DRY RUN" standing out when it matters.
   parts.push('', opts.dryRun ? `⚪ ${bold('DRY RUN')} · ${note(nowWib())}` : note(nowWib()));
-
   return parts.join('\n');
 }
 
