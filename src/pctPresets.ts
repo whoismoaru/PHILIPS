@@ -68,7 +68,8 @@ let cache: Record<PctFlow, number[]> | null = null;
  * at least 2 (one leg is not a ladder) and capped at 69, matching the open path.
  */
 const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
-  buy: { min: 1, max: 100 },
+  // Fractions allowed: 0.01% of a large balance is a real buy size.
+  buy: { min: 0.01, max: 100 },
   sell: { min: 1, max: 100 },
   add: { min: 1, max: 100 },
   stop: { min: 1, max: 99 },
@@ -94,7 +95,7 @@ export function sanitize(values: number[], flow: PctFlow): number[] | null {
   // solsize is an AMOUNT in SOL, so 0.25 is a legitimate value there and nowhere else.
   // Everywhere else a non-integer is a typo, and storing "0.5" as a percentage would make
   // a button that deposits nothing.
-  const decimals = flow === 'solsize' || flow === 'buyamt';
+  const decimals = flow === 'solsize' || flow === 'buyamt' || flow === 'buy';
   if (values.some((v) => (decimals ? !(v > 0) : !Number.isInteger(v)) || v < min || v > max)) return null;
   const clean = [...new Set(values)].sort((a, b) => a - b);
   if (clean.length === 0 || clean.length > MAX_BUTTONS) return null;

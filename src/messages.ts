@@ -958,8 +958,14 @@ export function msgBuyPresetAsk(amounts: number[], pcts: number[], saved = false
   ].join('\n');
 }
 
+/** A typing mistake, not a transaction: no "TRANSACTION ERROR", no service log. */
 export function msgBuyPresetInvalid(): string {
-  return msgError('preset', 'Give up to 4 amounts, then &, then up to 4 percentages (1-100). For example: 10 25 50 90 & 1% 2% 3% 4%');
+  return [
+    `⚠️ ${bold('Preset not saved')}`,
+    '',
+    'Up to 4 amounts, then &, then up to 4 percentages (0.01–100).',
+    `For example: ${code('0.001 2 3 4 & 0.01% 2% 3% 4%')}`,
+  ].join('\n');
 }
 
 export function msgPctAsk(label: string, current: number[], o: { unit: string; min: number; max: number }): string {

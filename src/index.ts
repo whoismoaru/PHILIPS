@@ -4509,7 +4509,7 @@ export async function handleSolBuyAmount(ctx: any, raw: string): Promise<boolean
   return true;
 }
 
-bot.action(/^solamt:(\d+)$/, async (ctx) => {
+bot.action(/^solamt:([\d.]+)$/, async (ctx) => {
   const f = solBuyFlows.get(ctx.from!.id);
   if (!f) return ctx.answerCbQuery('Expired. Paste the CA again.');
   const kp = solWallet.keypair();
@@ -4518,7 +4518,7 @@ bot.action(/^solamt:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery('Quoting…');
   // Integer arithmetic on lamports throughout: a float here rounds a 9-decimal amount and
   // the swap asks for an amount the wallet does not have.
-  const lamports = ((await solSpendable(kp.publicKey)) * BigInt(pct)) / 100n;
+  const lamports = pctOf(await solSpendable(kp.publicKey), pct);
   return solBuyQuoteCard(ctx, f, lamports, true, kp);
 });
 
@@ -4541,7 +4541,7 @@ async function solQuickBuy(ctx: any, mint: string, lamportsOf: (spendable: bigin
 }
 
 bot.action(/^qsa:(\d+):(\w+)$/, (ctx) => solQuickBuy(ctx, ctx.match[2], () => BigInt(ctx.match[1])));
-bot.action(/^qsp:(\d+):(\w+)$/, (ctx) => solQuickBuy(ctx, ctx.match[2], (sp) => (sp * BigInt(ctx.match[1])) / 100n));
+bot.action(/^qsp:([\d.]+):(\w+)$/, (ctx) => solQuickBuy(ctx, ctx.match[2], (sp) => pctOf(sp, Number(ctx.match[1]))));
 
 bot.action(/^solbuya:(\d+)$/, async (ctx) => {
   const f = solBuyFlows.get(ctx.from!.id);
@@ -4705,7 +4705,7 @@ bot.action('buyback:base', async (ctx) => {
   await buyBaseStep(ctx, flow, true);
 });
 /** A percentage of the balance to a buy amount. The source is the USABLE balance (gas already set aside). */
-bot.action(/^buypct:(\d+)$/, async (ctx) => {
+bot.action(/^buypct:([\d.]+)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
   if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
   const cc = CHAINS[flow.chainKey]!;
@@ -4722,7 +4722,7 @@ async function buyFromPct(ctx: any, flow: TSwapFlow, pct: number): Promise<unkno
   const base = flow.base!;
   const sym = base.wrappable ? cc.nativeSymbol : base.symbol;
   const usable = await buyUsableWei(flow).catch(() => 0n);
-  const amountWei = pct >= 100 ? usable : (usable * BigInt(pct)) / 100n;
+  const amountWei = pctOf(usable, pct);
   if (amountWei <= 0n) {
     return ctx.reply(msg.msgError('buy', `No spendable ${sym} left after the gas reserve.`), html);
   }
@@ -4750,6 +4750,14 @@ function binPctOf(cc: ChainCtx, p: explore.TokenPool): string | undefined {
   const pct = (Math.pow(1.0001, ts) - 1) * 100;
   return `${Number(pct.toPrecision(pct < 1 ? 2 : 3))}%`;
 }
+
+/**
+ * A share of a balance in integer maths, for fractional percentages too (0.01% of a
+ * balance is a legitimate buy since 23 Sep 2026). Basis points of a basis point keep
+ * two decimals of percent exact.
+ */
+const pctOf = (amount: bigint, pct: number): bigint =>
+  pct >= 100 ? amount : (amount * BigInt(Math.round(pct * 100))) / 10_000n;
 
 /** A fixed buy amount, typed as the button shows it ("0.01"), in the flow's paying asset. */
 async function buyFromAmount(ctx: any, flow: TSwapFlow, amount: string): Promise<unknown> {
@@ -4801,7 +4809,7 @@ bot.action(/^qba:([\d.]+)$/, async (ctx) => {
   await ctx.answerCbQuery('Quoting…');
   return buyFromAmount(ctx, flow, ctx.match[1]);
 });
-bot.action(/^qbp:(\d+)$/, async (ctx) => {
+bot.action(/^qbp:([\d.]+)$/, async (ctx) => {
   const flow = hubBuyFlow(ctx);
   if (!flow) return ctx.answerCbQuery('Expired. Paste the CA again.');
   await ctx.answerCbQuery('Quoting…');
