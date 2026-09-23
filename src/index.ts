@@ -32,7 +32,7 @@ import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
-import { binsForRange, openPosition } from './solana/lp.js';
+import { binsForRange, openPosition, quoteOpenCost } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
 import * as solWallet from './solana/walletStore.js';
@@ -4123,6 +4123,17 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
         `Only ${fmtSol(spendable)} SOL is spendable: ${fmtSol(SOL_LP_RESERVE_LAMPORTS)} is kept for fees and position rent (about 0.057 SOL comes back when you close).`,
       ),
     );
+  }
+  // Rent Meteora charges to open it. A range that is the first to need a bin array pays to
+  // create it, and that part never comes back: refused outright, never sent (owner's rule,
+  // 23 Sep 2026). An unreadable quote is refused too -- unknown is not "free".
+  const cost = await quoteOpenCost(f.pick.pool, f.rangePct ?? 10, pctPresets.shape()).catch(() => null);
+  if (!cost || cost.nonRefundable > 0) {
+    solLpFlows.delete(ctx.from.id);
+    return show(msg.msgSolLpNonRefund({ pair: f.pick.pair, cost }), {
+      ...html,
+      ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'positions_back')]]),
+    });
   }
   if (config.safety.dryRun) {
     solLpFlows.delete(ctx.from.id);

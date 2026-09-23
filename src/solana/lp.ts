@@ -92,6 +92,28 @@ export async function planOpen(pool: string, rangePct: number): Promise<OpenPlan
   };
 }
 
+/**
+ * What opening this position costs in rent, as Meteora's own quote puts it. The position
+ * account comes back on close; a bin array or bitmap extension this range is the first to
+ * need is created by us and stays with the pool: that part is NOT refunded.
+ */
+export type OpenCost = { refundable: number; nonRefundable: number; total: number };
+
+export async function quoteOpenCost(pool: string, rangePct: number, shape: 'bidask' | 'spot'): Promise<OpenCost> {
+  const dlmm = await DLMM.create(connection(), new PublicKey(pool));
+  const plan = await planOpen(pool, rangePct);
+  const q = await dlmm.quoteCreatePosition({
+    strategy: {
+      minBinId: plan.minBinId,
+      maxBinId: plan.maxBinId,
+      strategyType: shape === 'bidask' ? DLMM.StrategyType.BidAsk : DLMM.StrategyType.Spot,
+    },
+  });
+  const refundable = Number(q.positionCost) + Number(q.positionReallocCost ?? 0);
+  const nonRefundable = Number(q.binArrayCost) + Number(q.bitmapExtensionCost);
+  return { refundable, nonRefundable, total: refundable + nonRefundable };
+}
+
 export type OpenResult = { signature: string; position: string; plan: OpenPlan };
 
 /**

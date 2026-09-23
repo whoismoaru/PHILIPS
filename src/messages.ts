@@ -1667,6 +1667,30 @@ export function msgSolSellDone(o: { symbol: string; sold: string; received: stri
   );
 }
 
+/** Refused before sending: opening would leave rent behind that never comes back. */
+export function msgSolLpNonRefund(o: { pair: string; cost: { refundable: number; nonRefundable: number; total: number } | null }): string {
+  const sol = (n: number) => `${n.toFixed(5)} SOL`;
+  if (!o.cost)
+    return [
+      `⛔ ${bold('LP REFUSED')} | ${esc(o.pair)}`,
+      '',
+      'The position cost could not be read, so a non-refundable fee cannot be ruled out.',
+      '',
+      note('nothing was sent · try again in a minute'),
+    ].join('\n');
+  return [
+    `⛔ ${bold('LP REFUSED')} | ${esc(o.pair)}`,
+    '',
+    `<pre>cost to open  : ${sol(o.cost.total)}\nrefunded      : ${sol(o.cost.refundable)}\nnon-refundable: ${sol(o.cost.nonRefundable)}</pre>`,
+    '',
+    `🔴 ${bold(`${sol(o.cost.nonRefundable)} would never come back`)}`,
+    '',
+    '<blockquote>This range is the first to use part of the pool, so Meteora charges rent to create it. Nothing was sent. Try a narrower range, or a pool with more activity.</blockquote>',
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
+
 /** Step 1 of a Solana LP: how wide. */
 export function msgSolLpRange(o: { pair: string }): string {
   return card(`${bold('OPEN LP')} | ${esc(o.pair)}`, ['How wide should the range be?'], footerMode());
