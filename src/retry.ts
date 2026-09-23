@@ -15,6 +15,8 @@
  * liquidity figure, a position NFT count. Returning -1n or throwing means it cannot be
  * established, which is treated as "it moved" and never retried. When in doubt, stop.
  */
+import { explainRevert } from './revert.js';
+
 export type RetryLog = (line: string) => void;
 
 export async function retryOnce<T>(
@@ -31,6 +33,15 @@ export async function retryOnce<T>(
     // A position that is GONE reverts the same way every time, so a retry can only fail
     // again -- and each failure is another error card for the owner. Give up at once.
     if (/invalid token id|NOT_MINTED|nonexistent token/i.test((first as Error).message ?? '')) throw first;
+    // Same rule, by revert SELECTOR: an expired Permit2 approval fails identically however
+    // many times it is sent, because retrying the call does not renew anything. On
+    // 23 Sep 2026 this burned two extra attempts and two error cards per add, for a
+    // revert that could not have gone any other way.
+    const known = explainRevert((first as Error).message ?? '');
+    if (known?.deterministic) {
+      log(`[retry:${label}] TAK diulang (deterministic revert): ${known.text}`);
+      throw first;
+    }
     const after = await probe().catch(() => -1n);
     const why = (first as Error).message.slice(0, 160);
     if (before < 0n || after < 0n || after !== before) {

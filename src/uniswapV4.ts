@@ -906,10 +906,20 @@ async function ensurePermit2(cc: ChainCtx, token: string, spender: string, amoun
     await (await sendTxNonceSafe(cc.wallet as ethers.Wallet, await erc.approve.populateTransaction(PERMIT2, ethers.MaxUint256))).wait();
   }
   const p2 = new ethers.Contract(PERMIT2, ['function allowance(address,address,address) view returns (uint160,uint48,uint48)', 'function approve(address,address,uint160,uint48)'], cc.wallet);
-  const [amt] = await p2.allowance(cc.wallet.address, token, spender);
-  if (BigInt(amt) < amount) {
-    const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 3600;
-    await (await sendTxNonceSafe(cc.wallet as ethers.Wallet, await p2.approve.populateTransaction(token, spender, (1n << 160n) - 1n, exp))).wait();
+  // Permit2 returns (amount, expiration, nonce). The expiration used to be DISCARDED here,
+  // and only the amount decided whether to re-approve.
+  //
+  // An approval is written for 30 days with a max amount, so thirty days later the amount
+  // is still max and this branch stays shut while every add reverts with
+  // AllowanceExpired(1790118992). That is exactly what happened on 23 Sep 2026 from 06:16
+  // WIB onward: USDG on Robinhood carried a full allowance that had expired hours earlier.
+  //
+  // The renewal is EARLY by a day. Renewing at the moment of expiry races the block time:
+  // an approval that is valid when it is read can be stale by the time the add lands.
+  const [amt, exp] = await p2.allowance(cc.wallet.address, token, spender);
+  const now = Math.floor(Date.now() / 1000);
+  if (BigInt(amt) < amount || Number(exp) < now + 24 * 3600) {
+    await (await sendTxNonceSafe(cc.wallet as ethers.Wallet, await p2.approve.populateTransaction(token, spender, (1n << 160n) - 1n, now + 30 * 24 * 3600))).wait();
   }
 }
 

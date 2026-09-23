@@ -11,6 +11,7 @@
  */
 import { ethers } from 'ethers';
 import type { BaseKind } from './chains.js';
+import { explainRevert } from './revert.js';
 
 // ─── primitives ────────────────────────────────────────────────────
 
@@ -1103,7 +1104,11 @@ export function msgError(where: string, err: unknown): string {
   // Callers may pass a string OR an Error object (the latter is needed for `landed`).
   // `String(err)` on an Error yields "Error: message", so the prefix is stripped.
   const raw = err instanceof Error ? err.message : String(err);
-  const first = raw.split('\n')[0].trim().slice(0, 200) || 'unknown error';
+  // A known custom error is explained instead of being shown as hex. ethers only decodes
+  // reverts that are in the ABI it holds, so Permit2's own errors arrive as "unknown
+  // custom error" with the answer sitting unread in the payload.
+  const known = explainRevert(raw);
+  const first = known?.text ?? (raw.split('\n')[0].trim().slice(0, 200) || 'unknown error');
   // The card promises "details are in the service log" — and that promise used to be
   // a LIE: 156 of 177 catch blocks wrote nothing, so the truncated part vanished
   // entirely and errors could not be audited afterwards. One line here covers all 42
