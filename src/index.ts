@@ -1061,29 +1061,6 @@ async function renderPositionCard(ctx: any, rec: store.PosRecord, edit: boolean)
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
-/**
- * The detail card for a NEWLY opened v4 position. The v3 path always sends two things
- * after success — "LP Created", then the position card — while v4 (single and ladder)
- * stopped at the first, so a new v4 position never immediately showed its range,
- * strategy or range status.
- *
- * The caller has already invalidated the v4 list cache, so the read here is fresh.
- * A failed read must not fail an open that ALREADY succeeded — the position is real
- * and this card is only a view: /positions will still show it.
- */
-async function replyV4Card(ctx: any, cc: ChainCtx, tokenId: string | null | undefined): Promise<void> {
-  if (!tokenId) return;
-  try {
-    const list = await listPositionsV4(cc);
-    const p = list.find((x) => x.tokenId === tokenId);
-    if (!p) return;
-    const ethUsd = await getEthUsd(cc.wethAddress, cc).catch(() => null);
-    const c = await buildV4Card(p, ethUsd, cc);
-    await ctx.reply(c.text, c.extra);
-  } catch (e) {
-    console.error('[open v4] the detail card failed:', (e as Error).message.slice(0, 120));
-  }
-}
 
 /** The detail view (composition, value, fees). */
 async function renderPositionDetail(ctx: any, rec: store.PosRecord, edit: boolean) {
@@ -3203,7 +3180,6 @@ async function execAdd(ctx: any) {
       await ctx.editMessageText(msg.msgLadderOpened(r.tokenIds.length, legs.length, `$${msg.posPair(`${selected.baseSymbol} / ${selected.otherSymbol}`, selected.baseSymbol)}`, ethAmount), html);
       // The first leg's card already summarises the WHOLE ladder (see ladderSum in
       // buildV4Card), so one card is enough — same as the v3 ladder path.
-      await replyV4Card(ctx, cc, r.tokenIds[0]);
     } catch (err) {
       console.error('[open v4 ladder] failed:', (err as Error).message.slice(0, 200));
       await recoverStrayWeth(getChain(chain), 'add v4 ladder').catch(() => {});
@@ -3271,7 +3247,6 @@ async function execAdd(ctx: any) {
         }),
         html,
       );
-      await replyV4Card(ctx, cc, r.tokenId);
     } catch (err) {
       await recoverStrayWeth(getChain(chain), 'add v4').catch(() => {});
       await ctx.reply(msg.msgError('add v4', err), html);
@@ -3334,8 +3309,6 @@ async function execAdd(ctx: any) {
         opened.push(tokenIds[i]);
       }
       await ctx.editMessageText(msg.msgLadderOpened(opened.length, usable.length, `$${msg.posPair(`${legPlans[0].baseSymbol} / ${legPlans[0].otherSymbol}`, legPlans[0].baseSymbol)}`, flow.ethAmount), html);
-      const first = opened[0] ? store.get(opened[0]) : undefined;
-      if (first) await renderPositionCard(ctx, first, false).catch(() => {});
     } catch (err) {
       console.error('[open ladder] failed:', (err as Error).message.slice(0, 200));
       await recoverStrayWeth(getChain(flow.chain), 'add ladder').catch(() => {});
@@ -3423,14 +3396,7 @@ async function execAdd(ctx: any) {
       msg.msgLpOpened(tokenId, notes, `$${msg.posPair(`${plan.baseSymbol} / ${plan.otherSymbol}`, plan.baseSymbol)}`, `${pLo} — ${pHi}`),
       html,
     );
-    const rec = store.get(tokenId);
-    if (rec) {
-      try {
-        await renderPositionCard(ctx, rec, false);
-      } catch (e) {
-        await ctx.reply(msg.msgPositionReadFail(tokenId, (e as Error).message), html);
-      }
-    }
+    // No position card after the open: the opened card says it, /positions shows the rest.
   } catch (err) {
     // An add that failed after wrapping leaves WETH behind; it is tidied up here so no
     // manual /unwrap is needed before trying /add_lp again.
