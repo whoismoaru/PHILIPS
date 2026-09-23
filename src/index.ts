@@ -2366,7 +2366,10 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   flow.awaitingAmount = true;
   const a = amountCtx(flow);
   const rows: any[] = [];
-  rows.push(...pctPresets.chunkButtons(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `amt:${p}`))));
+  // Four amounts in the chain's native coin and four shares of the balance (/settings ->
+  // Add LP). A stablecoin pool converts the native amount at the live price on tap.
+  rows.push(pctPresets.get('addamt').slice(0, 4).map((v) => Markup.button.callback(`${v} ${wizardCtx(flow).nativeSymbol}`, `addamt:${v}`)));
+  rows.push(pctPresets.get('add').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `amt:${p}`)));
   // Back goes to whichever step really precedes the amount now: the leg picker on a
   // ladder, the range picker otherwise.
   rows.push(
@@ -2418,7 +2421,7 @@ async function usableFor(flow: AddFlow): Promise<bigint> {
   return raw > buf ? raw - buf : 0n;
 }
 
-bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
+bot.action(/^amt:([\d.]+)$/, async (ctx: any) => {
   await ctx.answerCbQuery();
   const flow = getFlow(ctx);
   if (!flow?.awaitingAmount) return;
@@ -2427,7 +2430,7 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
     return ctx.reply(msg.msgSessionExpired(), html);
   }
   const pct = Number(ctx.match[1]);
-  if (!pctPresets.get('add').includes(pct)) return;
+  if (!(pct > 0 && pct <= 100)) return;
 
   const dec = wizardBase(flow).decimals;
   const usable = await usableFor(flow).catch(() => null);
@@ -2439,7 +2442,7 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
     );
   }
 
-  let wei = (usable * BigInt(pct)) / 100n;
+  let wei = pctOf(usable, pct);
 
   // The per-tx limit still applies to the buttons, exactly as it does to a typed amount.
   const a = amountCtx(flow);
@@ -2452,6 +2455,36 @@ bot.action(/^amt:(\d{1,3})$/, async (ctx: any) => {
   await planThenOpen(ctx, flow);
 });
 
+
+/** A fixed Add LP amount, in the chain's native coin (/settings -> Add LP). */
+bot.action(/^addamt:([\d.]+)$/, async (ctx: any) => {
+  await ctx.answerCbQuery();
+  const flow = getFlow(ctx);
+  if (!flow?.awaitingAmount) return;
+  if (isStaleFlow(flow.startedAt)) {
+    flows.delete(ctx.from.id);
+    return ctx.reply(msg.msgSessionExpired(), html);
+  }
+  const cc = wizardCtx(flow);
+  const base = wizardBase(flow);
+  const native = Number(ctx.match[1]);
+  // A stablecoin pool is funded in that stablecoin: the native amount becomes its dollar value.
+  let amount = native;
+  if (!base.wrappable) {
+    const px = cc.hasWethBase ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1;
+    if (!px) return ctx.reply(msg.msgError('amount', `The ${cc.nativeSymbol} price could not be read. Type the amount instead.`), html);
+    amount = native * px;
+  }
+  const wei = ethers.parseUnits(amount.toFixed(Math.min(base.decimals, 8)), base.decimals);
+  const usable = await usableFor(flow).catch(() => null);
+  if (usable === null) return ctx.reply(msg.msgError('amount', 'Balance read failed. Type the amount instead.'), html);
+  if (wei > usable) {
+    return ctx.reply(msg.msgError('amount', `Only ${msg.cleanUnits(usable, base.decimals)} ${base.symbol} is available after the gas reserve.`), html);
+  }
+  flow.awaitingAmount = false;
+  flow.ethAmount = ethers.formatUnits(wei, base.decimals);
+  await planThenOpen(ctx, flow);
+});
 
 /**
  * The deposit amount is the LAST question, so setting it opens the position.
@@ -4201,9 +4234,9 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
   f.bins = f.pick.binStep ? binsForRange(f.pick.binStep, rangePct) : undefined;
   const bal = await jupiter.solBalance(kp.publicKey).catch(() => 0n);
   const rows = pctPresets.chunkButtons(
-    pctPresets.get('solsize').map((v) => Markup.button.callback(`${v} SOL`, `sollpa:${Math.round(v * jupiter.LAMPORTS)}`)),
+    pctPresets.get('addamt').slice(0, 4).map((v) => Markup.button.callback(`${v} SOL`, `sollpa:${Math.round(v * jupiter.LAMPORTS)}`)),
   );
-  rows.push(...pctPresets.chunkButtons(pctPresets.get('add').map((p) => Markup.button.callback(`${p}%`, `sollpp:${p}`))));
+  rows.push(pctPresets.get('add').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `sollpp:${p}`)));
   rows.push([Markup.button.callback('⬅️ Back', 'sollpback'), Markup.button.callback('❌ Cancel', 'cancel')]);
   return ctx.editMessageText(
     msg.msgSolLpAmount({
@@ -4313,14 +4346,14 @@ bot.action(/^sollpa:(\d+)$/, async (ctx) => {
   return solLpOpen(ctx, f, BigInt((ctx.match as RegExpMatchArray)[1]), true);
 });
 
-bot.action(/^sollpp:(\d+)$/, async (ctx) => {
+bot.action(/^sollpp:([\d.]+)$/, async (ctx) => {
   const f = solLpFlows.get(ctx.from!.id);
   if (!f || isStaleFlow(f.startedAt)) return ctx.answerCbQuery('Expired. Paste the CA again.');
   const kp = solWallet.keypair();
   if (!kp) return ctx.answerCbQuery('No Solana key connected.');
   await ctx.answerCbQuery();
-  const pct = BigInt((ctx.match as RegExpMatchArray)[1]);
-  return solLpOpen(ctx, f, ((await solSpendable(kp.publicKey, SOL_LP_RESERVE_LAMPORTS)) * pct) / 100n, true);
+  const pct = Number((ctx.match as RegExpMatchArray)[1]);
+  return solLpOpen(ctx, f, pctOf(await solSpendable(kp.publicKey, SOL_LP_RESERVE_LAMPORTS), pct), true);
 });
 
 /** An amount typed at the LP card. Returns true when the message was consumed. */
@@ -5043,8 +5076,12 @@ function sellAmountStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   flow.previewBack = 'sellback:amount'; // Back from the preview returns to the percentage/amount step
   // Arriving from the hub means there is no holdings list to return to; go back to the token card.
   const back = flow.sellList ? 'sellback:list' : flow.fromHub ? 'hub:back' : 'cancel';
+  // Four amounts worth that much of the chain's native coin, and four shares of the
+  // holding (/settings -> Swap Token).
+  const nat = CHAINS[flow.chainKey]?.nativeSymbol ?? 'ETH';
   const rows = [
-    ...pctPresets.chunkButtons(pctPresets.get('sell').map((p) => Markup.button.callback(`${p}%`, `sellpct:${p}`))),
+    pctPresets.get('sellamt').slice(0, 4).map((a) => Markup.button.callback(`${a} ${nat}`, `sellamt:${a}`)),
+    pctPresets.get('sell').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `sellpct:${p}`)),
     [Markup.button.callback('Type an amount', 'sellpct:custom')],
     [Markup.button.callback('⬅️ Back', back), Markup.button.callback('❌ Cancel', 'cancel')],
   ];
@@ -5168,18 +5205,12 @@ bot.action(/^solsell:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   solSellPick.set(ctx.from!.id, { ...h, startedAt: Date.now() });
   const isSol = h.mint === jupiter.WSOL;
-  const rows = pctPresets.chunkButtons(pctPresets.get('sell').map((p) => Markup.button.callback(`${p}%`, `solsellp:${p}`)));
-  // Fixed SOL amounts, the same presets as the LP deposit (/settings -> SOL Amount). Only
-  // for SOL itself: a fixed count of some meme token means nothing.
-  if (isSol)
-    rows.push(
-      ...pctPresets.chunkButtons(
-        pctPresets
-          .get('solsize')
-          .filter((a) => BigInt(Math.round(a * 1e9)) <= h.raw)
-          .map((a) => Markup.button.callback(`${a} SOL`, `solsella:${Math.round(a * 1e9)}`)),
-      ),
-    );
+  // Four amounts worth that much SOL, and four shares of the holding (/settings -> Swap
+  // Token). For SOL itself the amount is simply that much SOL.
+  const rows: any[] = [
+    pctPresets.get('sellamt').slice(0, 4).map((a) => Markup.button.callback(`${a} SOL`, `solsella:${Math.round(a * 1e9)}`)),
+    pctPresets.get('sell').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `solsellp:${p}`)),
+  ];
   rows.push([Markup.button.callback('✏️ Type an amount', 'solselltype')]);
   rows.push([Markup.button.callback('⬅️ Back', 'sell:refresh'), Markup.button.callback('❌ Cancel', 'cancel')]);
   return ctx.editMessageText(msg.msgSellAmount(`Solana: ${fmt4(h.amount)} ${h.symbol}`), { ...html, ...Markup.inlineKeyboard(rows) });
@@ -5192,18 +5223,27 @@ bot.action('solselltype', async (ctx) => {
   return ctx.reply(msg.msgProgress(`type how much ${h.symbol} to swap, for example ${h.mint === jupiter.WSOL ? '0.25' : '100'}`), html);
 });
 
-bot.action(/^solsellp:(\d+)$/, async (ctx) => {
+bot.action(/^solsellp:([\d.]+)$/, async (ctx) => {
   const h = solSellPick.get(ctx.from!.id);
   if (!h) return ctx.answerCbQuery('Expired. Open /swap again.');
   await ctx.answerCbQuery('Quoting…');
-  return solSellExec(ctx, h, (h.raw * BigInt((ctx.match as RegExpMatchArray)[1])) / 100n, true);
+  return solSellExec(ctx, h, pctOf(h.raw, Number((ctx.match as RegExpMatchArray)[1])), true);
 });
 
+/** Sell as much of the token as is worth `lamports` of SOL (SOL itself: that much SOL). */
 bot.action(/^solsella:(\d+)$/, async (ctx) => {
   const h = solSellPick.get(ctx.from!.id);
   if (!h) return ctx.answerCbQuery('Expired. Open /swap again.');
   await ctx.answerCbQuery('Quoting…');
-  return solSellExec(ctx, h, BigInt((ctx.match as RegExpMatchArray)[1]), true);
+  const lamports = BigInt((ctx.match as RegExpMatchArray)[1]);
+  if (h.mint === jupiter.WSOL) return solSellExec(ctx, h, lamports, true);
+  // The token's SOL value, from a live quote for the whole holding: tokens per lamport.
+  const q = await jupiter.quote(h.mint, jupiter.WSOL, h.raw, SOL_SLIPPAGE_BPS).catch(() => null);
+  const out = q ? BigInt(q.outAmount) : 0n;
+  if (out <= 0n) return ctx.reply(msg.msgError('swap', 'No SOL quote for this token right now. Use a percentage instead.'), html);
+  if (lamports > out)
+    return ctx.reply(msg.msgError('swap', `Your whole holding is worth about ${fmtSol(out)} SOL. Pick a smaller amount or 100%.`), html);
+  return solSellExec(ctx, h, (h.raw * lamports) / out, true);
 });
 
 /** An amount typed at the Solana swap card, in the token's own units. True when consumed. */
@@ -5284,7 +5324,7 @@ bot.action(/^sellpick:(\d+)$/, async (ctx) => {
   await sellAmountStep(ctx, flow, true);
 });
 
-bot.action(/^sellpct:(\d+|custom)$/, async (ctx) => {
+bot.action(/^sellpct:([\d.]+|custom)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
   if (!flow?.token || flow.tokenBalWei === undefined) return ctx.answerCbQuery('Expired. Start again with /sell.');
   if (ctx.match[1] === 'custom') {
@@ -5298,9 +5338,32 @@ bot.action(/^sellpct:(\d+|custom)$/, async (ctx) => {
   }
   const pct = Number(ctx.match[1]);
   await ctx.answerCbQuery();
-  const amountWei = pct >= 100 ? flow.tokenBalWei : (flow.tokenBalWei * BigInt(pct)) / 100n;
+  const amountWei = pctOf(flow.tokenBalWei, pct);
   const amtLabel = `${fmt4((flow.tokenBalNum! * pct) / 100)} ${flow.tokenSym} (${pct}%)`;
   await sellPreview(ctx, flow, amountWei, amtLabel);
+});
+
+/** Sell as much of the token as is worth that much native coin (native itself: that much). */
+bot.action(/^sellamt:([\d.]+)$/, async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.token || flow.tokenBalWei === undefined) return ctx.answerCbQuery('Expired. Start again with /sell.');
+  await ctx.answerCbQuery('Quoting…');
+  const cc = CHAINS[flow.chainKey]!;
+  const want = ethers.parseEther(ctx.match[1]);
+  let amountWei: bigint;
+  if (flow.token.toLowerCase() === cc.wethAddress.toLowerCase()) {
+    amountWei = want;
+  } else {
+    // The token's native value, from a live quote for the whole holding.
+    const q = await previewSwapOut(flow.token, cc.wethAddress, flow.tokenBalWei, cc).catch(() => null);
+    if (!q || q.out <= 0n) return ctx.reply(msg.msgError('swap', `No ${cc.nativeSymbol} quote for this token right now. Use a percentage instead.`), html);
+    if (want > q.out)
+      return ctx.reply(msg.msgError('swap', `Your whole holding is worth about ${fmt4(Number(ethers.formatEther(q.out)))} ${cc.nativeSymbol}. Pick a smaller amount or 100%.`), html);
+    amountWei = (flow.tokenBalWei * want) / q.out;
+  }
+  if (amountWei > flow.tokenBalWei) return ctx.reply(msg.msgError('swap', 'That is more than you hold.'), html);
+  const label = `${fmt4(Number(ethers.formatUnits(amountWei, flow.tokenDec ?? 18)))} ${flow.tokenSym} (~${ctx.match[1]} ${cc.nativeSymbol})`;
+  return sellPreview(ctx, flow, amountWei, label);
 });
 
 // The /sell Back button.

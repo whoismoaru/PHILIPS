@@ -948,9 +948,10 @@ export function msgPctPreset(
 /** Prompt to type a list of values. */
 /** The Buy preset prompt, opened straight from /settings. */
 /** The Buy Token prompt: four amounts (native coin) and four percentages in one line. */
-export function msgBuyPresetAsk(amounts: number[], pcts: number[], saved = false): string {
+export function msgBuyPresetAsk(amounts: number[], pcts: number[], saved = false, title = '🛒 BUY TOKEN'): string {
+  const [icon, ...words] = title.split(' ');
   return [
-    `🛒 ${bold('BUY TOKEN')} | ${saved ? 'Preset Saved ✅' : 'Change Preset'}`,
+    `${icon} ${bold(words.join(' '))} | ${saved ? 'Preset Saved ✅' : 'Change Preset'}`,
     '',
     `For example: ${code('10 25 50 90 & 1% 2% 3% 4%')}`,
     '',

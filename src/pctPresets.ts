@@ -10,7 +10,7 @@ import { writeJson } from './store.js';
  * 30/50/70/90 while the rest offered 25/50/75/100. Changing one meant editing four places
  * and restarting, so in practice they were never changed at all.
  */
-export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs' | 'send' | 'solrange' | 'solsize' | 'buyamt';
+export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs' | 'send' | 'solrange' | 'solsize' | 'buyamt' | 'sellamt' | 'addamt';
 
 export const FLOW_LABEL: Record<PctFlow, string> = {
   buy: 'Buy',
@@ -26,6 +26,8 @@ export const FLOW_LABEL: Record<PctFlow, string> = {
   // The quick-buy amounts, in the chain's native coin -- one list for every chain (the
   // owner's choice, 23 Sep 2026).
   buyamt: 'Buy amount',
+  sellamt: 'Swap amount',
+  addamt: 'Add LP amount',
 };
 
 // `stop` deliberately omits 100: pulling everything out means closing the position, which
@@ -42,6 +44,8 @@ const DEFAULTS: Record<PctFlow, number[]> = {
   solrange: [5, 10, 25, 50],
   solsize: [0.1, 0.25, 0.5, 1],
   buyamt: [0.005, 0.01, 0.05, 0.1],
+  sellamt: [0.005, 0.01, 0.05, 0.1],
+  addamt: [0.05, 0.1, 0.25, 0.5],
 };
 
 const FILE = join(process.cwd(), 'data', 'pctpresets.json');
@@ -70,8 +74,8 @@ let cache: Record<PctFlow, number[]> | null = null;
 const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
   // Fractions allowed: 0.01% of a large balance is a real buy size.
   buy: { min: 0.01, max: 100 },
-  sell: { min: 1, max: 100 },
-  add: { min: 1, max: 100 },
+  sell: { min: 0.01, max: 100 },
+  add: { min: 0.01, max: 100 },
   stop: { min: 1, max: 99 },
   bridge: { min: 1, max: 100 },
   legs: { min: 2, max: 69 },
@@ -82,10 +86,12 @@ const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
   // SOL, not percent. Fractions are the whole point here: the usual deposit is under 1.
   solsize: { min: 0.001, max: 1000 },
   buyamt: { min: 0.0001, max: 100000 },
+  sellamt: { min: 0.0001, max: 100000 },
+  addamt: { min: 0.0001, max: 100000 },
 };
 export const boundsFor = (flow: PctFlow) => BOUNDS[flow];
 /** The unit the settings card shows: '%' for amounts, 'legs' for a ladder. */
-export const unitFor = (flow: PctFlow): string => (flow === 'legs' ? 'legs' : flow === 'solsize' ? 'SOL' : flow === 'buyamt' ? 'native' : '%');
+export const unitFor = (flow: PctFlow): string => (flow === 'legs' ? 'legs' : flow === 'solsize' ? 'SOL' : flow === 'buyamt' || flow === 'sellamt' || flow === 'addamt' ? 'native' : '%');
 
 /** Valid values: whole numbers inside the flow's range, ascending, no duplicates, at most 4. */
 export function sanitize(values: number[], flow: PctFlow): number[] | null {
@@ -95,7 +101,7 @@ export function sanitize(values: number[], flow: PctFlow): number[] | null {
   // solsize is an AMOUNT in SOL, so 0.25 is a legitimate value there and nowhere else.
   // Everywhere else a non-integer is a typo, and storing "0.5" as a percentage would make
   // a button that deposits nothing.
-  const decimals = flow === 'solsize' || flow === 'buyamt' || flow === 'buy';
+  const decimals = ['solsize', 'buyamt', 'sellamt', 'addamt', 'buy', 'sell', 'add'].includes(flow);
   if (values.some((v) => (decimals ? !(v > 0) : !Number.isInteger(v)) || v < min || v > max)) return null;
   const clean = [...new Set(values)].sort((a, b) => a - b);
   if (clean.length === 0 || clean.length > MAX_BUTTONS) return null;
