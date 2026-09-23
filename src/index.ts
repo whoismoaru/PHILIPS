@@ -3784,7 +3784,9 @@ async function renderTokenHub(
   ];
   const text = msg.msgSolToken({
     symbol: sym,
-    name: st?.name ?? sc?.name ?? sym,
+    // GMGN writes a venue suffix into some names ("GameStop • Robinhood Token"), which
+    // doubled up against the chain label that follows. Only the name before it is kept.
+    name: (st?.name ?? sc?.name ?? sym).split(' • ')[0].trim(),
     ca,
     rows,
     chainLabel: cc.label,
