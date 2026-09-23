@@ -4786,7 +4786,7 @@ function sellListKb(list: SellHolding[], _showChain = false) {
   // A missing price drops the dollar half rather than printing $0, which would read as
   // a worthless token instead of an unread one.
   const rows = list.map((h, i) => [Markup.button.callback(holdingLabel(h), `sellpick:${i}`)]);
-  rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
+  rows.push([Markup.button.callback('🔄 Refresh', 'sell:refresh'), Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   return Markup.inlineKeyboard(rows);
 }
 
@@ -4887,6 +4887,13 @@ async function cmdSell(ctx: any) {
 // muscle memory and any pinned message still work.
 bot.command('swap', cmdSell);
 bot.command('sell', cmdSell);
+// Redrawn from scratch: balances and prices are read again, and the old list goes away so
+// a stale button cannot sell from yesterday's numbers.
+bot.action('sell:refresh', async (ctx) => {
+  await ctx.answerCbQuery('refreshing…');
+  await ctx.deleteMessage().catch(() => {});
+  return cmdSell(ctx);
+});
 // The "💱 Quick Sell" button on the /status card.
 bot.action('sell:start', async (ctx) => {
   await ctx.answerCbQuery();
