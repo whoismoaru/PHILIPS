@@ -3737,8 +3737,9 @@ async function renderTokenHub(
       tvl: msg.usdCompact(p.tvlUsd),
       // The gateway reports 0 for v4 volume it does not track; 0 would read as a dead pool.
       vol: p.vol24hUsd ? msg.usdCompact(p.vol24hUsd) : '—',
-      feeTvl: aprLabel(p.aprPct == null ? null : p.aprPct / 365),
+      feeTvl: aprLabel(p.aprPct ?? null),
     })),
+    feeLabel: 'APR',
     otherVenueCount: 0,
     offBaseCount: 0,
     chainReadSkipped: false,

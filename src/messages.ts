@@ -1540,6 +1540,8 @@ export function msgSolToken(opts: {
   chainLabel?: string;
   poolTitle?: string;
   poolDetail?: (p: { binStep: string; fee: string }) => string;
+  /** Label of the last pool figure: Solana shows 24h Fee/TVL, EVM an annual APR. */
+  feeLabel?: string;
 }): string {
   const out: string[] = [];
   // bold() and italic() escape their own argument. Wrapping esc() around them turns
@@ -1561,7 +1563,7 @@ export function msgSolToken(opts: {
       out.push(`${i + 1}. ${esc(p.pair)} ${italic(opts.poolDetail ? opts.poolDetail(p) : `(bin ${p.binStep}, fee ${p.fee})`)}`);
       // Fee over TVL for the last 24 hours, NOT an annualised APR. The two differ by 365x
       // and a card that showed one under the other's name would be off by that much.
-      out.push(`   \u2514 TVL: ${esc(p.tvl)} | Vol: ${esc(p.vol)} | 24h Fee/TVL: ${esc(p.feeTvl)}`);
+      out.push(`   \u2514 TVL: ${esc(p.tvl)} | Vol: ${esc(p.vol)} | ${esc(opts.feeLabel ?? '24h Fee/TVL')}: ${esc(p.feeTvl)}`);
     });
     if (opts.morePools && opts.morePools > 0) {
       out.push('', note(`${opts.morePools} deeper pool${opts.morePools === 1 ? '' : 's'} not shown; these are the top ${opts.pools.length} by TVL.`));
