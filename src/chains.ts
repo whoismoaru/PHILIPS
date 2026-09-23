@@ -1,4 +1,4 @@
-import { GAS_CAP_PCT, gasValue } from './gasBudget.js';
+import { GAS_CAP_PCT, GAS_MIN_USD, GAS_MAX_USD, allowedGasUsd, gasValue, nativeUsd } from './gasBudget.js';
 import { ethers } from 'ethers';
 import { config } from './config.js';
 import * as walletStore from './walletStore.js';
@@ -469,26 +469,38 @@ function build(key: string, d: Def): ChainCtx {
     const beforeCap = provider.broadcastTransaction.bind(provider);
     provider.broadcastTransaction = async (signedTx: string) => {
       const parsed = ethers.Transaction.from(signedTx);
-      const price = parsed.maxFeePerGas ?? parsed.gasPrice ?? 0n;
-      const worst = price * (parsed.gasLimit ?? 0n);
-      // 3% of what the tx moves: its own native value, or the value the flow stated for
-      // this chain (a token sell, an approve, a stablecoin LP). Unknown value falls back to
-      // the absolute ceiling below.
-      const stated = gasValue(key);
-      const valueWei = parsed.value > 0n ? parsed.value : stated ? ethers.parseEther(stated.toFixed(18)) : 0n;
-      if (valueWei > 0n) {
-        const pctCap = (valueWei * BigInt(GAS_CAP_PCT)) / 100n;
-        if (worst > pctCap) {
+      // What it will most likely cost, not the worst case: maxFeePerGas is padded to 2x the
+      // base fee and would refuse ordinary transactions. The base fee is read fresh; the
+      // gas limit already carries the estimate's own buffer.
+      const limit = parsed.gasLimit ?? 0n;
+      let unit = parsed.gasPrice ?? parsed.maxFeePerGas ?? 0n;
+      if (parsed.maxFeePerGas != null) {
+        const baseFee = (await provider.getBlock('latest').catch(() => null))?.baseFeePerGas ?? null;
+        if (baseFee !== null) {
+          const tip = parsed.maxPriorityFeePerGas ?? 0n;
+          unit = baseFee + tip < parsed.maxFeePerGas ? baseFee + tip : parsed.maxFeePerGas;
+        }
+      }
+      const est = unit * limit;
+      const px = d.hasWethBase === false ? 1 : await nativeUsd(key);
+      if (px) {
+        // The value moved: its own native value, or what the flow stated for this chain.
+        const stated = gasValue(key);
+        const valueNative = parsed.value > 0n ? Number(ethers.formatEther(parsed.value)) : stated ?? null;
+        const allowUsd = allowedGasUsd(valueNative !== null ? valueNative * px : null);
+        const estUsd = Number(ethers.formatEther(est)) * px;
+        if (estUsd > allowUsd) {
           throw new Error(
-            `Gas fee ceiling hit: up to ${ethers.formatEther(worst)} ${d.nativeSymbol} in gas is more than ${GAS_CAP_PCT}% ` +
-              `of the ~${ethers.formatEther(valueWei)} ${d.nativeSymbol} this moves. Nothing was sent. Use a larger amount or wait for gas to drop.`,
+            `Gas too high: ~$${estUsd.toFixed(2)} for this transaction, the limit is $${allowUsd.toFixed(2)} ` +
+              `(${GAS_CAP_PCT}% of the value, at least $${GAS_MIN_USD.toFixed(2)}, never above $${GAS_MAX_USD}). Nothing was sent. Wait for gas to drop.`,
           );
         }
         return beforeCap(signedTx);
       }
-      if (worst > feeCap) {
+      // No price readable: the old native-unit ceiling is the only guard left.
+      if (est > feeCap) {
         throw new Error(
-          `Gas fee ceiling hit: this transaction could cost up to ${ethers.formatEther(worst)} ${d.nativeSymbol} ` +
+          `Gas fee ceiling hit: this transaction could cost ~${ethers.formatEther(est)} ${d.nativeSymbol} ` +
             `(ceiling ${ethers.formatEther(feeCap)}). Nothing was sent. Wait for gas to drop.`,
         );
       }

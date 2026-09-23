@@ -13,7 +13,9 @@
  * signs slot 0. Everything this module needs is that one insertion, so the SDK's whole
  * transaction stack would be carried for a memcpy.
  */
-import { GAS_CAP_PCT } from '../gasBudget.js';
+import { solUsd, allowedFeeLamports } from './holdings.js';
+
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 import { signMessage, type SolKeypair } from './keys.js';
 import { solRpc } from './rpc.js';
 
@@ -65,12 +67,18 @@ export function routeLabel(q: Quote): string {
   return names.length ? [...new Set(names)].join(' → ') : 'Jupiter';
 }
 
-function feeCapLamports(q: Quote): number {
-  const MAX = 2_000_000;
-  // The SOL side of the trade: what goes in on a buy, what comes out on a sell.
-  const sol = q.inputMint === WSOL ? Number(q.inAmount) : q.outputMint === WSOL ? Number(q.outAmount) : null;
-  if (sol === null) return MAX;
-  return Math.max(10_000, Math.min(MAX, Math.floor((sol * GAS_CAP_PCT) / 100)));
+/**
+ * The most this swap may bid, by the rule in gasBudget.ts. Jupiter bids the going rate up
+ * to it, so a small trade still competes for its block instead of being priced out.
+ */
+async function feeCapLamports(q: Quote): Promise<number> {
+  const FALLBACK = 2_000_000;
+  const px = await solUsd();
+  if (!px) return FALLBACK;
+  const side = (mint: unknown, amt: string) =>
+    mint === WSOL ? (Number(amt) / 1e9) * px : mint === USDC_MINT ? Number(amt) / 1e6 : null;
+  const valueUsd = side(q.inputMint, q.inAmount) ?? side(q.outputMint, q.outAmount);
+  return (await allowedFeeLamports(valueUsd)) ?? FALLBACK;
 }
 
 /** Build the swap transaction for this quote, base64. */
@@ -87,9 +95,8 @@ async function buildSwap(q: Quote, userPublicKey: string): Promise<string> {
       dynamicComputeUnitLimit: true,
       // A swap that lands three blocks late on a token minutes old is a different trade.
       // The fee is capped so the urgency cannot quietly cost more than the position.
-      // Also capped at GAS_CAP_PCT of the trade's SOL side, matching the EVM rule;
-      // floored at 10k lamports so a tiny swap still bids something.
-      prioritizationFeeLamports: { priorityLevelWithMaxLamports: { maxLamports: feeCapLamports(q), priorityLevel: 'high' } },
+      // Capped by the shared gas rule (gasBudget.ts): max(3% of value, $0.10), at most $2.
+      prioritizationFeeLamports: { priorityLevelWithMaxLamports: { maxLamports: await feeCapLamports(q), priorityLevel: 'high' } },
     }),
   });
   if (!r.swapTransaction) throw new Error('jupiter returned no transaction');

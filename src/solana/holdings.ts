@@ -7,6 +7,7 @@
  * the same as worthless.
  */
 import { solRpc } from './rpc.js';
+import { allowedGasUsd } from '../gasBudget.js';
 
 const WSOL = 'So11111111111111111111111111111111111111112';
 const PROGRAMS = ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'];
@@ -32,6 +33,21 @@ async function prices(mints: string[]): Promise<Map<string, { px: number; sym: s
     for (const [m, b] of best) out.set(m, { px: b.px, sym: b.sym });
   }
   return out;
+}
+
+let solPxCache: { v: number; t: number } | null = null;
+/** SOL in dollars, cached for a minute. Null when DexScreener cannot answer. */
+export async function solUsd(): Promise<number | null> {
+  if (solPxCache && Date.now() - solPxCache.t < 60_000) return solPxCache.v;
+  const v = (await prices([WSOL]).catch(() => new Map())).get(WSOL)?.px ?? null;
+  if (v) solPxCache = { v, t: Date.now() };
+  return v;
+}
+
+/** Lamports of priority fee a trade worth `valueUsd` may pay, by the rule in gasBudget.ts. */
+export async function allowedFeeLamports(valueUsd: number | null): Promise<number | null> {
+  const px = await solUsd();
+  return px ? Math.floor((allowedGasUsd(valueUsd) / px) * 1e9) : null;
 }
 
 export async function solHoldings(owner: string): Promise<SolHolding[]> {

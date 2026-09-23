@@ -15,7 +15,8 @@
  * carry: deposit SOL or USDC into bins BELOW the active one and wait for price to fall
  * into the token. The token side is never deposited.
  */
-import { GAS_CAP_PCT } from '../gasBudget.js';
+import { GAS_CAP_PCT, GAS_MIN_USD, GAS_MAX_USD } from '../gasBudget.js';
+import { solUsd, allowedFeeLamports } from './holdings.js';
 import { createRequire } from 'node:module';
 import { ComputeBudgetProgram, Connection, Keypair, PublicKey, type Transaction } from '@solana/web3.js';
 import { rpcUrl } from './rpc.js';
@@ -133,9 +134,11 @@ export async function openPosition(
   // zero. On 22 Sep 2026 at 21:15 WIB that is exactly what happened: signature 2kwdfKed…
   // never landed and died with "block height exceeded" after sitting behind everything
   // that did pay. The Jupiter buy path has always set a fee; this one now matches it.
-  // Capped at GAS_CAP_PCT of the deposit when it is in SOL; a USDC deposit keeps the flat cap.
-  const maxFee = plan.baseSymbol === 'SOL' ? Math.max(10_000, Math.floor((Number(amount) * GAS_CAP_PCT) / 100)) : MAX_PRIORITY_LAMPORTS;
-  await addPriorityFee(conn, tx, pool, Math.min(maxFee, MAX_PRIORITY_LAMPORTS));
+  // Capped by the shared gas rule (gasBudget.ts): max(3% of the deposit, $0.10), at most $2.
+  const px = await solUsd();
+  const depositUsd = plan.baseSymbol === 'SOL' ? (px ? (Number(amount) / 1e9) * px : null) : Number(amount) / 1e6;
+  const maxFee = (await allowedFeeLamports(depositUsd)) ?? MAX_PRIORITY_LAMPORTS;
+  await addPriorityFee(conn, tx, pool, maxFee);
 
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
   tx.recentBlockhash = blockhash;
@@ -213,15 +216,13 @@ async function addPriorityFee(conn: Connection, tx: Transaction, pool: string, m
   const p75 = paid.length ? paid[Math.floor(paid.length * 0.75)] : 0;
   const ceiling = Math.floor((maxLamports * 1e6) / cuLimit);
   const want = Math.max(MIN_MICRO_LAMPORTS, p75);
-  // A bid below what this pool's writers pay does not land; it expires a minute later. So a
-  // deposit too small for the 3% rule to afford the going rate is refused BEFORE sending,
-  // naming the smallest amount that would work (23 Sep 2026: 0.001 SOL bid 30k lamports into
-  // GIGACAT/SOL and expired).
+  // A bid below what this pool's writers pay does not land; it expires a minute later
+  // (23 Sep 2026, GIGACAT/SOL). So the bid is the going rate, and when the gas rule cannot
+  // afford it the deposit is refused BEFORE sending rather than sent to die.
   if (want > ceiling) {
     const needLamports = (want * cuLimit) / 1e6;
-    const minSol = (needLamports * 100) / GAS_CAP_PCT / 1e9;
     throw new Error(
-      `amount too small: this pool needs ~${(needLamports / 1e9).toFixed(5)} SOL in priority fee, more than ${GAS_CAP_PCT}% of the deposit. Use at least ${minSol.toFixed(3)} SOL.`,
+      `priority fee too high: this pool needs ~${(needLamports / 1e9).toFixed(5)} SOL right now, above the gas limit (${GAS_CAP_PCT}% of the deposit, at least $${GAS_MIN_USD.toFixed(2)}, never above $${GAS_MAX_USD}). Nothing was sent. Wait a minute and try again.`,
     );
   }
   tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: want }));

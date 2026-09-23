@@ -25,7 +25,7 @@ import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
 import { solHoldings, type SolHolding } from './solana/holdings.js';
-import { setGasValue, GAS_CAP_PCT } from './gasBudget.js';
+import { setGasValue, GAS_CAP_PCT, setNativePriceFn } from './gasBudget.js';
 import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
@@ -350,6 +350,12 @@ const RANGE_OPTIONS = [
 
 
 /** Edit an existing progress message, or send a new one if that fails or none exists. */
+// The gas rule prices every chain's native through the same source the cards use.
+setNativePriceFn(async (k) => {
+  const c = CHAINS[k];
+  return c ? getEthUsd(c.wethAddress, c) : null;
+});
+
 // --- answerCbQuery must never take a handler down ---
 // A callback query expires after ~15 seconds. When the flow behind a button takes
 // longer than that (a cash-out, a swap), the "Loading..." reply fails with a 400 and
