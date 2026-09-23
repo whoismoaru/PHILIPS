@@ -11,7 +11,8 @@ import { solRpc } from './rpc.js';
 const WSOL = 'So11111111111111111111111111111111111111112';
 const PROGRAMS = ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'];
 
-export type SolHolding = { symbol: string; amount: number; usd: number | null };
+/** `mint` and `raw` (base units) are what a swap needs; the native row carries the WSOL mint. */
+export type SolHolding = { symbol: string; amount: number; usd: number | null; mint: string; raw: bigint };
 
 async function prices(mints: string[]): Promise<Map<string, { px: number; sym: string }>> {
   const out = new Map<string, { px: number; sym: string }>();
@@ -41,16 +42,19 @@ export async function solHoldings(owner: string): Promise<SolHolding[]> {
     ),
   ]);
   const bal = new Map<string, number>();
+  const raws = new Map<string, bigint>();
   for (const l of lists)
     for (const a of l.value) {
       const info = a?.account?.data?.parsed?.info;
       const n = Number(info?.tokenAmount?.uiAmount ?? 0);
-      if (info?.mint && n > 0) bal.set(info.mint, (bal.get(info.mint) ?? 0) + n);
+      if (!info?.mint || !(n > 0)) continue;
+      bal.set(info.mint, (bal.get(info.mint) ?? 0) + n);
+      raws.set(info.mint, (raws.get(info.mint) ?? 0n) + BigInt(info.tokenAmount.amount ?? '0'));
     }
   const px = await prices([WSOL, ...bal.keys()]);
   const sol = lamports.value / 1e9;
   const solPx = px.get(WSOL)?.px;
-  const out: SolHolding[] = [{ symbol: 'SOL', amount: sol, usd: solPx ? sol * solPx : null }];
+  const out: SolHolding[] = [{ symbol: 'SOL', amount: sol, usd: solPx ? sol * solPx : null, mint: WSOL, raw: BigInt(lamports.value) }];
   for (const [m, n] of bal) {
     const p = px.get(m);
     // Wrapped SOL is SOL: folded into the native row rather than listed twice.
@@ -59,7 +63,7 @@ export async function solHoldings(owner: string): Promise<SolHolding[]> {
       out[0].usd = solPx ? out[0].amount * solPx : null;
       continue;
     }
-    out.push({ symbol: p?.sym ?? `${m.slice(0, 4)}…`, amount: n, usd: p ? n * p.px : null });
+    out.push({ symbol: p?.sym ?? `${m.slice(0, 4)}…`, amount: n, usd: p ? n * p.px : null, mint: m, raw: raws.get(m) ?? 0n });
   }
   return out;
 }

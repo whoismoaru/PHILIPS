@@ -24,7 +24,7 @@ import { onchainV4Pools } from './onchainPools.js';
 import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
-import { solHoldings } from './solana/holdings.js';
+import { solHoldings, type SolHolding } from './solana/holdings.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
@@ -4859,11 +4859,29 @@ async function cmdSell(ctx: any) {
     .flat()
     .sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0))
     .slice(0, SELL_HOLDINGS_CAP);
-  if (list.length === 0) return editProgress(ctx, prog, msg.msgSellNoHoldings());
-  const multiChain = new Set(list.map((h) => h.chainKey)).size > 1;
-  const flow: TSwapFlow = { chainKey: list[0].chainKey!, buy: false, sellList: list, startedAt: Date.now(), sellMultiChain: multiChain };
-  tswapFlows.set(ctx.from.id, flow);
-  return editProgress(ctx, prog, msg.msgSellList(list.length), { ...html, ...sellListKb(list, multiChain) });
+  // Solana tokens, swapped to SOL through Jupiter. Only a signer can sell, and native SOL
+  // itself is left off: there is no SOL->USDC path here yet. Unpriced tokens are dropped
+  // too -- on Solana those are airdropped spam, dozens of them.
+  const solKp = solWallet.keypair();
+  const solList = solKp
+    ? ((await solHoldings(solKp.publicKey).catch(() => [])) as SolHolding[])
+        .filter((h) => h.mint !== jupiter.WSOL && h.usd !== null && h.usd >= SELL_DUST_USD && h.raw > 0n)
+        .sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0))
+        .slice(0, SELL_HOLDINGS_CAP)
+    : [];
+  if (list.length === 0 && solList.length === 0) return editProgress(ctx, prog, msg.msgSellNoHoldings());
+  if (solList.length) solSellLists.set(ctx.from.id, solList);
+  const solRows = solList.map((h, i) => [
+    Markup.button.callback(`Solana: ${fmt4(h.amount)} ${h.symbol} / $${h.usd!.toLocaleString('id-ID', { maximumFractionDigits: 2 })}`, `solsell:${i}`),
+  ]);
+  const multiChain = new Set(list.map((h) => h.chainKey)).size > 1 || (list.length > 0 && solList.length > 0);
+  if (list.length) {
+    const flow: TSwapFlow = { chainKey: list[0].chainKey!, buy: false, sellList: list, startedAt: Date.now(), sellMultiChain: multiChain };
+    tswapFlows.set(ctx.from.id, flow);
+  }
+  const kb = sellListKb(list, multiChain);
+  kb.reply_markup.inline_keyboard.splice(-1, 0, ...solRows);
+  return editProgress(ctx, prog, msg.msgSellList(list.length + solList.length), { ...html, ...kb });
 }
 // /swap is the name on the menu; /sell stays alive as a hidden alias so older
 // muscle memory and any pinned message still work.
@@ -4873,6 +4891,55 @@ bot.command('sell', cmdSell);
 bot.action('sell:start', async (ctx) => {
   await ctx.answerCbQuery();
   return cmdSell(ctx);
+});
+
+// ---------- Solana: token -> SOL through Jupiter, picked from the /swap list ----------
+const solSellLists = new Map<number, SolHolding[]>();
+const solSellPick = new Map<number, SolHolding>();
+registerFlowReset((uid) => {
+  solSellLists.delete(uid);
+  solSellPick.delete(uid);
+});
+
+bot.action(/^solsell:(\d+)$/, async (ctx) => {
+  const h = solSellLists.get(ctx.from!.id)?.[Number((ctx.match as RegExpMatchArray)[1])];
+  if (!h) return ctx.answerCbQuery('Expired. Open /swap again.');
+  await ctx.answerCbQuery();
+  solSellPick.set(ctx.from!.id, h);
+  const rows = pctPresets.chunkButtons(pctPresets.get('sell').map((p) => Markup.button.callback(`${p}%`, `solsellp:${p}`)));
+  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  return ctx.editMessageText(msg.msgSellAmount(`Solana: ${fmt4(h.amount)} ${h.symbol}`), { ...html, ...Markup.inlineKeyboard(rows) });
+});
+
+bot.action(/^solsellp:(\d+)$/, async (ctx) => {
+  const h = solSellPick.get(ctx.from!.id);
+  const kp = solWallet.keypair();
+  if (!h || !kp) return ctx.answerCbQuery('Expired. Open /swap again.');
+  await ctx.answerCbQuery('Quoting…');
+  // Cleared BEFORE the send: a second tap must not sell twice.
+  solSellPick.delete(ctx.from!.id);
+  const pct = BigInt((ctx.match as RegExpMatchArray)[1]);
+  const amount = (h.raw * pct) / 100n;
+  const say = (text: string, extra: Record<string, unknown> = html) => ctx.editMessageText(text, extra);
+  if (amount <= 0n) return say(msg.msgError('swap', 'That amount rounds to zero.'));
+  if (config.safety.dryRun) return say(msg.msgDryRunAddDone());
+  await say(msg.msgProgress(`swapping ${pct}% of $${msg.esc(h.symbol)} to SOL…`));
+  try {
+    const q = await jupiter.quote(h.mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+    const sig = await jupiter.executeSwap(q, kp);
+    return say(
+      msg.msgSolSellDone({ symbol: h.symbol, sold: fmt4((h.amount * Number(pct)) / 100), receivedSol: fmtSol(BigInt(q.outAmount)), sig }),
+      {
+        ...html,
+        ...Markup.inlineKeyboard([
+          [Markup.button.url('🔍 Solscan', `https://solscan.io/tx/${sig}`), Markup.button.callback('💰 Portfolio', 'portfolio')],
+        ]),
+      },
+    );
+  } catch (e) {
+    console.error(`[sol-sell] ${h.mint} ${pct}% failed:`, (e as Error).message);
+    return say(msg.msgError('swap', (e as Error).message));
+  }
 });
 
 bot.action(/^sellpick:(\d+)$/, async (ctx) => {

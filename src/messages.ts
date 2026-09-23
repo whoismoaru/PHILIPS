@@ -1657,6 +1657,15 @@ export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: s
   );
 }
 
+export function msgSolSellDone(o: { symbol: string; sold: string; receivedSol: string; sig: string }): string {
+  const sym = o.symbol.replace(/^\$+/, '');
+  return card(
+    `\u2705 ${bold('SWAP FILLED')}`,
+    [`${bold(`${esc(o.sold)} $${esc(sym)}`)} \u2192 ${bold(`${o.receivedSol} SOL`)}`, '', `${bold('Tx')} : ${code(o.sig)}`],
+    footerMode(),
+  );
+}
+
 /** Step 1 of a Solana LP: how wide. */
 export function msgSolLpRange(o: { pair: string }): string {
   return card(`${bold('OPEN LP')} | ${esc(o.pair)}`, ['How wide should the range be?'], footerMode());
