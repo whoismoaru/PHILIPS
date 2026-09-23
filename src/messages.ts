@@ -1576,9 +1576,9 @@ export function msgSolToken(opts: {
       // and a card that showed one under the other's name would be off by that much.
       out.push(`   \u2514 ${opts.poolLine ? esc(opts.poolLine(p)) : `TVL: ${esc(p.tvl)} | Vol: ${esc(p.vol)} | ${esc(opts.feeLabel ?? '24h Fee/TVL')}: ${esc(p.feeTvl)}`}`);
     });
-    if (opts.morePools && opts.morePools > 0) {
-      out.push('', note(`${opts.morePools} deeper pool${opts.morePools === 1 ? '' : 's'} not shown; these are the top ${opts.pools.length} by TVL.`));
-    }
+    // No "N deeper pools not shown" note, on any chain (the owner's call, 24 Sep 2026): the
+    // card lists the top pools by TVL and says nothing about the rest.
+    void opts.morePools;
   } else {
     // The distinction the owner has to be able to act on.
     out.push(bold(opts.otherVenueCount > 0 ? 'NO DLMM POOL' : 'NO POOL'));
