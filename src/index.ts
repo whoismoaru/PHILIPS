@@ -3732,10 +3732,7 @@ async function renderTokenHub(
   if (hasLp) rowLp.push(Markup.button.callback('📤 Close LP', `ca:close:${ca}`));
 
   const rowTok: ReturnType<typeof Markup.button.callback>[] = [];
-  if (swappable) {
-    rowTok.push(Markup.button.callback('💱 Buy Token', `ca:buy:${ca}`));
-    if (bal > 0n) rowTok.push(Markup.button.callback('📉 Sell Token', `ca:sell:${ca}`));
-  }
+  if (swappable && bal > 0n) rowTok.push(Markup.button.callback('📉 Sell Token', `ca:sell:${ca}`));
   // Quick buy, paid in the chain's native coin: four fixed amounts and four shares of the
   // spendable balance. Short callbacks; the hub in memory says which token and chain.
   const quickUnit = cc.hasWethBase ? cc.nativeSymbol : (basesFor(cc)[0]?.symbol ?? cc.nativeSymbol);
@@ -3979,7 +3976,6 @@ async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any
   kb.push([
     // 'solref:' + a 44-character base58 mint is 51 bytes, inside Telegram's 64-byte limit.
     Markup.button.callback('🔄 Refresh', `solref:${mint}`),
-    Markup.button.callback('🛒 Buy Token', `solbuy:${mint}`),
   ]);
   kb.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   // Spread over html: editProgress REPLACES its extra, so passing the keyboard alone
