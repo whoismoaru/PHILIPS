@@ -946,6 +946,17 @@ export function msgPctPreset(
 }
 
 /** Prompt to type a list of values. */
+/** The Buy preset prompt, opened straight from /settings. */
+export function msgBuyPresetAsk(current: number[]): string {
+  return [
+    `🛒 ${bold('BUY TOKEN')} | Change Preset`,
+    '',
+    `For example ${code('10 25 50 90')}.`,
+    '',
+    `current: ${bold(current.join(' '))}`,
+  ].join('\n');
+}
+
 export function msgPctAsk(label: string, current: number[], o: { unit: string; min: number; max: number }): string {
   const example = o.unit === '%' ? '10 25 50 90' : '4 8 12 20';
   return [

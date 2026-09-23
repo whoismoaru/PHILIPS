@@ -347,7 +347,8 @@ bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, as
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.askEdit(ctx.from!.id, flow);
   await ctx.answerCbQuery();
-  return ctx.editMessageText(msg.msgPctAsk(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctOpts(flow)), {
+  const text = flow === 'buy' ? msg.msgBuyPresetAsk(pctPresets.get('buy')) : msg.msgPctAsk(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctOpts(flow));
+  return ctx.editMessageText(text, {
     ...html,
     // Buy opens here directly from /settings, so its Back goes there too.
     ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', flow === 'buy' ? 'settings' : `pct:${flow}`)]]),
