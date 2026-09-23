@@ -150,8 +150,12 @@ export async function openPosition(
     maxRetries: 3,
   });
 
+  // Re-sent every 2s until confirmed or expired: a node that cannot forward in time drops
+  // it. Same bytes and a single-use position key, so it can land at most once.
+  const raw = tx.serialize();
+  const resend = setInterval(() => conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {}), 2_000);
   try {
-    const r = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+    const r = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed').finally(() => clearInterval(resend));
     if (r.value.err) throw new Error(`the position failed on-chain (${signature})`);
   } catch (e) {
     // An expiry is not an answer, it is the absence of one. A transaction whose blockhash
@@ -208,6 +212,17 @@ async function addPriorityFee(conn: Connection, tx: Transaction, pool: string, m
   // median only ever buys a tie.
   const p75 = paid.length ? paid[Math.floor(paid.length * 0.75)] : 0;
   const ceiling = Math.floor((maxLamports * 1e6) / cuLimit);
-  const microLamports = Math.min(ceiling, Math.max(MIN_MICRO_LAMPORTS, p75));
-  tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports }));
+  const want = Math.max(MIN_MICRO_LAMPORTS, p75);
+  // A bid below what this pool's writers pay does not land; it expires a minute later. So a
+  // deposit too small for the 3% rule to afford the going rate is refused BEFORE sending,
+  // naming the smallest amount that would work (23 Sep 2026: 0.001 SOL bid 30k lamports into
+  // GIGACAT/SOL and expired).
+  if (want > ceiling) {
+    const needLamports = (want * cuLimit) / 1e6;
+    const minSol = (needLamports * 100) / GAS_CAP_PCT / 1e9;
+    throw new Error(
+      `amount too small: this pool needs ~${(needLamports / 1e9).toFixed(5)} SOL in priority fee, more than ${GAS_CAP_PCT}% of the deposit. Use at least ${minSol.toFixed(3)} SOL.`,
+    );
+  }
+  tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: want }));
 }
