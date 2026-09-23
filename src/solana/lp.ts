@@ -15,7 +15,7 @@
  * carry: deposit SOL or USDC into bins BELOW the active one and wait for price to fall
  * into the token. The token side is never deposited.
  */
-import { highPriorityMicro } from './fees.js';
+import { highPriorityMicro, broadcastOfficial } from './fees.js';
 import { createRequire } from 'node:module';
 import { ComputeBudgetProgram, Connection, Keypair, PublicKey, type Transaction } from '@solana/web3.js';
 import { rpcUrl } from './rpc.js';
@@ -173,7 +173,12 @@ export async function openPosition(
   // Re-sent every 2s until confirmed or expired: a node that cannot forward in time drops
   // it. Same bytes and a single-use position key, so it can land at most once.
   const raw = tx.serialize();
-  const resend = setInterval(() => conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {}), 2_000);
+  const b64 = Buffer.from(raw).toString('base64');
+    broadcastOfficial(b64);
+    const resend = setInterval(() => {
+      conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+      broadcastOfficial(b64);
+    }, 2_000);
   try {
     const r = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed').finally(() => clearInterval(resend));
     if (r.value.err) throw new Error(`the position failed on-chain (${signature})`);
@@ -276,7 +281,12 @@ export async function closePosition(pool: string, position: string, kp: SolKeypa
     const signature = encodeBase58(Uint8Array.from(tx.signature!));
     const raw = tx.serialize();
     await conn.sendRawTransaction(raw, { maxRetries: 3 });
-    const resend = setInterval(() => conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {}), 2_000);
+    const b64 = Buffer.from(raw).toString('base64');
+    broadcastOfficial(b64);
+    const resend = setInterval(() => {
+      conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+      broadcastOfficial(b64);
+    }, 2_000);
     try {
       const r = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed').finally(() => clearInterval(resend));
       if (r.value.err) throw new Error(`the close failed on-chain (${signature})`);

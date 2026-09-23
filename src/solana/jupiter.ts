@@ -13,7 +13,7 @@
  * signs slot 0. Everything this module needs is that one insertion, so the SDK's whole
  * transaction stack would be carried for a memcpy.
  */
-import { highPriorityMicro } from './fees.js';
+import { highPriorityMicro, broadcastOfficial } from './fees.js';
 
 import { signMessage, type SolKeypair } from './keys.js';
 import { solRpc } from './rpc.js';
@@ -108,6 +108,7 @@ async function sendAndConfirm(signedBase64: string): Promise<string> {
     signedBase64,
     { encoding: 'base64', skipPreflight: false, maxRetries: 3 },
   ]);
+  broadcastOfficial(signedBase64);
   // Polled rather than subscribed: one websocket for one confirmation is not worth the
   // reconnect handling, and 60 seconds covers a congested slot.
   const until = Date.now() + 60_000;
@@ -117,6 +118,7 @@ async function sendAndConfirm(signedBase64: string): Promise<string> {
     // forward in time, and the one-shot send let 4oFxQdqm… (23 Sep, 0.01 SOL) vanish without
     // ever landing. Same signature, so it can land at most once.
     solRpc('sendTransaction', [signedBase64, { encoding: 'base64', skipPreflight: true, maxRetries: 0 }]).catch(() => {});
+    broadcastOfficial(signedBase64);
     const st = await solRpc<{ value: Array<{ confirmationStatus?: string; err?: unknown } | null> }>(
       'getSignatureStatuses',
       [[sig], { searchTransactionHistory: true }],
