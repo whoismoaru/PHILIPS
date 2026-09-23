@@ -4460,9 +4460,10 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
           ...Markup.inlineKeyboard([
             [
               // Solscan, because the signature alone is not something anyone reads.
-              Markup.button.url('🔍 Solscan', `https://solscan.io/tx/${sig}`),
               Markup.button.callback('💰 Portfolio', 'portfolio'),
+              Markup.button.callback('💱 Swap', 'sell:start'),
             ],
+            [Markup.button.url('🔍 Solscan', `https://solscan.io/tx/${sig}`)],
           ]),
         },
       );
@@ -5726,7 +5727,12 @@ async function execTSwap(ctx: any) {
     const { feeUsd, slipPct } = await swapCost(cc, txHashes, flow.quotedOutWei, outWei);
     await ctx.editMessageText(
       msg.msgTSwapDone({ buy, tokenSym: tokenSym!, amountInLabel: amountInLabel!, outLabel, route, feeUsd, slipPct, dryRun: false }),
-      html,
+      {
+        ...html,
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('💰 Portfolio', 'portfolio'), Markup.button.callback('💱 Swap', 'sell:start')],
+        ]),
+      },
     );
   } catch (e) {
     await ctx.reply(msg.msgError('swap', e), html);

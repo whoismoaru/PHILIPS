@@ -1081,18 +1081,15 @@ export function msgTSwapDone(o: {
   }
   // Each half is dropped on its own when unmeasurable: a missing receipt must not blank
   // out a slippage figure that was read correctly.
-  const cost = [
-    o.feeUsd === null || o.feeUsd === undefined ? null : `Fee $${o.feeUsd < 0.01 ? o.feeUsd.toFixed(4) : o.feeUsd.toFixed(2)}`,
-    o.slipPct === null || o.slipPct === undefined ? null : `Slippage ${o.slipPct.toFixed(2)}%`,
-  ].filter(Boolean);
   return [
     `\u2705 ${bold('ORDER FILLED')}`,
     '',
-    `Received ${bold(`+${o.outLabel}`)}`,
-    `Paid ${bold(o.amountInLabel)} using ${esc(routeLabel(o.route))}`,
-    ...(cost.length ? [cost.join(' \u00B7 ')] : []),
+    `» Received ${bold(`+${o.outLabel}`)}`,
+    `» Paid ${bold(o.amountInLabel)} using ${esc(routeLabel(o.route))}`,
+    ...(o.feeUsd === null || o.feeUsd === undefined ? [] : [`» Fee ${bold(`$${o.feeUsd < 0.01 ? o.feeUsd.toFixed(4) : o.feeUsd.toFixed(2)}`)}`]),
+    ...(o.slipPct === null || o.slipPct === undefined ? [] : [`» Slippage ${bold(`${o.slipPct.toFixed(2)}%`)}`]),
     '',
-    note(`LIVE \u00B7 ${nowWib()}`),
+    note(nowWib()),
   ].join('\n');
 }
 
@@ -1664,16 +1661,18 @@ export function msgSolBuyConfirm(o: {
 /** The result of a Solana buy that landed. */
 export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: string; sig: string }): string {
   const sym = o.symbol.replace(/^\$+/, '');
-  return card(
+  // The same card as an EVM fill. Fee and slippage are not measured on this path yet, so
+  // those lines are left out rather than printed as guesses.
+  return [
     `\u2705 ${bold('ORDER FILLED')}`,
-    [
-      // One line, one trade: what went out and what came back, in the direction it happened.
-      `${bold(`${o.spendSol} SOL`)} \u2192 ${bold(`${o.received} $${sym}`)}`,
-      '',
-      `${bold('Tx')} : ${code(o.sig)}`,
-    ],
-    footerMode(),
-  );
+    '',
+    `» Received ${bold(`+${o.received} ${sym}`)}`,
+    `» Paid ${bold(`${o.spendSol} SOL`)} using Jupiter`,
+    '',
+    `${bold('Tx')} : ${code(o.sig)}`,
+    '',
+    note(nowWib()),
+  ].join('\n');
 }
 
 export function msgSolSellDone(o: { symbol: string; sold: string; received: string; sig: string }): string {
