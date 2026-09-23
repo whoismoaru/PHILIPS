@@ -478,7 +478,14 @@ bot.start(async (ctx) => {
   // cmdConnect, not a copy of its card: it also arms awaitingSecret, and a prompt that
   // asks for a key while nothing is listening would swallow whatever was pasted.
   if (!walletStore.isConnected()) return cmdConnect(ctx);
-  const { imported, gone } = await syncOnChainPositions().catch(() => ({ imported: 0, gone: 0 }));
+  // Capped at 8s: a slow RPC here once held /start past telegraf's 90s handler timeout,
+  // and polling waits on the handler, so every other message stalled with it. A sync that
+  // runs over simply reports nothing on this card; it still finishes in the background.
+  const zero = { imported: 0, gone: 0 };
+  const { imported, gone } = await Promise.race([
+    syncOnChainPositions().catch(() => zero),
+    new Promise<typeof zero>((r) => setTimeout(() => r(zero), 8_000)),
+  ]);
   await ctx.reply(startCard({ imported, gone }), { ...html, ...startKeyboard() });
 });
 // Dismiss an alert card. Delete the message; if Telegram refuses (a message older than
