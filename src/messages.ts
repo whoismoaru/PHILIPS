@@ -1659,7 +1659,7 @@ export function msgSolBuyConfirm(o: {
 }
 
 /** The result of a Solana buy that landed. */
-export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: string; sig: string }): string {
+export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: string; sig: string; gas?: string | null }): string {
   const sym = o.symbol.replace(/^\$+/, '');
   // The same card as an EVM fill. Fee and slippage are not measured on this path yet, so
   // those lines are left out rather than printed as guesses.
@@ -1668,6 +1668,7 @@ export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: s
     '',
     `» Received ${bold(`+${o.received} ${sym}`)}`,
     `» Paid ${bold(`${o.spendSol} SOL`)} using Jupiter`,
+    ...(o.gas ? [`» Fee ${bold(esc(o.gas))}`] : []),
     '',
     `${bold('Tx')} : ${code(o.sig)}`,
     '',
@@ -1675,11 +1676,16 @@ export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: s
   ].join('\n');
 }
 
-export function msgSolSellDone(o: { symbol: string; sold: string; received: string; sig: string }): string {
+export function msgSolSellDone(o: { symbol: string; sold: string; received: string; sig: string; gas?: string | null }): string {
   const sym = o.symbol.replace(/^\$+/, '');
   return card(
     `\u2705 ${bold('SWAP FILLED')}`,
-    [`${bold(`${esc(o.sold)} $${esc(sym)}`)} \u2192 ${bold(esc(o.received))}`, '', `${bold('Tx')} : ${code(o.sig)}`],
+    [
+      `${bold(`${esc(o.sold)} $${esc(sym)}`)} \u2192 ${bold(esc(o.received))}`,
+      ...(o.gas ? [`Gas fee: ${bold(esc(o.gas))}`] : []),
+      '',
+      `${bold('Tx')} : ${code(o.sig)}`,
+    ],
     footerMode(),
   );
 }

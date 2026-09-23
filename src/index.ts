@@ -4305,12 +4305,7 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
       console.error('[sol-lp] opened but not recorded:', (e as Error).message);
     }
     // The fee the network actually charged, read off the landed transaction.
-    const tx = await solRpc<any>('getTransaction', [r.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]).catch(() => null);
-    const feeLamports = Number(tx?.meta?.fee ?? 0);
-    const px = await solUsd().catch(() => null);
-    const gas = feeLamports
-      ? `${px ? `$${((feeLamports / 1e9) * px).toFixed(4)} ` : ''}(${Number((feeLamports / 1e9).toPrecision(3))} SOL)`
-      : null;
+    const gas = await solTxFee(r.signature);
     return say(
       msg.msgPositionOpened({
         pair: f.pick.pair,
@@ -4451,7 +4446,7 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
     try {
       const sig = await jupiter.executeSwap(q, kp);
       return say(
-        msg.msgSolBuyDone({ symbol: f.symbol, spendSol: fmtSol(lamports), received: amt(q.outAmount), sig }),
+        msg.msgSolBuyDone({ symbol: f.symbol, spendSol: fmtSol(lamports), received: amt(q.outAmount), sig, gas: await solTxFee(sig) }),
         {
           ...html,
           ...Markup.inlineKeyboard([
@@ -4552,6 +4547,19 @@ bot.action(/^solamt:([\d.]+)$/, async (ctx) => {
   const lamports = pctOf(await solSpendable(kp.publicKey), pct);
   return solBuyQuoteCard(ctx, f, lamports, true, kp);
 });
+
+/**
+ * The network fee a landed Solana transaction actually paid (base + priority), read off the
+ * chain: "$0.0012 (0.0000054 SOL)". Null when the transaction cannot be read yet.
+ */
+async function solTxFee(sig: string): Promise<string | null> {
+  const tx = await solRpc<any>('getTransaction', [sig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]).catch(() => null);
+  const lamports = Number(tx?.meta?.fee ?? 0);
+  if (!lamports) return null;
+  const sol = lamports / 1e9;
+  const px = await solUsd().catch(() => null);
+  return `${px ? `$${(sol * px).toFixed(4)} ` : ''}(${Number(sol.toPrecision(3))} SOL)`;
+}
 
 /** Symbols of the Solana token cards drawn, so a quick-buy tap does not re-read the token. */
 const solCardSym = new Map<string, string>();
@@ -5294,7 +5302,7 @@ async function solSellExec(ctx: any, h: SolHolding, amount: bigint, edit: boolea
       return show(msg.msgError('swap', `Price impact is ${(Number(q.priceImpactPct) * 100).toFixed(1)}%, above the ${MAX_IMPACT_PCT}% limit. Nothing was sent. Try a smaller amount.`));
     const sig = await jupiter.executeSwap(q, kp);
     const got = (Number(q.outAmount) / 10 ** out.decimals).toLocaleString('en-US', { maximumFractionDigits: 4 });
-    return show(msg.msgSolSellDone({ symbol: h.symbol, sold, received: `${got} ${out.symbol}`, sig }), {
+    return show(msg.msgSolSellDone({ symbol: h.symbol, sold, received: `${got} ${out.symbol}`, sig, gas: await solTxFee(sig) }), {
       ...html,
       ...Markup.inlineKeyboard([
         [Markup.button.url('🔍 Solscan', `https://solscan.io/tx/${sig}`), Markup.button.callback('💰 Portfolio', 'portfolio')],
