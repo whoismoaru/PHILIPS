@@ -4888,8 +4888,14 @@ async function cmdSell(ctx: any) {
     const flow: TSwapFlow = { chainKey: list[0].chainKey!, buy: false, sellList: list, startedAt: Date.now(), sellMultiChain: multiChain };
     tswapFlows.set(ctx.from.id, flow);
   }
+  // One list across both families, highest value on top. Each button keeps its own
+  // index into its own list, so only the order changes, never what a tap picks.
   const kb = sellListKb(list, multiChain);
-  kb.reply_markup.inline_keyboard.splice(-1, 0, ...solRows);
+  const evmRows = kb.reply_markup.inline_keyboard.slice(0, -1).map((r, i) => ({ r, usd: list[i].usd ?? 0 }));
+  const merged = [...evmRows, ...solRows.map((r, i) => ({ r, usd: solList[i].usd ?? 0 }))]
+    .sort((x, y) => y.usd - x.usd)
+    .map((x) => x.r);
+  kb.reply_markup.inline_keyboard.splice(0, evmRows.length, ...merged);
   return editProgress(ctx, prog, msg.msgSellList(list.length + solList.length), { ...html, ...kb });
 }
 // /swap is the name on the menu; /sell stays alive as a hidden alias so older
