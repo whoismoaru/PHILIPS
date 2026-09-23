@@ -4075,7 +4075,6 @@ async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any
     // The pools are CALLBACKS now, not links: tapping one opens the LP flow for that pool.
     // The card index is what travels, not the address -- a pool key plus a prefix does not
     // fit Telegram's 64-byte callback limit alongside the mint.
-    kb.push(shown.map((p, i) => Markup.button.callback(`${i + 1}. $${p.baseSymbol} ${p.binStep ?? '?'}`, `sollp:${i}`)));
     solPoolPicks.set(ctx.from.id, {
       at: Date.now(),
       pools: shown.map((p) => ({
@@ -4094,6 +4093,15 @@ async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any
   solCardSym.set(mint, sym);
   kb.push(buyAmountPresets('SOL').map((a) => Markup.button.callback(`🛒 ${a} SOL`, `qsa:${Math.round(a * 1e9)}:${mint}`)));
   kb.push(pctPresets.get('buy').slice(0, 4).map((p) => Markup.button.callback(`🛒 ${p}%`, `qsp:${p}:${mint}`)));
+  // One pool per row, above Refresh, named like the pool list: "$GROK/$SOL (bin 100, fee 2%)".
+  shown.forEach((p, i) =>
+    kb.push([
+      Markup.button.callback(
+        `$${sym}/$${p.baseSymbol} (bin ${p.binStep ?? '?'}, fee ${p.baseFeePct == null ? '?' : `${Number(p.baseFeePct.toFixed(2))}%`})`,
+        `sollp:${i}`,
+      ),
+    ]),
+  );
   kb.push([
     // 'solref:' + a 44-character base58 mint is 51 bytes, inside Telegram's 64-byte limit.
     Markup.button.callback('🔄 Refresh', `solref:${mint}`),
