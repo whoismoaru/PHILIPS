@@ -3706,21 +3706,44 @@ async function renderTokenHub(
   const balNum = Number(ethers.formatUnits(bal, dec));
   const { v3, v4 } = await lpForToken(ca, cc);
 
-  const priceUsd = sc?.priceUsd ?? null;
-  const note =
-    sc && sc.liquidityUsd != null
-      ? `liquidity ${msg.usdCompact(sc.liquidityUsd)}${sc.pairAgeHours != null ? ` · pool ${Math.round(sc.pairAgeHours)}h old` : ''}`
-      : undefined;
-  // The card SHOWN is the screening TOKEN DETAIL card (no longer msgTokenHub): one card,
-  // rather than two with overlapping contents.
-  const text = sc
-    ? formatScreen(sc, {
-        ca,
-        chainLabel: cc.label,
-        heldLabel: bal > 0n ? `${msg.cleanUnits(bal, dec)} ${sym}` : null,
-        lpCount: v3.length + v4.length,
-      })
-    : msg.msgScreeningFailed();
+  // The same TOKEN STATISTICS card as a Solana CA, so every chain reads alike. The audit
+  // verdict, which Solana has no equivalent of, rides along as one row rather than a card.
+  const pools = (await explore.poolsForToken(cc, ca).catch(() => [] as explore.TokenPool[])).sort((a, b) => b.tvlUsd - a.tvlUsd);
+  const shown = pools.slice(0, 3);
+  const verdict = !sc ? 'not readable' : sc.verdict === 'BAHAYA' ? '⛔ DANGER' : sc.verdict === 'HATI-HATI' ? '⚠️ CAUTION' : '✅ SAFE';
+  const warn = (sc?.flags ?? []).filter((f) => f.level !== 'INFO').length;
+  const rows: Array<[string, string]> = [
+    ['Price', sc?.priceUsd ? `$${sc.priceUsd}` : '—'],
+    ['MCap', sc?.marketCapUsd != null ? msg.usdCompact(sc.marketCapUsd) : '—'],
+    ['Liq', sc?.liquidityUsd != null ? msg.usdCompact(sc.liquidityUsd) : '—'],
+    ['Vol 24h', sc?.volume24h != null ? msg.usdCompact(sc.volume24h) : '—'],
+    ['Age', sc?.pairAgeHours != null ? msg.fmtAge(sc.pairAgeHours * 3_600_000) : '—'],
+    ['Audit', `${verdict}${warn ? ` (${warn} flag${warn === 1 ? '' : 's'})` : ''}`],
+    ...(bal > 0n ? [['Holding', `${msg.cleanUnits(bal, dec)} ${sym}`] as [string, string]] : []),
+    ...(v3.length + v4.length ? [['Your LP', `${v3.length + v4.length} open`] as [string, string]] : []),
+  ];
+  const text = msg.msgSolToken({
+    symbol: sym,
+    name: sc?.name ?? sym,
+    ca,
+    rows,
+    chainLabel: cc.label,
+    poolTitle: 'Pools',
+    poolDetail: (p) => `(${p.binStep}, fee ${p.fee})`,
+    pools: shown.map((p) => ({
+      pair: `$${p.otherSymbol}/$${p.baseSymbol}`,
+      binStep: p.protocol,
+      fee: `${Number((p.fee / 10_000).toFixed(2))}%`,
+      tvl: msg.usdCompact(p.tvlUsd),
+      // The gateway reports 0 for v4 volume it does not track; 0 would read as a dead pool.
+      vol: p.vol24hUsd ? msg.usdCompact(p.vol24hUsd) : '—',
+      feeTvl: aprLabel(p.aprPct == null ? null : p.aprPct / 365),
+    })),
+    otherVenueCount: 0,
+    offBaseCount: 0,
+    chainReadSkipped: false,
+    morePools: Math.max(0, pools.length - shown.length),
+  });
 
   // EXIT buttons appear only when there is something to exit: Close LP when a position
   // exists, Sell Token when the balance is above zero. With neither, only the entry paths
@@ -3749,7 +3772,11 @@ async function renderTokenHub(
     ...(rowTok.length ? [rowTok] : []),
     // This card is static: its prices are frozen at the second you pasted the CA. For a
     // newly born token a minute is already a long time, so offer a way to refresh in place.
-    [Markup.button.callback('🔄 Refresh', `ca:refresh:${ca}`), Markup.button.callback('❌ Cancel', 'cancel')],
+    [
+      Markup.button.callback('🔄 Refresh', `ca:refresh:${ca}`),
+      Markup.button.callback('🛡 Audit', 'ca:audit'),
+      Markup.button.callback('❌ Cancel', 'cancel'),
+    ],
     [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
   ]);
 
@@ -3760,7 +3787,8 @@ async function renderTokenHub(
     kb,
     sym,
     dec,
-    screenText: text,
+    // The full audit, kept for the Audit button and for the flows that quote it.
+    screenText: sc ? formatScreen(sc, { ca, chainLabel: cc.label }) : msg.msgScreeningFailed(),
     bahaya: sc?.verdict === 'BAHAYA',
     reasons: (sc?.flags ?? []).filter((f) => f.level === 'BAHAYA').map((f) => f.msg),
     failed: !sc,
@@ -3773,6 +3801,14 @@ async function renderTokenHub(
  * screening is handed over (never re-scanned), and every confirmation and guard still
  * belongs to the original flow.
  */
+// The full security audit behind the card's one-line verdict, as its own message.
+bot.action('ca:audit', async (ctx) => {
+  const h = hubs.get(ctx.from!.id);
+  if (!h) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  await ctx.answerCbQuery();
+  return ctx.reply(h.screenText, { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('❌ Close', 'dismiss')]]) });
+});
+
 bot.action(/^ca:refresh:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const ca = ethers.getAddress(ctx.match[1]);
   const h = hubs.get(ctx.from!.id);

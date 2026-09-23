@@ -1536,6 +1536,10 @@ export function msgSolToken(opts: {
   chainReadSkipped: boolean;
   /** DLMM pools found beyond the ones listed, so the list can say it was trimmed. */
   morePools?: number;
+  /** Shared by every chain's CA card: defaults are Solana's. */
+  chainLabel?: string;
+  poolTitle?: string;
+  poolDetail?: (p: { binStep: string; fee: string }) => string;
 }): string {
   const out: string[] = [];
   // bold() and italic() escape their own argument. Wrapping esc() around them turns
@@ -1543,7 +1547,7 @@ export function msgSolToken(opts: {
   // for, so the raw value goes in here.
   const sym = opts.symbol.replace(/^\$+/, '');
   out.push(`\u{1F4CA} ${bold('TOKEN STATISTICS')}`);
-  out.push(`${bold(`$${sym}`)} | ${esc(opts.name)} ${italic('(Solana)')}`);
+  out.push(`${bold(`$${sym}`)} | ${esc(opts.name)} ${italic(`(${opts.chainLabel ?? 'Solana'})`)}`);
   // A tree, not a <pre> block: these are five labelled facts, not a column of numbers to
   // compare down the page, and the glyphs line them up without a monospace font.
   opts.rows.forEach(([k, v], i) => {
@@ -1552,9 +1556,9 @@ export function msgSolToken(opts: {
   out.push('');
 
   if (opts.pools.length > 0) {
-    out.push(`${bold('DLMM Pools')} :`);
+    out.push(`${bold(opts.poolTitle ?? 'DLMM Pools')} :`);
     opts.pools.forEach((p, i) => {
-      out.push(`${i + 1}. ${esc(p.pair)} ${italic(`(bin ${p.binStep}, fee ${p.fee})`)}`);
+      out.push(`${i + 1}. ${esc(p.pair)} ${italic(opts.poolDetail ? opts.poolDetail(p) : `(bin ${p.binStep}, fee ${p.fee})`)}`);
       // Fee over TVL for the last 24 hours, NOT an annualised APR. The two differ by 365x
       // and a card that showed one under the other's name would be off by that much.
       out.push(`   \u2514 TVL: ${esc(p.tvl)} | Vol: ${esc(p.vol)} | 24h Fee/TVL: ${esc(p.feeTvl)}`);
