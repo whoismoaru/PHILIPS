@@ -20,6 +20,19 @@ export const bot = new Telegraf(config.telegram.botToken);
 // Registered here, before any module adds a handler: telegraf runs middleware in order, so
 // a scope opened later would not cover commands registered by earlier imports. Every tx one
 // update sends is measured against the value that update moves (see gasBudget.ts).
+// --- Guard: only the owner may use the bot ---
+// FIRST, here in core.ts: ES imports run before index.ts's body, so every command and button
+// registered in commands/*.ts used to sit AHEAD of this guard -- a stranger could open
+// /settings and tap its buttons.
+bot.use((ctx, next) => {
+  // Ignore silently: replying to a stranger confirms this bot exists and can be made
+  // to answer. Groups are refused too (a balance card would be readable by everyone).
+  if (ctx.from?.id !== config.telegram.allowedUserId || (ctx.chat && ctx.chat.type !== 'private')) {
+    console.log(`[guard] ignored an update from id ${ctx.from?.id} (chat ${ctx.chat?.type}); TELEGRAM_ALLOWED_USER_ID is ${config.telegram.allowedUserId}`);
+    return;
+  }
+  return next();
+});
 bot.use((_ctx, next) => withGasScope(() => next()));
 
 /**

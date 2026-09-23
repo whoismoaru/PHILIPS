@@ -350,17 +350,6 @@ const RANGE_OPTIONS = [
 
 
 /** Edit an existing progress message, or send a new one if that fails or none exists. */
-// --- Guard: only the owner may use the bot ---
-bot.use((ctx, next) => {
-  // Ignore silently: replying to a stranger confirms this bot exists and can be made
-  // to answer. Groups are refused too (a balance card would be readable by everyone).
-  if (ctx.from?.id !== config.telegram.allowedUserId || (ctx.chat && ctx.chat.type !== 'private')) {
-    console.log(`[guard] ignored an update from id ${ctx.from?.id} (chat ${ctx.chat?.type}); TELEGRAM_ALLOWED_USER_ID is ${config.telegram.allowedUserId}`);
-    return;
-  }
-  return next();
-});
-
 // --- answerCbQuery must never take a handler down ---
 // A callback query expires after ~15 seconds. When the flow behind a button takes
 // longer than that (a cash-out, a swap), the "Loading..." reply fails with a 400 and
