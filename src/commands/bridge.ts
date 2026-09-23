@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { config } from '../config.js';
 import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset } from '../core.js';
 import { CHAINS, getChain, isStableBase, type ChainCtx, type BaseKind } from '../chains.js';
+import { setGasValue } from '../gasBudget.js';
 import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridgeRoute.js';
 import { NATIVE } from '../relay.js';
 import { lifiSupports, lifiBridgeQuote } from '../lifi.js';
@@ -509,6 +510,11 @@ async function execBridge(ctx: any) {
       return;
     }
     await ctx.editMessageText(msg.msgProgress(`bridging ${from.label} → ${to.label}…`), html).catch(() => {});
+    // A stablecoin bridge carries no native value, so its size is stated for the 3% gas rule.
+    if (flow.kind && isStableBase(flow.kind) && from.hasWethBase) {
+      const px = await getEthUsd(from.wethAddress, from).catch(() => null);
+      if (px) setGasValue(from.key, Number(ethers.formatUnits(amountWei!, flow.srcDecimals ?? 6)) / px);
+    }
     const r = await executeBridgeVia(provider ?? 'relay', from, to, amountWei!, minOutWei!, { originCurrency, destinationCurrency });
     console.log(`[bridge] via ${provider ?? 'relay'} ${from.key}→${to.key} ${inLabel} → ${outLabel} tx ${r.txHashes.join(',')}`);
     await ctx.editMessageText(

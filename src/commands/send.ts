@@ -17,6 +17,7 @@ import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
 import { getEthUsd } from '../screening.js';
+import { setGasValue } from '../gasBudget.js';
 
 /**
  * /send -- withdraw funds to another address.
@@ -324,6 +325,11 @@ async function execSend(ctx: any) {
   store.beginMoneyOp();
   const cc = CHAINS[flow.chainKey!]!;
   const { to, asset, amountWei } = flow;
+  // A stablecoin transfer carries no native value, so its size is stated for the 3% gas rule.
+  if (asset.address && cc.hasWethBase) {
+    const px = await getEthUsd(cc.wethAddress, cc).catch(() => null);
+    if (px) setGasValue(cc.key, Number(ethers.formatUnits(amountWei, asset.decimals)) / px);
+  }
   flows.delete(uid); // idempotency: clear it BEFORE executing, so a double-tap cannot send twice
   await ctx.answerCbQuery('Sending…');
   try {

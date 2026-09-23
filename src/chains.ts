@@ -1,3 +1,4 @@
+import { GAS_CAP_PCT, gasValue } from './gasBudget.js';
 import { ethers } from 'ethers';
 import { config } from './config.js';
 import * as walletStore from './walletStore.js';
@@ -98,21 +99,6 @@ export const isStableBase = (kind: BaseKind): boolean =>
  * rather than silently disabling the cap.
  */
 const DEFAULT_MAX_TX_FEE = '0.005';
-/** Gas as a share of the native value sent, at most. GAS_CAP_PCT in .env, default 3. */
-export function gasCapPct(): number {
-  const n = Number(process.env.GAS_CAP_PCT ?? '');
-  return n > 0 && n <= 100 ? n : 3;
-}
-export function gasFeeCapLabel(): string | null {
-  const c = parseFeeCap(config.safety.maxTxFeeNative);
-  return c === null ? null : ethers.formatEther(c);
-}
-function parseFeeCap(raw: string): bigint | null {
-  const v = raw.trim().toLowerCase();
-  if (v === 'off' || v === 'none' || v === '0') return null;
-  const use = Number(v) > 0 ? v : DEFAULT_MAX_TX_FEE;
-  return ethers.parseEther(use);
-}
 
 export const baseSymbolOf = (kind: BaseKind | undefined, ctx?: ChainCtx): string => {
   if (ctx) {
@@ -477,27 +463,33 @@ function build(key: string, d: Def): ChainCtx {
   // half a cent -- and a perfectly ordinary CCTP mint at 0.0065 USDC was refused as
   // "genuinely wild" (measured 16 Sep 2026). A chain whose gas is a stablecoin states its
   // own ceiling, in the same units everything else there is priced in.
-  const feeCap = parseFeeCap(d.maxTxFeeNative ?? config.safety.maxTxFeeNative);
-  if (feeCap !== null) {
+  // Fixed, not read from .env: the ceiling is a rule, not a preference.
+  const feeCap = ethers.parseEther(d.maxTxFeeNative ?? DEFAULT_MAX_TX_FEE);
+  {
     const beforeCap = provider.broadcastTransaction.bind(provider);
     provider.broadcastTransaction = async (signedTx: string) => {
       const parsed = ethers.Transaction.from(signedTx);
       const price = parsed.maxFeePerGas ?? parsed.gasPrice ?? 0n;
       const worst = price * (parsed.gasLimit ?? 0n);
-      // Relative ceiling on top: when the tx carries native value (a buy, an LP deposit in
-      // ETH/BNB), gas may cost at most GAS_CAP_PCT of it. A token-in tx carries no value,
-      // so only the absolute ceiling above can apply there.
-      const pctCap = parsed.value > 0n ? (parsed.value * BigInt(Math.round(gasCapPct() * 100))) / 10_000n : null;
-      if (pctCap !== null && worst > pctCap) {
-        throw new Error(
-          `Gas fee ceiling hit: up to ${ethers.formatEther(worst)} ${d.nativeSymbol} in gas is more than ${gasCapPct()}% ` +
-            `of the ${ethers.formatEther(parsed.value)} ${d.nativeSymbol} being sent. Nothing was sent. Raise the amount, or GAS_CAP_PCT.`,
-        );
+      // 3% of what the tx moves: its own native value, or the value the flow stated for
+      // this chain (a token sell, an approve, a stablecoin LP). Unknown value falls back to
+      // the absolute ceiling below.
+      const stated = gasValue(key);
+      const valueWei = parsed.value > 0n ? parsed.value : stated ? ethers.parseEther(stated.toFixed(18)) : 0n;
+      if (valueWei > 0n) {
+        const pctCap = (valueWei * BigInt(GAS_CAP_PCT)) / 100n;
+        if (worst > pctCap) {
+          throw new Error(
+            `Gas fee ceiling hit: up to ${ethers.formatEther(worst)} ${d.nativeSymbol} in gas is more than ${GAS_CAP_PCT}% ` +
+              `of the ~${ethers.formatEther(valueWei)} ${d.nativeSymbol} this moves. Nothing was sent. Use a larger amount or wait for gas to drop.`,
+          );
+        }
+        return beforeCap(signedTx);
       }
       if (worst > feeCap) {
         throw new Error(
           `Gas fee ceiling hit: this transaction could cost up to ${ethers.formatEther(worst)} ${d.nativeSymbol} ` +
-            `(ceiling ${ethers.formatEther(feeCap)}). Nothing was sent. Wait for gas to drop, or raise MAX_TX_FEE_NATIVE.`,
+            `(ceiling ${ethers.formatEther(feeCap)}). Nothing was sent. Wait for gas to drop.`,
         );
       }
       return beforeCap(signedTx);

@@ -25,6 +25,7 @@ import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
 import { solHoldings, type SolHolding } from './solana/holdings.js';
+import { setGasValue } from './gasBudget.js';
 import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
@@ -768,6 +769,18 @@ bot.action('refresh:status', async (ctx) => {
 });
 
 /** A base value (float) to USD. WETH: x ethUsd (may be null). USDG: 1:1 with the dollar. */
+/**
+ * State what this flow moves, for the 3% gas rule (see gasBudget.ts). An amount in a
+ * stablecoin base is converted to native at that chain's own price; unreadable leaves the
+ * absolute ceiling in charge rather than guessing.
+ */
+async function stateGasValue(cc: ChainCtx, stable: boolean, amountFloat: number): Promise<void> {
+  if (!(amountFloat > 0)) return;
+  if (!stable || !cc.hasWethBase) return setGasValue(cc.key, amountFloat);
+  const px = await getEthUsd(cc.wethAddress, cc).catch(() => null);
+  if (px) setGasValue(cc.key, amountFloat / px);
+}
+
 async function baseToUsd(baseKind: BaseKind, amountFloat: number, cc: ChainCtx): Promise<number | null> {
   if (isStableBase(baseKind)) return amountFloat; // USDG/USDT ≈ $1
   const eu = await getEthUsd(cc.wethAddress, cc);
@@ -3048,6 +3061,10 @@ bot.action('back:amount', async (ctx) => {
  */
 async function execAdd(ctx: any) {
   const flow = getFlow(ctx);
+  if (flow?.ethAmount && flow.selected) {
+    const gcc = getChain(flow.chain);
+    await stateGasValue(gcc, isStableBase(flow.selected.base), Number(flow.ethAmount)).catch(() => {});
+  }
   // --- v4 LADDER path (batched modifyLiquidities: N legs in 1 atomic tx) ---
   if (flow?.selected?.protocol === 'v4' && flow.shape === 'bidask' && (flow.legs ?? 1) > 1) {
     if (!flow.ethAmount || flow.rangePct === undefined || !flow.v4LadderLegs?.length)
@@ -5297,6 +5314,11 @@ async function execTSwap(ctx: any) {
   }
   if (tswapInFlight.has(uid)) return ctx.answerCbQuery('Processing…');
   tswapInFlight.add(uid);
+  {
+    // The base side of the trade: what goes in on a buy, what the preview said comes out on a sell.
+    const baseWei = flow.buy ? flow.amountWei : flow.quotedOutWei ?? 0n;
+    await stateGasValue(CHAINS[flow.chainKey]!, isStableBase(flow.base.kind), Number(ethers.formatUnits(baseWei, flow.base.decimals))).catch(() => {});
+  }
   store.beginMoneyOp();
   const { chainKey, buy, base, token, tokenSym, tokenDec, amountWei, amountInLabel } = flow;
   tswapFlows.delete(uid); // idempotency: clear it BEFORE executing, so a double-tap cannot swap twice
@@ -5877,6 +5899,11 @@ async function stopAndCashOut(
   tokenId: string,
   cc: ChainCtx = getChain(),
 ): Promise<{ text: string; baseOutWei: bigint; leftover: boolean; leftoverWei: bigint; feesBaseWei?: bigint }> {
+  {
+    const d = await getPositionDetail(tokenId, cc).catch(() => null);
+    if (d)
+      await stateGasValue(cc, isStableBase(d.baseKind), Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals))).catch(() => {});
+  }
   const { positionManager: pm, weth: wethC, wallet: w } = cc;
   const p = await pm.positions(tokenId);
   // A pool with no base we recognise (an imported TOKENA/TOKENB, say) has no two-sided

@@ -15,6 +15,7 @@
  * carry: deposit SOL or USDC into bins BELOW the active one and wait for price to fall
  * into the token. The token side is never deposited.
  */
+import { GAS_CAP_PCT } from '../gasBudget.js';
 import { createRequire } from 'node:module';
 import { ComputeBudgetProgram, Connection, Keypair, PublicKey, type Transaction } from '@solana/web3.js';
 import { rpcUrl } from './rpc.js';
@@ -132,7 +133,9 @@ export async function openPosition(
   // zero. On 22 Sep 2026 at 21:15 WIB that is exactly what happened: signature 2kwdfKed…
   // never landed and died with "block height exceeded" after sitting behind everything
   // that did pay. The Jupiter buy path has always set a fee; this one now matches it.
-  await addPriorityFee(conn, tx, pool);
+  // Capped at GAS_CAP_PCT of the deposit when it is in SOL; a USDC deposit keeps the flat cap.
+  const maxFee = plan.baseSymbol === 'SOL' ? Math.max(10_000, Math.floor((Number(amount) * GAS_CAP_PCT) / 100)) : MAX_PRIORITY_LAMPORTS;
+  await addPriorityFee(conn, tx, pool, Math.min(maxFee, MAX_PRIORITY_LAMPORTS));
 
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
   tx.recentBlockhash = blockhash;
@@ -195,7 +198,7 @@ const MIN_MICRO_LAMPORTS = 50_000;
  * out of the instruction rather than guessed: paying per unit while assuming the wrong
  * number of units is how a fee cap stops capping anything.
  */
-async function addPriorityFee(conn: Connection, tx: Transaction, pool: string): Promise<void> {
+async function addPriorityFee(conn: Connection, tx: Transaction, pool: string, maxLamports = MAX_PRIORITY_LAMPORTS): Promise<void> {
   const cbIx = tx.instructions.find((i) => i.programId.equals(ComputeBudgetProgram.programId));
   // 0x02 is SetComputeUnitLimit, followed by a u32 of units.
   const cuLimit = cbIx && cbIx.data[0] === 2 ? Buffer.from(cbIx.data).readUInt32LE(1) : 200_000;
@@ -204,7 +207,7 @@ async function addPriorityFee(conn: Connection, tx: Transaction, pool: string): 
   // The 75th percentile, not the median: this is a race against other openers, and the
   // median only ever buys a tie.
   const p75 = paid.length ? paid[Math.floor(paid.length * 0.75)] : 0;
-  const ceiling = Math.floor((MAX_PRIORITY_LAMPORTS * 1e6) / cuLimit);
+  const ceiling = Math.floor((maxLamports * 1e6) / cuLimit);
   const microLamports = Math.min(ceiling, Math.max(MIN_MICRO_LAMPORTS, p75));
   tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports }));
 }

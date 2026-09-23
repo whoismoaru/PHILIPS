@@ -3,7 +3,7 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { loadImage } from '@napi-rs/canvas';
 import { config } from '../config.js';
 import { bot, html, editProgress, maxEthLabel, registerFlowReset, startKeyboard, startCard } from '../core.js';
-import { getChain, rebuildChains, gasFeeCapLabel, CHAINS } from '../chains.js';
+import { getChain, rebuildChains, CHAINS } from '../chains.js';
 import * as walletStore from '../walletStore.js';
 import * as solWallet from '../solana/walletStore.js';
 import { solPositions } from '../solana/positions.js';
@@ -130,7 +130,6 @@ export async function cmdSettings(ctx: any) {
   // The "Adjust Slippage" button from the design is deliberately absent: slippage is still
   // a constant in the code, so the button would open a card that changes nothing. Add it
   // once the value can really be stored and used by the swap path.
-  const gasCeil = gasFeeCapLabel() ? `${gasFeeCapLabel()} ${cc.nativeSymbol}` : null;
   // Each flow's percentages are editable from here. They used to be hardcoded, so in
   // practice they could never be adjusted without an edit and a restart.
   // Labels follow the flows as they are now named. "Withdraw %" used to sit on pct:stop,
@@ -177,7 +176,7 @@ export async function cmdSettings(ctx: any) {
       : Markup.button.callback('🔗 Connect SOL Wallet', 'connectsol'),
   ]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
-  return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, gasCeil, pctPresets.shape(), pctPresets.get('legs').join('/')), {
+  return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, null, pctPresets.shape(), pctPresets.get('legs').join('/')), {
     ...html,
     ...Markup.inlineKeyboard(rows),
   });

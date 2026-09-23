@@ -13,6 +13,7 @@
  * signs slot 0. Everything this module needs is that one insertion, so the SDK's whole
  * transaction stack would be carried for a memcpy.
  */
+import { GAS_CAP_PCT } from '../gasBudget.js';
 import { signMessage, type SolKeypair } from './keys.js';
 import { solRpc } from './rpc.js';
 
@@ -66,10 +67,10 @@ export function routeLabel(q: Quote): string {
 
 function feeCapLamports(q: Quote): number {
   const MAX = 2_000_000;
-  if (q.inputMint !== WSOL) return MAX;
-  const n = Number(process.env.GAS_CAP_PCT ?? '');
-  const pct = n > 0 && n <= 100 ? n : 3;
-  return Math.max(10_000, Math.min(MAX, Math.floor((Number(q.inAmount) * pct) / 100)));
+  // The SOL side of the trade: what goes in on a buy, what comes out on a sell.
+  const sol = q.inputMint === WSOL ? Number(q.inAmount) : q.outputMint === WSOL ? Number(q.outAmount) : null;
+  if (sol === null) return MAX;
+  return Math.max(10_000, Math.min(MAX, Math.floor((sol * GAS_CAP_PCT) / 100)));
 }
 
 /** Build the swap transaction for this quote, base64. */
@@ -86,7 +87,7 @@ async function buildSwap(q: Quote, userPublicKey: string): Promise<string> {
       dynamicComputeUnitLimit: true,
       // A swap that lands three blocks late on a token minutes old is a different trade.
       // The fee is capped so the urgency cannot quietly cost more than the position.
-      // Also capped at GAS_CAP_PCT of the SOL spent when the input IS SOL, matching the EVM rule;
+      // Also capped at GAS_CAP_PCT of the trade's SOL side, matching the EVM rule;
       // floored at 10k lamports so a tiny swap still bids something.
       prioritizationFeeLamports: { priorityLevelWithMaxLamports: { maxLamports: feeCapLamports(q), priorityLevel: 'high' } },
     }),

@@ -1,4 +1,5 @@
 import { Telegraf, Markup } from 'telegraf';
+import { withGasScope } from './gasBudget.js';
 import { ethers } from 'ethers';
 import { config } from './config.js';
 import * as walletStore from './walletStore.js';
@@ -16,6 +17,10 @@ import { CHAINS, getChain } from './chains.js';
  */
 
 export const bot = new Telegraf(config.telegram.botToken);
+// Registered here, before any module adds a handler: telegraf runs middleware in order, so
+// a scope opened later would not cover commands registered by earlier imports. Every tx one
+// update sends is measured against the value that update moves (see gasBudget.ts).
+bot.use((_ctx, next) => withGasScope(() => next()));
 
 /**
  * The ownership mark at the foot of EVERY message.

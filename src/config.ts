@@ -105,7 +105,6 @@ export const config = {
     // A ceiling on one transaction's GAS COST, in that chain's native asset. 'off' or '0'
     // means no ceiling; empty falls back to the default in chains.ts. This is not a limit
     // on the transaction's own amount.
-    maxTxFeeNative: optional('MAX_TX_FEE_NATIVE', ''),
     dryRun: optional('DRY_RUN', 'true').toLowerCase() === 'true',
   },
   // The Krystal Cloud API: a far more complete pool source than Uniswap's gateway, which
