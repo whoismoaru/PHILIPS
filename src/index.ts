@@ -4911,7 +4911,7 @@ bot.action('sell:start', async (ctx) => {
 
 // ---------- Solana: token -> SOL through Jupiter, picked from the /swap list ----------
 const solSellLists = new Map<number, SolHolding[]>();
-const solSellPick = new Map<number, SolHolding>();
+const solSellPick = new Map<number, SolHolding & { startedAt: number }>();
 registerFlowReset((uid) => {
   solSellLists.delete(uid);
   solSellPick.delete(uid);
@@ -4921,46 +4921,105 @@ bot.action(/^solsell:(\d+)$/, async (ctx) => {
   const h = solSellLists.get(ctx.from!.id)?.[Number((ctx.match as RegExpMatchArray)[1])];
   if (!h) return ctx.answerCbQuery('Expired. Open /swap again.');
   await ctx.answerCbQuery();
-  solSellPick.set(ctx.from!.id, h);
+  solSellPick.set(ctx.from!.id, { ...h, startedAt: Date.now() });
+  const isSol = h.mint === jupiter.WSOL;
   const rows = pctPresets.chunkButtons(pctPresets.get('sell').map((p) => Markup.button.callback(`${p}%`, `solsellp:${p}`)));
-  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  // Fixed SOL amounts, the same presets as the LP deposit (/settings -> SOL Amount). Only
+  // for SOL itself: a fixed count of some meme token means nothing.
+  if (isSol)
+    rows.push(
+      ...pctPresets.chunkButtons(
+        pctPresets
+          .get('solsize')
+          .filter((a) => BigInt(Math.round(a * 1e9)) <= h.raw)
+          .map((a) => Markup.button.callback(`${a} SOL`, `solsella:${Math.round(a * 1e9)}`)),
+      ),
+    );
+  rows.push([Markup.button.callback('✏️ Type an amount', 'solselltype')]);
+  rows.push([Markup.button.callback('⬅️ Back', 'sell:refresh'), Markup.button.callback('❌ Cancel', 'cancel')]);
   return ctx.editMessageText(msg.msgSellAmount(`Solana: ${fmt4(h.amount)} ${h.symbol}`), { ...html, ...Markup.inlineKeyboard(rows) });
+});
+
+bot.action('solselltype', async (ctx) => {
+  const h = solSellPick.get(ctx.from!.id);
+  if (!h) return ctx.answerCbQuery('Expired. Open /swap again.');
+  await ctx.answerCbQuery();
+  return ctx.reply(msg.msgProgress(`type how much ${h.symbol} to swap, for example ${h.mint === jupiter.WSOL ? '0.25' : '100'}`), html);
 });
 
 bot.action(/^solsellp:(\d+)$/, async (ctx) => {
   const h = solSellPick.get(ctx.from!.id);
-  const kp = solWallet.keypair();
-  if (!h || !kp) return ctx.answerCbQuery('Expired. Open /swap again.');
+  if (!h) return ctx.answerCbQuery('Expired. Open /swap again.');
   await ctx.answerCbQuery('Quoting…');
-  // Cleared BEFORE the send: a second tap must not sell twice.
-  solSellPick.delete(ctx.from!.id);
-  const pct = BigInt((ctx.match as RegExpMatchArray)[1]);
-  const amount = (h.raw * pct) / 100n;
-  const say = (text: string, extra: Record<string, unknown> = html) => ctx.editMessageText(text, extra);
+  return solSellExec(ctx, h, (h.raw * BigInt((ctx.match as RegExpMatchArray)[1])) / 100n, true);
+});
+
+bot.action(/^solsella:(\d+)$/, async (ctx) => {
+  const h = solSellPick.get(ctx.from!.id);
+  if (!h) return ctx.answerCbQuery('Expired. Open /swap again.');
+  await ctx.answerCbQuery('Quoting…');
+  return solSellExec(ctx, h, BigInt((ctx.match as RegExpMatchArray)[1]), true);
+});
+
+/** An amount typed at the Solana swap card, in the token's own units. True when consumed. */
+export async function handleSolSellAmount(ctx: any, raw: string): Promise<boolean> {
+  const h = solSellPick.get(ctx.from.id);
+  if (!h) return false;
+  if (isStaleFlow(h.startedAt)) {
+    solSellPick.delete(ctx.from.id);
+    return false;
+  }
+  const t = raw.trim().replace(',', '.');
+  if (!/^\d*\.?\d+$/.test(t) || !(Number(t) > 0)) return false;
+  const dec = h.mint === jupiter.WSOL ? 9 : await mintDecimals(h.mint);
+  if (dec === null) {
+    await ctx.reply(msg.msgError('swap', 'Could not read this token\'s decimals. Use a percentage button instead.'), html);
+    return true;
+  }
+  // Integer base units from a fixed-decimal string: float maths on 0.01 rounds into an
+  // amount the wallet does not hold.
+  const [w, f = ''] = Number(t).toFixed(dec).split('.');
+  await solSellExec(ctx, h, BigInt(w + f), false);
+  return true;
+}
+
+/** Quote and send one Solana swap: SOL goes to USDC, any other token to SOL. */
+async function solSellExec(ctx: any, h: SolHolding, amount: bigint, edit: boolean): Promise<unknown> {
+  const kp = solWallet.keypair();
+  const say = (text: string, extra: Record<string, unknown> = html) =>
+    edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+  if (!kp) return say(msg.msgError('swap', 'No Solana key connected.'));
   if (amount <= 0n) return say(msg.msgError('swap', 'That amount rounds to zero.'));
-  if (config.safety.dryRun) return say(msg.msgDryRunAddDone());
   const isSol = h.mint === jupiter.WSOL;
+  // h.raw is already net of the SOL fee reserve, so this one check covers both cases.
+  if (amount > h.raw) {
+    const max = isSol ? `${fmtSol(h.raw)} SOL (${fmtSol(SOL_RESERVE_LAMPORTS)} is kept for fees)` : `${fmt4(h.amount)} ${h.symbol}`;
+    return say(msg.msgError('swap', `That is more than you hold. Max: ${max}.`));
+  }
+  // Cleared BEFORE the send: a second tap must not sell twice.
+  solSellPick.delete(ctx.from.id);
+  if (config.safety.dryRun) return say(msg.msgDryRunAddDone());
   const out = isSol ? SOL_USDC : { mint: jupiter.WSOL, symbol: 'SOL', decimals: 9 };
-  await say(msg.msgProgress(`swapping ${pct}% of $${h.symbol} to ${out.symbol}…`));
+  const sold = isSol ? fmtSol(amount) : fmt4((h.amount * Number(amount)) / Number(h.raw));
+  const prog = edit ? null : await ctx.reply(msg.msgProgress(`swapping ${sold} $${h.symbol} to ${out.symbol}…`), html);
+  const show = (text: string, extra: Record<string, unknown> = html) =>
+    prog ? editProgress(ctx, prog, text, extra) : ctx.editMessageText(text, extra);
+  if (!prog) await show(msg.msgProgress(`swapping ${sold} $${h.symbol} to ${out.symbol}…`));
   try {
     const q = await jupiter.quote(h.mint, out.mint, amount, SOL_SLIPPAGE_BPS);
     const sig = await jupiter.executeSwap(q, kp);
     const got = (Number(q.outAmount) / 10 ** out.decimals).toLocaleString('en-US', { maximumFractionDigits: 4 });
-    const sold = isSol ? fmtSol(amount) : fmt4((h.amount * Number(pct)) / 100);
-    return say(
-      msg.msgSolSellDone({ symbol: h.symbol, sold, received: `${got} ${out.symbol}`, sig }),
-      {
-        ...html,
-        ...Markup.inlineKeyboard([
-          [Markup.button.url('🔍 Solscan', `https://solscan.io/tx/${sig}`), Markup.button.callback('💰 Portfolio', 'portfolio')],
-        ]),
-      },
-    );
+    return show(msg.msgSolSellDone({ symbol: h.symbol, sold, received: `${got} ${out.symbol}`, sig }), {
+      ...html,
+      ...Markup.inlineKeyboard([
+        [Markup.button.url('🔍 Solscan', `https://solscan.io/tx/${sig}`), Markup.button.callback('💰 Portfolio', 'portfolio')],
+      ]),
+    });
   } catch (e) {
-    console.error(`[sol-sell] ${h.mint} ${pct}% failed:`, (e as Error).message);
-    return say(msg.msgError('swap', (e as Error).message));
+    console.error(`[sol-sell] ${h.mint} ${amount} failed:`, (e as Error).message);
+    return show(msg.msgError('swap', (e as Error).message));
   }
-});
+}
 
 bot.action(/^sellpick:(\d+)$/, async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
@@ -6288,6 +6347,7 @@ bot.on(message('text'), async (ctx) => {
   // A Solana buy waiting on an amount. Checked here, alongside the other amount flows: a
   // bare number typed at that card used to fall all the way through to msgUnknown.
   if (await handleSolBuyAmount(ctx, raw)) return;
+  if (await handleSolSellAmount(ctx, raw)) return;
   if (await handleSolLpAmount(ctx, raw)) return;
 
   // /buy and /sell: wait for a contract address, then an amount, then quote the best route, then confirm.
