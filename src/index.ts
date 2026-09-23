@@ -4015,6 +4015,8 @@ registerFlowReset((uid) => {
  * reserve does not cover that, so depositing "100%" of it would leave the wallet short at
  * exactly the moment the rent is charged and the transaction would fail on-chain.
  */
+/** Share of the open cost that must come back on close. */
+const SOL_LP_MIN_REFUND = 0.9;
 const SOL_LP_RESERVE_LAMPORTS = 140_000_000n;
 
 /**
@@ -4125,10 +4127,11 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
     );
   }
   // Rent Meteora charges to open it. A range that is the first to need a bin array pays to
-  // create it, and that part never comes back: refused outright, never sent (owner's rule,
-  // 23 Sep 2026). An unreadable quote is refused too -- unknown is not "free".
+  // create it, and that part never comes back. At least 90% of the cost must come back on
+  // close, or it is refused and never sent (owner's rule, 23 Sep 2026). An unreadable quote
+  // is refused too -- unknown is not "free".
   const cost = await quoteOpenCost(f.pick.pool, f.rangePct ?? 10, pctPresets.shape()).catch(() => null);
-  if (!cost || cost.nonRefundable > 0) {
+  if (!cost || cost.total <= 0 || cost.refundable / cost.total < SOL_LP_MIN_REFUND) {
     solLpFlows.delete(ctx.from.id);
     return show(msg.msgSolLpNonRefund({ pair: f.pick.pair, cost }), {
       ...html,

@@ -1683,7 +1683,7 @@ export function msgSolLpNonRefund(o: { pair: string; cost: { refundable: number;
     '',
     `<pre>cost to open  : ${sol(o.cost.total)}\nrefunded      : ${sol(o.cost.refundable)}\nnon-refundable: ${sol(o.cost.nonRefundable)}</pre>`,
     '',
-    `🔴 ${bold(`${sol(o.cost.nonRefundable)} would never come back`)}`,
+    `🔴 ${bold(`only ${((o.cost.refundable / o.cost.total) * 100).toFixed(1)}% comes back, 90% is the minimum`)}`,
     '',
     '<blockquote>This range is the first to use part of the pool, so Meteora charges rent to create it. Nothing was sent. Try a narrower range, or a pool with more activity.</blockquote>',
     '',
