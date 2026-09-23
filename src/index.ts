@@ -376,7 +376,7 @@ const NEEDS_WALLET = /^\/(add_lp|stop|claim_fees|buy|sell|swap|unwrap|bridge|sen
 // typing /buy, or an old start card left in the chat becomes a way around the guard
 // after the wallet is disconnected.
 const NEEDS_WALLET_CB =
-  /^(addok|tswapok|close:|closev4go:|claim:|rmok:|unwrap:go|br:go|sndgo|cmd:(stop|claim_fees|buy|sell|swap|unwrap|bridge|send|withdraw)$)/;
+  /^(addok|tswapok|qba:|qbp:|close:|closev4go:|claim:|rmok:|unwrap:go|br:go|sndgo|cmd:(stop|claim_fees|buy|sell|swap|unwrap|bridge|send|withdraw)$)/;
 bot.use((ctx: any, next: any) => {
   const t = ctx.message?.text ?? '';
   const cb = ctx.callbackQuery?.data ?? '';
@@ -3736,8 +3736,18 @@ async function renderTokenHub(
     rowTok.push(Markup.button.callback('💱 Buy Token', `ca:buy:${ca}`));
     if (bal > 0n) rowTok.push(Markup.button.callback('📉 Sell Token', `ca:sell:${ca}`));
   }
+  // Quick buy, paid in the chain's native coin: four fixed amounts and four shares of the
+  // spendable balance. Short callbacks; the hub in memory says which token and chain.
+  const quickUnit = cc.hasWethBase ? cc.nativeSymbol : (basesFor(cc)[0]?.symbol ?? cc.nativeSymbol);
+  const quick = swappable
+    ? [
+        buyAmountPresets(quickUnit).map((a) => Markup.button.callback(`🛒 ${a} ${quickUnit}`, `qba:${a}`)),
+        pctPresets.get('buy').slice(0, 4).map((p) => Markup.button.callback(`🛒 ${p}%`, `qbp:${p}`)),
+      ]
+    : [];
 
   const kb = Markup.inlineKeyboard([
+    ...quick,
     rowLp,
     ...(rowTok.length ? [rowTok] : []),
     // This card is static: its prices are frozen at the second you pasted the CA. For a
@@ -3961,6 +3971,11 @@ async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any
       })),
     });
   }
+  // Quick buy straight from the card: four fixed SOL amounts, four shares of the spendable
+  // balance. 'qsa:' + lamports + mint stays under Telegram's 64-byte callback limit.
+  solCardSym.set(mint, sym);
+  kb.push(buyAmountPresets('SOL').map((a) => Markup.button.callback(`🛒 ${a} SOL`, `qsa:${Math.round(a * 1e9)}:${mint}`)));
+  kb.push(pctPresets.get('buy').slice(0, 4).map((p) => Markup.button.callback(`🛒 ${p}%`, `qsp:${p}:${mint}`)));
   kb.push([
     // 'solref:' + a 44-character base58 mint is 51 bytes, inside Telegram's 64-byte limit.
     Markup.button.callback('🔄 Refresh', `solref:${mint}`),
@@ -4415,6 +4430,27 @@ bot.action(/^solamt:(\d+)$/, async (ctx) => {
   return solBuyQuoteCard(ctx, f, lamports, true, kp);
 });
 
+/** Symbols of the Solana token cards drawn, so a quick-buy tap does not re-read the token. */
+const solCardSym = new Map<string, string>();
+
+async function solQuickBuy(ctx: any, mint: string, lamportsOf: (spendable: bigint) => bigint): Promise<unknown> {
+  if (!isSolAddress(mint)) return;
+  const kp = solWallet.keypair();
+  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  await ctx.answerCbQuery('Quoting…');
+  const spendable = await solSpendable(kp.publicKey);
+  const lamports = lamportsOf(spendable);
+  if (lamports > spendable)
+    return ctx.reply(msg.msgError('buy', `Only ${fmtSol(spendable)} SOL is spendable (${fmtSol(SOL_RESERVE_LAMPORTS)} is kept for fees).`), html);
+  const f: SolBuyFlow = { mint, symbol: solCardSym.get(mint) ?? '?', decimals: await mintDecimals(mint), startedAt: Date.now() };
+  solBuyFlows.set(ctx.from!.id, f);
+  // A new message, so the token card stays up for the next tap.
+  return solBuyQuoteCard(ctx, f, lamports, false, kp);
+}
+
+bot.action(/^qsa:(\d+):(\w+)$/, (ctx) => solQuickBuy(ctx, ctx.match[2], () => BigInt(ctx.match[1])));
+bot.action(/^qsp:(\d+):(\w+)$/, (ctx) => solQuickBuy(ctx, ctx.match[2], (sp) => (sp * BigInt(ctx.match[1])) / 100n));
+
 bot.action(/^solbuya:(\d+)$/, async (ctx) => {
   const f = solBuyFlows.get(ctx.from!.id);
   if (!f) return ctx.answerCbQuery('Expired. Paste the CA again.');
@@ -4615,19 +4651,61 @@ function buyAmountPresets(unit: string): number[] {
   return [5, 10, 25, 50]; // stablecoins, and Arc's USDC gas
 }
 
-bot.action(/^buyamt:([\d.]+)$/, async (ctx) => {
-  const flow = tswapFlows.get(ctx.from!.id);
-  if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
-  await ctx.answerCbQuery();
+/** A fixed buy amount, typed as the button shows it ("0.01"), in the flow's paying asset. */
+async function buyFromAmount(ctx: any, flow: TSwapFlow, amount: string): Promise<unknown> {
   const cc = CHAINS[flow.chainKey]!;
-  const base = flow.base;
+  const base = flow.base!;
   const sym = base.wrappable ? cc.nativeSymbol : base.symbol;
-  const amountWei = ethers.parseUnits(ctx.match[1], base.decimals);
+  const amountWei = ethers.parseUnits(amount, base.decimals);
   const usable = await buyUsableWei(flow).catch(() => 0n);
   if (amountWei > usable) {
     return ctx.reply(msg.msgError('buy', `Only ${ethers.formatUnits(usable, base.decimals)} ${sym} is spendable after the gas reserve.`), html);
   }
-  return tswapQuoteConfirm(ctx, flow, cc, base.address, flow.token, amountWei, `${ctx.match[1]} ${sym}`);
+  return tswapQuoteConfirm(ctx, flow, cc, base.address, flow.token!, amountWei, `${amount} ${sym}`);
+}
+
+bot.action(/^buyamt:([\d.]+)$/, async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
+  await ctx.answerCbQuery();
+  return buyFromAmount(ctx, flow, ctx.match[1]);
+});
+
+/** Quick buy from the CA hub: a buy flow built from the hub, paying in the native coin. */
+function hubBuyFlow(ctx: any): TSwapFlow | null {
+  const h = hubs.get(ctx.from!.id);
+  if (!h) return null;
+  const cc = getChain(h.chainKey);
+  const bases = basesFor(cc).filter((b) => b.address.toLowerCase() !== h.ca.toLowerCase());
+  const base = bases.find((b) => b.wrappable) ?? bases[0];
+  if (!base) return null;
+  const flow: TSwapFlow = {
+    chainKey: h.chainKey,
+    buy: true,
+    token: ethers.getAddress(h.ca),
+    tokenSym: h.sym,
+    tokenDec: h.dec,
+    screenText: h.screenText,
+    screenBahaya: h.bahaya,
+    fromHub: true,
+    base,
+    startedAt: Date.now(),
+  };
+  tswapFlows.set(ctx.from!.id, flow);
+  return flow;
+}
+
+bot.action(/^qba:([\d.]+)$/, async (ctx) => {
+  const flow = hubBuyFlow(ctx);
+  if (!flow) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  await ctx.answerCbQuery('Quoting…');
+  return buyFromAmount(ctx, flow, ctx.match[1]);
+});
+bot.action(/^qbp:(\d+)$/, async (ctx) => {
+  const flow = hubBuyFlow(ctx);
+  if (!flow) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  await ctx.answerCbQuery('Quoting…');
+  return buyFromPct(ctx, flow, Number(ctx.match[1]));
 });
 
 bot.action('buyback:size', async (ctx) => {
