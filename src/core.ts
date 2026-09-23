@@ -1,4 +1,5 @@
 import { Telegraf, Markup } from 'telegraf';
+import { rpcUrl as solRpcUrl } from './solana/rpc.js';
 import { withGasScope } from './gasBudget.js';
 import { ethers } from 'ethers';
 import { config } from './config.js';
@@ -343,7 +344,7 @@ export function startCard(o: { imported?: number; gone?: number } = {}): string 
   // The connected keystore first, the .env address second: once a key is connected it is
   // the wallet that actually signs, and the card must name that one.
   const solAddr = solWallet.address();
-  const solConfigured = config.solana.enabled && !!config.solana.rpcUrl && !!solAddr;
+  const solConfigured = config.solana.enabled && !!solRpcUrl() && !!solAddr;
   return msg.msgStarted({
     dryRun: config.safety.dryRun,
     chainLabel: cc.label,

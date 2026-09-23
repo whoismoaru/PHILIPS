@@ -12,10 +12,13 @@
  * getProgramAccounts with a 410 -- so a failure has to name WHICH call was refused, or a
  * feature looks broken when only one method is unavailable.
  */
+import * as chainToggle from '../chainToggle.js';
 import { config } from '../config.js';
 
 /** The configured endpoint, or null when none is set. Never a public default: see config.ts. */
 export function rpcUrl(): string | null {
+  // Off in /settings reads as unconfigured: every Solana path already handles that.
+  if (chainToggle.isOff('solana')) return null;
   return config.solana.rpcUrl || null;
 }
 

@@ -2139,6 +2139,17 @@ export function msgSettings(
   ].join('\n');
 }
 
+export function msgChainsToggle(): string {
+  return [
+    `🔌 ${bold('CHAINS')}`,
+    '',
+    'Tap a chain to switch it on or off.',
+    'An off chain leaves portfolio, swap, buy, bridge and pool lists.',
+    '',
+    `⚠️ ${italic('open positions on an off chain are not monitored until it is back on')}`,
+  ].join('\n');
+}
+
 export function msgSolDisconnectConfirm(addr: string, openLp: number | null): string {
   const out = [
     `🔴 ${bold('Disconnect SOL Wallet')}`,

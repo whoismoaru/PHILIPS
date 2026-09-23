@@ -3,7 +3,8 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { loadImage } from '@napi-rs/canvas';
 import { config } from '../config.js';
 import { bot, html, editProgress, maxEthLabel, registerFlowReset, startKeyboard, startCard } from '../core.js';
-import { getChain, rebuildChains, CHAINS } from '../chains.js';
+import { getChain, rebuildChains, CHAINS, ALL_CHAIN_DEFS, DEFAULT_CHAIN } from '../chains.js';
+import * as chainToggle from '../chainToggle.js';
 import * as walletStore from '../walletStore.js';
 import * as solWallet from '../solana/walletStore.js';
 import { solPositions } from '../solana/positions.js';
@@ -161,6 +162,7 @@ export async function cmdSettings(ctx: any) {
     Markup.button.callback(`${sh === 'bidask' ? '◣' : '▬'} LP shape: ${sh === 'bidask' ? 'BID-ASK' : 'SPOT'}`, 'lpshape'),
     Markup.button.callback('🪜 Ladder legs (EVM)', 'pct:legs'),
   ]);
+  rows.push([Markup.button.callback('🔌 Chains on/off', 'chains')]);
   // The PnL card's backdrop. The label says which one is in use, so the state is visible
   // without opening anything.
   rows.push([
@@ -182,6 +184,39 @@ export async function cmdSettings(ctx: any) {
   });
 }
 bot.command('settings', cmdSettings);
+
+// ---------- chains on/off ----------
+function chainsCard() {
+  const list = [
+    ...ALL_CHAIN_DEFS(),
+    ...(config.solana.enabled ? [{ key: 'solana', label: 'Solana' }] : []),
+  ];
+  const btn = (c: { key: string; label: string }) =>
+    c.key === DEFAULT_CHAIN
+      ? Markup.button.callback(`🟢 ${c.label} · default`, 'chains')
+      : Markup.button.callback(`${chainToggle.isOff(c.key) ? '🔴' : '🟢'} ${c.label}`, `chaintg:${c.key}`);
+  const rows: any[] = [];
+  for (let i = 0; i < list.length; i += 2) rows.push(list.slice(i, i + 2).map(btn));
+  rows.push([Markup.button.callback('⬅️ Back', 'settings')]);
+  return { text: msg.msgChainsToggle(), extra: { ...html, ...Markup.inlineKeyboard(rows) } };
+}
+
+bot.action('chains', async (ctx) => {
+  await ctx.answerCbQuery();
+  const c = chainsCard();
+  return ctx.editMessageText(c.text, c.extra).catch(() => {});
+});
+
+bot.action(/^chaintg:([a-z0-9_-]+)$/, async (ctx) => {
+  const key = ctx.match[1];
+  if (key === DEFAULT_CHAIN) return ctx.answerCbQuery('The default chain stays on.');
+  const on = chainToggle.toggle(key);
+  // Contexts are built from the switch list, so they are rebuilt to drop or add this chain.
+  rebuildChains();
+  await ctx.answerCbQuery(on ? 'On' : 'Off');
+  const c = chainsCard();
+  return ctx.editMessageText(c.text, c.extra).catch(() => {});
+});
 
 // One tap flips it; the card redraws so the new value is visible immediately.
 bot.action('lpshape', async (ctx: any) => {

@@ -1,5 +1,6 @@
 import { GAS_CAP_PCT, GAS_MIN_USD, GAS_MAX_USD, allowedGasUsd, gasValue, nativeUsd } from './gasBudget.js';
 import { ethers } from 'ethers';
+import * as chainToggle from './chainToggle.js';
 import { config } from './config.js';
 import * as walletStore from './walletStore.js';
 import {
@@ -626,7 +627,14 @@ function chains(): Record<string, ChainCtx> {
     const anyCtx = Object.values(ctxCache)[0];
     if (anyCtx && anyCtx.wallet.address === ethers.ZeroAddress) ctxCache = null;
   }
-  if (!ctxCache) ctxCache = Object.fromEntries(Object.entries(DEFS).map(([k, d]) => [k, build(k, d)]));
+  // A chain switched off in /settings is left out entirely. The default chain cannot be:
+  // getChain() falls back to it, and too much reads it to run without one.
+  if (!ctxCache)
+    ctxCache = Object.fromEntries(
+      Object.entries(DEFS)
+        .filter(([k]) => k === DEFAULT_CHAIN || !chainToggle.isOff(k))
+        .map(([k, d]) => [k, build(k, d)]),
+    );
   return ctxCache;
 }
 
@@ -675,3 +683,7 @@ export async function detectChains(tokenAddress: string): Promise<ChainCtx[]> {
 
 /** Re-export the ERC20 ABI for cross-module use. */
 export { ERC20_ABI };
+
+/** Every chain this build knows, on or off: what the /settings switches list. */
+export const ALL_CHAIN_DEFS = (): Array<{ key: string; label: string }> =>
+  Object.entries(DEFS).map(([key, d]) => ({ key, label: d.label }));

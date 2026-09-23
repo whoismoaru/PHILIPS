@@ -25,6 +25,8 @@ import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
 import { solHoldings, type SolHolding } from './solana/holdings.js';
+import * as chainToggle from './chainToggle.js';
+import { rpcUrl as solRpcUrl } from './solana/rpc.js';
 import { setGasValue, GAS_CAP_PCT, setNativePriceFn } from './gasBudget.js';
 import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
@@ -645,7 +647,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       }),
     );
     const solAddr = solWallet.address();
-    const solP = solAddr && config.solana.enabled ? solHoldings(solAddr).catch(() => null) : Promise.resolve(null);
+    const solP = solAddr && config.solana.enabled && !chainToggle.isOff('solana') ? solHoldings(solAddr).catch(() => null) : Promise.resolve(null);
     const [network, chains] = await Promise.all([
       provider.getNetwork(),
       // Native balances on EVERY chain (in parallel; a failed chain gives amount '?' and null usd).
@@ -1712,7 +1714,8 @@ function collapseLadderRows(rows: PosRow[]): void {
  * indistinguishable from a measured figure.
  */
 async function solanaRows(): Promise<PosRow[]> {
-  const { enabled, rpcUrl } = config.solana;
+  const enabled = config.solana.enabled && !chainToggle.isOff('solana');
+  const rpcUrl = solRpcUrl();
   // The connected keystore wins over the .env address, so /positions follows the wallet
   // that is actually being traded with rather than the one first configured.
   const wallet = solWallet.address();
