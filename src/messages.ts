@@ -2099,29 +2099,63 @@ export function msgSettings(
   dryRun: boolean,
   maxPerTx: string,
   gasCeiling?: string | null, // the per-transaction gas cost ceiling; null means none
-  /** Default deposit shape, chosen here instead of on every /add. */
+  /** Default deposit shape, chosen here instead of on every /add. Shared by both chains. */
   lpShape?: 'spot' | 'bidask',
+  /** Ladder leg choices, e.g. "3/5/8". EVM only: Meteora shapes its own bid-ask. */
+  legs?: string,
 ): string {
   // Wallet, chain and the quick-% list are deliberately NOT here: the first two already
   // head the WELCOME card, and each percentage is shown by the button that changes it.
-  const fields = [
+  // Split by chain because the two paths share almost nothing: the tx limit and gas ceiling
+  // are never checked on Solana, and its slippage is a different constant.
+  const shape = lpShape ? bold(lpShape === 'bidask' ? 'BID-ASK' : 'SPOT') : null;
+  const evm = [
     `Tx limit: ${esc(maxPerTx)}`,
     `Gas: auto-fetched${gasCeiling ? `, ceiling ${esc(gasCeiling)}/tx` : ', no ceiling'}`,
     // These match what the code ACTUALLY does: a swap steps 1% -> 2% -> 3% and never
     // beyond, while an LP mint is a separate, far tighter figure.
     'Swap slippage: 1%, retried at 2% then 3%',
     'LP mint slippage: 0.5%',
-    ...(lpShape ? [`LP shape: ${bold(lpShape === 'bidask' ? 'BID-ASK ladder' : 'SPOT')}`] : []),
+    ...(shape ? [`LP shape: ${shape}${lpShape === 'bidask' && legs ? `, legs ${esc(legs)}` : ''}`] : []),
   ];
+  const sol = [
+    'Slippage: 3%',
+    'Priority fee: auto',
+    ...(shape ? [`LP shape: ${shape}`] : []),
+  ];
+  const list = (xs: string[]) => xs.map((f, i) => `${i + 1}. ${f}`);
   return [
     `\u2699\uFE0F ${bold('SETTINGS')}`,
     '',
     `${bold('Mode')} : ${bold(dryRun ? 'DRY RUN' : 'LIVE')}  ${dryRun ? '\u26AA' : '\u{1F7E2}'}`,
     '',
-    ...fields.map((f, i) => `${i + 1}. ${f}`),
+    bold('EVM'),
+    ...list(evm),
+    '',
+    bold('Solana'),
+    ...list(sol),
     '',
     note(nowWib()),
   ].join('\n');
+}
+
+export function msgSolDisconnectConfirm(addr: string, openLp: number | null): string {
+  const out = [
+    `🔴 ${bold('Disconnect SOL Wallet')}`,
+    '',
+    `Disconnect ${code(shortAddr(addr))} from PHILIPS?`,
+    '',
+    `⚠️ ${bold('Warning :')}`,
+    '• Your encrypted Solana key will be permanently DELETED from this server.',
+    '• Your funds are not lost, but you will have to manage your DLMM positions yourself on Meteora.',
+    '• Your EVM wallet stays connected.',
+  ];
+  if (openLp) {
+    out.push(`• ${bold(`You still have ${openLp} open DLMM position(s).`)} PHILIPS will stop tracking them.`);
+  } else if (openLp === null) {
+    out.push("• Open positions could not be checked right now. Look on Meteora before you continue.");
+  }
+  return out.join('\n');
 }
 
 export function msgDisconnectConfirm(addr: string, openLp: number): string {

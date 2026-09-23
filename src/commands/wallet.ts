@@ -6,6 +6,7 @@ import { bot, html, editProgress, maxEthLabel, registerFlowReset, startKeyboard,
 import { getChain, rebuildChains, gasFeeCapLabel, CHAINS } from '../chains.js';
 import * as walletStore from '../walletStore.js';
 import * as solWallet from '../solana/walletStore.js';
+import { solPositions } from '../solana/positions.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
@@ -100,7 +101,22 @@ export async function handleSolSecret(ctx: any, raw: string): Promise<void> {
   }
 }
 
+// Asks first, like the EVM disconnect: the key is deleted, and open positions stop being
+// tracked from here. Counted on-chain, not from solStore, which only knows what PHILIPS opened.
 bot.action('disconnectsol', async (ctx: any) => {
+  const addr = solWallet.address();
+  if (!addr) return ctx.answerCbQuery('No Solana wallet connected');
+  await ctx.answerCbQuery();
+  const open = await solPositions(addr).then((l) => l.length).catch(() => null);
+  return ctx.reply(msg.msgSolDisconnectConfirm(addr, open), {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('✅ Yes, Disconnect & Delete Key', 'disconnectsol:ok')],
+      [Markup.button.callback('❌ No, Stay Connected', 'cancel')],
+    ]),
+  });
+});
+bot.action('disconnectsol:ok', async (ctx: any) => {
   solWallet.disconnect();
   await ctx.answerCbQuery('Solana wallet disconnected');
   await ctx.deleteMessage().catch(() => {});
@@ -125,8 +141,8 @@ export async function cmdSettings(ctx: any) {
     Markup.button.callback('💱 Swap %', 'pct:sell'),
   ]);
   rows.push([
-    Markup.button.callback('➕ Add LP %', 'pct:add'),
-    Markup.button.callback('⛔ Close LP %', 'pct:stop'),
+    Markup.button.callback('➕ Add LP % (EVM)', 'pct:add'),
+    Markup.button.callback('⛔ Close LP % (EVM)', 'pct:stop'),
   ]);
   rows.push([
     Markup.button.callback('🌉 Bridge %', 'pct:bridge'),
@@ -144,7 +160,7 @@ export async function cmdSettings(ctx: any) {
   const sh = pctPresets.shape();
   rows.push([
     Markup.button.callback(`${sh === 'bidask' ? '◣' : '▬'} LP shape: ${sh === 'bidask' ? 'BID-ASK' : 'SPOT'}`, 'lpshape'),
-    Markup.button.callback('🪜 Ladder legs', 'pct:legs'),
+    Markup.button.callback('🪜 Ladder legs (EVM)', 'pct:legs'),
   ]);
   // The PnL card's backdrop. The label says which one is in use, so the state is visible
   // without opening anything.
@@ -161,7 +177,7 @@ export async function cmdSettings(ctx: any) {
       : Markup.button.callback('🔗 Connect SOL Wallet', 'connectsol'),
   ]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
-  return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, gasCeil, pctPresets.shape()), {
+  return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, gasCeil, pctPresets.shape(), pctPresets.get('legs').join('/')), {
     ...html,
     ...Markup.inlineKeyboard(rows),
   });
