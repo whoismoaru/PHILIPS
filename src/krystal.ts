@@ -221,3 +221,16 @@ export async function krystalPools(cc: ChainCtx, token: string, sortBy = 0): Pro
   );
   return out.filter((p): p is TokenPool => p !== null).sort((a, b) => b.tvlUsd - a.tvlUsd);
 }
+
+/**
+ * A v4 poolKey for a pool found ELSEWHERE (GeckoTerminal), by its poolId. Krystal's detail
+ * endpoint answers for pools its own list never names, which is what makes a complete
+ * indexer usable for LP at all. Cached forever inside resolveV4PoolKey: a poolKey never
+ * changes.
+ */
+export async function v4KeyFor(cc: ChainCtx, poolId: string, tokenA: string, tokenB: string): Promise<PoolKeyV4 | null> {
+  if (!krystalConfigured(cc)) return null;
+  return resolveV4PoolKey(cc, { poolAddress: poolId, token0: { token: { address: tokenA } }, token1: { token: { address: tokenB } } });
+}
+
+export { baseOfPair };

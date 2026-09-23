@@ -239,3 +239,36 @@ export async function gmgnExtra(ca: string, chainKey: string): Promise<GmgnExtra
   cache.set(key, { t: Date.now(), v: out });
   return out;
 }
+
+const statsCache = new Map<string, { t: number; v: GmgnStats }>();
+export type GmgnStats = { name: string | null; priceUsd: number | null; mcapUsd: number | null; liquidityUsd: number | null; vol24hUsd: number | null; ageHours: number | null };
+
+/**
+ * Every figure the CA card shows, from ONE `token info` call: price, market cap
+ * (price x circulating supply), liquidity, 24h volume and age. One platform for all of
+ * them, so the rows agree with each other. Cached 3s (the owner's call): fresh on every
+ * tap. A miss is not cached, so the next tap tries again.
+ */
+export async function gmgnTokenStats(ca: string, chainKey: string): Promise<GmgnStats | null> {
+  const chain = PRICE_CHAIN[chainKey];
+  if (!chain || !process.env.GMGN_API_KEY) return null;
+  const key = `${chain}:${ca.toLowerCase()}`;
+  const hit = statsCache.get(key);
+  if (hit && Date.now() - hit.t < 3_000) return hit.v;
+  const j = await run(['token', 'info', '--chain', chain, '--address', ca.toLowerCase()]);
+  const n = (v: unknown) => (v == null || v === '' || !isFinite(Number(v)) ? null : Number(v));
+  const px = n(j?.price?.price);
+  if (!px) return null;
+  const supply = n(j?.circulating_supply) ?? n(j?.total_supply);
+  const born = n(j?.open_timestamp) ?? n(j?.creation_timestamp);
+  const v: GmgnStats = {
+    name: j?.name ?? null,
+    priceUsd: px,
+    mcapUsd: supply ? px * supply : null,
+    liquidityUsd: n(j?.liquidity),
+    vol24hUsd: n(j?.price?.volume_24h),
+    ageHours: born ? (Date.now() / 1000 - born) / 3600 : null,
+  };
+  statsCache.set(key, { t: Date.now(), v });
+  return v;
+}

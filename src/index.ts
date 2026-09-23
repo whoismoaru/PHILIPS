@@ -70,7 +70,8 @@ import { startMonitor } from './monitor.js';
 import * as store from './store.js';
 import * as journal from './journal.js';
 import * as msg from './messages.js';
-import { gmgnPrice } from './gmgn.js';
+import { gmgnTokenStats } from './gmgn.js';
+import { geckoPools, geckoTokenStats } from './gecko.js';
 import * as explore from './explore.js';
 import * as krystal from './krystal.js';
 import { awaitingSecret, handleSecret, awaitingSolSecret, handleSolSecret } from './commands/wallet.js';
@@ -2645,7 +2646,7 @@ async function continueAddlp(
     prog,
     msg.msgProgress(pre ? 'finding pools…' : `auditing token & finding pools on ${cc.label}…`),
   );
-  const [screened, found, krystalFound, onchainFound] = await Promise.allSettled([
+  const [screened, found, krystalFound, onchainFound, geckoFound] = await Promise.allSettled([
     pre ? Promise.resolve(null) : screenToken(token, cc),
     explore.poolsForToken(cc, token),
     krystal.krystalPools(cc, token),
@@ -2654,6 +2655,9 @@ async function continueAddlp(
     // and from the outside that gap is indistinguishable from a token having no
     // pools at all.
     onchainV4Pools(cc, token),
+    // GeckoTerminal: the most complete index (23 Sep 2026: every $GPU v4 pool, where
+    // Krystal's list named 4 of ~17). Its v4 pools carry a poolKey verified by keccak.
+    geckoPools(cc, token),
   ]);
 
   let screenBahaya = pre?.bahaya ?? false;
@@ -2687,7 +2691,16 @@ async function continueAddlp(
   // Krystal is the complete pool source (the gateway often misses large-TVL ETH/token
   // pools and reports nonsense TVL). Its poolKey is already VERIFIED on-chain (the
   // Initialize event), so no re-resolution is needed and its fee is the real poolKey's.
-  const kPools = krystalFound.status === 'fulfilled' ? krystalFound.value : [];
+  // GeckoTerminal's pools first, then any Krystal pool it did not name. A v4 pool with no
+  // resolved key cannot be opened, so it is left out here (the card still shows it).
+  const gkPools = (geckoFound.status === 'fulfilled' ? (geckoFound.value ?? []) : []).filter(
+    (p) => p.protocol === 'v3' || !!p.poolKey,
+  );
+  const krPools = krystalFound.status === 'fulfilled' ? krystalFound.value : [];
+  const gkIdKey = (p: explore.TokenPool) =>
+    p.poolKey ? `${p.poolKey.currency0}${p.poolKey.currency1}${p.poolKey.fee}${p.poolKey.tickSpacing}${p.poolKey.hooks}`.toLowerCase() : `v3:${p.venue ?? ''}:${p.base}:${p.fee}`;
+  const gkSeen = new Set(gkPools.map(gkIdKey));
+  const kPools = [...gkPools, ...krPools.filter((p) => !gkSeen.has(gkIdKey(p)))];
   if (krystalFound.status === 'rejected')
     console.log('[krystal] failed:', String(krystalFound.reason).slice(0, 120));
   const oPools = onchainFound.status === 'fulfilled' ? onchainFound.value : [];
@@ -3709,45 +3722,29 @@ async function renderTokenHub(
 
   // The same TOKEN STATISTICS card as a Solana CA, so every chain reads alike. The audit
   // verdict, which Solana has no equivalent of, rides along as one row rather than a card.
-  // Krystal first, the same source /add trusts (it resolves v4 pool keys and reads v4
-  // volume); the Uniswap gateway fills in when Krystal has nothing. The gateway alone once
-  // returned only a $0.03 v3 dust pool for $GPU while $53K sat in v4. Dust is dropped
-  // either way: a pool under $500 is not a market.
-  const [kPools, gPools] = await Promise.all([
-    krystal.krystalPools(cc, ca).catch(() => [] as explore.TokenPool[]),
-    explore.poolsForToken(cc, ca).catch(() => [] as explore.TokenPool[]),
+  // One platform per job, chosen by measurement (23 Sep 2026): stats from GMGN (every row
+  // in one call), pools from GeckoTerminal (the only index that named all of $GPU's v4
+  // pools). Each falls back when it cannot answer -- GeckoTerminal for stats, Krystal for
+  // pools -- so a rate limit costs a source, never the card. Pools under $500 are dust.
+  const [gs, gPools] = await Promise.all([
+    gmgnTokenStats(ca, cc.key).catch(() => null),
+    geckoPools(cc, ca, { keys: false }).catch(() => null),
   ]);
-  const pools = (kPools.length ? kPools : gPools).filter((p) => p.tvlUsd >= 500).sort((a, b) => b.tvlUsd - a.tvlUsd);
+  const st = gs ?? (await geckoTokenStats(cc, ca).catch(() => null));
+  const pools = (gPools ?? (await krystal.krystalPools(cc, ca).catch(() => [] as explore.TokenPool[])))
+    .filter((p) => p.tvlUsd >= 500)
+    .sort((a, b) => b.tvlUsd - a.tvlUsd);
   const shown = pools.slice(0, 3);
-  const poolTvl = pools.reduce((a, p) => a + p.tvlUsd, 0);
-  // DexScreener's pair only counts when it is the market, not a dust pool beside it.
-  const dexOk = sc?.liquidityUsd != null && sc.liquidityUsd >= poolTvl * 0.1;
-  // Price and mcap from GMGN first, DexScreener only as the fallback (the house rule). And
-  // DexScreener's pair figures only count when that pair is real: on 23 Sep 2026 its only
-  // $GPU pair was a $0.03 v3 dust pool while $29K sat in v4, and the card printed a price
-  // of $4.5e26. A pair with no liquidity reading, or one far shallower than the pools we
-  // can see, is not the market.
-  const gm = await gmgnPrice(ca, cc.key).catch(() => null);
-  const px = gm?.priceUsd ?? (dexOk && sc?.priceUsd ? Number(sc.priceUsd) : null);
-  const mcap = gm?.mcapUsd ?? (dexOk ? (sc?.marketCapUsd ?? null) : null);
-  const liq = dexOk ? sc!.liquidityUsd! : poolTvl > 0 ? poolTvl : null;
   const rows: Array<[string, string]> = [
-    ['Price', px ? `$${Number(px.toPrecision(4))}` : '—'],
-    ['MCap', mcap != null ? msg.usdCompact(mcap) : '—'],
-    ['Liq', liq != null ? msg.usdCompact(liq) : '—'],
-    [
-      'Vol 24h',
-      dexOk && sc?.volume24h != null
-        ? msg.usdCompact(sc.volume24h)
-        : pools.some((p) => p.vol24hUsd)
-          ? msg.usdCompact(pools.reduce((a, p) => a + (p.vol24hUsd ?? 0), 0))
-          : '—',
-    ],
-    ['Age', dexOk && sc?.pairAgeHours != null ? msg.fmtAge(sc.pairAgeHours * 3_600_000) : '—'],
+    ['Price', st?.priceUsd ? `$${Number(st.priceUsd.toPrecision(4))}` : '—'],
+    ['MCap', st?.mcapUsd != null ? msg.usdCompact(st.mcapUsd) : '—'],
+    ['Liq', st?.liquidityUsd != null ? msg.usdCompact(st.liquidityUsd) : '—'],
+    ['Vol 24h', st?.vol24hUsd != null ? msg.usdCompact(st.vol24hUsd) : '—'],
+    ['Age', st?.ageHours != null ? msg.fmtAge(st.ageHours * 3_600_000) : '—'],
   ];
   const text = msg.msgSolToken({
     symbol: sym,
-    name: sc?.name ?? sym,
+    name: st?.name ?? sc?.name ?? sym,
     ca,
     rows,
     chainLabel: cc.label,
