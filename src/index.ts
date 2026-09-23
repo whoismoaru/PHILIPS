@@ -3709,7 +3709,15 @@ async function renderTokenHub(
 
   // The same TOKEN STATISTICS card as a Solana CA, so every chain reads alike. The audit
   // verdict, which Solana has no equivalent of, rides along as one row rather than a card.
-  const pools = (await explore.poolsForToken(cc, ca).catch(() => [] as explore.TokenPool[])).sort((a, b) => b.tvlUsd - a.tvlUsd);
+  // Krystal first, the same source /add trusts (it resolves v4 pool keys and reads v4
+  // volume); the Uniswap gateway fills in when Krystal has nothing. The gateway alone once
+  // returned only a $0.03 v3 dust pool for $GPU while $53K sat in v4. Dust is dropped
+  // either way: a pool under $500 is not a market.
+  const [kPools, gPools] = await Promise.all([
+    krystal.krystalPools(cc, ca).catch(() => [] as explore.TokenPool[]),
+    explore.poolsForToken(cc, ca).catch(() => [] as explore.TokenPool[]),
+  ]);
+  const pools = (kPools.length ? kPools : gPools).filter((p) => p.tvlUsd >= 500).sort((a, b) => b.tvlUsd - a.tvlUsd);
   const shown = pools.slice(0, 3);
   // Defined below with the price sources; hoisted here because the verdict depends on it.
   const poolTvlAll = pools.reduce((a, p) => a + p.tvlUsd, 0);
@@ -3741,7 +3749,14 @@ async function renderTokenHub(
     ['Price', px ? `$${Number(px.toPrecision(4))}` : '—'],
     ['MCap', mcap != null ? msg.usdCompact(mcap) : '—'],
     ['Liq', liq != null ? msg.usdCompact(liq) : '—'],
-    ['Vol 24h', dexOk && sc?.volume24h != null ? msg.usdCompact(sc.volume24h) : '—'],
+    [
+      'Vol 24h',
+      dexOk && sc?.volume24h != null
+        ? msg.usdCompact(sc.volume24h)
+        : pools.some((p) => p.vol24hUsd)
+          ? msg.usdCompact(pools.reduce((a, p) => a + (p.vol24hUsd ?? 0), 0))
+          : '—',
+    ],
     ['Age', dexOk && sc?.pairAgeHours != null ? msg.fmtAge(sc.pairAgeHours * 3_600_000) : '—'],
     ['Audit', `${verdict}${warn ? ` (${warn} flag${warn === 1 ? '' : 's'})` : ''}`],
     ...(bal > 0n ? [['Holding', `${msg.cleanUnits(bal, dec)} ${sym}`] as [string, string]] : []),

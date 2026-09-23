@@ -139,7 +139,9 @@ export async function gmgnPrice(ca: string, chainKey: string): Promise<{ priceUs
     const supply = Number(j?.circulating_supply ?? j?.total_supply);
     v = { priceUsd: px, mcapUsd: Number.isFinite(supply) && supply > 0 ? px * supply : null };
   }
-  priceCache.set(key, { t: Date.now(), v });
+  // Only an ANSWER is cached. A timeout or rate-limit hit cached as null blanked the price
+  // on every card for 15 minutes (23 Sep 2026, $GPU): a miss must be retried, not remembered.
+  if (v) priceCache.set(key, { t: Date.now(), v });
   return v;
 }
 
