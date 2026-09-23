@@ -12,7 +12,7 @@
 import { ethers } from 'ethers';
 import type { BaseKind } from './chains.js';
 import { explainRevert } from './revert.js';
-import { GAS_CAP_PCT, GAS_MIN_USD, GAS_MAX_USD } from './gasBudget.js';
+import { TRADE_LIMIT_PCT } from './tradeLimit.js';
 
 // ─── primitives ────────────────────────────────────────────────────
 
@@ -2109,18 +2109,18 @@ export function msgSettings(
   const shape = lpShape ? bold(lpShape === 'bidask' ? 'BID-ASK' : 'SPOT') : null;
   const evm = [
     `Tx limit: ${esc(maxPerTx)}`,
-    `Gas: max ${GAS_CAP_PCT}% of the trade (at least $${GAS_MIN_USD.toFixed(2)}, never above $${GAS_MAX_USD})`,
+    'Gas: high, from the official RPC',
     // These match what the code ACTUALLY does: a swap steps 1% -> 2% -> 3% and never
     // beyond, while an LP mint is a separate, far tighter figure.
-    `Swap slippage: 1%, retried at 2% then ${GAS_CAP_PCT}% max`,
-    `Price impact: max ${GAS_CAP_PCT}%`,
+    `Swap slippage: 1%, retried at 2% then ${TRADE_LIMIT_PCT}% max`,
+    `Price impact: max ${TRADE_LIMIT_PCT}%`,
     'LP mint slippage: 0.5%',
     ...(shape ? [`LP shape: ${shape}${lpShape === 'bidask' && legs ? `, legs ${esc(legs)}` : ''}`] : []),
   ];
   const sol = [
-    `Slippage: ${GAS_CAP_PCT}%`,
-    `Price impact: max ${GAS_CAP_PCT}%`,
-    `Priority fee: market rate, max ${GAS_CAP_PCT}% of the trade (at least $${GAS_MIN_USD.toFixed(2)}, never above $${GAS_MAX_USD})`,
+    `Slippage: ${TRADE_LIMIT_PCT}%`,
+    `Price impact: max ${TRADE_LIMIT_PCT}%`,
+    'Priority fee: high, from the official RPC',
     ...(shape ? [`LP shape: ${shape}`] : []),
   ];
   const list = (xs: string[]) => xs.map((f, i) => `${i + 1}. ${f}`);

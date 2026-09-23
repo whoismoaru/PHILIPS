@@ -1,4 +1,4 @@
-import { GAS_CAP_PCT, GAS_MIN_USD, GAS_MAX_USD, allowedGasUsd, gasValue, nativeUsd } from './gasBudget.js';
+import { officialHighFees } from './feeOracle.js';
 import { ethers } from 'ethers';
 import * as chainToggle from './chainToggle.js';
 import { config } from './config.js';
@@ -94,12 +94,6 @@ export const isStableBase = (kind: BaseKind): boolean =>
  * symbol differs per chain (WETH on Robinhood, WBNB on BSC), and showing 'WETH' on
  * BSC names an asset the user never holds.
  */
-/**
- * Per-tx gas cost ceiling in the native asset. 'off'/'0' removes it; empty uses the
- * default. A nonsensical value (not a number, negative) falls back to the default
- * rather than silently disabling the cap.
- */
-const DEFAULT_MAX_TX_FEE = '0.005';
 
 export const baseSymbolOf = (kind: BaseKind | undefined, ctx?: ChainCtx): string => {
   if (ctx) {
@@ -182,7 +176,6 @@ type Def = {
   routerHasDeadline?: boolean; // default false (SwapRouter02 Uniswap)
   /** This chain's per-transaction gas ceiling, in ITS native units. Only set where the
    *  global default does not translate -- a chain whose gas token is a dollar. */
-  maxTxFeeNative?: string;
   fallbackRpc?: string[]; // backup RPCs for when the primary `rpc` is down (FallbackProvider, in priority order)
   privateRpc?: string; // a private relay for broadcasting, which protects against MEV and sandwiching
 };
@@ -342,13 +335,7 @@ const DEFS: Record<string, Def> = {
           // assumption until feeAmountTickSpacing is read on a live Arc pool -- the pool
           // sampled during the survey used fee 10000 / spacing 200, which fits it.
           routerHasDeadline: false, // SwapRouter02, which dropped the deadline field
-          // Gas here is USDC, so this ceiling reads in DOLLARS. It is sized the way the
-          // global default was: roughly 170x an ordinary 400k-gas transaction. Arc's base
-          // fee is not the flat 20 gwei it launched at -- measured 583 gwei worst case on
-          // 16 Sep 2026, where a three-leg ladder came to 0.69 USDC and an eight-leg one
-          // would reach 2.33. At 5 cents this refused routine work; at $2.50 it still stops
-          // anything genuinely wild.
-          maxTxFeeNative: '2.50',
+
           // Alchemy is primary here, as on every other chain: measured 20 of 20 at ~47 ms.
           // Its free tier caps eth_getLogs at 10 BLOCKS, which is why the v4 log scan uses
           // a public endpoint instead (see LOGS_RPC in uniswapV4.ts) -- exactly the split
@@ -451,62 +438,11 @@ function build(key: string, d: Def): ChainCtx {
     };
   }
 
-  // GAS COST CEILING. Gas is fetched from the network with no upper bound, so a
-  // single spike — or an RPC returning a nonsense fee — would be paid whatever it
-  // came to. Checked at the broadcast point so EVERY path is covered: ordinary
-  // contract calls, sendTxNonceSafe, and raw txs from aggregators alike, not just
-  // whatever happens to go through one helper. A 400k-gas tx costs ~0.00003 native
-  // on all five chains, so the 0.005 default leaves ~170x of headroom: it never
-  // interferes with normal operation but still stops something genuinely wild.
-  //
-  // EXCEPT where the native asset is a DOLLAR. The default is calibrated for ETH and BNB,
-  // where 0.005 native is $20 or $3; on Arc the gas token is USDC, so the same number means
-  // half a cent -- and a perfectly ordinary CCTP mint at 0.0065 USDC was refused as
-  // "genuinely wild" (measured 16 Sep 2026). A chain whose gas is a stablecoin states its
-  // own ceiling, in the same units everything else there is priced in.
-  // Fixed, not read from .env: the ceiling is a rule, not a preference.
-  const feeCap = ethers.parseEther(d.maxTxFeeNative ?? DEFAULT_MAX_TX_FEE);
+  // GAS PRICE: the chain's official "high" rate on every transaction (feeOracle.ts), with
+  // the provider's own figures only when the official endpoint does not answer.
   {
-    const beforeCap = provider.broadcastTransaction.bind(provider);
-    provider.broadcastTransaction = async (signedTx: string) => {
-      const parsed = ethers.Transaction.from(signedTx);
-      // What it will most likely cost, not the worst case: maxFeePerGas is padded to 2x the
-      // base fee and would refuse ordinary transactions. The base fee is read fresh; the
-      // gas limit already carries the estimate's own buffer.
-      const limit = parsed.gasLimit ?? 0n;
-      let unit = parsed.gasPrice ?? parsed.maxFeePerGas ?? 0n;
-      if (parsed.maxFeePerGas != null) {
-        const baseFee = (await provider.getBlock('latest').catch(() => null))?.baseFeePerGas ?? null;
-        if (baseFee !== null) {
-          const tip = parsed.maxPriorityFeePerGas ?? 0n;
-          unit = baseFee + tip < parsed.maxFeePerGas ? baseFee + tip : parsed.maxFeePerGas;
-        }
-      }
-      const est = unit * limit;
-      const px = d.hasWethBase === false ? 1 : await nativeUsd(key);
-      if (px) {
-        // The value moved: its own native value, or what the flow stated for this chain.
-        const stated = gasValue(key);
-        const valueNative = parsed.value > 0n ? Number(ethers.formatEther(parsed.value)) : stated ?? null;
-        const allowUsd = allowedGasUsd(valueNative !== null ? valueNative * px : null);
-        const estUsd = Number(ethers.formatEther(est)) * px;
-        if (estUsd > allowUsd) {
-          throw new Error(
-            `Gas too high: ~$${estUsd.toFixed(2)} for this transaction, the limit is $${allowUsd.toFixed(2)} ` +
-              `(${GAS_CAP_PCT}% of the value, at least $${GAS_MIN_USD.toFixed(2)}, never above $${GAS_MAX_USD}). Nothing was sent. Wait for gas to drop.`,
-          );
-        }
-        return beforeCap(signedTx);
-      }
-      // No price readable: the old native-unit ceiling is the only guard left.
-      if (est > feeCap) {
-        throw new Error(
-          `Gas fee ceiling hit: this transaction could cost ~${ethers.formatEther(est)} ${d.nativeSymbol} ` +
-            `(ceiling ${ethers.formatEther(feeCap)}). Nothing was sent. Wait for gas to drop.`,
-        );
-      }
-      return beforeCap(signedTx);
-    };
+    const own = provider.getFeeData.bind(provider);
+    provider.getFeeData = async () => (await officialHighFees(d.chainId)) ?? own();
   }
 
   // No wallet connected yet gives a VoidSigner: READS keep working (balances,

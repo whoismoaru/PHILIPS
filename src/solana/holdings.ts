@@ -7,7 +7,6 @@
  * the same as worthless.
  */
 import { solRpc } from './rpc.js';
-import { allowedGasUsd } from '../gasBudget.js';
 
 const WSOL = 'So11111111111111111111111111111111111111112';
 const PROGRAMS = ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'];
@@ -42,12 +41,6 @@ export async function solUsd(): Promise<number | null> {
   const v = (await prices([WSOL]).catch(() => new Map())).get(WSOL)?.px ?? null;
   if (v) solPxCache = { v, t: Date.now() };
   return v;
-}
-
-/** Lamports of priority fee a trade worth `valueUsd` may pay, by the rule in gasBudget.ts. */
-export async function allowedFeeLamports(valueUsd: number | null): Promise<number | null> {
-  const px = await solUsd();
-  return px ? Math.floor((allowedGasUsd(valueUsd) / px) * 1e9) : null;
 }
 
 export async function solHoldings(owner: string): Promise<SolHolding[]> {

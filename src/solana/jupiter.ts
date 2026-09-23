@@ -13,9 +13,8 @@
  * signs slot 0. Everything this module needs is that one insertion, so the SDK's whole
  * transaction stack would be carried for a memcpy.
  */
-import { solUsd, allowedFeeLamports } from './holdings.js';
+import { highPriorityMicro } from './fees.js';
 
-const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 import { signMessage, type SolKeypair } from './keys.js';
 import { solRpc } from './rpc.js';
 
@@ -67,20 +66,6 @@ export function routeLabel(q: Quote): string {
   return names.length ? [...new Set(names)].join(' → ') : 'Jupiter';
 }
 
-/**
- * The most this swap may bid, by the rule in gasBudget.ts. Jupiter bids the going rate up
- * to it, so a small trade still competes for its block instead of being priced out.
- */
-async function feeCapLamports(q: Quote): Promise<number> {
-  const FALLBACK = 2_000_000;
-  const px = await solUsd();
-  if (!px) return FALLBACK;
-  const side = (mint: unknown, amt: string) =>
-    mint === WSOL ? (Number(amt) / 1e9) * px : mint === USDC_MINT ? Number(amt) / 1e6 : null;
-  const valueUsd = side(q.inputMint, q.inAmount) ?? side(q.outputMint, q.outAmount);
-  return (await allowedFeeLamports(valueUsd)) ?? FALLBACK;
-}
-
 /** Build the swap transaction for this quote, base64. */
 async function buildSwap(q: Quote, userPublicKey: string): Promise<string> {
   const r = await jup<{ swapTransaction?: string }>('/swap', {
@@ -94,9 +79,9 @@ async function buildSwap(q: Quote, userPublicKey: string): Promise<string> {
       wrapAndUnwrapSol: true,
       dynamicComputeUnitLimit: true,
       // A swap that lands three blocks late on a token minutes old is a different trade.
-      // The fee is capped so the urgency cannot quietly cost more than the position.
-      // Capped by the shared gas rule (gasBudget.ts): max(3% of value, $0.10), at most $2.
-      prioritizationFeeLamports: { priorityLevelWithMaxLamports: { maxLamports: await feeCapLamports(q), priorityLevel: 'high' } },
+      // The official RPC's "high" rate (fees.ts), per compute unit, uncapped. A small floor
+      // so a quiet reading still bids something.
+      computeUnitPriceMicroLamports: Math.max(10_000, (await highPriorityMicro())?.micro ?? 0),
     }),
   });
   if (!r.swapTransaction) throw new Error('jupiter returned no transaction');

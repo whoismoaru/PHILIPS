@@ -1,6 +1,5 @@
 import { Telegraf, Markup } from 'telegraf';
 import { rpcUrl as solRpcUrl } from './solana/rpc.js';
-import { withGasScope } from './gasBudget.js';
 import { ethers } from 'ethers';
 import { config } from './config.js';
 import * as walletStore from './walletStore.js';
@@ -18,9 +17,6 @@ import { CHAINS, getChain } from './chains.js';
  */
 
 export const bot = new Telegraf(config.telegram.botToken);
-// Registered here, before any module adds a handler: telegraf runs middleware in order, so
-// a scope opened later would not cover commands registered by earlier imports. Every tx one
-// update sends is measured against the value that update moves (see gasBudget.ts).
 // --- Guard: only the owner may use the bot ---
 // FIRST, here in core.ts: ES imports run before index.ts's body, so every command and button
 // registered in commands/*.ts used to sit AHEAD of this guard -- a stranger could open
@@ -34,7 +30,6 @@ bot.use((ctx, next) => {
   }
   return next();
 });
-bot.use((_ctx, next) => withGasScope(() => next()));
 
 /**
  * The ownership mark at the foot of EVERY message.

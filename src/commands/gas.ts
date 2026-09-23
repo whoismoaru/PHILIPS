@@ -3,6 +3,8 @@ import { Markup } from 'telegraf';
 import { bot, html } from '../core.js';
 import { CHAINS, type ChainCtx } from '../chains.js';
 import { getEthUsd } from '../screening.js';
+import { officialHighFees } from '../feeOracle.js';
+import { highPriorityMicro } from '../solana/fees.js';
 import { config } from '../config.js';
 import * as chainToggle from '../chainToggle.js';
 import { solUsd } from '../solana/holdings.js';
@@ -87,40 +89,16 @@ async function usdToIdr(): Promise<number | null> {
  * teams themselves document -- deliberately NOT the .env ones, which all point at
  * Alchemy.
  */
-const OFFICIAL_RPC: Record<number, string> = {
-  4663: 'https://rpc.mainnet.chain.robinhood.com',
-  56: 'https://bsc-dataseed.bnbchain.org',
-  8453: 'https://mainnet.base.org',
-  999: 'https://rpc.hyperliquid.xyz/evm',
-  57073: 'https://rpc-gel.inkonchain.com',
-};
-
-/** eth_gasPrice straight from a URL. Raw fetch: one call, no provider to construct. */
-async function rawGasPrice(url: string): Promise<bigint | null> {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 6000);
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_gasPrice', params: [] }),
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
-    if (!r.ok) return null;
-    const hex = (await r.json())?.result;
-    return typeof hex === 'string' ? BigInt(hex) : null;
-  } catch {
-    return null;
-  }
-}
 
 /** The effective gas price that will be paid, and where the figure came from. */
 async function gasPriceOf(cc: ChainCtx): Promise<{ price: bigint; official: boolean } | null> {
-  const url = OFFICIAL_RPC[cc.chainId];
-  if (url) {
-    const p = await rawGasPrice(url);
-    if (p !== null && p > 0n) return { price: p, official: true };
+  // The same "high" figure every transaction is sent with (feeOracle.ts). What is CHARGED is
+  // base + tip; maxFeePerGas carries a 2x base margin that is never spent.
+  const fd = await officialHighFees(cc.chainId);
+  if (fd) {
+    const tip = fd.maxPriorityFeePerGas ?? 0n;
+    const price = fd.gasPrice ?? (fd.maxFeePerGas !== null ? (fd.maxFeePerGas - tip) / 2n + tip : null);
+    if (price !== null && price > 0n) return { price, official: true };
   }
   // Fallback only. Flagged, because an unflagged fallback would quietly claim to be
   // the chain's own number while coming from the trading provider.
@@ -176,7 +154,7 @@ type Chain = NonNullable<Awaited<ReturnType<typeof costsOf>>>;
  * Solana, from the official public RPC (api.mainnet-beta.solana.com). A fee there is 5,000
  * lamports per signature plus a priority fee: micro-lamports per compute unit times the
  * unit LIMIT the transaction sets. The price is the 75th percentile paid over the last 150 slots
- * on a busy pool (see BUSY_ACCOUNT), so the row says what a normal transaction costs right now.
+ * on a busy pool (solana/fees.ts), so the row says what a normal transaction costs right now.
  *
  * Units per operation are the limits this bot's own transactions carry: Jupiter's dynamic
  * limit on a swap, the ~1.4M the Meteora SDK sets on an LP open (read off its logs, 23 Sep
@@ -190,48 +168,18 @@ const SOL_OPS: Record<string, { cu: number; sigs: number }> = {
   Send: { cu: 0, sigs: 1 },
   Approve: { cu: 0, sigs: 1 },
 };
-const SOL_OFFICIAL_RPC = 'https://api.mainnet-beta.solana.com';
-/**
- * Asked with no account, the RPC returns each slot's MINIMUM fee, which is almost always 0
- * and would claim a Solana trade costs nothing extra. A busy writable account (Raydium's
- * SOL/USDC pool) gives what traders competing for the same state actually pay; the 75th
- * percentile is what this bot bids too.
- */
-const BUSY_ACCOUNT = '58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2';
 /** The LP path never bids below this (solana/lp.ts MIN_MICRO_LAMPORTS). */
 const LP_FLOOR_MICRO = 50_000;
 
-async function solPriorityMicro(url: string): Promise<number | null> {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 6000);
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getRecentPrioritizationFees', params: [[BUSY_ACCOUNT]] }),
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
-    if (!r.ok) return null;
-    const fees = ((await r.json())?.result ?? []).map((x: any) => Number(x.prioritizationFee)).filter((f: number) => f > 0).sort((a: number, b: number) => a - b);
-    return fees.length ? fees[Math.floor(fees.length * 0.75)] : 0;
-  } catch {
-    return null;
-  }
-}
-
 async function solanaCosts(): Promise<Chain | null> {
-  let official = true;
-  let micro = await solPriorityMicro(SOL_OFFICIAL_RPC);
-  if (micro === null && config.solana.rpcUrl) {
-    micro = await solPriorityMicro(config.solana.rpcUrl);
-    official = false;
-  }
-  if (micro === null) return null;
+  const hp = await highPriorityMicro();
+  if (hp === null) return null;
+  const { micro, official } = hp;
   const px = await solUsd();
   const rows = new Map<string, Row>();
   for (const [label, o] of Object.entries(SOL_OPS)) {
-    const m = label.endsWith('LP') ? Math.max(micro, LP_FLOOR_MICRO) : micro;
+    // The floors the bot's own paths apply (lp.ts, jupiter.ts).
+    const m = Math.max(micro, label.endsWith('LP') ? LP_FLOOR_MICRO : 10_000);
     const native = (o.sigs * 5_000 + (m * o.cu) / 1e6) / 1e9;
     rows.set(label, { label, usd: px === null ? null : native * px, native, sym: 'SOL' });
   }

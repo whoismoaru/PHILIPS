@@ -3,7 +3,7 @@ import { ethers } from 'ethers';
 import { config } from '../config.js';
 import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset } from '../core.js';
 import { CHAINS, getChain, isStableBase, type ChainCtx, type BaseKind } from '../chains.js';
-import { setGasValue, GAS_CAP_PCT } from '../gasBudget.js';
+import { TRADE_LIMIT_PCT } from '../tradeLimit.js';
 import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridgeRoute.js';
 import { NATIVE } from '../relay.js';
 import { lifiSupports, lifiBridgeQuote } from '../lifi.js';
@@ -432,9 +432,9 @@ async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<voi
     const assets = { originCurrency: flow.originCurrency, destinationCurrency: flow.destinationCurrency };
     const { provider, quote: q } = await bestBridgeQuote(from, to, wei, assets);
     // Price impact stops at 3%, the same as gas and slippage.
-    if (q.impactPct != null && Math.abs(q.impactPct) > GAS_CAP_PCT) {
+    if (q.impactPct != null && Math.abs(q.impactPct) > TRADE_LIMIT_PCT) {
       await editProgress(ctx, prog, msg.msgError('bridge',
-        `Price impact is ${Math.abs(q.impactPct).toFixed(1)}%, above the ${GAS_CAP_PCT}% limit. Nothing was sent. Try a smaller amount.`));
+        `Price impact is ${Math.abs(q.impactPct).toFixed(1)}%, above the ${TRADE_LIMIT_PCT}% limit. Nothing was sent. Try a smaller amount.`));
       return;
     }
     flow.awaitingAmount = false;
@@ -516,11 +516,6 @@ async function execBridge(ctx: any) {
       return;
     }
     await ctx.editMessageText(msg.msgProgress(`bridging ${from.label} → ${to.label}…`), html).catch(() => {});
-    // A stablecoin bridge carries no native value, so its size is stated for the 3% gas rule.
-    if (flow.kind && isStableBase(flow.kind) && from.hasWethBase) {
-      const px = await getEthUsd(from.wethAddress, from).catch(() => null);
-      if (px) setGasValue(from.key, Number(ethers.formatUnits(amountWei!, flow.srcDecimals ?? 6)) / px);
-    }
     const r = await executeBridgeVia(provider ?? 'relay', from, to, amountWei!, minOutWei!, { originCurrency, destinationCurrency });
     console.log(`[bridge] via ${provider ?? 'relay'} ${from.key}→${to.key} ${inLabel} → ${outLabel} tx ${r.txHashes.join(',')}`);
     await ctx.editMessageText(
