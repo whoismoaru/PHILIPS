@@ -4923,7 +4923,7 @@ bot.action(/^solsellp:(\d+)$/, async (ctx) => {
   const say = (text: string, extra: Record<string, unknown> = html) => ctx.editMessageText(text, extra);
   if (amount <= 0n) return say(msg.msgError('swap', 'That amount rounds to zero.'));
   if (config.safety.dryRun) return say(msg.msgDryRunAddDone());
-  await say(msg.msgProgress(`swapping ${pct}% of $${msg.esc(h.symbol)} to SOL…`));
+  await say(msg.msgProgress(`swapping ${pct}% of $${h.symbol} to SOL…`));
   try {
     const q = await jupiter.quote(h.mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
     const sig = await jupiter.executeSwap(q, kp);
