@@ -32,7 +32,7 @@ import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
-import { binsForRange, openPosition, quoteOpenCost } from './solana/lp.js';
+import { binsForRange, openPosition, quoteOpenCost, closePosition } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
 import * as solWallet from './solana/walletStore.js';
@@ -1674,6 +1674,9 @@ function collapseLadderRows(rows: PosRow[]): void {
  * price on a path that has none, and a made-up one beside real v3/v4 dollars would be
  * indistinguishable from a measured figure.
  */
+/** Row id (the position's first 8 characters) -> the position and its pool, for the buttons. */
+const solRowRef = new Map<string, { position: string; pool: string }>();
+
 async function solanaRows(): Promise<PosRow[]> {
   const enabled = config.solana.enabled && !chainToggle.isOff('solana');
   const rpcUrl = solRpcUrl();
@@ -1726,6 +1729,7 @@ async function solanaRows(): Promise<PosRow[]> {
     }),
   );
   const num = (v: number, dp = 4) => Number(v.toFixed(dp)).toLocaleString('en-US', { maximumFractionDigits: dp });
+  for (const p of list) solRowRef.set(p.position.slice(0, 8), { position: p.position, pool: p.pool });
   return list.map((p): PosRow => {
     const baseSym = p.base?.symbol ?? '?';
     // The mint's first four characters only when DexScreener knows no symbol: a pool too
@@ -2043,7 +2047,8 @@ async function cmdPositions(ctx: any, edit = false) {
   const idBtns = top.map((r) =>
     Markup.button.callback(
       `$${msg.posPair(r.pair, r.baseSymbol)} | #${r.id}${r.protocol ? ` (${r.protocol})` : ''}`,
-      `pos_detail_${r.id}`,
+      // A DLMM row opens its own card: its id is a base58 prefix, not an NFT number.
+      r.protocol === 'DLMM' ? `solpos:${r.id}` : `pos_detail_${r.id}`,
     ),
   );
   // One button per row, per the design.
@@ -4294,6 +4299,7 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
         openedAt: Date.now(),
         rangePct: f.rangePct ?? 10,
         bins: r.plan.bins,
+        entryUsd: f.pick.baseSymbol === 'USDC' ? 1 : ((await solUsd().catch(() => null)) ?? undefined),
       });
     } catch (e) {
       console.error('[sol-lp] opened but not recorded:', (e as Error).message);
@@ -5417,6 +5423,151 @@ async function sendOpened(
     ...(url ? [Markup.button.url('🔍 View Tx', url)] : []),
   ];
   await ctx.editMessageText(msg.msgPositionOpened({ ...o, gas }), { ...html, ...Markup.inlineKeyboard([row]) });
+}
+
+// ---------- Solana DLMM: position card and close ----------
+
+bot.action(/^solpos:(\w{8})$/, async (ctx) => {
+  const ref = solRowRef.get(ctx.match[1]);
+  if (!ref) return ctx.answerCbQuery('Expired. Open /positions again.');
+  await ctx.answerCbQuery('Loading…');
+  const row = (await solanaRows().catch(() => [] as PosRow[])).find((r) => r.id === ctx.match[1]);
+  if (!row) return ctx.reply(msg.msgAlreadyClosed(ctx.match[1]), html);
+  const pnl =
+    row.pnlUsd !== null
+      ? `${row.pnlUsd >= 0 ? '+' : '-'}${msg.usdPlain(Math.abs(row.pnlUsd))}${row.pnlPct !== null ? ` (${msg.fmtPct(row.pnlPct)})` : ''}`
+      : row.pnlPct !== null
+        ? msg.fmtPct(row.pnlPct)
+        : '—';
+  const text = [
+    `${row.inRange ? '🟢' : row.converted ? '🟡' : '🔴'} ${msg.bold(`$${msg.posPair(row.pair, row.baseSymbol)}`)} | #${row.id} (DLMM)`,
+    `├ Deposit: ${msg.esc(row.investLabel)}`,
+    `├ PnL: ${msg.esc(pnl)}`,
+    `├ Fees: ${msg.esc(row.feesLabel ?? '—')}`,
+    `├ Range: ${msg.esc(row.rangeLabel ?? '—')}`,
+    `└ Age: ${msg.esc(row.age)}`,
+    '',
+    msg.note(msg.nowWib()),
+  ].join('\n');
+  return ctx.reply(text, {
+    ...html,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('⛔ Close Position', `solcl:${ctx.match[1]}`)],
+      [Markup.button.url('🔍 Meteora', `https://app.meteora.ag/dlmm/${ref.pool}`), Markup.button.callback('📊 Positions', 'positions')],
+    ]),
+  });
+});
+
+/** In-flight closes, so a double tap cannot send a second withdrawal. */
+const solClosing = new Set<string>();
+
+/**
+ * Close straight away, no confirm card -- the same rule every EVM close follows. Withdraw
+ * and claim, swap the token side back into the base through Jupiter, then the same two
+ * cards an EVM close ends with: POSITION CLOSED, and the PnL image.
+ */
+bot.action(/^solcl:(\w{8})$/, async (ctx) => {
+  const ref = solRowRef.get(ctx.match[1]);
+  const kp = solWallet.keypair();
+  if (!ref) return ctx.answerCbQuery('Expired. Open /positions again.');
+  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  if (solClosing.has(ref.position)) return ctx.answerCbQuery('Processing…');
+  solClosing.add(ref.position);
+  await ctx.answerCbQuery('Closing…');
+  const entry = solStore.getEntry(ref.position);
+  const pair = entry ? `$${entry.symbol}/${entry.baseSymbol}` : `#${ctx.match[1]}`;
+  const prog = await ctx.reply(msg.msgProgress(`closing ${pair}…`), html);
+  try {
+    if (config.safety.dryRun) return editProgress(ctx, prog, msg.msgDryRunClose(ctx.match[1]));
+    const r = await closePosition(ref.pool, ref.position, kp);
+    const baseIsSol = r.baseMint === jupiter.WSOL;
+    const baseSym = baseIsSol ? 'SOL' : 'USDC';
+    const baseDec = baseIsSol ? 9 : 6;
+    const notes = ['Close DLMM position (withdraw, claim fees, close account)'];
+    const sigs = [...r.signatures];
+    let swapOut = 0n;
+    let leftover = false;
+    if (r.tokenOut > 0n) {
+      try {
+        const q = await jupiter.quote(r.tokenMint, r.baseMint, r.tokenOut, SOL_SLIPPAGE_BPS);
+        const sig = await jupiter.executeSwap(q, kp);
+        swapOut = BigInt(q.outAmount);
+        sigs.push(sig);
+        notes.push(`Swap: token → ${baseSym} via Jupiter`);
+      } catch (e) {
+        // The token stays in the wallet and /swap can move it; the close itself succeeded.
+        leftover = true;
+        console.error('[sol-close] swap back failed:', (e as Error).message.slice(0, 160));
+        notes.push('Swap back failed: the token is in your wallet (use /swap)');
+      }
+    }
+    const baseTotal = r.baseOut + swapOut;
+    const outLabel = `${Number((Number(baseTotal) / 10 ** baseDec).toFixed(baseIsSol ? 5 : 2))} ${baseSym}`;
+    await editProgress(
+      ctx,
+      prog,
+      msg.msgCashOut({
+        tokenId: ctx.match[1],
+        pair,
+        protocol: 'DLMM',
+        notes,
+        ethOut: outLabel,
+        txHashes: sigs,
+        baseSymbol: baseSym,
+        native: baseIsSol,
+        leftover,
+      }),
+      {
+        ...html,
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('📊 View Other Positions', 'positions')],
+          [Markup.button.url('🔍 View Tx', `https://solscan.io/tx/${sigs[0]}`)],
+        ]),
+      },
+    );
+    if (entry) {
+      // Fees in base terms: the base-side fee plus the token-side fee at the swap's rate.
+      const feeBase = r.baseFee + (r.tokenOut > 0n ? (r.tokenFee * swapOut) / r.tokenOut : 0n);
+      await sendSolProfitCard(ctx, entry, baseTotal, feeBase, baseSym, baseDec).catch((e) =>
+        console.error('[sol-close] PnL card failed:', (e as Error).message.slice(0, 120)),
+      );
+    }
+  } catch (e) {
+    console.error(`[sol-close] ${ref.position} failed:`, (e as Error).message);
+    await editProgress(ctx, prog, msg.msgError('close', (e as Error).message));
+  } finally {
+    solClosing.delete(ref.position);
+  }
+});
+
+/** The EVM PnL image, drawn from a Solana close: same maths, same card. */
+async function sendSolProfitCard(ctx: any, e: solStore.SolEntry, outRaw: bigint, feeRaw: bigint, baseSym: string, dec: number): Promise<void> {
+  const baseIn = Number(e.entryBase) / 10 ** dec;
+  const baseOut = Number(outRaw) / 10 ** dec;
+  const nowUsd = baseSym === 'USDC' ? 1 : await solUsd().catch(() => null);
+  const entryUsd = e.entryUsd ?? nowUsd;
+  const usdKnown = nowUsd !== null && entryUsd !== null && entryUsd > 0;
+  const pnl = usdKnown ? baseOut * nowUsd! - baseIn * entryUsd! : baseOut - baseIn;
+  const pnlPct = usdKnown ? (baseIn * entryUsd! > 0 ? (pnl / (baseIn * entryUsd!)) * 100 : 0) : baseIn > 0 ? ((baseOut - baseIn) / baseIn) * 100 : 0;
+  const positive = pnl === 0 ? null : pnl > 0;
+  const fmt = (n: number) => n.toLocaleString('id-ID', { maximumFractionDigits: dec >= 9 ? 5 : 2 });
+  const usd2 = (n: number) => n.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fees = Number(feeRaw) / 10 ** dec;
+  const buf = await renderProfitCard({
+    pair: pairLabel(baseSym, e.symbol),
+    positive,
+    pnlBig: usdKnown ? `${positive ? '+' : '-'}$${usd2(Math.abs(pnl))}` : `${positive ? '+' : ''}${fmt(pnl)} ${baseSym}`,
+    pnlPct: msg.fmtPct(pnlPct),
+    stats: [
+      { label: 'deposit', value: usdKnown ? `$${usd2(baseIn * entryUsd!)}` : `${fmt(baseIn)} ${baseSym}` },
+      { label: 'received', value: usdKnown ? `$${usd2(baseOut * nowUsd!)}` : `${fmt(baseOut)} ${baseSym}` },
+      { label: 'held', value: msg.fmtAge(Date.now() - e.openedAt) },
+      ...(fees > 0 ? [{ label: 'fees', value: usdKnown ? `$${usd2(fees * nowUsd!)}` : `${fmt(fees)} ${baseSym}` }] : []),
+    ],
+    footerLeft: `Solana · ${msg.dateWibFull()}`,
+    shape: pctPresets.shape(),
+  });
+  await ctx.replyWithDocument(Input.fromBuffer(buf, `philips-${e.position.slice(0, 8)}.png`));
 }
 
 /** Price impact, slippage and gas all stop at 3%. */

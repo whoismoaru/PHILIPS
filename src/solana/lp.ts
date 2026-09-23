@@ -222,3 +222,81 @@ async function addPriorityFee(tx: Transaction, pool: string): Promise<void> {
   const micro = Math.max(MIN_MICRO_LAMPORTS, (await highPriorityMicro(pool))?.micro ?? 0);
   tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: micro }));
 }
+
+export type CloseResult = {
+  signatures: string[];
+  /** What came back on each side, principal plus claimed fees, in raw units. */
+  baseOut: bigint;
+  tokenOut: bigint;
+  /** The fee share of baseOut + tokenOut, for the PnL card's fees box. */
+  baseFee: bigint;
+  tokenFee: bigint;
+  baseMint: string;
+  tokenMint: string;
+};
+
+/**
+ * Close a DLMM position: withdraw 100% from every bin, claim its fees, and close the
+ * account so its rent comes back. The amounts are read from the position BEFORE the
+ * withdrawal, not from balance deltas -- a SOL delta would fold in the returned rent and
+ * the network fee, and overstate the PnL by ~0.057 SOL.
+ *
+ * Each transaction the SDK returns is sent, re-broadcast and confirmed in order, the same
+ * way the open path does it. A transaction that expires is asked about before anything is
+ * claimed: an expiry is not an answer.
+ */
+export async function closePosition(pool: string, position: string, kp: SolKeypair): Promise<CloseResult> {
+  const conn = connection();
+  const dlmm = await DLMM.create(conn, new PublicKey(pool));
+  const user = Keypair.fromSeed(Buffer.from(kp.seed));
+  const pos = await dlmm.getPosition(new PublicKey(position));
+  const pd: any = pos.positionData;
+  const xMint = dlmm.lbPair.tokenXMint.toBase58();
+  const yMint = dlmm.lbPair.tokenYMint.toBase58();
+  const baseIsX = !!baseOfMint(xMint);
+  const big = (v: unknown) => BigInt(String(v ?? '0').split('.')[0] || '0');
+  const x = big(pd.totalXAmount), y = big(pd.totalYAmount);
+  const fx = big(pd.feeX?.toString?.() ?? pd.feeX), fy = big(pd.feeY?.toString?.() ?? pd.feeY);
+
+  const txs: Transaction[] = await dlmm.removeLiquidity({
+    user: user.publicKey,
+    position: new PublicKey(position),
+    fromBinId: pd.lowerBinId,
+    toBinId: pd.upperBinId,
+    bps: new BN(10_000),
+    shouldClaimAndClose: true,
+  });
+  const signatures: string[] = [];
+  for (const tx of txs) {
+    await addPriorityFee(tx, pool);
+    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = user.publicKey;
+    tx.sign(user);
+    const signature = encodeBase58(Uint8Array.from(tx.signature!));
+    const raw = tx.serialize();
+    await conn.sendRawTransaction(raw, { maxRetries: 3 });
+    const resend = setInterval(() => conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {}), 2_000);
+    try {
+      const r = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed').finally(() => clearInterval(resend));
+      if (r.value.err) throw new Error(`the close failed on-chain (${signature})`);
+    } catch (e) {
+      const landed = await landedStatus(conn, signature);
+      if (landed === 'failed') throw new Error(`the close failed on-chain (${signature})`);
+      if (landed === 'absent') {
+        console.error(`[sol-lp] close did not land: ${signature} — ${(e as Error).message}`);
+        throw new Error(`the close never landed (${signature}); the position is untouched, so it is safe to try again`);
+      }
+    }
+    signatures.push(signature);
+  }
+  return {
+    signatures,
+    baseOut: baseIsX ? x + fx : y + fy,
+    tokenOut: baseIsX ? y + fy : x + fx,
+    baseFee: baseIsX ? fx : fy,
+    tokenFee: baseIsX ? fy : fx,
+    baseMint: baseIsX ? xMint : yMint,
+    tokenMint: baseIsX ? yMint : xMint,
+  };
+}

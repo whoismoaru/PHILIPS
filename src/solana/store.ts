@@ -28,6 +28,8 @@ export type SolEntry = {
   /** The range as opened, for the card. */
   rangePct: number;
   bins: number;
+  /** Dollars per base unit when it opened (SOL price, or 1 for USDC), for a dollar PnL. */
+  entryUsd?: number;
 };
 
 let cache: Record<string, SolEntry> | null = null;

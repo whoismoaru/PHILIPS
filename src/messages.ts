@@ -2395,7 +2395,7 @@ export function msgCashOut(opts: {
   native?: boolean; // the proceeds were unwrapped into the chain's native asset, not a stablecoin
   leftover?: boolean; // token dust is still left unswept
   pair?: string; // "$富贵/USDG": the same label the position card uses
-  protocol?: 'V3' | 'V4';
+  protocol?: 'V3' | 'V4' | 'DLMM';
 }): string {
   const ladder = (opts.legs ?? 0) > 1;
   const out = [
