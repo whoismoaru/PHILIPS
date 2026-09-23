@@ -3,6 +3,9 @@ import { Markup } from 'telegraf';
 import { bot, html } from '../core.js';
 import { CHAINS, type ChainCtx } from '../chains.js';
 import { getEthUsd } from '../screening.js';
+import { config } from '../config.js';
+import * as chainToggle from '../chainToggle.js';
+import { solUsd } from '../solana/holdings.js';
 import { bold, esc, italic, nowWib } from '../messages.js';
 
 /**
@@ -169,6 +172,72 @@ async function costsOf(cc: ChainCtx): Promise<{ label: string; gwei: string; nat
 
 type Chain = NonNullable<Awaited<ReturnType<typeof costsOf>>>;
 
+/**
+ * Solana, from the official public RPC (api.mainnet-beta.solana.com). A fee there is 5,000
+ * lamports per signature plus a priority fee: micro-lamports per compute unit times the
+ * unit LIMIT the transaction sets. The price is the 75th percentile paid over the last 150 slots
+ * on a busy pool (see BUSY_ACCOUNT), so the row says what a normal transaction costs right now.
+ *
+ * Units per operation are the limits this bot's own transactions carry: Jupiter's dynamic
+ * limit on a swap, the ~1.4M the Meteora SDK sets on an LP open (read off its logs, 23 Sep
+ * 2026, which also signs with the new position's key), a smaller close. Approve does not
+ * exist on Solana, so that row is a plain token transfer.
+ */
+const SOL_OPS: Record<string, { cu: number; sigs: number }> = {
+  Swap: { cu: 300_000, sigs: 1 },
+  'Open LP': { cu: 1_400_000, sigs: 2 },
+  'Close LP': { cu: 400_000, sigs: 1 },
+  Send: { cu: 0, sigs: 1 },
+  Approve: { cu: 0, sigs: 1 },
+};
+const SOL_OFFICIAL_RPC = 'https://api.mainnet-beta.solana.com';
+/**
+ * Asked with no account, the RPC returns each slot's MINIMUM fee, which is almost always 0
+ * and would claim a Solana trade costs nothing extra. A busy writable account (Raydium's
+ * SOL/USDC pool) gives what traders competing for the same state actually pay; the 75th
+ * percentile is what this bot bids too.
+ */
+const BUSY_ACCOUNT = '58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2';
+/** The LP path never bids below this (solana/lp.ts MIN_MICRO_LAMPORTS). */
+const LP_FLOOR_MICRO = 50_000;
+
+async function solPriorityMicro(url: string): Promise<number | null> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getRecentPrioritizationFees', params: [[BUSY_ACCOUNT]] }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    const fees = ((await r.json())?.result ?? []).map((x: any) => Number(x.prioritizationFee)).filter((f: number) => f > 0).sort((a: number, b: number) => a - b);
+    return fees.length ? fees[Math.floor(fees.length * 0.75)] : 0;
+  } catch {
+    return null;
+  }
+}
+
+async function solanaCosts(): Promise<Chain | null> {
+  let official = true;
+  let micro = await solPriorityMicro(SOL_OFFICIAL_RPC);
+  if (micro === null && config.solana.rpcUrl) {
+    micro = await solPriorityMicro(config.solana.rpcUrl);
+    official = false;
+  }
+  if (micro === null) return null;
+  const px = await solUsd();
+  const rows = new Map<string, Row>();
+  for (const [label, o] of Object.entries(SOL_OPS)) {
+    const m = label.endsWith('LP') ? Math.max(micro, LP_FLOOR_MICRO) : micro;
+    const native = (o.sigs * 5_000 + (m * o.cu) / 1e6) / 1e9;
+    rows.set(label, { label, usd: px === null ? null : native * px, native, sym: 'SOL' });
+  }
+  return { label: 'Solana', gwei: `${micro} µlamports/CU`, nativeUsd: px, official, rows };
+}
+
 /** One section: chains ranked cheapest first for this operation.
  *  A chain with no native price is left OUT of the ranking — ordering it would
  *  need the very USD figure we lack — and listed below with its cost in native
@@ -198,6 +267,11 @@ export async function gasCard(): Promise<string> {
   const rate = await usdToIdr();
   const all = await Promise.all(Object.values(CHAINS).map(async (cc) => [cc.label, await costsOf(cc)] as const));
   const chains = all.filter((x): x is readonly [string, Chain] => x[1] !== null).map((x) => x[1]);
+  if (config.solana.enabled && !chainToggle.isOff('solana')) {
+    const sol = await solanaCosts();
+    if (sol) chains.push(sol);
+    else all.push(['Solana', null]);
+  }
   const down = all.filter((x) => x[1] === null).map((x) => x[0]);
 
   if (!chains.length)
