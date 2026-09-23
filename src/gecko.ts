@@ -72,7 +72,7 @@ const feeOf = (name: string): number | null => {
  * rest are listed without one (fine for a card, filtered out by /add). Null when
  * GeckoTerminal did not answer, so the caller knows to fall back.
  */
-export async function geckoPools(cc: ChainCtx, token: string, opts: { keys?: boolean } = {}): Promise<TokenPool[] | null> {
+export async function geckoPools(cc: ChainCtx, token: string, opts: { keys?: boolean; maxKeys?: number } = {}): Promise<TokenPool[] | null> {
   const net = NET[cc.key];
   if (!net) return null;
   const j = await get(`/networks/${net}/tokens/${token.toLowerCase()}/pools?page=1&include=dex`);
@@ -128,7 +128,7 @@ export async function geckoPools(cc: ChainCtx, token: string, opts: { keys?: boo
   if (opts.keys === false) return out;
   // poolKeys for the deepest v4 pools only: the rest would never be picked, and each first
   // resolution costs a Krystal call.
-  const v4 = out.filter((p) => p.protocol === 'v4').slice(0, MAX_V4_KEYS) as Array<TokenPool & { _poolId: string; _tokens: string[] }>;
+  const v4 = out.filter((p) => p.protocol === 'v4' && p.tvlUsd >= 500).slice(0, opts.maxKeys ?? MAX_V4_KEYS) as Array<TokenPool & { _poolId: string; _tokens: string[] }>;
   await Promise.all(
     v4.map(async (p) => {
       const pk = await v4KeyFor(cc, p._poolId, p._tokens[0], p._tokens[1]).catch(() => null);

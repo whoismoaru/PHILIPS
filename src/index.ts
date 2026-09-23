@@ -3728,7 +3728,8 @@ async function renderTokenHub(
   // pools -- so a rate limit costs a source, never the card. Pools under $500 are dust.
   const [gs, gPools] = await Promise.all([
     gmgnTokenStats(ca, cc.key).catch(() => null),
-    geckoPools(cc, ca, { keys: false }).catch(() => null),
+    // Keys for the three shown pools only: their tick spacing is the Bin figure.
+    geckoPools(cc, ca, { maxKeys: 3 }).catch(() => null),
   ]);
   const st = gs ?? (await geckoTokenStats(cc, ca).catch(() => null));
   const pools = (gPools ?? (await krystal.krystalPools(cc, ca).catch(() => [] as explore.TokenPool[])))
@@ -3748,8 +3749,9 @@ async function renderTokenHub(
     ca,
     rows,
     chainLabel: cc.label,
-    poolTitle: 'Pools',
+    poolTitle: `💦 ${msg.bold('AVAILABLE POOLS')} :`,
     poolDetail: (p) => `(${p.binStep}, fee ${p.fee})`,
+    poolLine: (p) => `Tvl: ${p.tvl} | Vol: ${p.vol} | Apr: ${p.feeTvl} | Bin: ${p.bin ?? '—'}`,
     pools: shown.map((p) => ({
       pair: `$${p.otherSymbol}/$${p.baseSymbol}`,
       binStep: p.protocol,
@@ -3758,6 +3760,7 @@ async function renderTokenHub(
       // The gateway reports 0 for v4 volume it does not track; 0 would read as a dead pool.
       vol: p.vol24hUsd ? msg.usdCompact(p.vol24hUsd) : '—',
       feeTvl: p.aprPct == null ? '—' : aprLabel(p.aprPct),
+      bin: binPctOf(cc, p),
     })),
     feeLabel: 'APR',
     otherVenueCount: 0,
@@ -4691,6 +4694,18 @@ function buyAmountPresets(unit: string): number[] {
   if (u === 'BNB') return [0.01, 0.025, 0.05, 0.1];
   if (u === 'HYPE') return [0.25, 0.5, 1, 2];
   return [5, 10, 25, 50]; // stablecoins, and Arc's USDC gas
+}
+
+/**
+ * The price step between two usable ticks, as a percentage: Uniswap's analogue of a DLMM
+ * bin. v4 reads it off the resolved poolKey; v3 from the venue's fixed fee -> spacing table.
+ * Unknown (a v4 pool whose key could not be resolved) is null, shown as a dash.
+ */
+function binPctOf(cc: ChainCtx, p: explore.TokenPool): string | undefined {
+  const ts = p.poolKey?.tickSpacing ?? (p.protocol === 'v3' ? venueCtx(cc, p.venue).tickSpacing[p.fee] : undefined);
+  if (!ts) return undefined;
+  const pct = (Math.pow(1.0001, ts) - 1) * 100;
+  return `${Number(pct.toPrecision(pct < 1 ? 2 : 3))}%`;
 }
 
 /** A fixed buy amount, typed as the button shows it ("0.01"), in the flow's paying asset. */
