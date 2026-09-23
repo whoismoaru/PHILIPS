@@ -3719,29 +3719,15 @@ async function renderTokenHub(
   ]);
   const pools = (kPools.length ? kPools : gPools).filter((p) => p.tvlUsd >= 500).sort((a, b) => b.tvlUsd - a.tvlUsd);
   const shown = pools.slice(0, 3);
-  // Defined below with the price sources; hoisted here because the verdict depends on it.
-  const poolTvlAll = pools.reduce((a, p) => a + p.tvlUsd, 0);
-  const dexReal = sc?.liquidityUsd != null && sc.liquidityUsd >= poolTvlAll * 0.1;
-  // Flags read off DexScreener's pair (age, trades, liquidity) say nothing when that pair
-  // is not the market: $GPU was flagged "almost no trades" and "very new" off a dust pool.
-  const MARKET_FLAG = /liquidity|very new|no trades|Almost no trades|No market|honeypot/i;
-  const flagsUsed = (sc?.flags ?? []).filter((f) => f.level !== 'INFO' && (dexReal || !MARKET_FLAG.test(f.msg)));
-  const verdict = !sc
-    ? 'not readable'
-    : flagsUsed.some((f) => f.level === 'BAHAYA')
-      ? '⛔ DANGER'
-      : flagsUsed.length
-        ? '⚠️ CAUTION'
-        : '✅ SAFE';
-  const warn = flagsUsed.length;
+  const poolTvl = pools.reduce((a, p) => a + p.tvlUsd, 0);
+  // DexScreener's pair only counts when it is the market, not a dust pool beside it.
+  const dexOk = sc?.liquidityUsd != null && sc.liquidityUsd >= poolTvl * 0.1;
   // Price and mcap from GMGN first, DexScreener only as the fallback (the house rule). And
   // DexScreener's pair figures only count when that pair is real: on 23 Sep 2026 its only
   // $GPU pair was a $0.03 v3 dust pool while $29K sat in v4, and the card printed a price
   // of $4.5e26. A pair with no liquidity reading, or one far shallower than the pools we
   // can see, is not the market.
   const gm = await gmgnPrice(ca, cc.key).catch(() => null);
-  const poolTvl = poolTvlAll;
-  const dexOk = dexReal;
   const px = gm?.priceUsd ?? (dexOk && sc?.priceUsd ? Number(sc.priceUsd) : null);
   const mcap = gm?.mcapUsd ?? (dexOk ? (sc?.marketCapUsd ?? null) : null);
   const liq = dexOk ? sc!.liquidityUsd! : poolTvl > 0 ? poolTvl : null;
@@ -3758,9 +3744,6 @@ async function renderTokenHub(
           : '—',
     ],
     ['Age', dexOk && sc?.pairAgeHours != null ? msg.fmtAge(sc.pairAgeHours * 3_600_000) : '—'],
-    ['Audit', `${verdict}${warn ? ` (${warn} flag${warn === 1 ? '' : 's'})` : ''}`],
-    ...(bal > 0n ? [['Holding', `${msg.cleanUnits(bal, dec)} ${sym}`] as [string, string]] : []),
-    ...(v3.length + v4.length ? [['Your LP', `${v3.length + v4.length} open`] as [string, string]] : []),
   ];
   const text = msg.msgSolToken({
     symbol: sym,
@@ -3783,7 +3766,8 @@ async function renderTokenHub(
     otherVenueCount: 0,
     offBaseCount: 0,
     chainReadSkipped: false,
-    morePools: Math.max(0, pools.length - shown.length),
+    // Top 3 by TVL, no "more pools" note: the owner's design (23 Sep 2026).
+    morePools: 0,
   });
 
   // EXIT buttons appear only when there is something to exit: Close LP when a position
