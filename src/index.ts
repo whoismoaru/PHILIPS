@@ -2308,7 +2308,9 @@ async function renderPoolStep(ctx: any, flow: AddFlow, edit: boolean) {
 async function renderRangeStep(ctx: any, flow: AddFlow, edit: boolean) {
   // Always downwards: PHILIPS deposits the base and buys the dip. The upward variant
   // belonged to the token side, which no longer exists.
-  const rows = RANGE_OPTIONS.map((o) => [Markup.button.callback(`📉 -${o.pct}% ${o.label}`, `rng:${o.pct}`)]);
+  // One row, left to right (the owner's layout). Five buttons fit only as bare numbers,
+  // so the Tightest..Widest names are dropped from the buttons.
+  const rows = [RANGE_OPTIONS.map((o) => Markup.button.callback(`-${o.pct}%`, `rng:${o.pct}`))];
   rows.push([Markup.button.callback('⬅️ Back', 'back:pool'), Markup.button.callback('❌ Cancel', 'cancel')]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   const text = msg.msgRangeStep();
