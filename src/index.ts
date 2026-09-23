@@ -5595,18 +5595,28 @@ async function sendSolProfitCard(ctx: any, e: solStore.SolEntry, outRaw: bigint,
 /** Price impact, slippage and gas all stop at 3%. */
 const MAX_IMPACT_PCT = TRADE_LIMIT_PCT;
 
-/** Loss from price impact and fees, in %: 100 * (1 - out value / in value). Null when unpriced. */
-async function swapImpactPct(cc: ChainCtx, f: TSwapFlow, inWei: bigint, outWei: bigint): Promise<number | null> {
-  const base = f.base!;
-  if (!f.token || f.tokenDec === undefined) return null;
-  const tokenPx = (await explore.tokenUsdPrices(cc, [f.token]))?.get(f.token.toLowerCase()) ?? null;
-  const basePx = isStableBase(base.kind) ? 1 : await getEthUsd(cc.wethAddress, cc).catch(() => null);
-  if (!tokenPx || !basePx) return null;
-  const baseUsd = (w: bigint) => Number(ethers.formatUnits(w, base.decimals)) * basePx;
-  const tokUsd = (w: bigint) => Number(ethers.formatUnits(w, f.tokenDec!)) * tokenPx;
-  const inUsd = f.buy ? baseUsd(inWei) : tokUsd(inWei);
-  const outUsd = f.buy ? tokUsd(outWei) : baseUsd(outWei);
-  return inUsd > 0 ? (1 - outUsd / inUsd) * 100 : null;
+/**
+ * Price impact alone, in %: how much worse this order's rate is than a tenth-sized order's on the
+ * same route. Both quotes carry the same pool fee and the same pricing, so those cancel and
+ * only the size effect is left.
+ *
+ * It used to compare the fill against a market price feed, which folded the pool fee in:
+ * on 24 Sep 2026 ten buys in a row were refused at exactly "3.1%", whatever the amount --
+ * a 3% fee pool can never pass a 3% limit measured that way.
+ */
+async function swapImpactPct(cc: ChainCtx, fromAddr: string, toAddr: string, inWei: bigint, outWei: bigint): Promise<number | null> {
+  // A TENTH, not a thousandth: aggregator routes carry fixed costs that make a dust-sized
+  // quote read worse per unit than the real one (measured -15% at 1/1000 on LI.FI), while at
+  // 1/10 the figure tracks size as it should (0.15% at 0.05 BNB, 2.33% at 1 BNB on $GPU).
+  const small = inWei / 10n;
+  if (small <= 0n || outWei <= 0n) return null;
+  const ref = await previewSwapOut(fromAddr, toAddr, small, cc).catch(() => null);
+  if (!ref || ref.out <= 0n) return null;
+  // Rates as out-per-in; the small order is the reference, scaled up by the same 10x.
+  const refOut = ref.out * 10n;
+  if (refOut <= 0n) return null;
+  const pct = (Number(refOut - outWei) / Number(refOut)) * 100;
+  return Math.max(0, pct);
 }
 
 async function tswapQuoteConfirm(
@@ -5650,11 +5660,11 @@ async function tswapQuoteConfirm(
     tswapFlows.delete(ctx.from!.id);
     return editProgress(ctx, prog, msg.msgError('swap', 'No route (thin pool/liquidity). Try a different amount or token.'));
   }
-  // Price impact, capped at the same 3% as gas and slippage. Measured as what comes out
-  // against what goes in, both at market price; a token with no readable price, or a
-  // native side without a price, skips the check rather than blocking on a guess.
+  // Price impact, capped at 3%: this order's rate against a tiny order's on the same route,
+  // so the pool fee is not counted as impact. A reference quote that cannot be had skips
+  // the check rather than blocking on a guess.
   {
-    const impact = await swapImpactPct(cc, tflow, amountWei, q.out).catch(() => null);
+    const impact = await swapImpactPct(cc, fromAddr, toAddr, amountWei, q.out).catch(() => null);
     if (impact !== null && impact > MAX_IMPACT_PCT) {
       tswapFlows.delete(ctx.from!.id);
       return editProgress(
