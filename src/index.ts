@@ -3634,11 +3634,14 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   // The amount can be typed in chat (flow.awaitingAmount) OR picked as a percentage.
   // Percentages of the balance, in line with /sell and the /add wizard, which already have
   // percentage buttons. "Custom %" covers anything outside the presets.
-  const rows: any[] = [];
-  rows.push(...pctPresets.chunkButtons(pctPresets.get('buy').map((p) => Markup.button.callback(`${p}%`, `buypct:${p}`))));
+  const unit = base.wrappable ? cc.nativeSymbol : base.symbol;
   const multiBase = basesFor(cc).length > 1;
   const backSize = multiBase ? 'buyback:base' : flow.fromHub ? 'hub:back' : 'buyback:safety';
-  rows.push([Markup.button.callback('⬅️ Back', backSize), Markup.button.callback('❌ Cancel', 'cancel')]);
+  const rows: any[] = [
+    buyAmountPresets(unit).map((a) => Markup.button.callback(`${a} ${unit}`, `buyamt:${a}`)),
+    pctPresets.get('buy').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `buypct:${p}`)),
+    [Markup.button.callback('⬅️ Back', backSize)],
+  ];
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
   const text = msg.msgBuyStart({
     symbol: flow.tokenSym ?? '?',
@@ -4256,10 +4259,11 @@ bot.action(/^solbuy:(.+)$/, async (ctx) => {
   const view = await solTokenView(mint).catch(() => null);
   const symbol = view?.facts?.symbol ?? '?';
   solBuyFlows.set(ctx.from!.id, { mint, symbol, decimals: await mintDecimals(mint), startedAt: Date.now() });
-  const rows = pctPresets.chunkButtons(
-    pctPresets.get('buy').map((p) => Markup.button.callback(`${p}%`, `solamt:${p}`)),
-  );
-  rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  const rows = [
+    buyAmountPresets('SOL').map((a) => Markup.button.callback(`${a} SOL`, `solbuya:${Math.round(a * 1e9)}`)),
+    pctPresets.get('buy').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `solamt:${p}`)),
+    [Markup.button.callback('⬅️ Back', `solref:${mint}`)],
+  ];
   const px = await solUsd().catch(() => null);
   const netSol = Number(spendable) / jupiter.LAMPORTS;
   return ctx.reply(
@@ -4408,6 +4412,19 @@ bot.action(/^solamt:(\d+)$/, async (ctx) => {
   // Integer arithmetic on lamports throughout: a float here rounds a 9-decimal amount and
   // the swap asks for an amount the wallet does not have.
   const lamports = ((await solSpendable(kp.publicKey)) * BigInt(pct)) / 100n;
+  return solBuyQuoteCard(ctx, f, lamports, true, kp);
+});
+
+bot.action(/^solbuya:(\d+)$/, async (ctx) => {
+  const f = solBuyFlows.get(ctx.from!.id);
+  if (!f) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  const kp = solWallet.keypair();
+  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  await ctx.answerCbQuery('Quoting…');
+  const lamports = BigInt((ctx.match as RegExpMatchArray)[1]);
+  const spendable = await solSpendable(kp.publicKey);
+  if (lamports > spendable)
+    return ctx.reply(msg.msgError('buy', `Only ${fmtSol(spendable)} SOL is spendable (${fmtSol(SOL_RESERVE_LAMPORTS)} is kept for fees).`), html);
   return solBuyQuoteCard(ctx, f, lamports, true, kp);
 });
 
@@ -4584,6 +4601,34 @@ async function buyFromPct(ctx: any, flow: TSwapFlow, pct: number): Promise<unkno
   const label = `${Number(ethers.formatUnits(amountWei, base.decimals)).toLocaleString('id-ID', { maximumFractionDigits: base.decimals >= 18 ? 6 : 2 })} ${sym} (${pct}%)`;
   return tswapQuoteConfirm(ctx, flow, cc, base.address, flow.token!, amountWei, label);
 }
+
+/**
+ * Fixed amounts for the buy card, four per spending asset, sized to roughly $5-$100 so no
+ * row is useless on a chain whose coin is worth 100x another's.
+ */
+function buyAmountPresets(unit: string): number[] {
+  const u = unit.toUpperCase();
+  if (u === 'SOL') return [0.05, 0.1, 0.25, 0.5];
+  if (u === 'ETH') return [0.0025, 0.005, 0.01, 0.025];
+  if (u === 'BNB') return [0.01, 0.025, 0.05, 0.1];
+  if (u === 'HYPE') return [0.25, 0.5, 1, 2];
+  return [5, 10, 25, 50]; // stablecoins, and Arc's USDC gas
+}
+
+bot.action(/^buyamt:([\d.]+)$/, async (ctx) => {
+  const flow = tswapFlows.get(ctx.from!.id);
+  if (!flow?.base || !flow.token) return ctx.answerCbQuery('Expired. Start again with /buy.');
+  await ctx.answerCbQuery();
+  const cc = CHAINS[flow.chainKey]!;
+  const base = flow.base;
+  const sym = base.wrappable ? cc.nativeSymbol : base.symbol;
+  const amountWei = ethers.parseUnits(ctx.match[1], base.decimals);
+  const usable = await buyUsableWei(flow).catch(() => 0n);
+  if (amountWei > usable) {
+    return ctx.reply(msg.msgError('buy', `Only ${ethers.formatUnits(usable, base.decimals)} ${sym} is spendable after the gas reserve.`), html);
+  }
+  return tswapQuoteConfirm(ctx, flow, cc, base.address, flow.token, amountWei, `${ctx.match[1]} ${sym}`);
+});
 
 bot.action('buyback:size', async (ctx) => {
   const flow = tswapFlows.get(ctx.from!.id);
