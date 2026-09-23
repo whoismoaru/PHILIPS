@@ -26,7 +26,7 @@ import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
 import { solHoldings, solUsd, type SolHolding } from './solana/holdings.js';
 import * as chainToggle from './chainToggle.js';
-import { rpcUrl as solRpcUrl } from './solana/rpc.js';
+import { rpcUrl as solRpcUrl, solRpc } from './solana/rpc.js';
 import { TRADE_LIMIT_PCT } from './tradeLimit.js';
 import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
@@ -3139,8 +3139,11 @@ async function execAdd(ctx: any) {
       // is what makes them recoverable.
       const idBefore = await v4NextTokenId(cc).catch(() => null);
       let ids: string[];
+      let ladderTx: string | null = null;
       try {
-        ids = (await openLadderV4(cc, pk, selected.baseIsCurrency0!, legs, { dryRun: false })).tokenIds;
+        const lr = await openLadderV4(cc, pk, selected.baseIsCurrency0!, legs, { dryRun: false });
+        ids = lr.tokenIds;
+        ladderTx = lr.txHash ?? null;
       } catch (e) {
         // A failure is not the same as nothing happening. Recover whatever was minted first, then rethrow.
         const stray = await adoptStrayV4(cc, idBefore, legs.length);
@@ -3179,7 +3182,14 @@ async function execAdd(ctx: any) {
         });
       }
       invalidateV4ListCache(); // a new position means /positions has to be fresh
-      await ctx.editMessageText(msg.msgLadderOpened(r.tokenIds.length, legs.length, `$${msg.posPair(`${selected.baseSymbol} / ${selected.otherSymbol}`, selected.baseSymbol)}`, ethAmount), html);
+      await sendOpened(ctx, cc, {
+        pair: `$${msg.posPair(`${selected.baseSymbol} / ${selected.otherSymbol}`, selected.baseSymbol)}`,
+        tokenId: r.tokenIds[0],
+        protocol: 'V4',
+        size: `${ethAmount} ${base.symbol}`,
+        txHash: ladderTx,
+        legs: r.tokenIds.length,
+      });
       // The first leg's card already summarises the WHOLE ladder (see ladderSum in
       // buildV4Card), so one card is enough — same as the v3 ladder path.
     } catch (err) {
@@ -3238,17 +3248,13 @@ async function execAdd(ctx: any) {
         });
       }
       invalidateV4ListCache();
-      await ctx.editMessageText(
-        msg.msgV4Added({
-          tokenId: r.tokenId,
-          sizeEth: `${ethAmount} ${base.symbol}`,
-          rangeLabel: `single-sided ${base.symbol} · range ~${rangePct}%`,
-          txHash: r.txHash,
-          pair: `$${msg.posPair(`${base.symbol} / ${selected.otherSymbol}`, base.symbol)}`,
-          dryRun: false,
-        }),
-        html,
-      );
+      await sendOpened(ctx, cc, {
+        pair: `$${msg.posPair(`${base.symbol} / ${selected.otherSymbol}`, base.symbol)}`,
+        tokenId: String(r.tokenId),
+        protocol: 'V4',
+        size: `${ethAmount} ${base.symbol}`,
+        txHash: r.txHash ?? null,
+      });
     } catch (err) {
       await recoverStrayWeth(getChain(chain), 'add v4').catch(() => {});
       await ctx.reply(msg.msgError('add v4', err), html);
@@ -3282,7 +3288,8 @@ async function execAdd(ctx: any) {
       await ensureGasForLegs(ccAdd, usable.length, base.wrappable ? usable.reduce((s, lp) => s + lp.baseAmountWei, 0n) : 0n);
       await ctx.editMessageText(msg.msgProgress(`opening ${usable.length}-leg ladder (batched)…`), html);
       // BATCH multicall: every leg in ~1 atomic tx per chunk (closing the N-tx weakness).
-      const { tokenIds } = await executeAddBatch(usable, flow.token, flow.fee, ccAdd);
+      const { tokenIds, notes: batchNotes } = await executeAddBatch(usable, flow.token, flow.fee, ccAdd);
+      const batchTx = batchNotes.map((n) => n.match(/\(tx (0x[0-9a-fA-F]+)\)/)?.[1]).find(Boolean) ?? null;
       for (let i = 0; i < tokenIds.length; i++) {
         const lp = usable[i];
         store.add({
@@ -3310,7 +3317,14 @@ async function execAdd(ctx: any) {
         });
         opened.push(tokenIds[i]);
       }
-      await ctx.editMessageText(msg.msgLadderOpened(opened.length, usable.length, `$${msg.posPair(`${legPlans[0].baseSymbol} / ${legPlans[0].otherSymbol}`, legPlans[0].baseSymbol)}`, flow.ethAmount), html);
+      await sendOpened(ctx, ccAdd, {
+        pair: `$${msg.posPair(`${legPlans[0].baseSymbol} / ${legPlans[0].otherSymbol}`, legPlans[0].baseSymbol)}`,
+        tokenId: opened[0],
+        protocol: 'V3',
+        size: `${flow.ethAmount} ${base.symbol}`,
+        txHash: batchTx,
+        legs: opened.length,
+      });
     } catch (err) {
       console.error('[open ladder] failed:', (err as Error).message.slice(0, 200));
       await recoverStrayWeth(getChain(flow.chain), 'add ladder').catch(() => {});
@@ -3394,10 +3408,15 @@ async function execAdd(ctx: any) {
       Number(plan.priceLower) <= Number(plan.priceUpper)
         ? [plan.priceLower, plan.priceUpper]
         : [plan.priceUpper, plan.priceLower];
-    await ctx.editMessageText(
-      msg.msgLpOpened(tokenId, notes, `$${msg.posPair(`${plan.baseSymbol} / ${plan.otherSymbol}`, plan.baseSymbol)}`, `${pLo} — ${pHi}`),
-      html,
-    );
+    void pLo;
+    void pHi;
+    await sendOpened(ctx, wizardCtx(flow), {
+      pair: `$${msg.posPair(`${plan.baseSymbol} / ${plan.otherSymbol}`, plan.baseSymbol)}`,
+      tokenId,
+      protocol: 'V3',
+      size: `${flow.ethAmount} ${plan.baseSymbol}`,
+      txHash: notes.map((n) => n.match(/\(tx (0x[0-9a-fA-F]+)\)/)?.[1]).find(Boolean) ?? null,
+    });
     // No position card after the open: the opened card says it, /positions shows the rest.
   } catch (err) {
     // An add that failed after wrapping leaves WETH behind; it is tidied up here so no
@@ -4279,25 +4298,29 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
     } catch (e) {
       console.error('[sol-lp] opened but not recorded:', (e as Error).message);
     }
+    // The fee the network actually charged, read off the landed transaction.
+    const tx = await solRpc<any>('getTransaction', [r.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]).catch(() => null);
+    const feeLamports = Number(tx?.meta?.fee ?? 0);
+    const px = await solUsd().catch(() => null);
+    const gas = feeLamports
+      ? `${px ? `$${((feeLamports / 1e9) * px).toFixed(4)} ` : ''}(${Number((feeLamports / 1e9).toPrecision(3))} SOL)`
+      : null;
     return say(
-      msg.msgSolLpOpened({
+      msg.msgPositionOpened({
         pair: f.pick.pair,
-        amountSol: fmtSol(lamports),
-        // Signed by the side the deposit actually sits on, read back from the PLAN rather
-        // than from the request: a range wider than 69 bins is trimmed, and the card must
-        // say the range that was opened, not the one that was asked for.
-        rangeLabel: `${r.plan.baseIsX ? '+' : '-'}${rangeOpenedPct(r.plan.bins, f.pick.binStep)}%`,
-        baseSymbol: f.pick.baseSymbol,
-        sig: r.signature,
+        tokenId: `${r.position.slice(0, 4)}…${r.position.slice(-4)}`,
+        protocol: 'DLMM',
+        size: `${fmtSol(lamports)} SOL`,
+        gas,
+        txHash: r.signature,
       }),
       {
         ...html,
         ...Markup.inlineKeyboard([
           [
-            Markup.button.url('🔍 Meteora', `https://app.meteora.ag/dlmm/${f.pick.pool}`),
-            Markup.button.callback('📊 Positions', 'positions'),
+            Markup.button.callback('📊 View Position', 'positions'),
+            Markup.button.url('🔍 View Tx', `https://solscan.io/tx/${r.signature}`),
           ],
-          [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
         ]),
       },
     );
@@ -5354,6 +5377,47 @@ bot.action('sellback:amount', async (ctx) => {
 });
 
 /** Quote the best route and build the confirmation card. Shared by the typed and preset paths. */
+/** Block explorers, by chain: the tx link on the opened card. */
+const EXPLORER_TX: Record<string, string> = {
+  robinhood: 'https://robinhoodchain.blockscout.com/tx/',
+  bsc: 'https://bscscan.com/tx/',
+  base: 'https://basescan.org/tx/',
+  hyperevm: 'https://hyperevmscan.io/tx/',
+  arc: 'https://arc-scan.org/tx/',
+  ink: 'https://explorer.inkonchain.com/tx/',
+};
+
+/** Gas actually paid by these transactions: "$0.02 (0.00003 BNB)", or null when unreadable. */
+async function gasPaid(cc: ChainCtx, hashes: string[]): Promise<string | null> {
+  try {
+    const rcs = await Promise.all(hashes.map((h) => cc.provider.getTransactionReceipt(h)));
+    let wei = 0n;
+    for (const rc of rcs) if (rc) wei += rc.gasUsed * (rc.gasPrice ?? 0n);
+    if (wei === 0n) return null;
+    const nat = Number(ethers.formatEther(wei));
+    const px = cc.hasWethBase ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1;
+    const natLabel = `${Number(nat.toPrecision(3))} ${cc.nativeSymbol}`;
+    return px ? `$${(nat * px).toFixed(nat * px < 0.01 ? 4 : 2)} (${natLabel})` : natLabel;
+  } catch {
+    return null;
+  }
+}
+
+/** The opened card, with its two buttons: the position itself, and the tx on the explorer. */
+async function sendOpened(
+  ctx: any,
+  cc: ChainCtx,
+  o: { pair: string; tokenId: string; protocol: 'V3' | 'V4'; size: string; txHash: string | null; legs?: number },
+): Promise<void> {
+  const gas = o.txHash ? await gasPaid(cc, [o.txHash]) : null;
+  const url = o.txHash && EXPLORER_TX[cc.key] ? `${EXPLORER_TX[cc.key]}${o.txHash}` : null;
+  const row = [
+    Markup.button.callback('📊 View Position', `pos_detail_${o.tokenId}`),
+    ...(url ? [Markup.button.url('🔍 View Tx', url)] : []),
+  ];
+  await ctx.editMessageText(msg.msgPositionOpened({ ...o, gas }), { ...html, ...Markup.inlineKeyboard([row]) });
+}
+
 /** Price impact, slippage and gas all stop at 3%. */
 const MAX_IMPACT_PCT = TRADE_LIMIT_PCT;
 

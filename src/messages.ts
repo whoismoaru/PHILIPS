@@ -1779,6 +1779,21 @@ export function msgLegStep(tokenSym: string, rangePct: number): string {
   ].join('\n');
 }
 
+/** Every "position now exists" card, whichever protocol or shape minted it. */
+export function msgPositionOpened(o: { pair: string; tokenId: string; protocol: 'V3' | 'V4' | 'DLMM'; size: string; gas: string | null; txHash: string | null; legs?: number }): string {
+  return [
+    `\u2705 ${bold('POSITION OPENED')}`,
+    '',
+    `» ${bold(o.pair)} | #${esc(o.tokenId)} (${o.protocol})${o.legs && o.legs > 1 ? ` · ${o.legs} legs` : ''}`,
+    `» Size: ${bold(o.size)}`,
+    `» Gas: ${bold(o.gas ?? '—')}`,
+    // The FULL hash: a shortened one cannot be pasted into an explorer.
+    ...(o.txHash ? ['', 'tx :', code(o.txHash)] : []),
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
+
 export function msgLadderOpened(opened: number, total: number, pair: string, deposit: string, txHash?: string | null): string {
   return [
     `\u2705 ${bold('POSITION OPENED')} \u00B7 ladder ${opened}/${total} legs`,
