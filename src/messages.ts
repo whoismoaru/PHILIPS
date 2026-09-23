@@ -964,7 +964,7 @@ export function msgBuyPresetInvalid(): string {
   return [
     `⚠️ ${bold('Preset not saved')}`,
     '',
-    'Up to 4 amounts, then &, then up to 4 percentages (0.01–100).',
+    'Exactly 4 amounts, then &, then exactly 4 percentages (0.01–100), no repeats.',
     `For example: ${code('0.001 2 3 4 & 0.01% 2% 3% 4%')}`,
   ].join('\n');
 }

@@ -393,9 +393,10 @@ export async function handlePctReply(ctx: any, raw: string): Promise<boolean> {
     const [l, r] = raw.split('&');
     const amts = l ? pctPresets.parseList(l) : null;
     const pcts = r ? pctPresets.parseList(r) : null;
-    const okA = amts && amts.length <= 4 ? pctPresets.sanitize(amts, dual.amt) : null;
-    const okP = pcts && pcts.length <= 4 ? pctPresets.sanitize(pcts, flow) : null;
-    if (!okA || !okP) {
+    // Exactly four each, to match the four-and-four button rows the cards draw.
+    const okA = amts && amts.length === 4 ? pctPresets.sanitize(amts, dual.amt) : null;
+    const okP = pcts && pcts.length === 4 ? pctPresets.sanitize(pcts, flow) : null;
+    if (!okA || !okP || okA.length !== 4 || okP.length !== 4) {
       await ctx.reply(msg.msgBuyPresetInvalid(), html);
       return true; // still handled here: never fall through to the amount flow
     }
