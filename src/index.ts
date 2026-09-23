@@ -3815,8 +3815,8 @@ async function renderTokenHub(
   const swappable = swapTokenChains().some((c) => c.key === cc.key);
   const hasLp = v3.length + v4.length > 0;
 
-  const rowLp = [Markup.button.callback('💧 Add LP', `ca:add:${ca}`)];
-  if (hasLp) rowLp.push(Markup.button.callback('📤 Close LP', `ca:close:${ca}`));
+  // No Add LP button: the pool buttons below open the wizard at a chosen pool directly.
+  const rowLp = hasLp ? [Markup.button.callback('📤 Close LP', `ca:close:${ca}`)] : [];
 
   const rowTok: ReturnType<typeof Markup.button.callback>[] = [];
   if (swappable && bal > 0n) rowTok.push(Markup.button.callback('📉 Sell Token', `ca:sell:${ca}`));
@@ -3835,9 +3835,9 @@ async function renderTokenHub(
     Markup.button.callback(`$${p.otherSymbol}/$${p.baseSymbol} (${p.protocol}, fee ${Number((p.fee / 10_000).toFixed(2))}%)`, `hp:${i}`),
   ]);
   const kb = Markup.inlineKeyboard([
-    ...poolRows,
     ...quick,
-    rowLp,
+    ...poolRows,
+    ...(rowLp.length ? [rowLp] : []),
     ...(rowTok.length ? [rowTok] : []),
     // This card is static: its prices are frozen at the second you pasted the CA. For a
     // newly born token a minute is already a long time, so offer a way to refresh in place.
