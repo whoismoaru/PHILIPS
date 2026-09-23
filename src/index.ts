@@ -558,7 +558,9 @@ bot.action('closeall_confirm', async (ctx: any) => {
   for (const c of Object.values(CHAINS).filter((x) => v4Supported(x))) {
     for (const p of await listPositionsV4(c).catch(() => [])) v4.push({ id: p.tokenId, chain: c });
   }
-  const total = v3.length + v4.length;
+  // Solana DLMM too: "Close All" that leaves a chain open is not close all.
+  const sol = await solanaRows().catch(() => [] as PosRow[]);
+  const total = v3.length + v4.length + sol.length;
   if (total === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
 
   const prog = await ctx.reply(msg.msgProgress(`closing ${total} position${total === 1 ? '' : 's'}…`), html);
@@ -589,6 +591,12 @@ bot.action('closeall_confirm', async (ctx: any) => {
     } catch (e) {
       failed.push(`#${p.id}: ${(e as Error).message.slice(0, 60)}`);
     }
+  }
+  // Each Solana close sends its own closed card and PnL image, like its button does.
+  for (const r of sol) {
+    const ok = await solCloseRun(ctx, r.id).catch(() => false);
+    if (ok) done++;
+    else failed.push(`#${r.id}: see its card above`);
   }
   await edit(msg.msgCloseAllDone(done, total, failed));
 });
@@ -3503,17 +3511,26 @@ async function replyActiveCards(ctx: any, header: string | null) {
 async function cmdCloseAll(ctx: any) {
   // The /positions card shows v4 positions, so a "Close All" button listing only v3 would
   // leave the user believing everything was closed while v4 stayed open.
-  const cc = getChain();
-  const v4 = v4Supported(cc) ? await listPositionsV4(cc).catch(() => []) : [];
+  // Every chain: v4 from each chain that has it, and Solana DLMM. Only the active chain's
+  // v4 used to be read, and Solana not at all -- so /stop answered "no active positions"
+  // with a DLMM position open (24 Sep 2026).
+  const v4: Array<{ p: V4Position; cc: ChainCtx }> = [];
+  for (const c of Object.values(CHAINS).filter((x) => v4Supported(x)))
+    for (const p of await listPositionsV4(c).catch(() => [] as V4Position[])) v4.push({ p, cc: c });
   const v3 = store.active();
-  if (v3.length + v4.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
-  if (v3.length) await replyActiveCards(ctx, msg.msgCloseAllPick(v3.length, v4.length));
-  else await ctx.reply(msg.msgCloseAllPick(0, v4.length), html);
-  const ethUsd = v4.length ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
-  // v4 cards used to be built INSIDE the send loop, alternating build and send, making it
-  // the slowest of all the card paths. Now they build in parallel, order preserved.
-  for (const p of mapLimitStream(v4, POS_CARD_CONCURRENCY, (x) => buildV4Card(x, ethUsd, cc))) {
-    const c = await p;
+  const sol = await solanaRows().catch(() => [] as PosRow[]);
+  if (v3.length + v4.length + sol.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
+  if (v3.length) await replyActiveCards(ctx, msg.msgCloseAllPick(v3.length, v4.length + sol.length));
+  else await ctx.reply(msg.msgCloseAllPick(0, v4.length + sol.length), html);
+  // Built in parallel, sent in order.
+  for (const q of mapLimitStream(v4, POS_CARD_CONCURRENCY, async (x) => buildV4Card(x.p, await getEthUsd(x.cc.wethAddress, x.cc).catch(() => null), x.cc))) {
+    const c = await q;
+    await ctx.reply(c.text, c.extra);
+  }
+  for (const r of sol) {
+    const ref = solRowRef.get(r.id);
+    if (!ref) continue;
+    const c = solPosCard(r, ref.pool);
     await ctx.reply(c.text, c.extra);
   }
 }
@@ -5450,6 +5467,12 @@ bot.action(/^solpos:(\w{8})$/, async (ctx) => {
   await ctx.answerCbQuery('Loading…');
   const row = (await solanaRows().catch(() => [] as PosRow[])).find((r) => r.id === ctx.match[1]);
   if (!row) return ctx.reply(msg.msgAlreadyClosed(ctx.match[1]), html);
+  const c = solPosCard(row, ref.pool);
+  return ctx.reply(c.text, c.extra);
+});
+
+/** The Solana position card: the /positions row, with its Close button. */
+function solPosCard(row: PosRow, pool: string): { text: string; extra: Record<string, unknown> } {
   const pnl =
     row.pnlUsd !== null
       ? `${row.pnlUsd >= 0 ? '+' : '-'}${msg.usdPlain(Math.abs(row.pnlUsd))}${row.pnlPct !== null ? ` (${msg.fmtPct(row.pnlPct)})` : ''}`
@@ -5467,14 +5490,17 @@ bot.action(/^solpos:(\w{8})$/, async (ctx) => {
     '',
     msg.note(msg.nowWib()),
   ].join('\n');
-  return ctx.reply(text, {
-    ...html,
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback('⛔ Close Position', `solcl:${ctx.match[1]}`)],
-      [Markup.button.url('🔍 Meteora', `https://app.meteora.ag/dlmm/${ref.pool}`), Markup.button.callback('📊 Positions', 'positions')],
-    ]),
-  });
-});
+  return {
+    text,
+    extra: {
+      ...html,
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('⛔ Close Position', `solcl:${row.id}`)],
+        [Markup.button.url('🔍 Meteora', `https://app.meteora.ag/dlmm/${pool}`), Markup.button.callback('📊 Positions', 'positions')],
+      ]),
+    },
+  };
+}
 
 /** In-flight closes, so a double tap cannot send a second withdrawal. */
 const solClosing = new Set<string>();
@@ -5486,17 +5512,28 @@ const solClosing = new Set<string>();
  */
 bot.action(/^solcl:(\w{8})$/, async (ctx) => {
   const ref = solRowRef.get(ctx.match[1]);
-  const kp = solWallet.keypair();
   if (!ref) return ctx.answerCbQuery('Expired. Open /positions again.');
-  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  if (!solWallet.keypair()) return ctx.answerCbQuery('No Solana key connected.');
   if (solClosing.has(ref.position)) return ctx.answerCbQuery('Processing…');
-  solClosing.add(ref.position);
   await ctx.answerCbQuery('Closing…');
+  await solCloseRun(ctx, ctx.match[1]);
+});
+
+/** Close one Solana position by its row id. Returns false when it did not close. */
+async function solCloseRun(ctx: any, id: string): Promise<boolean> {
+  const ref = solRowRef.get(id);
+  const kp = solWallet.keypair();
+  if (!ref || !kp || solClosing.has(ref.position)) return false;
+  solClosing.add(ref.position);
+  const m = [ '', id ];
   const entry = solStore.getEntry(ref.position);
-  const pair = entry ? `$${entry.symbol}/${entry.baseSymbol}` : `#${ctx.match[1]}`;
+  const pair = entry ? `$${entry.symbol}/${entry.baseSymbol}` : `#${m[1]}`;
   const prog = await ctx.reply(msg.msgProgress(`closing ${pair}…`), html);
   try {
-    if (config.safety.dryRun) return editProgress(ctx, prog, msg.msgDryRunClose(ctx.match[1]));
+    if (config.safety.dryRun) {
+      await editProgress(ctx, prog, msg.msgDryRunClose(m[1]));
+      return false;
+    }
     const r = await closePosition(ref.pool, ref.position, kp);
     // Everything ends in native SOL, whatever the pool's base (the owner's rule, 24 Sep
     // 2026): the token side is swapped to SOL, and on a USDC pool the USDC side is too.
@@ -5531,7 +5568,7 @@ bot.action(/^solcl:(\w{8})$/, async (ctx) => {
       ctx,
       prog,
       msg.msgCashOut({
-        tokenId: ctx.match[1],
+        tokenId: m[1],
         pair,
         protocol: 'DLMM',
         notes,
@@ -5558,13 +5595,15 @@ bot.action(/^solcl:(\w{8})$/, async (ctx) => {
         console.error('[sol-close] PnL card failed:', (e as Error).message.slice(0, 120)),
       );
     }
+    return true;
   } catch (e) {
     console.error(`[sol-close] ${ref.position} failed:`, (e as Error).message);
     await editProgress(ctx, prog, msg.msgError('close', (e as Error).message));
+    return false;
   } finally {
     solClosing.delete(ref.position);
   }
-});
+}
 
 /** The EVM PnL image, drawn from a Solana close: same maths, same card. */
 async function sendSolProfitCard(ctx: any, e: solStore.SolEntry, outRaw: bigint, feeRaw: bigint, baseSym: string, dec: number): Promise<void> {
