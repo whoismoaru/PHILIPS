@@ -110,6 +110,10 @@ async function sendAndConfirm(signedBase64: string): Promise<string> {
   const until = Date.now() + 60_000;
   while (Date.now() < until) {
     await new Promise((r) => setTimeout(r, 2_000));
+    // Re-broadcast the SAME signed bytes each round: a node drops a transaction it could not
+    // forward in time, and the one-shot send let 4oFxQdqm… (23 Sep, 0.01 SOL) vanish without
+    // ever landing. Same signature, so it can land at most once.
+    solRpc('sendTransaction', [signedBase64, { encoding: 'base64', skipPreflight: true, maxRetries: 0 }]).catch(() => {});
     const st = await solRpc<{ value: Array<{ confirmationStatus?: string; err?: unknown } | null> }>(
       'getSignatureStatuses',
       [[sig], { searchTransactionHistory: true }],
