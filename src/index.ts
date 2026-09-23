@@ -5481,29 +5481,35 @@ bot.action(/^solcl:(\w{8})$/, async (ctx) => {
   try {
     if (config.safety.dryRun) return editProgress(ctx, prog, msg.msgDryRunClose(ctx.match[1]));
     const r = await closePosition(ref.pool, ref.position, kp);
+    // Everything ends in native SOL, whatever the pool's base (the owner's rule, 24 Sep
+    // 2026): the token side is swapped to SOL, and on a USDC pool the USDC side is too.
     const baseIsSol = r.baseMint === jupiter.WSOL;
-    const baseSym = baseIsSol ? 'SOL' : 'USDC';
-    const baseDec = baseIsSol ? 9 : 6;
     const notes = ['Close DLMM position (withdraw, claim fees, close account)'];
     const sigs = [...r.signatures];
-    let swapOut = 0n;
     let leftover = false;
-    if (r.tokenOut > 0n) {
+    /** Swap `amount` of `mint` to SOL; returns the lamports received, 0n on failure. */
+    const toSol = async (mint: string, amount: bigint, what: string): Promise<bigint> => {
+      if (amount <= 0n) return 0n;
       try {
-        const q = await jupiter.quote(r.tokenMint, r.baseMint, r.tokenOut, SOL_SLIPPAGE_BPS);
-        const sig = await jupiter.executeSwap(q, kp);
-        swapOut = BigInt(q.outAmount);
-        sigs.push(sig);
-        notes.push(`Swap: token → ${baseSym} via Jupiter`);
+        const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+        sigs.push(await jupiter.executeSwap(q, kp));
+        notes.push(`Swap: ${what} → SOL via Jupiter`);
+        return BigInt(q.outAmount);
       } catch (e) {
-        // The token stays in the wallet and /swap can move it; the close itself succeeded.
+        // It stays in the wallet and /swap can move it; the close itself succeeded.
         leftover = true;
-        console.error('[sol-close] swap back failed:', (e as Error).message.slice(0, 160));
-        notes.push('Swap back failed: the token is in your wallet (use /swap)');
+        console.error(`[sol-close] ${what} -> SOL failed:`, (e as Error).message.slice(0, 160));
+        notes.push(`Swap ${what} → SOL failed: it is in your wallet (use /swap)`);
+        return 0n;
       }
-    }
-    const baseTotal = r.baseOut + swapOut;
-    const outLabel = `${Number((Number(baseTotal) / 10 ** baseDec).toFixed(baseIsSol ? 5 : 2))} ${baseSym}`;
+    };
+    const tokenSol = await toSol(r.tokenMint, r.tokenOut, 'token');
+    const baseSol = baseIsSol ? r.baseOut : await toSol(r.baseMint, r.baseOut, 'USDC');
+    const baseTotal = baseSol + tokenSol;
+    const outLabel = `${Number((Number(baseTotal) / 1e9).toFixed(5))} SOL`;
+    // Aliases kept for the card below.
+    const baseSym = 'SOL';
+    const swapOut = tokenSol;
     await editProgress(
       ctx,
       prog,
@@ -5515,7 +5521,7 @@ bot.action(/^solcl:(\w{8})$/, async (ctx) => {
         ethOut: outLabel,
         txHashes: sigs,
         baseSymbol: baseSym,
-        native: baseIsSol,
+        native: true,
         leftover,
       }),
       {
@@ -5527,9 +5533,11 @@ bot.action(/^solcl:(\w{8})$/, async (ctx) => {
       },
     );
     if (entry) {
-      // Fees in base terms: the base-side fee plus the token-side fee at the swap's rate.
-      const feeBase = r.baseFee + (r.tokenOut > 0n ? (r.tokenFee * swapOut) / r.tokenOut : 0n);
-      await sendSolProfitCard(ctx, entry, baseTotal, feeBase, baseSym, baseDec).catch((e) =>
+      // Fees in SOL: each side's fee at the rate that side was actually swapped at.
+      const feeSol =
+        (baseIsSol ? r.baseFee : r.baseOut > 0n ? (r.baseFee * baseSol) / r.baseOut : 0n) +
+        (r.tokenOut > 0n ? (r.tokenFee * swapOut) / r.tokenOut : 0n);
+      await sendSolProfitCard(ctx, entry, baseTotal, feeSol, baseSym, 9).catch((e) =>
         console.error('[sol-close] PnL card failed:', (e as Error).message.slice(0, 120)),
       );
     }
@@ -5543,10 +5551,15 @@ bot.action(/^solcl:(\w{8})$/, async (ctx) => {
 
 /** The EVM PnL image, drawn from a Solana close: same maths, same card. */
 async function sendSolProfitCard(ctx: any, e: solStore.SolEntry, outRaw: bigint, feeRaw: bigint, baseSym: string, dec: number): Promise<void> {
-  const baseIn = Number(e.entryBase) / 10 ** dec;
+  // The deposit is in the pool's base (SOL or USDC); what came back is always SOL. Each is
+  // priced in its own unit at its own moment.
+  const inUsdc = e.baseSymbol === 'USDC';
+  const baseIn = Number(e.entryBase) / 10 ** (inUsdc ? 6 : 9);
   const baseOut = Number(outRaw) / 10 ** dec;
-  const nowUsd = baseSym === 'USDC' ? 1 : await solUsd().catch(() => null);
-  const entryUsd = e.entryUsd ?? nowUsd;
+  const nowUsd = await solUsd().catch(() => null);
+  const entryUsd = inUsdc ? 1 : (e.entryUsd ?? nowUsd);
+  // USDC in, SOL out, no SOL price: there is no honest figure to draw, so no card.
+  if (inUsdc && nowUsd === null) return;
   const usdKnown = nowUsd !== null && entryUsd !== null && entryUsd > 0;
   const pnl = usdKnown ? baseOut * nowUsd! - baseIn * entryUsd! : baseOut - baseIn;
   const pnlPct = usdKnown ? (baseIn * entryUsd! > 0 ? (pnl / (baseIn * entryUsd!)) * 100 : 0) : baseIn > 0 ? ((baseOut - baseIn) / baseIn) * 100 : 0;
