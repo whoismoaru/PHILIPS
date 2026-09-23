@@ -320,7 +320,7 @@ const flows = new Map<number, AddFlow>();
  * The text and keyboard are stored so a "Back" button from any flow can re-render it
  * WITHOUT screening again (zero RPCs).
  */
-type Hub = { ca: string; chainKey: string; text: string; kb: any; sym: string; dec: number; screenText: string; bahaya: boolean; reasons: string[]; failed: boolean };
+type Hub = { ca: string; chainKey: string; text: string; kb: any; sym: string; dec: number; screenText: string; bahaya: boolean; reasons: string[]; failed: boolean; pools?: explore.TokenPool[] };
 const hubs = new Map<number, Hub>();
 
 // Every piece of per-user state is registered with the central cleaner. The text
@@ -2878,6 +2878,45 @@ bot.action(/^chn:(\w+):(0x[0-9a-fA-F]{40})$/, async (ctx) => {
 // --- Wizard navigation (forward and back) ---
 const getFlow = (ctx: any): AddFlow | undefined => flows.get(ctx.from!.id);
 
+/**
+ * A pool button on the CA card: the /add wizard, entered at the range step for that pool.
+ * The same guards the wizard's own pool list applies to a v4 pool are applied here, since
+ * this path skips that list: a verified poolKey, native (not wrapped) ETH as the base, and
+ * live liquidity -- a pool at zero traps a deposit at a fake price.
+ */
+bot.action(/^hp:(\d)$/, async (ctx) => {
+  const h = hubs.get(ctx.from!.id);
+  const sel = h?.pools?.[Number(ctx.match[1])];
+  if (!h || !sel) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  const cc = getChain(h.chainKey);
+  if (sel.protocol === 'v4') {
+    if (!sel.poolKey) return ctx.answerCbQuery('This pool could not be verified, so it cannot be opened.', { show_alert: true });
+    const baseCur = sel.baseIsCurrency0 ? sel.poolKey.currency0 : sel.poolKey.currency1;
+    if (sel.base === 'weth' && baseCur !== ethers.ZeroAddress) {
+      await ctx.answerCbQuery();
+      return ctx.reply(msg.msgV4BaseUnsupported(), html);
+    }
+    const health = await poolHealthV4(cc, sel.poolKey).catch(() => null);
+    if (!health || health.liquidity === 0n) return ctx.answerCbQuery('This pool has no active liquidity right now.', { show_alert: true });
+  }
+  await ctx.answerCbQuery();
+  const flow: AddFlow = {
+    token: ethers.getAddress(h.ca),
+    chain: h.chainKey,
+    screenBahaya: h.bahaya,
+    screenFailed: h.failed,
+    pools: h.pools!,
+    startedAt: Date.now(),
+    selected: sel,
+    base: sel.base,
+    fee: sel.fee,
+    strategy: 'base',
+  };
+  flows.set(ctx.from!.id, flow);
+  // A new message, so the CA card stays up.
+  return renderRangeStep(ctx, flow, false);
+});
+
 bot.action(/^pick:(\d+)$/, async (ctx) => {
   const flow = getFlow(ctx);
   if (!flow) return ctx.answerCbQuery('Expired. Start again with /add_lp.');
@@ -3791,7 +3830,12 @@ async function renderTokenHub(
       ]
     : [];
 
+  // One button per pool shown, opening the LP wizard straight at that pool's range step.
+  const poolRows = shown.map((p, i) => [
+    Markup.button.callback(`$${p.otherSymbol}/$${p.baseSymbol} (${p.protocol}, fee ${Number((p.fee / 10_000).toFixed(2))}%)`, `hp:${i}`),
+  ]);
   const kb = Markup.inlineKeyboard([
+    ...poolRows,
     ...quick,
     rowLp,
     ...(rowTok.length ? [rowTok] : []),
@@ -3811,6 +3855,7 @@ async function renderTokenHub(
     // The full audit, kept for the Audit button and for the flows that quote it.
     screenText: sc ? formatScreen(sc, { ca, chainLabel: cc.label }) : msg.msgScreeningFailed(),
     bahaya: sc?.verdict === 'BAHAYA',
+    pools: shown,
     reasons: (sc?.flags ?? []).filter((f) => f.level === 'BAHAYA').map((f) => f.msg),
     failed: !sc,
   });
