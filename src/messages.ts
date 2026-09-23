@@ -12,6 +12,7 @@
 import { ethers } from 'ethers';
 import type { BaseKind } from './chains.js';
 import { explainRevert } from './revert.js';
+import { gasCapPct } from './chains.js';
 
 // ─── primitives ────────────────────────────────────────────────────
 
@@ -2108,7 +2109,7 @@ export function msgSettings(
   const shape = lpShape ? bold(lpShape === 'bidask' ? 'BID-ASK' : 'SPOT') : null;
   const evm = [
     `Tx limit: ${esc(maxPerTx)}`,
-    `Gas: auto-fetched${gasCeiling ? `, ceiling ${esc(gasCeiling)}/tx` : ', no ceiling'}`,
+    `Gas: auto-fetched, max ${gasCapPct()}% of value${gasCeiling ? `, ceiling ${esc(gasCeiling)}/tx` : ''}`,
     // These match what the code ACTUALLY does: a swap steps 1% -> 2% -> 3% and never
     // beyond, while an LP mint is a separate, far tighter figure.
     'Swap slippage: 1%, retried at 2% then 3%',
@@ -2117,7 +2118,7 @@ export function msgSettings(
   ];
   const sol = [
     'Slippage: 3%',
-    'Priority fee: auto',
+    `Priority fee: auto, max ${gasCapPct()}% of SOL spent`,
     ...(shape ? [`LP shape: ${shape}`] : []),
   ];
   const list = (xs: string[]) => xs.map((f, i) => `${i + 1}. ${f}`);

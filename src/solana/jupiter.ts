@@ -64,6 +64,14 @@ export function routeLabel(q: Quote): string {
   return names.length ? [...new Set(names)].join(' → ') : 'Jupiter';
 }
 
+function feeCapLamports(q: Quote): number {
+  const MAX = 2_000_000;
+  if (q.inputMint !== WSOL) return MAX;
+  const n = Number(process.env.GAS_CAP_PCT ?? '');
+  const pct = n > 0 && n <= 100 ? n : 3;
+  return Math.max(10_000, Math.min(MAX, Math.floor((Number(q.inAmount) * pct) / 100)));
+}
+
 /** Build the swap transaction for this quote, base64. */
 async function buildSwap(q: Quote, userPublicKey: string): Promise<string> {
   const r = await jup<{ swapTransaction?: string }>('/swap', {
@@ -78,7 +86,9 @@ async function buildSwap(q: Quote, userPublicKey: string): Promise<string> {
       dynamicComputeUnitLimit: true,
       // A swap that lands three blocks late on a token minutes old is a different trade.
       // The fee is capped so the urgency cannot quietly cost more than the position.
-      prioritizationFeeLamports: { priorityLevelWithMaxLamports: { maxLamports: 2_000_000, priorityLevel: 'high' } },
+      // Also capped at GAS_CAP_PCT of the SOL spent when the input IS SOL, matching the EVM rule;
+      // floored at 10k lamports so a tiny swap still bids something.
+      prioritizationFeeLamports: { priorityLevelWithMaxLamports: { maxLamports: feeCapLamports(q), priorityLevel: 'high' } },
     }),
   });
   if (!r.swapTransaction) throw new Error('jupiter returned no transaction');
