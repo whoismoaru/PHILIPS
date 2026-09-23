@@ -227,6 +227,8 @@ export async function gasCard(): Promise<string> {
 
   return [
     bold('⛽️ GAS FEE'),
+    // Says which figure this is: the same "high" rate every transaction is sent with.
+    italic('high · official RPC of each chain · what the bot pays'),
     '',
     ...OPS.flatMap(([op]) => [...section(op, chains, rate), '']),
     // WITHDRAW & APPROVE is priced on APPROVE, the dearer of the two. Using the 21k
