@@ -70,6 +70,7 @@ import { startMonitor } from './monitor.js';
 import * as store from './store.js';
 import * as journal from './journal.js';
 import * as msg from './messages.js';
+import { gmgnPrice } from './gmgn.js';
 import * as explore from './explore.js';
 import * as krystal from './krystal.js';
 import { awaitingSecret, handleSecret, awaitingSolSecret, handleSolSecret } from './commands/wallet.js';
@@ -3710,14 +3711,38 @@ async function renderTokenHub(
   // verdict, which Solana has no equivalent of, rides along as one row rather than a card.
   const pools = (await explore.poolsForToken(cc, ca).catch(() => [] as explore.TokenPool[])).sort((a, b) => b.tvlUsd - a.tvlUsd);
   const shown = pools.slice(0, 3);
-  const verdict = !sc ? 'not readable' : sc.verdict === 'BAHAYA' ? '⛔ DANGER' : sc.verdict === 'HATI-HATI' ? '⚠️ CAUTION' : '✅ SAFE';
-  const warn = (sc?.flags ?? []).filter((f) => f.level !== 'INFO').length;
+  // Defined below with the price sources; hoisted here because the verdict depends on it.
+  const poolTvlAll = pools.reduce((a, p) => a + p.tvlUsd, 0);
+  const dexReal = sc?.liquidityUsd != null && sc.liquidityUsd >= poolTvlAll * 0.1;
+  // Flags read off DexScreener's pair (age, trades, liquidity) say nothing when that pair
+  // is not the market: $GPU was flagged "almost no trades" and "very new" off a dust pool.
+  const MARKET_FLAG = /liquidity|very new|no trades|Almost no trades|No market|honeypot/i;
+  const flagsUsed = (sc?.flags ?? []).filter((f) => f.level !== 'INFO' && (dexReal || !MARKET_FLAG.test(f.msg)));
+  const verdict = !sc
+    ? 'not readable'
+    : flagsUsed.some((f) => f.level === 'BAHAYA')
+      ? '⛔ DANGER'
+      : flagsUsed.length
+        ? '⚠️ CAUTION'
+        : '✅ SAFE';
+  const warn = flagsUsed.length;
+  // Price and mcap from GMGN first, DexScreener only as the fallback (the house rule). And
+  // DexScreener's pair figures only count when that pair is real: on 23 Sep 2026 its only
+  // $GPU pair was a $0.03 v3 dust pool while $29K sat in v4, and the card printed a price
+  // of $4.5e26. A pair with no liquidity reading, or one far shallower than the pools we
+  // can see, is not the market.
+  const gm = await gmgnPrice(ca, cc.key).catch(() => null);
+  const poolTvl = poolTvlAll;
+  const dexOk = dexReal;
+  const px = gm?.priceUsd ?? (dexOk && sc?.priceUsd ? Number(sc.priceUsd) : null);
+  const mcap = gm?.mcapUsd ?? (dexOk ? (sc?.marketCapUsd ?? null) : null);
+  const liq = dexOk ? sc!.liquidityUsd! : poolTvl > 0 ? poolTvl : null;
   const rows: Array<[string, string]> = [
-    ['Price', sc?.priceUsd ? `$${sc.priceUsd}` : '—'],
-    ['MCap', sc?.marketCapUsd != null ? msg.usdCompact(sc.marketCapUsd) : '—'],
-    ['Liq', sc?.liquidityUsd != null ? msg.usdCompact(sc.liquidityUsd) : '—'],
-    ['Vol 24h', sc?.volume24h != null ? msg.usdCompact(sc.volume24h) : '—'],
-    ['Age', sc?.pairAgeHours != null ? msg.fmtAge(sc.pairAgeHours * 3_600_000) : '—'],
+    ['Price', px ? `$${Number(px.toPrecision(4))}` : '—'],
+    ['MCap', mcap != null ? msg.usdCompact(mcap) : '—'],
+    ['Liq', liq != null ? msg.usdCompact(liq) : '—'],
+    ['Vol 24h', dexOk && sc?.volume24h != null ? msg.usdCompact(sc.volume24h) : '—'],
+    ['Age', dexOk && sc?.pairAgeHours != null ? msg.fmtAge(sc.pairAgeHours * 3_600_000) : '—'],
     ['Audit', `${verdict}${warn ? ` (${warn} flag${warn === 1 ? '' : 's'})` : ''}`],
     ...(bal > 0n ? [['Holding', `${msg.cleanUnits(bal, dec)} ${sym}`] as [string, string]] : []),
     ...(v3.length + v4.length ? [['Your LP', `${v3.length + v4.length} open`] as [string, string]] : []),
@@ -3737,7 +3762,7 @@ async function renderTokenHub(
       tvl: msg.usdCompact(p.tvlUsd),
       // The gateway reports 0 for v4 volume it does not track; 0 would read as a dead pool.
       vol: p.vol24hUsd ? msg.usdCompact(p.vol24hUsd) : '—',
-      feeTvl: aprLabel(p.aprPct ?? null),
+      feeTvl: p.aprPct == null ? '—' : aprLabel(p.aprPct),
     })),
     feeLabel: 'APR',
     otherVenueCount: 0,
