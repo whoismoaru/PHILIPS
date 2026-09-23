@@ -137,7 +137,8 @@ export async function cmdSettings(ctx: any) {
   // which is the share of an LP you close -- a different thing from a withdrawal to an
   // address, and the two shared one word.
   rows.push([
-    Markup.button.callback('🛒 Buy %', 'pct:buy'),
+    // Straight into the edit prompt: the value is shown there anyway, one tap saved.
+    Markup.button.callback('🛒 Buy %', 'pctedit:buy'),
     Markup.button.callback('💱 Swap %', 'pct:sell'),
   ]);
   rows.push([
@@ -348,7 +349,8 @@ bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, as
   await ctx.answerCbQuery();
   return ctx.editMessageText(msg.msgPctAsk(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctOpts(flow)), {
     ...html,
-    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `pct:${flow}`)]]),
+    // Buy opens here directly from /settings, so its Back goes there too.
+    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', flow === 'buy' ? 'settings' : `pct:${flow}`)]]),
   });
 });
 
@@ -385,6 +387,8 @@ export async function handlePctReply(ctx: any, raw: string): Promise<boolean> {
   return true;
 }
 bot.action('settings', async (ctx) => {
+  // Leaving an edit prompt by Back abandons it, or the next number typed is taken as an answer.
+  pctPresets.clearEdit(ctx.from!.id);
   await ctx.answerCbQuery();
   return cmdSettings(ctx);
 });
