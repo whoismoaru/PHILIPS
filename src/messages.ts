@@ -12,7 +12,7 @@
 import { ethers } from 'ethers';
 import type { BaseKind } from './chains.js';
 import { explainRevert } from './revert.js';
-import { TRADE_LIMIT_PCT } from './tradeLimit.js';
+import { TRADE_LIMIT_PCT, SELL_IMPACT_PCT } from './tradeLimit.js';
 
 // ─── primitives ────────────────────────────────────────────────────
 
@@ -2175,13 +2175,13 @@ export function msgSettings(
     // These match what the code ACTUALLY does: a swap steps 1% -> 2% -> 3% and never
     // beyond, while an LP mint is a separate, far tighter figure.
     `Swap slippage: 1%, retried at 2% then ${TRADE_LIMIT_PCT}% max`,
-    `Price impact: max ${TRADE_LIMIT_PCT}%`,
+    `Price impact: max ${TRADE_LIMIT_PCT}% to buy, ${SELL_IMPACT_PCT}% to sell`,
     'LP mint slippage: 0.5%',
     ...(shape ? [`LP shape: ${shape}${lpShape === 'bidask' && legs ? `, legs ${esc(legs)}` : ''}`] : []),
   ];
   const sol = [
     `Slippage: ${TRADE_LIMIT_PCT}%`,
-    `Price impact: max ${TRADE_LIMIT_PCT}%`,
+    `Price impact: max ${TRADE_LIMIT_PCT}% to buy, ${SELL_IMPACT_PCT}% to sell`,
     'Priority fee: high, from the official RPC',
     ...(shape ? [`LP shape: ${shape}`] : []),
   ];

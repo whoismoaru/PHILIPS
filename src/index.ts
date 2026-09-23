@@ -27,7 +27,7 @@ import { solPositions, mintDecimals } from './solana/positions.js';
 import { solHoldings, solUsd, type SolHolding } from './solana/holdings.js';
 import * as chainToggle from './chainToggle.js';
 import { rpcUrl as solRpcUrl, solRpc } from './solana/rpc.js';
-import { TRADE_LIMIT_PCT } from './tradeLimit.js';
+import { TRADE_LIMIT_PCT, SELL_IMPACT_PCT } from './tradeLimit.js';
 import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
@@ -5298,8 +5298,9 @@ async function solSellExec(ctx: any, h: SolHolding, amount: bigint, edit: boolea
   if (!prog) await show(msg.msgProgress(`swapping ${sold} $${h.symbol} to ${out.symbol}…`));
   try {
     const q = await jupiter.quote(h.mint, out.mint, amount, SOL_SLIPPAGE_BPS);
-    if (Number(q.priceImpactPct) * 100 > MAX_IMPACT_PCT)
-      return show(msg.msgError('swap', `Price impact is ${(Number(q.priceImpactPct) * 100).toFixed(1)}%, above the ${MAX_IMPACT_PCT}% limit. Nothing was sent. Try a smaller amount.`));
+    // A sale: the looser sell limit (10%), so a thin token can still be exited.
+    if (Number(q.priceImpactPct) * 100 > SELL_IMPACT_PCT)
+      return show(msg.msgError('swap', `Price impact is ${(Number(q.priceImpactPct) * 100).toFixed(1)}%, above the ${SELL_IMPACT_PCT}% sell limit. Nothing was sent. Try a smaller amount.`));
     const sig = await jupiter.executeSwap(q, kp);
     const got = (Number(q.outAmount) / 10 ** out.decimals).toLocaleString('en-US', { maximumFractionDigits: 4 });
     return show(msg.msgSolSellDone({ symbol: h.symbol, sold, received: `${got} ${out.symbol}`, sig, gas: await solTxFee(sig) }), {
@@ -5665,12 +5666,14 @@ async function tswapQuoteConfirm(
   // the check rather than blocking on a guess.
   {
     const impact = await swapImpactPct(cc, fromAddr, toAddr, amountWei, q.out).catch(() => null);
-    if (impact !== null && impact > MAX_IMPACT_PCT) {
+    // 3% to buy, 10% to sell: an exit must stay possible on a thin token.
+    const limit = tflow.buy ? MAX_IMPACT_PCT : SELL_IMPACT_PCT;
+    if (impact !== null && impact > limit) {
       tswapFlows.delete(ctx.from!.id);
       return editProgress(
         ctx,
         prog,
-        msg.msgError('swap', `Price impact is ${impact.toFixed(1)}%, above the ${MAX_IMPACT_PCT}% limit. Nothing was sent. Try a smaller amount.`),
+        msg.msgError(tflow.buy ? 'buy' : 'swap', `Price impact is ${impact.toFixed(1)}%, above the ${limit}% ${tflow.buy ? 'buy' : 'sell'} limit. Nothing was sent. Try a smaller amount.`),
       );
     }
   }
