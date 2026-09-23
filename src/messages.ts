@@ -1657,11 +1657,11 @@ export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: s
   );
 }
 
-export function msgSolSellDone(o: { symbol: string; sold: string; receivedSol: string; sig: string }): string {
+export function msgSolSellDone(o: { symbol: string; sold: string; received: string; sig: string }): string {
   const sym = o.symbol.replace(/^\$+/, '');
   return card(
     `\u2705 ${bold('SWAP FILLED')}`,
-    [`${bold(`${esc(o.sold)} $${esc(sym)}`)} \u2192 ${bold(`${o.receivedSol} SOL`)}`, '', `${bold('Tx')} : ${code(o.sig)}`],
+    [`${bold(`${esc(o.sold)} $${esc(sym)}`)} \u2192 ${bold(esc(o.received))}`, '', `${bold('Tx')} : ${code(o.sig)}`],
     footerMode(),
   );
 }

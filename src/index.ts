@@ -25,6 +25,7 @@ import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
 import { solHoldings, type SolHolding } from './solana/holdings.js';
+import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
@@ -4866,13 +4867,14 @@ async function cmdSell(ctx: any) {
     .flat()
     .sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0))
     .slice(0, SELL_HOLDINGS_CAP);
-  // Solana tokens, swapped to SOL through Jupiter. Only a signer can sell, and native SOL
-  // itself is left off: there is no SOL->USDC path here yet. Unpriced tokens are dropped
-  // too -- on Solana those are airdropped spam, dozens of them.
+  // Solana holdings, swapped through Jupiter. Only a signer can sell. Unpriced tokens are
+  // dropped -- on Solana those are airdropped spam, dozens of them.
   const solKp = solWallet.keypair();
   const solList = solKp
     ? ((await solHoldings(solKp.publicKey).catch(() => [])) as SolHolding[])
-        .filter((h) => h.mint !== jupiter.WSOL && h.usd !== null && h.usd >= SELL_DUST_USD && h.raw > 0n)
+        // Native SOL is offered minus the fee reserve and goes to USDC; everything else goes to SOL.
+        .map((h) => (h.mint === jupiter.WSOL ? { ...h, raw: h.raw > SOL_RESERVE_LAMPORTS ? h.raw - SOL_RESERVE_LAMPORTS : 0n } : h))
+        .filter((h) => h.usd !== null && h.usd >= SELL_DUST_USD && h.raw > 0n)
         .sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0))
         .slice(0, SELL_HOLDINGS_CAP)
     : [];
@@ -4937,12 +4939,16 @@ bot.action(/^solsellp:(\d+)$/, async (ctx) => {
   const say = (text: string, extra: Record<string, unknown> = html) => ctx.editMessageText(text, extra);
   if (amount <= 0n) return say(msg.msgError('swap', 'That amount rounds to zero.'));
   if (config.safety.dryRun) return say(msg.msgDryRunAddDone());
-  await say(msg.msgProgress(`swapping ${pct}% of $${h.symbol} to SOL…`));
+  const isSol = h.mint === jupiter.WSOL;
+  const out = isSol ? SOL_USDC : { mint: jupiter.WSOL, symbol: 'SOL', decimals: 9 };
+  await say(msg.msgProgress(`swapping ${pct}% of $${h.symbol} to ${out.symbol}…`));
   try {
-    const q = await jupiter.quote(h.mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+    const q = await jupiter.quote(h.mint, out.mint, amount, SOL_SLIPPAGE_BPS);
     const sig = await jupiter.executeSwap(q, kp);
+    const got = (Number(q.outAmount) / 10 ** out.decimals).toLocaleString('en-US', { maximumFractionDigits: 4 });
+    const sold = isSol ? fmtSol(amount) : fmt4((h.amount * Number(pct)) / 100);
     return say(
-      msg.msgSolSellDone({ symbol: h.symbol, sold: fmt4((h.amount * Number(pct)) / 100), receivedSol: fmtSol(BigInt(q.outAmount)), sig }),
+      msg.msgSolSellDone({ symbol: h.symbol, sold, received: `${got} ${out.symbol}`, sig }),
       {
         ...html,
         ...Markup.inlineKeyboard([
