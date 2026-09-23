@@ -947,14 +947,19 @@ export function msgPctPreset(
 
 /** Prompt to type a list of values. */
 /** The Buy preset prompt, opened straight from /settings. */
-export function msgBuyPresetAsk(current: number[]): string {
+/** The Buy Token prompt: four amounts (native coin) and four percentages in one line. */
+export function msgBuyPresetAsk(amounts: number[], pcts: number[], saved = false): string {
   return [
-    `🛒 ${bold('BUY TOKEN')} | Change Preset`,
+    `🛒 ${bold('BUY TOKEN')} | ${saved ? 'Preset Saved ✅' : 'Change Preset'}`,
     '',
-    `For example ${code('10 25 50 90')}.`,
+    `For example: ${code('10 25 50 90 & 1% 2% 3% 4%')}`,
     '',
-    `current: ${bold(current.join(' '))}`,
+    `current: ${bold(`${amounts.join(' ')} & ${pcts.map((p) => `${p}%`).join(' ')}`)}`,
   ].join('\n');
+}
+
+export function msgBuyPresetInvalid(): string {
+  return msgError('preset', 'Give up to 4 amounts, then &, then up to 4 percentages (1-100). For example: 10 25 50 90 & 1% 2% 3% 4%');
 }
 
 export function msgPctAsk(label: string, current: number[], o: { unit: string; min: number; max: number }): string {

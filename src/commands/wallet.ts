@@ -138,7 +138,7 @@ export async function cmdSettings(ctx: any) {
   // address, and the two shared one word.
   rows.push([
     // Straight into the edit prompt: the value is shown there anyway, one tap saved.
-    Markup.button.callback('🛒 Buy %', 'pctedit:buy'),
+    Markup.button.callback('🛒 Buy Token', 'pctedit:buy'),
     Markup.button.callback('💱 Swap %', 'pct:sell'),
   ]);
   rows.push([
@@ -347,7 +347,7 @@ bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, as
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.askEdit(ctx.from!.id, flow);
   await ctx.answerCbQuery();
-  const text = flow === 'buy' ? msg.msgBuyPresetAsk(pctPresets.get('buy')) : msg.msgPctAsk(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctOpts(flow));
+  const text = flow === 'buy' ? msg.msgBuyPresetAsk(pctPresets.get('buyamt'), pctPresets.get('buy')) : msg.msgPctAsk(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctOpts(flow));
   return ctx.editMessageText(text, {
     ...html,
     // Buy opens here directly from /settings, so its Back goes there too.
@@ -359,6 +359,11 @@ bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, a
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.clearEdit(ctx.from!.id);
   const v = pctPresets.reset(flow);
+  if (flow === 'buy') {
+    const a = pctPresets.reset('buyamt');
+    await ctx.answerCbQuery('Reset');
+    return ctx.editMessageText(msg.msgBuyPresetAsk(a, v, true), { ...html, ...pctCardKb('buy') });
+  }
   await ctx.answerCbQuery('Reset');
   return ctx.editMessageText(
     msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], v, pctPresets.defaultsFor(flow), pctOpts(flow)),
@@ -374,6 +379,23 @@ bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, a
 export async function handlePctReply(ctx: any, raw: string): Promise<boolean> {
   const flow = pctPresets.pendingEdit(ctx.from?.id);
   if (!flow) return false;
+  // Buy Token edits two lists at once: "0.01 0.05 0.1 0.5 & 10% 25% 50% 100%".
+  if (flow === 'buy') {
+    const [l, r] = raw.split('&');
+    const amts = l ? pctPresets.parseList(l) : null;
+    const pcts = r ? pctPresets.parseList(r) : null;
+    const okA = amts && amts.length <= 4 ? pctPresets.sanitize(amts, 'buyamt') : null;
+    const okP = pcts && pcts.length <= 4 ? pctPresets.sanitize(pcts, 'buy') : null;
+    if (!okA || !okP) {
+      await ctx.reply(msg.msgBuyPresetInvalid(), html);
+      return true; // still handled here: never fall through to the amount flow
+    }
+    pctPresets.set('buyamt', okA);
+    pctPresets.set('buy', okP);
+    pctPresets.clearEdit(ctx.from.id);
+    await ctx.reply(msg.msgBuyPresetAsk(okA, okP, true), { ...html, ...pctCardKb('buy') });
+    return true;
+  }
   const nums = pctPresets.parseList(raw);
   const saved = nums ? pctPresets.set(flow, nums) : null;
   if (!saved) {

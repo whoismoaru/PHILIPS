@@ -4731,16 +4731,12 @@ async function buyFromPct(ctx: any, flow: TSwapFlow, pct: number): Promise<unkno
 }
 
 /**
- * Fixed amounts for the buy card, four per spending asset, sized to roughly $5-$100 so no
- * row is useless on a chain whose coin is worth 100x another's.
+ * Fixed amounts for the buy buttons, in the chain's native coin. One list for every chain
+ * (the owner's choice, 23 Sep 2026), edited from /settings -> Buy Token.
  */
-function buyAmountPresets(unit: string): number[] {
-  const u = unit.toUpperCase();
-  if (u === 'SOL') return [0.05, 0.1, 0.25, 0.5];
-  if (u === 'ETH') return [0.0025, 0.005, 0.01, 0.025];
-  if (u === 'BNB') return [0.01, 0.025, 0.05, 0.1];
-  if (u === 'HYPE') return [0.25, 0.5, 1, 2];
-  return [5, 10, 25, 50]; // stablecoins, and Arc's USDC gas
+function buyAmountPresets(_unit: string): number[] {
+  // One list for every chain, in its native coin (/settings -> Buy Token), the first four.
+  return pctPresets.get('buyamt').slice(0, 4);
 }
 
 /**
