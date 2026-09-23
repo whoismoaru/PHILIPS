@@ -5412,7 +5412,8 @@ async function sendOpened(
   const gas = o.txHash ? await gasPaid(cc, [o.txHash]) : null;
   const url = o.txHash && EXPLORER_TX[cc.key] ? `${EXPLORER_TX[cc.key]}${o.txHash}` : null;
   const row = [
-    Markup.button.callback('📊 View Position', `pos_detail_${o.tokenId}`),
+    // The /positions list, the same screen the command opens, not the single-position card.
+    Markup.button.callback('📊 View Position', 'positions'),
     ...(url ? [Markup.button.url('🔍 View Tx', url)] : []),
   ];
   await ctx.editMessageText(msg.msgPositionOpened({ ...o, gas }), { ...html, ...Markup.inlineKeyboard([row]) });
