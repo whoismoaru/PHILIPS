@@ -731,7 +731,7 @@ async function renderStatus(ctx: any, edit: boolean) {
     const extra = {
       ...html,
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('🔄 Refresh Data', 'refresh:status')],
+        [Markup.button.callback('🔄 Refresh Data', 'refresh:status'), Markup.button.callback('💱 Swap', 'sell:start')],
         [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
       ]),
     };
