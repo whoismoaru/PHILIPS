@@ -5444,7 +5444,8 @@ bot.action(/^solpos:(\w{8})$/, async (ctx) => {
     `├ Deposit: ${msg.esc(row.investLabel)}`,
     `├ PnL: ${msg.esc(pnl)}`,
     `├ Fees: ${msg.esc(row.feesLabel ?? '—')}`,
-    `├ Range: ${msg.esc(row.rangeLabel ?? '—')}`,
+    // As market cap, like every EVM card; the price bounds only when no market cap was read.
+    `├ Range: ${msg.esc(row.mcRange ?? row.rangeLabel ?? '—')}`,
     `└ Age: ${msg.esc(row.age)}`,
     '',
     msg.note(msg.nowWib()),
