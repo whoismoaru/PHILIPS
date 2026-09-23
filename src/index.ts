@@ -25,7 +25,7 @@ import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
 import { solHoldings, type SolHolding } from './solana/holdings.js';
-import { setGasValue } from './gasBudget.js';
+import { setGasValue, GAS_CAP_PCT } from './gasBudget.js';
 import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
@@ -4295,6 +4295,8 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
   } catch (e) {
     return show(msg.msgError('buy', (e as Error).message));
   }
+  if (Number(q.priceImpactPct) * 100 > MAX_IMPACT_PCT)
+    return show(msg.msgError('buy', `Price impact is ${(Number(q.priceImpactPct) * 100).toFixed(1)}%, above the ${MAX_IMPACT_PCT}% limit. Nothing was sent. Try a smaller amount.`));
   f.lamports = lamports;
   f.quote = q;
   const dec = f.decimals;
@@ -5030,6 +5032,8 @@ async function solSellExec(ctx: any, h: SolHolding, amount: bigint, edit: boolea
   if (!prog) await show(msg.msgProgress(`swapping ${sold} $${h.symbol} to ${out.symbol}…`));
   try {
     const q = await jupiter.quote(h.mint, out.mint, amount, SOL_SLIPPAGE_BPS);
+    if (Number(q.priceImpactPct) * 100 > MAX_IMPACT_PCT)
+      return show(msg.msgError('swap', `Price impact is ${(Number(q.priceImpactPct) * 100).toFixed(1)}%, above the ${MAX_IMPACT_PCT}% limit. Nothing was sent. Try a smaller amount.`));
     const sig = await jupiter.executeSwap(q, kp);
     const got = (Number(q.outAmount) / 10 ** out.decimals).toLocaleString('en-US', { maximumFractionDigits: 4 });
     return show(msg.msgSolSellDone({ symbol: h.symbol, sold, received: `${got} ${out.symbol}`, sig }), {
@@ -5098,6 +5102,23 @@ bot.action('sellback:amount', async (ctx) => {
 });
 
 /** Quote the best route and build the confirmation card. Shared by the typed and preset paths. */
+/** Price impact, slippage and gas all stop at 3%. */
+const MAX_IMPACT_PCT = GAS_CAP_PCT;
+
+/** Loss from price impact and fees, in %: 100 * (1 - out value / in value). Null when unpriced. */
+async function swapImpactPct(cc: ChainCtx, f: TSwapFlow, inWei: bigint, outWei: bigint): Promise<number | null> {
+  const base = f.base!;
+  if (!f.token || f.tokenDec === undefined) return null;
+  const tokenPx = (await explore.tokenUsdPrices(cc, [f.token]))?.get(f.token.toLowerCase()) ?? null;
+  const basePx = isStableBase(base.kind) ? 1 : await getEthUsd(cc.wethAddress, cc).catch(() => null);
+  if (!tokenPx || !basePx) return null;
+  const baseUsd = (w: bigint) => Number(ethers.formatUnits(w, base.decimals)) * basePx;
+  const tokUsd = (w: bigint) => Number(ethers.formatUnits(w, f.tokenDec!)) * tokenPx;
+  const inUsd = f.buy ? baseUsd(inWei) : tokUsd(inWei);
+  const outUsd = f.buy ? tokUsd(outWei) : baseUsd(outWei);
+  return inUsd > 0 ? (1 - outUsd / inUsd) * 100 : null;
+}
+
 async function tswapQuoteConfirm(
   ctx: any,
   tflow: TSwapFlow,
@@ -5138,6 +5159,20 @@ async function tswapQuoteConfirm(
   if (!q) {
     tswapFlows.delete(ctx.from!.id);
     return editProgress(ctx, prog, msg.msgError('swap', 'No route (thin pool/liquidity). Try a different amount or token.'));
+  }
+  // Price impact, capped at the same 3% as gas and slippage. Measured as what comes out
+  // against what goes in, both at market price; a token with no readable price, or a
+  // native side without a price, skips the check rather than blocking on a guess.
+  {
+    const impact = await swapImpactPct(cc, tflow, amountWei, q.out).catch(() => null);
+    if (impact !== null && impact > MAX_IMPACT_PCT) {
+      tswapFlows.delete(ctx.from!.id);
+      return editProgress(
+        ctx,
+        prog,
+        msg.msgError('swap', `Price impact is ${impact.toFixed(1)}%, above the ${MAX_IMPACT_PCT}% limit. Nothing was sent. Try a smaller amount.`),
+      );
+    }
   }
   const outDec = tflow.buy ? tflow.tokenDec! : base.decimals;
   const outSym = tflow.buy ? tflow.tokenSym! : base.symbol;

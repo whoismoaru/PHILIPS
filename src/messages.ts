@@ -2112,12 +2112,14 @@ export function msgSettings(
     `Gas: auto-fetched, max ${GAS_CAP_PCT}% of the trade value`,
     // These match what the code ACTUALLY does: a swap steps 1% -> 2% -> 3% and never
     // beyond, while an LP mint is a separate, far tighter figure.
-    'Swap slippage: 1%, retried at 2% then 3%',
+    `Swap slippage: 1%, retried at 2% then ${GAS_CAP_PCT}% max`,
+    `Price impact: max ${GAS_CAP_PCT}%`,
     'LP mint slippage: 0.5%',
     ...(shape ? [`LP shape: ${shape}${lpShape === 'bidask' && legs ? `, legs ${esc(legs)}` : ''}`] : []),
   ];
   const sol = [
-    'Slippage: 3%',
+    `Slippage: ${GAS_CAP_PCT}%`,
+    `Price impact: max ${GAS_CAP_PCT}%`,
     `Priority fee: auto, max ${GAS_CAP_PCT}% of the trade value`,
     ...(shape ? [`LP shape: ${shape}`] : []),
   ];

@@ -3,7 +3,7 @@ import { ethers } from 'ethers';
 import { config } from '../config.js';
 import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset } from '../core.js';
 import { CHAINS, getChain, isStableBase, type ChainCtx, type BaseKind } from '../chains.js';
-import { setGasValue } from '../gasBudget.js';
+import { setGasValue, GAS_CAP_PCT } from '../gasBudget.js';
 import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridgeRoute.js';
 import { NATIVE } from '../relay.js';
 import { lifiSupports, lifiBridgeQuote } from '../lifi.js';
@@ -431,6 +431,12 @@ async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<voi
     }
     const assets = { originCurrency: flow.originCurrency, destinationCurrency: flow.destinationCurrency };
     const { provider, quote: q } = await bestBridgeQuote(from, to, wei, assets);
+    // Price impact stops at 3%, the same as gas and slippage.
+    if (q.impactPct != null && Math.abs(q.impactPct) > GAS_CAP_PCT) {
+      await editProgress(ctx, prog, msg.msgError('bridge',
+        `Price impact is ${Math.abs(q.impactPct).toFixed(1)}%, above the ${GAS_CAP_PCT}% limit. Nothing was sent. Try a smaller amount.`));
+      return;
+    }
     flow.awaitingAmount = false;
     flow.amountWei = wei;
     flow.provider = provider;
