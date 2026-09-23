@@ -5890,7 +5890,8 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
           ...(r.cashedOut ? [`Swap: token → ${r.cashedOut}`] : []),
         ],
         ethOut: `${msg.cleanUnits(r.baseOutWei, dec)} ${sym}`,
-        txHashes: r.txHash ? [r.txHash] : [],
+        // The swap's own hash too: the close alone does not prove the cash-out happened.
+        txHashes: [...(r.txHash ? [r.txHash] : []), ...(r.cashTxHashes ?? [])],
         baseSymbol: sym,
         native: r.base === 'ETH',
       }),
@@ -6376,7 +6377,8 @@ async function execCloseV4(ctx: any) {
             ...(r.cashedOut ? [`Swap: token → ${r.cashedOut}`] : []),
           ],
           ethOut: outLabel4,
-          txHashes: r.txHash ? [r.txHash] : [],
+          // The swap's own hash too: the close alone does not prove the cash-out happened.
+        txHashes: [...(r.txHash ? [r.txHash] : []), ...(r.cashTxHashes ?? [])],
           baseSymbol: sym4,
           native: r.base === 'ETH',
           leftover: !!r.leftover,

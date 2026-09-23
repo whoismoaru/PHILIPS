@@ -436,6 +436,7 @@ export async function closePositionV4(
   base: 'ETH' | 'USDG' | null;
   other?: string; // token non-base → jurnal & kandidat sweep
   cashedOut?: string;
+  cashTxHashes?: string[];
   leftover?: string;
   unprotected?: boolean; // the burn was forced through without a price floor
   /** The symbol of a side that had to be FORFEITED because the token refuses transfers. */
@@ -520,6 +521,7 @@ export async function closePositionV4(
     base: 'ETH' | 'USDG' | null;
     other?: string; // the non-base token address, used by the journal and as a sweep candidate
     cashedOut?: string;
+    cashTxHashes?: string[];
     leftover?: string;
     unprotected?: boolean;
     forfeited?: string;
@@ -542,7 +544,10 @@ export async function closePositionV4(
         const r = base === 'ETH'
           ? await swapTokenToEthRobust(other, bal, cc)
           : await swapTokenToUsdgRobust(other, bal, stableOf(cc)!.addr, cc);
-        out.cashedOut = `${base} via ${r.route}`;
+        // The chain's real symbol (USDT on BSC), not the internal 'USDG' kind; route without its
+        // '-usdg' suffix, which named the code path, not the asset.
+        out.cashTxHashes = r.txHashes ?? [];
+        out.cashedOut = `${v4BaseSymbol(cc, base)} via ${r.route.replace(/-usdg\b/, '')}`;
       }
     } catch (e) {
       out.leftover = (e as Error).message.slice(0, 100); // token receh tetap di wallet (aman)
@@ -636,7 +641,7 @@ export async function closeLadderV4(
   tokenIds: string[],
   cc: ChainCtx,
   opts: { dryRun: boolean },
-): Promise<{ dryRun?: boolean; txHash?: string; base: 'ETH' | 'USDG' | null; other?: string; sym0: string; sym1: string; baseOutWei: bigint; cashedOut?: string; unprotected?: string[]; gone?: string[] }> {
+): Promise<{ dryRun?: boolean; txHash?: string; base: 'ETH' | 'USDG' | null; other?: string; sym0: string; sym1: string; baseOutWei: bigint; cashedOut?: string; cashTxHashes?: string[]; unprotected?: string[]; gone?: string[] }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
   const pm = new ethers.Contract(pmAddr, V4_WRITE_ABI, cc.wallet);
@@ -700,6 +705,7 @@ export async function closeLadderV4(
   const tx = await sendTxNonceSafe(cc.wallet as ethers.Wallet, await pm.modifyLiquidities.populateTransaction(unlockData, deadline));
   const rc = await tx.wait();
   let cashedOut: string | undefined;
+  let cashTxHashes: string[] = [];
   // Swap the whole token proceeds (aggregated across legs) to base in one go.
   if (base && other && other !== ethers.ZeroAddress) {
     try {
@@ -707,7 +713,8 @@ export async function closeLadderV4(
       const bal: bigint = await erc.balanceOf(cc.wallet.address);
       if (bal > 0n) {
         const r = base === 'ETH' ? await swapTokenToEthRobust(other, bal, cc) : await swapTokenToUsdgRobust(other, bal, stableOf(cc)!.addr, cc);
-        cashedOut = `${base} via ${r.route}`;
+        cashTxHashes = r.txHashes ?? [];
+        cashedOut = `${v4BaseSymbol(cc, base)} via ${r.route.replace(/-usdg\b/, '')}`;
       }
     } catch { /* token receh tetap di wallet */ }
   }
@@ -719,7 +726,7 @@ export async function closeLadderV4(
   }
   const afterWei = await readBase();
   const baseOutWei = afterWei > beforeWei ? afterWei - beforeWei : 0n;
-  return { txHash: rc?.hash ?? tx.hash, base, other: other ?? undefined, sym0, sym1, baseOutWei, cashedOut, unprotected: unprotectedIds, gone };
+  return { txHash: rc?.hash ?? tx.hash, base, other: other ?? undefined, sym0, sym1, baseOutWei, cashedOut, cashTxHashes, unprotected: unprotectedIds, gone };
 }
 
 // Per-chain cache of the v4 list (short TTL): several commands (/status,
