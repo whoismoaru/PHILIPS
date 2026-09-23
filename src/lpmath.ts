@@ -32,8 +32,18 @@ export function amountsForLiquidity(
   return { amount0: 0n, amount1: amount1Delta(sqrtA, sqrtB, L) };
 }
 
-/** Width of the PRICE BAND tolerated when withdrawing liquidity (0.5%). */
-export const WITHDRAW_BAND_BPS = 50n;
+/**
+ * Width of the PRICE BAND tolerated when withdrawing liquidity: 3%, the same limit as
+ * slippage and price impact everywhere else.
+ *
+ * It was 0.5%. On 23 Sep 2026 a BSC v4 close passed its simulation, then
+ * the token moved more than 0.5% in the ~1s before inclusion and the burn reverted with
+ * MinimumAmountInsufficient (it landed at once on the high gas price, so the
+ * gas was not the problem). The retry at a fresh price succeeded 9s later. A meme token
+ * moves 0.5% between two blocks routinely; 3% still stops a sandwich that would push the
+ * price to a range edge.
+ */
+export const WITHDRAW_BAND_BPS = 300n;
 
 /** Integer-rounding cushion; without it a floor can land 1 wei too high. */
 const ROUNDING_BPS = 1n;
@@ -66,7 +76,7 @@ export const shiftSqrt = (sqrtP: bigint, bps: bigint): bigint =>
  * per-side floor pins COMPOSITION, which is meant to move, instead of VALUE.
  *
  * The way it works now: token amounts are a deterministic function of price as
- * long as liquidity is fixed. So the floor comes from a PRICE BAND of +/-0.5% —
+ * long as liquidity is fixed. So the floor comes from a PRICE BAND of +/-3% (WITHDRAW_BAND_BPS) —
  * compute the amounts at both edges and take the smaller of each side. Since
  * amount0 falls as price rises and amount1 rises with it, that lands on amount0
  * at the upper edge and amount1 at the lower one. Ordinary movement inside the
