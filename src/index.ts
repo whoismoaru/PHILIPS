@@ -3797,11 +3797,7 @@ async function renderTokenHub(
     ...(rowTok.length ? [rowTok] : []),
     // This card is static: its prices are frozen at the second you pasted the CA. For a
     // newly born token a minute is already a long time, so offer a way to refresh in place.
-    [
-      Markup.button.callback('🔄 Refresh', `ca:refresh:${ca}`),
-      Markup.button.callback('🛡 Audit', 'ca:audit'),
-      Markup.button.callback('❌ Cancel', 'cancel'),
-    ],
+    [Markup.button.callback('🔄 Refresh', `ca:refresh:${ca}`), Markup.button.callback('❌ Cancel', 'cancel')],
     [Markup.button.callback('⬅️ Back to Menu', 'positions_back')],
   ]);
 
@@ -3826,14 +3822,6 @@ async function renderTokenHub(
  * screening is handed over (never re-scanned), and every confirmation and guard still
  * belongs to the original flow.
  */
-// The full security audit behind the card's one-line verdict, as its own message.
-bot.action('ca:audit', async (ctx) => {
-  const h = hubs.get(ctx.from!.id);
-  if (!h) return ctx.answerCbQuery('Expired. Paste the CA again.');
-  await ctx.answerCbQuery();
-  return ctx.reply(h.screenText, { ...html, ...Markup.inlineKeyboard([[Markup.button.callback('❌ Close', 'dismiss')]]) });
-});
-
 bot.action(/^ca:refresh:(0x[0-9a-fA-F]{40})$/, async (ctx) => {
   const ca = ethers.getAddress(ctx.match[1]);
   const h = hubs.get(ctx.from!.id);
