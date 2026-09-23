@@ -24,7 +24,7 @@ import { onchainV4Pools } from './onchainPools.js';
 import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
 import { solPositions, mintDecimals } from './solana/positions.js';
-import { solHoldings, type SolHolding } from './solana/holdings.js';
+import { solHoldings, solUsd, type SolHolding } from './solana/holdings.js';
 import * as chainToggle from './chainToggle.js';
 import { rpcUrl as solRpcUrl } from './solana/rpc.js';
 import { TRADE_LIMIT_PCT } from './tradeLimit.js';
@@ -3620,19 +3620,14 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   flow.previewBack = 'buyback:size'; // Back from the preview returns to the size step
   const cc = CHAINS[flow.chainKey]!;
   const base = flow.base!;
-  let balLine = '';
+  // NET, not raw: for a native base the gas buffer is already taken off (buyUsableWei), so
+  // the figure is exactly what a 100% buy would spend.
+  let net: number | null = null;
+  let usd: number | null = null;
   try {
-    if (base.wrappable) {
-      // What funds it is THAT chain's NATIVE asset (the bot wraps it itself). The symbol
-      // MUST follow the chain: writing 'ETH' while on BSC names an asset that is never
-      // held, and makes the figure read as the wrong chain's balance.
-      const b = await cc.provider.getBalance(cc.wallet.address);
-      balLine = msg.note(`balance: ${Number(ethers.formatEther(b)).toFixed(5)} ${cc.nativeSymbol}`);
-    } else {
-      const bc = new ethers.Contract(base.address, ERC20_ABI, cc.provider);
-      const b: bigint = await bc.balanceOf(cc.wallet.address);
-      balLine = msg.note(`balance: ${Number(ethers.formatUnits(b, base.decimals)).toFixed(2)} ${base.symbol}`);
-    }
+    net = Number(ethers.formatUnits(await buyUsableWei(flow), base.decimals));
+    const px = isStableBase(base.kind) ? 1 : await getEthUsd(cc.wethAddress, cc).catch(() => null);
+    usd = px === null ? null : net * px;
   } catch {
     /* the balance is optional */
   }
@@ -3645,7 +3640,13 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   const backSize = multiBase ? 'buyback:base' : flow.fromHub ? 'hub:back' : 'buyback:safety';
   rows.push([Markup.button.callback('⬅️ Back', backSize), Markup.button.callback('❌ Cancel', 'cancel')]);
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
-  const text = msg.msgTSwapAmountPrompt(true, base.wrappable ? cc.nativeSymbol : base.symbol, balLine);
+  const text = msg.msgBuyStart({
+    symbol: flow.tokenSym ?? '?',
+    chainLabel: cc.label,
+    amount: net ?? 0,
+    unit: base.wrappable ? cc.nativeSymbol : base.symbol,
+    usd: net === null ? null : usd,
+  });
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
 }
 
@@ -4259,13 +4260,11 @@ bot.action(/^solbuy:(.+)$/, async (ctx) => {
     pctPresets.get('buy').map((p) => Markup.button.callback(`${p}%`, `solamt:${p}`)),
   );
   rows.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+  const px = await solUsd().catch(() => null);
+  const netSol = Number(spendable) / jupiter.LAMPORTS;
   return ctx.reply(
-    msg.msgSolBuyAmount({
-      symbol,
-      balanceSol: fmtSol(bal),
-      spendableSol: fmtSol(spendable),
-      reserveSol: fmtSol(SOL_RESERVE_LAMPORTS),
-    }),
+    // The balance shown is what can actually be spent: the fee and rent reserve is already off.
+    msg.msgBuyStart({ symbol, chainLabel: 'Solana', amount: netSol, unit: 'SOL', usd: px ? netSol * px : null }),
     { ...html, ...Markup.inlineKeyboard(rows) },
   );
 });

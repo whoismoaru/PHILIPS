@@ -983,16 +983,6 @@ export function msgTSwapBase(chainLabel: string, buy: boolean): string {
   ].join('\n');
 }
 
-export function msgTSwapAmountPrompt(buy: boolean, sym: string, balanceLine: string): string {
-  return [
-    `${buy ? '📈' : '📉'} ${bold(buy ? 'Buy Amount' : 'Sell Amount')}`,
-    '',
-    balanceLine,
-    '',
-    `💬 Type how much ${bold(sym)} to ${buy ? 'spend' : 'sell'}${buy ? '' : ` (or ${code('all')})`}.`,
-  ].join('\n');
-}
-
 export function msgTSwapConfirm(o: {
   buy: boolean;
   chainLabel: string;
@@ -1591,21 +1581,18 @@ export function msgSolToken(opts: {
 }
 
 /** The amount step of a Solana buy: how much SOL to spend. */
-export function msgSolBuyAmount(o: { symbol: string; balanceSol: string; spendableSol: string; reserveSol: string }): string {
+/** Step 1 of every buy: the NET balance ready to spend (fees and reserves already taken off). */
+export function msgBuyStart(o: { symbol: string; chainLabel: string; amount: number; unit: string; usd: number | null }): string {
   const sym = o.symbol.replace(/^\$+/, '');
-  return card(
-    `\u{1F6D2} ${bold('BUY')} $${esc(sym)} ${italic('(Solana)')}`,
-    [
-      `\u251C Balance: ${esc(o.balanceSol)} SOL`,
-      `\u251C Reserved: ${esc(o.reserveSol)} SOL`,
-      `\u2514 Spendable: ${esc(o.spendableSol)} SOL`,
-      '',
-      note('the reserve covers network fees and the token account rent; it is never spent.'),
-      '',
-      'Pick a share of the spendable balance, or type an amount in SOL.',
-    ],
-    footerMode(),
-  );
+  const amt = o.amount.toLocaleString('en-US', { maximumFractionDigits: 4 });
+  const usd = o.usd === null ? '—' : usdPlain(o.usd);
+  return [
+    `🛒 ${bold(`BUY $${esc(sym)}`)} (${esc(o.chainLabel)})`,
+    '',
+    `» Balance: ${bold(`${esc(amt)} ${esc(o.unit)}`)} / ${bold(usd)}`,
+    '',
+    note(nowWib()),
+  ].join('\n');
 }
 
 /** The confirm step: the numbers being risked, before anything is signed. */
