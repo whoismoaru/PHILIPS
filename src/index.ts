@@ -5545,6 +5545,40 @@ bot.action(/^solcl:(\w{8})$/, async (ctx) => {
   await solCloseRun(ctx, ctx.match[1]);
 });
 
+/**
+ * Keep trying to sell a closed position's leftover token for SOL: every 30s for 15
+ * minutes. Success is booked as a 'recovery' in the journal and reported with the
+ * LEFTOVER SWEPT card.
+ */
+function solSweepLater(chatId: number, mint: string, amount: bigint, position: string, symbol: string): void {
+  let tries = 0;
+  const tick = async () => {
+    const kp = solWallet.keypair();
+    if (!kp) return;
+    tries++;
+    try {
+      const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+      await jupiter.executeSwap(q, kp);
+      const out = BigInt(q.outAmount);
+      journal.noteUsdRate('SOL', await solUsd().catch(() => null));
+      journal.recordRecovery({ tokenId: position, symbol: `${symbol}/SOL`, ca: mint, chain: 'solana', amountWei: out });
+      await bot.telegram
+        .sendMessage(chatId, msg.msgSwept({ symbol, tokenId: position.slice(0, 8), amountLabel: `${Number((Number(out) / 1e9).toFixed(5))} SOL`, dryRun: false }), html)
+        .catch(() => {});
+    } catch (e) {
+      if (tries >= 30) {
+        console.error(`[sol-sweep] ${symbol} gave up after ${tries} tries:`, (e as Error).message.slice(0, 120));
+        await bot.telegram
+          .sendMessage(chatId, msg.msgError('sweep', `$${symbol} could not be sold for SOL after 15 minutes. It is in your wallet: sell it with /swap.`), html)
+          .catch(() => {});
+        return;
+      }
+      setTimeout(tick, 30_000);
+    }
+  };
+  setTimeout(tick, 5_000);
+}
+
 /** Close one Solana position by its row id. Returns false when it did not close. */
 async function solCloseRun(ctx: any, id: string): Promise<boolean> {
   const ref = solRowRef.get(id);
@@ -5567,6 +5601,7 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
     const notes = ['Close DLMM position (withdraw, claim fees, close account)'];
     const sigs = [...r.signatures];
     let leftover = false;
+    const unswapped: Array<{ mint: string; amount: bigint }> = [];
     /** Swap `amount` of `mint` to SOL; returns the lamports received, 0n on failure. */
     const toSol = async (mint: string, amount: bigint, what: string): Promise<bigint> => {
       if (amount <= 0n) return 0n;
@@ -5589,8 +5624,9 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
       } catch (e) {
         // It stays in the wallet and /swap can move it; the close itself succeeded.
         leftover = true;
+        unswapped.push({ mint, amount });
         console.error(`[sol-close] ${what} -> SOL failed:`, (e as Error).message.slice(0, 160));
-        notes.push(`Swap ${what} → SOL failed: it is in your wallet (use /swap)`);
+        notes.push(`Swap ${what} → SOL failed: retrying in the background`);
         return 0n;
       }
     };
@@ -5623,6 +5659,9 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
         ]),
       },
     );
+    // Whatever did not swap is retried behind the card until it does, and booked into /pnl
+    // as a recovery, so the position's PnL ends up complete.
+    for (const u of unswapped) solSweepLater(ctx.chat.id, u.mint, u.amount, ref.position, entry?.symbol ?? '?');
     if (entry) {
       // Book it in /pnl, in SOL. A USDC deposit is converted at today's SOL price; with
       // no price there is no honest figure, so it is left out rather than guessed.

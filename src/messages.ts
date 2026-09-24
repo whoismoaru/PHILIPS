@@ -2457,7 +2457,7 @@ export function msgCashOut(opts: {
   // A failed swap on Solana: the token is in the wallet and nothing retries it later, so
   // the card must not claim it was swapped.
   if (opts.leftover && opts.protocol === 'DLMM') {
-    out.push('', 'The token swap failed, so it is still in your wallet. Sell it with /swap.', '', note(nowWib()));
+    out.push('', 'The token swap failed. It is retried in the background and added to this PnL once sold.', '', note(nowWib()));
     return out.join('\n');
   }
   out.push(
