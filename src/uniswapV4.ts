@@ -742,6 +742,25 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
   const ck = `${cc.key}:${onlyLive}`;
   const hit = listCache.get(ck);
   if (hit && Date.now() - hit.t < LIST_TTL_MS) return hit.v;
+  // Stale but recent: answer with it now and refresh behind. A cold read is ~3s on
+  // Robinhood, and every open/close clears this cache, so a stale list can only be off by
+  // price drift, never by a position that came or went.
+  if (hit && Date.now() - hit.t < LIST_STALE_MS) {
+    if (!refreshing.has(ck)) {
+      refreshing.add(ck);
+      listFresh(cc, onlyLive, ck).catch(() => {}).finally(() => refreshing.delete(ck));
+    }
+    return hit.v;
+  }
+  return listFresh(cc, onlyLive, ck);
+}
+
+const LIST_STALE_MS = 10 * 60_000;
+const refreshing = new Set<string>();
+
+async function listFresh(cc: ChainCtx, onlyLive: boolean, ck: string): Promise<V4Position[]> {
+  const pmAddr = V4_PM[cc.key]!;
+  const gen = listGen;
   const ids = await walletV4TokenIds(cc);
   if (ids.length === 0) return [];
   const pm = new ethers.Contract(pmAddr, V4_ABI, cc.provider);
@@ -819,12 +838,15 @@ export async function listPositionsV4(cc: ChainCtx, { onlyLive = true }: { onlyL
     },
   );
   const out = rows.filter((r): r is V4Position => r !== null);
-  listCache.set(ck, { t: Date.now(), v: out });
+  // A close or open during this read has cleared the cache; do not put the old list back.
+  if (gen === listGen) listCache.set(ck, { t: Date.now(), v: out });
   return out;
 }
 
 /** Drop the v4 list cache (called after opening or closing so /positions stays fresh). */
+let listGen = 0;
 export function invalidateV4ListCache(): void {
+  listGen++;
   listCache.clear();
 }
 

@@ -28,7 +28,14 @@ bot.use((ctx, next) => {
     console.log(`[guard] ignored an update from id ${ctx.from?.id} (chat ${ctx.chat?.type}); TELEGRAM_ALLOWED_USER_ID is ${config.telegram.allowedUserId}`);
     return;
   }
-  return next();
+  // Slow handlers name themselves in the log, so the next thing to speed up is measured,
+  // not guessed.
+  const t0 = Date.now();
+  const what = (ctx.message as any)?.text?.split(' ')[0] ?? (ctx.callbackQuery as any)?.data ?? ctx.updateType;
+  return Promise.resolve(next()).finally(() => {
+    const ms = Date.now() - t0;
+    if (ms > 1500) console.log(`[slow] ${String(what).slice(0, 40)} took ${ms}ms`);
+  });
 });
 
 /**

@@ -1823,7 +1823,9 @@ async function cmdPositions(ctx: any, edit = false) {
   // say) so /positions does not miss them. This function is fail-safe: a failed read
   // leaves the store untouched. Sync used to run only on /start, so a new position never
   // appeared.
-  await syncOnChainPositions(cc).catch(() => {});
+  // Capped at 1.5s: a slow RPC must not hold the card. A sync that runs over still
+  // finishes behind it, and the next refresh shows whatever it found.
+  await Promise.race([syncOnChainPositions(cc).catch(() => {}), new Promise((r) => setTimeout(r, 1_500))]);
   const active = store.active();
   // v4 from EVERY chain that supports it, not just the active one.
   //
@@ -7373,6 +7375,13 @@ function startWatchdog() {
   }, EVERY_MS).unref();
 }
 startWatchdog();
+// Keep each chain's v4 list warm, so /positions, /portfolio and /stop answer from memory
+// instead of a ~3s cold read.
+const warmV4 = () => {
+  for (const c of Object.values(CHAINS)) if (v4Supported(c)) listPositionsV4(c).catch(() => {});
+};
+warmV4();
+setInterval(warmV4, 4 * 60_000);
 
 // --- Auto-recovery: an unhandled error logs, notifies, and restarts via systemd ---
 async function notifyCrash(kind: string, err: unknown) {
