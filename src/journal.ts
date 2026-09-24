@@ -1,7 +1,11 @@
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ethers } from 'ethers';
-import { baseDecimalsOf, getChain, CHAINS, type BaseKind } from './chains.js';
+import { baseDecimalsOf as evmDecimalsOf, getChain, CHAINS, type BaseKind } from './chains.js';
+
+/** Solana entries are always booked in SOL (lamports, 9 decimals). */
+const baseDecimalsOf = (chain: string | undefined, kind: BaseKind | undefined): number =>
+  chain === 'solana' ? 9 : evmDecimalsOf(chain, kind);
 
 /**
  * Closed-trade journal (append-only, its own file at `data/journal.jsonl`).
@@ -194,6 +198,7 @@ export function recentTokens(limit = 80): Array<{ ca: string; chain?: string; sy
  * native branch, making USDC trades read as ETH or BNB.
  */
 export function unitOf(chain?: string, baseKind?: JournalEntry['baseKind']): string {
+  if (chain === 'solana') return 'SOL';
   const bk = baseKind ?? 'weth';
   if (bk === 'usdg') return 'USDG';
   if (bk === 'usdt') return 'USDT';
@@ -216,6 +221,7 @@ const FLAT_EPS: Record<string, number> = {
   ETH: 0.00005, // ~$0,11 @ $2.300
   BNB: 0.0002, // ~$0,13 @ $650
   HYPE: 0.0012, // ~$0,10 @ $83
+  SOL: 0.001, // ~$0,11 @ $113
 };
 
 /**

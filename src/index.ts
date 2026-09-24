@@ -5587,6 +5587,32 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
       },
     );
     if (entry) {
+      // Book it in /pnl, in SOL. A USDC deposit is converted at today's SOL price; with
+      // no price there is no honest figure, so it is left out rather than guessed.
+      const nowUsd = await solUsd().catch(() => null);
+      const inLamports =
+        entry.baseSymbol === 'USDC'
+          ? nowUsd
+            ? BigInt(Math.round((Number(entry.entryBase) / 1e6 / nowUsd) * 1e9))
+            : null
+          : BigInt(entry.entryBase);
+      if (inLamports !== null && inLamports > 0n) {
+        const inF = Number(inLamports) / 1e9, outF = Number(baseTotal) / 1e9;
+        journal.record({
+          tokenId: ref.position,
+          symbol: `${entry.symbol}/SOL`,
+          ca: entry.mint,
+          chain: 'solana',
+          openedAt: entry.openedAt,
+          closedAt: Date.now(),
+          initialWethWei: inLamports.toString(),
+          resultEthWei: baseTotal.toString(),
+          pnlEth: outF - inF,
+          pnlPct: ((outF - inF) / inF) * 100,
+          reason: 'cashed',
+          usdRate: nowUsd ?? undefined,
+        });
+      }
       // Fees in SOL: each side's fee at the rate that side was actually swapped at.
       const feeSol =
         (baseIsSol ? r.baseFee : r.baseOut > 0n ? (r.baseFee * baseSol) / r.baseOut : 0n) +

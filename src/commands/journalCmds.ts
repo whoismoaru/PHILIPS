@@ -1,3 +1,4 @@
+import { solUsd } from '../solana/holdings.js';
 import { Markup, Input } from 'telegraf';
 import { config } from '../config.js';
 import { bot, html } from '../core.js';
@@ -94,6 +95,7 @@ async function usdRates(): Promise<Map<string, number | null>> {
       m.set(unit, b.kind === 'weth' ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1);
     }
   }
+  m.set('SOL', await solUsd().catch(() => null));
   return m;
 }
 
