@@ -91,6 +91,7 @@ import './commands/gas.js';
 import './commands/send.js';
 import { handlePctReply } from './commands/wallet.js';
 import { handleBridgeAmount } from './commands/bridge.js';
+import { handleSolBridgeAmount } from './commands/bridgeSol.js';
 import { handleSendAddress, handleSendAmount } from './commands/send.js';
 import {
   CHAINS,
@@ -7060,6 +7061,7 @@ bot.on(message('text'), async (ctx) => {
 
   // /bridge waiting on an amount — checked first because its state is separate.
   if (await handleBridgeAmount(ctx, raw)) return;
+  if (await handleSolBridgeAmount(ctx, raw)) return;
 
   // A Solana buy waiting on an amount. Checked here, alongside the other amount flows: a
   // bare number typed at that card used to fall all the way through to msgUnknown.

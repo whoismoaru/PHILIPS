@@ -13,6 +13,7 @@ import { getEthUsd } from '../screening.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
+import { solBridgeChains, clearSolBridge } from './bridgeSol.js';
 
 /**
  * /bridge -- move funds between chains.
@@ -254,8 +255,11 @@ function routes(): Array<{ from: ChainCtx; to: ChainCtx }> {
 export async function cmdBridge(ctx: any) {
   await Promise.all([refreshCctpChains(), probePartialPairs()]);
   const rs = routes();
-  if (rs.length === 0) return ctx.reply(msg.msgBridgeUnavailable(), html);
+  // Solana routes sit beside the EVM ones, handled by bridgeSol.ts (Relay).
+  const sol = solBridgeChains();
+  if (rs.length === 0 && sol.length === 0) return ctx.reply(msg.msgBridgeUnavailable(), html);
   flows.delete(ctx.from.id);
+  clearSolBridge(ctx.from.id);
   // TWO per row, filled evenly across all twelve pairs. Telegram splits a row's width
   // between its buttons and offers no width of its own, so buttons-per-row is the only
   // lever: at three, "HyperEVM → Robinhood" gets a third of the screen and wraps.
@@ -267,8 +271,18 @@ export async function cmdBridge(ctx: any) {
       rs.slice(i, i + 2).map((r) => Markup.button.callback(`${r.from.label} → ${r.to.label}`, `br:${r.from.key}:${r.to.key}`)),
     );
   }
+  for (const c of sol) {
+    rows.push([
+      Markup.button.callback(`${c.label} → Solana`, `brs:${c.key}:in`),
+      Markup.button.callback(`Solana → ${c.label}`, `brs:${c.key}:out`),
+    ]);
+  }
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
-  return ctx.reply(msg.msgBridgePick(rs.map((r) => ({ from: r.from.label, to: r.to.label }))), {
+  const listed = [
+    ...rs.map((r) => ({ from: r.from.label, to: r.to.label })),
+    ...sol.flatMap((c) => [{ from: c.label, to: 'Solana' }, { from: 'Solana', to: c.label }]),
+  ];
+  return ctx.reply(msg.msgBridgePick(listed), {
     ...html,
     ...Markup.inlineKeyboard(rows),
   });
