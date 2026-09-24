@@ -260,7 +260,10 @@ export async function gmgnTokenStats(ca: string, chainKey: string): Promise<Gmgn
   const px = n(j?.price?.price);
   if (!px) return null;
   const supply = n(j?.circulating_supply) ?? n(j?.total_supply);
-  const born = n(j?.open_timestamp) ?? n(j?.creation_timestamp);
+  // 0 means "not set" here, not 1970: open_timestamp is 0 on every token that never went
+  // through a launchpad, and taking it hid the real creation time behind "—".
+  const ts = (v: unknown) => (n(v) || null);
+  const born = ts(j?.open_timestamp) ?? ts(j?.creation_timestamp) ?? ts(j?.pool?.creation_timestamp);
   const v: GmgnStats = {
     name: j?.name ?? null,
     priceUsd: px,
