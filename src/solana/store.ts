@@ -30,6 +30,10 @@ export type SolEntry = {
   bins: number;
   /** Dollars per base unit when it opened (SOL price, or 1 for USDC), for a dollar PnL. */
   entryUsd?: number;
+  /** Market cap and pool price (base per token) captured together once, so the card's
+   *  range bounds are fixed ratios of one snapshot instead of drifting with every read. */
+  anchorMcap?: number;
+  anchorPrice?: number;
 };
 
 let cache: Record<string, SolEntry> | null = null;

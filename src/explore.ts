@@ -800,12 +800,16 @@ export async function tokenMarketCap(ctx: ChainCtx, token: string): Promise<numb
     const res = await fetch(`${DEXSCREENER_TOKENS}/${token}`, { signal: AbortSignal.timeout(10_000) });
     if (res.ok) {
       const j: any = await res.json();
+      // The DEEPEST pair's figure, never the first one listed: a dust pair's marketCap is
+      // routinely absurd (GPU once read $4.4e26 and poisoned a position's stored entry).
+      let bestLiq = -1;
       for (const p of j?.pairs ?? []) {
         if (p?.chainId !== ctx.dexKey) continue;
         const n = Number(p?.marketCap ?? p?.fdv ?? NaN);
-        if (Number.isFinite(n) && n > 0) {
+        const liq = Number(p?.liquidity?.usd ?? 0);
+        if (Number.isFinite(n) && n > 0 && n < 1e13 && liq > bestLiq) {
           v = n;
-          break;
+          bestLiq = liq;
         }
       }
     }

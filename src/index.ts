@@ -1580,7 +1580,9 @@ function investedLabel(amount: number, symbol: string, stable: boolean): string 
  * the same ratio comes out of the tick distance.
  */
 function mcapRangeRow(mcEntry: number | undefined, edges: [number, number] | null, nowRatio: number | null): string | null {
-  if (!mcEntry || !edges) return null;
+  // A market cap past $10T is a bad source read (a dust pair once gave $4.5e26), not a
+  // token: show no range rather than that.
+  if (!mcEntry || !edges || !(mcEntry < 1e13)) return null;
   const [hi, lo] = edges[0] >= edges[1] ? edges : [edges[1], edges[0]];
   const now = nowRatio !== null ? ` / now ${explore.usdShort(mcEntry * nowRatio)}` : '';
   return `${explore.usdShort(mcEntry * hi)} ⇄ ${explore.usdShort(mcEntry * lo)}${now}`;
@@ -1791,13 +1793,23 @@ async function solanaRows(): Promise<PosRow[]> {
       // The range read as MARKET CAP, exactly as the EVM rows read it. Market cap scales
       // linearly with price, so mc(edge) = mcNow x (edge price / current price) -- and the
       // ratio comes from the bins, which is the one price on this row that cannot drift.
-      mcRange: mcapRangeRow(
-        mcNow,
-        mcNow && p.currentPrice && p.lowerPrice !== null && p.upperPrice !== null
-          ? [p.upperPrice / p.currentPrice, p.lowerPrice / p.currentPrice]
-          : null,
-        1,
-      ),
+      // Anchored to ONE stored snapshot (mcap + pool price read together), like the EVM rows
+      // anchor to their entry: live mcap and live pool price come from different sources and
+      // disagree by a little on every read, which made the upper bound jump each refresh.
+      mcRange: (() => {
+        if (entry && entry.anchorMcap === undefined && mcNow && p.currentPrice) {
+          entry.anchorMcap = mcNow;
+          entry.anchorPrice = p.currentPrice;
+          solStore.record(entry);
+        }
+        const aM = entry?.anchorMcap ?? mcNow ?? undefined;
+        const aP = entry?.anchorPrice ?? p.currentPrice;
+        return mcapRangeRow(
+          aM,
+          aP && p.lowerPrice !== null && p.upperPrice !== null ? [p.upperPrice / aP, p.lowerPrice / aP] : null,
+          aP && p.currentPrice ? p.currentPrice / aP : null,
+        );
+      })(),
     };
   });
 }
