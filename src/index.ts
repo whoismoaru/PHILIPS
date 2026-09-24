@@ -30,6 +30,7 @@ import { rpcUrl as solRpcUrl, solRpc } from './solana/rpc.js';
 import { TRADE_LIMIT_PCT, SELL_IMPACT_PCT } from './tradeLimit.js';
 import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
+import * as limits from './limits.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
 import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition } from './solana/lp.js';
@@ -1073,6 +1074,7 @@ async function buildPositionCard(
       // Straight to the executor, no confirmation card -- the same shape as swap, bridge
       // and withdraw. `stop:` (which asks first) stays registered for older cards.
       [Markup.button.callback('⛔ Close Position', `close:${rec.tokenId}`)],
+      [Markup.button.callback('🎯 Take Profit', `tp:v3:${rec.tokenId}`)],
       [Markup.button.callback('⬅️ Positions', 'positions')],
     ]),
   };
@@ -1547,6 +1549,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
       [Markup.button.callback('🔄 Refresh', `posv4:${p.tokenId}`)],
       // Straight to the executor, as on the v3 card. `closev4:` still asks, for older cards.
       [Markup.button.callback('⛔ Close Position', `closev4go:${p.tokenId}`)],
+      [Markup.button.callback('🎯 Take Profit', `tp:v4:${p.tokenId}`)],
       [Markup.button.callback('⬅️ Positions', 'positions_refresh')],
     ]),
   };
@@ -2109,6 +2112,7 @@ async function cmdPositions(ctx: any, edit = false) {
     Markup.button.callback('🔄 Refresh', 'positions_refresh'),
   ]);
   kbRows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
+  kbRows.push([Markup.button.callback('⏰ Limit Orders', 'limits')]);
   kbRows.push([Markup.button.callback('⛔ Close All Positions', 'closeall_confirm')]);
   const extra = { ...html, ...Markup.inlineKeyboard(kbRows) };
   return edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
@@ -2409,6 +2413,7 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   rows.push(pctPresets.get(pctPresets.scoped('add', addScope)).slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `amt:${p}`)));
   // Back goes to whichever step really precedes the amount now: the leg picker on a
   // ladder, the range picker otherwise.
+  rows.push([Markup.button.callback('⏰ Limit Entry', 'lim:new')]);
   rows.push(
     [Markup.button.callback('⬅️ Back', flow.shape === 'bidask' && (flow.legs ?? 1) > 1 ? 'back:legs' : 'back:range')],
     [Markup.button.callback('❌ Cancel', 'cancel')],
@@ -4333,6 +4338,7 @@ async function solLpAmountStep(ctx: any, f: SolLpFlow, owner: string) {
     pctPresets.get('addamt.sol').slice(0, 4).map((v) => Markup.button.callback(`${v} SOL`, `sollpa:${Math.round(v * jupiter.LAMPORTS)}`)),
   );
   rows.push(pctPresets.get('add.sol').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `sollpp:${p}`)));
+  rows.push([Markup.button.callback('⏰ Limit Entry', 'lim:new')]);
   rows.push([Markup.button.callback('⬅️ Back', 'sollpback'), Markup.button.callback('❌ Cancel', 'cancel')]);
   return ctx.editMessageText(
     msg.msgSolLpAmount({
@@ -5664,6 +5670,7 @@ function solPosCard(row: PosRow, pool: string): { text: string; extra: Record<st
       ...html,
       ...Markup.inlineKeyboard([
         [Markup.button.callback('⛔ Close Position', `solcl:${row.id}`)],
+        [Markup.button.callback('🎯 Take Profit', `tp:sol:${row.id}`)],
         [Markup.button.url('🔍 Meteora', `https://app.meteora.ag/dlmm/${pool}`), Markup.button.callback('📊 Positions', 'positions')],
       ]),
     },
@@ -7199,6 +7206,261 @@ bot.on(message('document'), async (ctx: any) => {
   return handleBgPhoto(ctx, ctx.message.document.file_id);
 });
 
+// ─── Limit orders: entry (open an LP at a market cap) and take profit ────────────────
+//
+// The bot watches market cap every 30s. When a target is crossed it REPLAYS the owner's
+// own taps through bot.handleUpdate -- paste CA, pool, range, legs, amount, or the close
+// button -- so every guard on those paths still runs. See src/limits.ts.
+
+/** Which pool an order means, matched again at trigger time: the card's order can change. */
+const evmPoolRef = (p: explore.TokenPool): string =>
+  [p.protocol, p.fee, p.baseSymbol, p.poolKey?.tickSpacing ?? '', p.poolKey?.hooks ?? '', p.venue ?? ''].join(':');
+
+async function mcapOf(chain: string, ca: string): Promise<number | null> {
+  if (chain === 'solana') return (await solTokenView(ca).catch(() => null))?.facts?.marketCapUsd ?? null;
+  const cc = CHAINS[chain];
+  return cc ? explore.tokenMarketCap(cc, ca).catch(() => null) : null;
+}
+
+type LimitDraft =
+  | { type: 'entry'; order: Omit<limits.LimitEntry, 'id' | 'createdAt' | 'targetMcap' | 'dir' | 'amount'>; at: number }
+  | { type: 'tp'; order: Omit<limits.LimitTp, 'id' | 'createdAt' | 'targetMcap'>; at: number };
+const limitDrafts = new Map<number, LimitDraft>();
+registerFlowReset((uid) => limitDrafts.delete(uid));
+
+const limitsKbRow = () => [Markup.button.callback('⏰ Limit Orders', 'limits')];
+
+// "⏰ Limit Entry" on the amount step, EVM and Solana: the order is this wizard, frozen.
+bot.action('lim:new', async (ctx: any) => {
+  const uid = ctx.from.id;
+  const f = flows.get(uid);
+  const sf = solLpFlows.get(uid);
+  let draft: LimitDraft | null = null;
+  if (f?.awaitingAmount && f.selected) {
+    const base = wizardBase(f);
+    draft = {
+      type: 'entry',
+      at: Date.now(),
+      order: {
+        kind: 'entry',
+        chain: f.chain,
+        ca: f.token,
+        symbol: f.selected.otherSymbol,
+        poolRef: evmPoolRef(f.selected),
+        poolLabel: `$${f.selected.otherSymbol}/$${f.selected.baseSymbol} (${f.selected.protocol}, fee ${Number((f.selected.fee / 10_000).toFixed(2))}%)`,
+        rangePct: f.rangePct ?? 10,
+        legs: f.shape === 'bidask' ? f.legs : undefined,
+        unit: base.wrappable ? wizardCtx(f).nativeSymbol : base.symbol,
+      },
+    };
+    flows.delete(uid); // a number typed next is the order, not a deposit
+  } else if (sf && sf.rangePct !== undefined) {
+    draft = {
+      type: 'entry',
+      at: Date.now(),
+      order: {
+        kind: 'entry',
+        chain: 'solana',
+        ca: sf.pick.mint,
+        symbol: sf.pick.pair.split('/')[0].replace(/^\$+/, '').trim(),
+        poolRef: sf.pick.pool,
+        poolLabel: `${sf.pick.pair} (bin ${sf.pick.binStep ?? '?'})`,
+        rangePct: sf.rangePct,
+        legs: sf.legs,
+        unit: 'SOL',
+      },
+    };
+    solLpFlows.delete(uid);
+  }
+  if (!draft || draft.type !== 'entry') return ctx.answerCbQuery('Expired. Paste the CA again.');
+  await ctx.answerCbQuery();
+  limitDrafts.set(uid, draft);
+  const now = await mcapOf(draft.order.chain, draft.order.ca);
+  return ctx.reply(msg.msgLimitAsk({ kind: 'entry', label: draft.order.poolLabel, range: draft.order.rangePct, legs: draft.order.legs, unit: draft.order.unit, nowMcap: now }), {
+    ...html,
+    ...Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'cancel')]]),
+  });
+});
+
+// "🎯 Take Profit" on a position card.
+bot.action(/^tp:(v3|v4|sol):(\w+)$/, async (ctx: any) => {
+  const [kind, id] = [ctx.match[1], ctx.match[2]];
+  let chain = '', ca = '', symbol = '', posRef = '';
+  if (kind === 'v3') {
+    const r = store.get(id);
+    if (r) [chain, ca, symbol, posRef] = [r.chain ?? 'robinhood', r.ca, r.symbol.split('/').find((s) => !/^(W?ETH|USDG|USDT0?|USDC|W?BNB|W?HYPE)$/i.test(s)) ?? r.symbol, `v3:${id}`];
+  } else if (kind === 'v4') {
+    const r = v4store.getV4(id);
+    if (r) {
+      chain = r.chain ?? 'robinhood';
+      ca = r.baseIsCurrency0 ? r.currency1 : r.currency0;
+      symbol = await v4TokenSymbol(ca, getChain(chain)).catch(() => '?');
+      posRef = `v4:${id}`;
+    }
+  } else {
+    const ref = solRowRef.get(id);
+    const e = ref ? solStore.getEntry(ref.position) : undefined;
+    if (ref && e) [chain, ca, symbol, posRef] = ['solana', e.mint, e.symbol, `sol:${ref.position}`];
+  }
+  if (!ca) return ctx.answerCbQuery('Expired. Open /positions again.');
+  await ctx.answerCbQuery();
+  limitDrafts.set(ctx.from.id, { type: 'tp', at: Date.now(), order: { kind: 'tp', chain, ca, symbol, posRef } });
+  return ctx.reply(msg.msgLimitAsk({ kind: 'tp', label: `$${symbol} #${id}`, nowMcap: await mcapOf(chain, ca) }), {
+    ...html,
+    ...Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'cancel')]]),
+  });
+});
+
+/** The owner's answer to a limit prompt. Returns true when the message was consumed. */
+async function handleLimitReply(ctx: any, raw: string): Promise<boolean> {
+  const d = limitDrafts.get(ctx.from.id);
+  if (!d) return false;
+  if (Date.now() - d.at > 10 * 60_000) {
+    limitDrafts.delete(ctx.from.id);
+    return false;
+  }
+  const parts = raw.trim().split(/\s+/);
+  const target = limits.parseMcap(parts[0] ?? '');
+  const now = await mcapOf(d.order.chain, d.order.ca);
+  if (d.type === 'entry') {
+    const amount = (parts[1] ?? '').replace(',', '.');
+    if (!target || !/^\d*\.?\d+$/.test(amount) || !(Number(amount) > 0)) {
+      await ctx.reply(msg.msgLimitInvalid(`Type the target market cap, then the amount in ${d.order.unit}. For example: 500K 100`), html);
+      return true;
+    }
+    const o = limits.add({ ...d.order, targetMcap: target, amount, dir: now !== null && target > now ? 'above' : 'below' });
+    limitDrafts.delete(ctx.from.id);
+    await ctx.reply(msg.msgLimitSaved(o, now), { ...html, ...Markup.inlineKeyboard([limitsKbRow()]) });
+    return true;
+  }
+  if (!target || parts.length > 1) {
+    await ctx.reply(msg.msgLimitInvalid('Type the target market cap. For example: 2M'), html);
+    return true;
+  }
+  if (now !== null && target <= now) {
+    await ctx.reply(msg.msgLimitInvalid(`Market cap is already ${explore.usdShort(now)}. Take profit needs a target above it.`), html);
+    return true;
+  }
+  const o = limits.add({ ...d.order, targetMcap: target });
+  limitDrafts.delete(ctx.from.id);
+  await ctx.reply(msg.msgLimitSaved(o, now), { ...html, ...Markup.inlineKeyboard([limitsKbRow()]) });
+  return true;
+}
+
+async function cmdLimits(ctx: any, edit = false) {
+  const list = limits.all();
+  const nows = await Promise.all(list.map((l) => mcapOf(l.chain, l.ca)));
+  const rows = list.map((l, i) => [Markup.button.callback(`❌ Cancel ${i + 1}`, `limdel:${l.id}`)]);
+  rows.push([Markup.button.callback('🔄 Refresh', 'limits'), Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
+  const text = msg.msgLimits(list, nows);
+  const extra = { ...html, ...Markup.inlineKeyboard(rows) };
+  return edit ? ctx.editMessageText(text, extra).catch(() => ctx.reply(text, extra)) : ctx.reply(text, extra);
+}
+bot.command('limits', (ctx) => cmdLimits(ctx));
+bot.action('limits', async (ctx: any) => {
+  await ctx.answerCbQuery();
+  return cmdLimits(ctx, true);
+});
+bot.action(/^limdel:(\w+)$/, async (ctx: any) => {
+  const ok = limits.remove(ctx.match[1]);
+  await ctx.answerCbQuery(ok ? 'Cancelled' : 'Already gone');
+  return cmdLimits(ctx, true);
+});
+
+// ── the engine ──
+let limitBusy = false;
+/** Texts the bot sent while replaying an order, so the result can be read back. */
+let limitSeen: string[] | null = null;
+{
+  const { Telegram } = await import('telegraf');
+  const orig = (Telegram.prototype as any).callApi;
+  (Telegram.prototype as any).callApi = function (method: string, payload: any, ...rest: any[]) {
+    if (limitSeen && typeof payload?.text === 'string') limitSeen.push(payload.text);
+    return orig.call(this, method, payload, ...rest);
+  };
+}
+
+async function replay(messageId: number, what: { text?: string; data?: string }): Promise<void> {
+  const uid = config.telegram.allowedUserId;
+  const chat = { id: uid, type: 'private' };
+  const from = { id: uid, is_bot: false, first_name: 'limit' };
+  const n = Date.now();
+  await bot.handleUpdate(
+    what.data
+      ? ({ update_id: n, callback_query: { id: `lim-${n}`, from, chat_instance: 'limit', data: what.data, message: { message_id: messageId, date: 0, chat, from, text: '' } } } as any)
+      : ({ update_id: n, message: { message_id: messageId, date: Math.floor(n / 1000), chat, from, text: what.text } } as any),
+  );
+}
+
+async function fireLimit(l: limits.Limit, now: number): Promise<void> {
+  const uid = config.telegram.allowedUserId;
+  const head = await bot.telegram.sendMessage(uid, msg.msgLimitTriggered(l, now), html);
+  const mid = head.message_id;
+  limitSeen = [];
+  let why: string | null = null;
+  try {
+    if (l.kind === 'tp') {
+      const [k, id] = l.posRef.split(':');
+      if (k === 'sol') {
+        await solanaRows().catch(() => []);
+        const row = [...solRowRef.entries()].find(([, r]) => r.position === id)?.[0];
+        if (!row) why = 'the position is no longer open';
+        else await replay(mid, { data: `solcl:${row}` });
+      } else if (k === 'v4') await replay(mid, { data: `closev4go:${id}` });
+      else await replay(mid, { data: `close:${id}` });
+      if (!why && !limitSeen.some((t) => /POSITION CLOSED/.test(t))) why = lastLine(limitSeen);
+    } else if (l.chain === 'solana') {
+      await replay(mid, { text: l.ca });
+      const i = solPoolPicks.get(uid)?.pools.findIndex((p) => p.pool === l.poolRef) ?? -1;
+      if (i < 0) why = 'that pool is no longer listed';
+      else {
+        await replay(mid, { data: `sollp:${i}` });
+        await replay(mid, { data: `sollpr:${l.rangePct}` });
+        if (pctPresets.shape() === 'bidask') await replay(mid, { data: `sollpl:${l.legs ?? pctPresets.get('legs')[0]}` });
+        await replay(mid + 1, { text: l.amount });
+      }
+    } else {
+      await replay(mid, { text: l.ca });
+      const i = hubs.get(uid)?.pools?.findIndex((p) => evmPoolRef(p) === l.poolRef) ?? -1;
+      if (i < 0 || i > 2) why = 'that pool is no longer among the three listed';
+      else {
+        await replay(mid, { data: `hp:${i}` });
+        await replay(mid, { data: `rng:${l.rangePct}` });
+        if (flows.get(uid)?.shape === 'bidask' && !flows.get(uid)?.awaitingAmount) await replay(mid, { data: `leg:${l.legs ?? pctPresets.get('legs')[0]}` });
+        await replay(mid + 1, { text: l.amount });
+      }
+    }
+    if (!why && l.kind === 'entry' && !limitSeen.some((t) => /POSITION OPENED/.test(t))) why = lastLine(limitSeen);
+  } catch (e) {
+    why = (e as Error).message;
+  } finally {
+    limitSeen = null;
+  }
+  // One shot either way: a failed order that stayed armed would retry every 30 seconds.
+  limits.remove(l.id);
+  await bot.telegram.sendMessage(uid, msg.msgLimitResult(l, why), { ...html, ...Markup.inlineKeyboard([limitsKbRow()]) }).catch(() => {});
+}
+
+const lastLine = (texts: string[]): string =>
+  (texts.filter((t) => !/…<\/i>$|…$/.test(t)).pop() ?? 'no result card came back').replace(/<[^>]+>/g, '').split('\n').filter(Boolean).slice(0, 2).join(' · ').slice(0, 200);
+
+async function checkLimits(): Promise<void> {
+  if (limitBusy || config.safety.dryRun && !process.env.LIMITS_IN_DRY_RUN) return;
+  limitBusy = true;
+  try {
+    for (const l of limits.all()) {
+      const now = await mcapOf(l.chain, l.ca);
+      if (now === null) continue;
+      const hit = l.kind === 'tp' ? now >= l.targetMcap : l.dir === 'below' ? now <= l.targetMcap : now >= l.targetMcap;
+      if (hit) await fireLimit(l, now).catch((e) => console.error('[limits] fire failed:', (e as Error).message));
+    }
+  } finally {
+    limitBusy = false;
+  }
+}
+if (process.env.PHILIPS_HARNESS !== '1') setInterval(() => void checkLimits(), 30_000);
+else (globalThis as any).__checkLimits = checkLimits; // an audit script drives it by hand
+
 bot.on(message('text'), async (ctx) => {
   const raw = (ctx.message.text || '').trim();
 
@@ -7233,6 +7495,9 @@ bot.on(message('text'), async (ctx) => {
     pctPresets.clearEdit(ctx.from.id);
     return ethers.isAddress(raw) ? startTokenHub(ctx, ethers.getAddress(raw)) : startSolToken(ctx, raw);
   }
+
+  // A limit order being typed ("500K 100", "2M").
+  if (await handleLimitReply(ctx, raw)) return;
 
   // /bridge waiting on an amount — checked first because its state is separate.
   if (await handleBridgeAmount(ctx, raw)) return;
@@ -7407,6 +7672,7 @@ const BOT_COMMANDS = [
   // Monitoring
   { command: 'portfolio', description: 'Portfolio, balances & network' },
   { command: 'positions', description: 'Active LP positions (live)' },
+  { command: 'limits', description: 'Limit entry & take-profit orders' },
   { command: 'pnl', description: 'Lifetime PnL summary' },
   // Research
   // LP

@@ -192,13 +192,41 @@ this for you).
 
 ---
 
+## Limit orders
+
+So you don't have to watch the chart. Both are based on **market cap**.
+
+- **Limit entry.** Walk through the LP flow as usual, and at the amount step tap
+  **⏰ Limit Entry** instead of an amount. Type the target market cap and the amount,
+  for example `500K 100`. When the market cap reaches that target, the bot opens the
+  position with the pool, range and legs you picked.
+- **Take profit.** Open a position from `/positions` and tap **🎯 Take Profit**. Type
+  the market cap to close at, for example `2M`. When it gets there, the bot closes the
+  position exactly as the Close button would.
+
+`/limits` lists your open orders and lets you cancel them.
+
+How it works, and what that means for you:
+
+- The bot checks every 30 seconds. A move that starts and ends inside that window can
+  be missed.
+- Nothing is placed on-chain. If the bot is stopped, nothing fires.
+- When a target is crossed, the bot replays the same taps you would make, so every
+  normal check still applies: balance, gas reserve, price impact, the Solana rent rule.
+  It fills at the price of that moment, not at your target.
+- An order runs once. If it fails, the bot tells you why and removes it.
+- Limit orders only run in LIVE mode.
+
+---
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `/start` | The main menu |
 | `/portfolio` | Total equity, what is in LP, and your balances on every chain |
-| `/positions` | Open positions on every chain; tap one to see it or close it |
+| `/positions` | Open positions on every chain; tap one to see it, close it, or set a take profit |
+| `/limits` | Your limit entry and take-profit orders |
 | `/pnl` | Pick a chain and a period; the recap comes back as a picture |
 | paste an address | The token card: buy, sell, or open an LP |
 | `/swap` | Sell anything in your wallets, EVM or Solana, sorted by value |
@@ -293,6 +321,9 @@ wallet, not a vault.
 - **It signs unattended.** A background loop sweeps leftover tokens and unwraps stray
   wrapped native once a minute.
 - **There is no stop-loss.** Alerts tell you when a position moves. They don't act.
+  Take profit is the only automatic close.
+- **Limit orders act on their own.** When a target is crossed, the bot opens or closes a
+  position without asking.
 - **Gas has no ceiling.** The bot pays whatever each chain's official "high" rate is at
   that moment. During a spike that can be expensive.
 - **Your keystore is only as strong as `WALLET_SECRET`.** The installer generates a
@@ -372,8 +403,7 @@ a fake Telegram API.
 
 ## Not supported
 
-Several users on one bot, signing without holding the key, opening positions
-automatically.
+Several users on one bot, signing without holding the key, stop-loss orders.
 
 ---
 

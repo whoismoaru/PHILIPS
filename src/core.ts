@@ -28,6 +28,9 @@ bot.use((ctx, next) => {
     console.log(`[guard] ignored an update from id ${ctx.from?.id} (chat ${ctx.chat?.type}); TELEGRAM_ALLOWED_USER_ID is ${config.telegram.allowedUserId}`);
     return;
   }
+  // A limit order replaying the owner's taps: its callback ids are made up, and Telegram
+  // would refuse to answer them, which would abort the handler before it did anything.
+  if ((ctx.callbackQuery as any)?.id?.startsWith('lim-')) (ctx as any).answerCbQuery = async () => true;
   // Slow handlers name themselves in the log, so the next thing to speed up is measured,
   // not guessed.
   const t0 = Date.now();
@@ -305,6 +308,7 @@ export function resetFlows(uid: number): void {
  */
 export const START_GRID: Array<[label: string, data: string]> = [
   ['💰 Portfolio', 'portfolio'], ['📊 Positions', 'positions'], ['🧾 PnL', 'pnl'],
+  ['⏰ Limits', 'limits'],
   // No Add LP, Close LP or Buy: all three start from a pasted CA or from the position
   // itself in /positions. A button for any of them would only ask for the CA again.
   // Swap stays -- it opens the holdings list, which is the point when the CA is the
