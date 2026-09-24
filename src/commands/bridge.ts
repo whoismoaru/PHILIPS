@@ -13,7 +13,7 @@ import { getEthUsd } from '../screening.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
-import { solBridgeChains, clearSolBridge, evmGasUsd } from './bridgeSol.js';
+import { solBridgeChains, clearSolBridge, evmGasUsd, relayFilled } from './bridgeSol.js';
 
 /**
  * /bridge -- move funds between chains.
@@ -547,6 +547,8 @@ async function execBridge(ctx: any) {
         via: provider === 'lifi' ? 'LI.FI' : provider === 'cctp' ? 'CCTP' : 'Relay',
         bridgeFeeUsd: feeUsd ?? null,
         gasUsd: await evmGasUsd(from, r.txHashes),
+        // Relay can say when the destination received it; other routes are left as sent.
+        pending: (provider ?? 'relay') === 'relay' && r.txHashes.length ? !(await relayFilled(r.txHashes[r.txHashes.length - 1])) : false,
       }),
       {
         ...html,

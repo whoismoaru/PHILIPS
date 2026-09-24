@@ -77,7 +77,8 @@ export const clearSolBridge = (uid: number): void => void flows.delete(uid);
 /** EVM chains Relay carries to and from Solana. */
 export function solBridgeChains(): ChainCtx[] {
   if (!config.solana.enabled || !solWallet.address()) return [];
-  return Object.values(CHAINS).filter((c) => c.key === 'robinhood' || c.key === 'bsc');
+  // Every enabled EVM chain Relay carries; Arc is the one it does not.
+  return Object.values(CHAINS).filter((c) => c.key !== 'arc');
 }
 
 const baseOf = (cc: ChainCtx, kind: BaseKind) => cc.bases.find((b) => b.kind === kind)!;
@@ -106,6 +107,23 @@ async function relayQuote(cc: ChainCtx, dir: Dir, kind: BaseKind, amount: bigint
   const j: any = await res.json().catch(() => ({}));
   if (!res.ok || !j.steps) throw new Error(`Relay has no route right now: ${String(j.message ?? res.status).slice(0, 120)}`);
   return j;
+}
+
+/**
+ * Wait for Relay to report the fill on the destination chain: up to 90s, since most land
+ * in seconds. false means not confirmed yet, not failed.
+ */
+export async function relayFilled(originTx: string): Promise<boolean> {
+  for (let i = 0; i < 30; i++) {
+    const j: any = await fetch(`https://api.relay.link/requests/v2?hash=${originTx}`, { signal: AbortSignal.timeout(8_000) })
+      .then((r) => r.json())
+      .catch(() => null);
+    const st = j?.requests?.[0]?.status;
+    if (st === 'success') return true;
+    if (st === 'failure' || st === 'refund') return false;
+    await new Promise((r) => setTimeout(r, 3_000));
+  }
+  return false;
 }
 
 /** Sign and land Relay's Solana deposit: its instructions, its lookup tables, our fee bid. */
@@ -147,7 +165,15 @@ async function sendSolDeposit(data: any): Promise<string> {
     broadcastOfficial(b64);
   }, 2_000);
   try {
-    const r = await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+    const r = await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed').catch(async (e) => {
+      // An expired wait is not an answer: ask the chain whether it landed before saying no.
+      for (let i = 0; i < 5; i++) {
+        const st = (await conn.getSignatureStatus(sig, { searchTransactionHistory: true }).catch(() => null))?.value;
+        if (st) return { value: { err: st.err } };
+        await new Promise((res) => setTimeout(res, 3_000));
+      }
+      throw new Error(`the deposit never landed (${sig}); nothing left the wallet, so it is safe to try again. ${(e as Error).message.slice(0, 60)}`);
+    });
     if (r.value.err) throw new Error(`the deposit failed on-chain (${sig})`);
   } finally {
     clearInterval(resend);
@@ -281,8 +307,12 @@ async function run(ctx: any, f: Flow, amount: bigint): Promise<void> {
     console.log(`[bridge-sol] ${a}→${b} ${inLabel} → ${outLabel} tx ${hashes.join(',')}`);
     const inUsd = Number(d.currencyIn?.amountUsd), outUsd = Number(d.currencyOut?.amountUsd);
     const bridgeFeeUsd = isFinite(inUsd) && isFinite(outUsd) ? Math.max(0, inUsd - outUsd) : null;
-    const gasUsd = f.dir === 'out' ? await solGasUsd(hashes) : await evmGasUsd(cc, hashes);
-    await editProgress(ctx, prog, msg.msgBridgeDone({ fromLabel: a, toLabel: b, inLabel, outLabel, txHashes: hashes, dryRun: false, bridgeFeeUsd, gasUsd }), {
+    await editProgress(ctx, prog, msg.msgProgress(`sent, waiting for ${b} to receive it…`));
+    const [gasUsd, filled] = await Promise.all([
+      f.dir === 'out' ? solGasUsd(hashes) : evmGasUsd(cc, hashes),
+      relayFilled(hashes[hashes.length - 1]),
+    ]);
+    await editProgress(ctx, prog, msg.msgBridgeDone({ fromLabel: a, toLabel: b, inLabel, outLabel, txHashes: hashes, dryRun: false, bridgeFeeUsd, gasUsd, pending: !filled }), {
       ...html,
       ...Markup.inlineKeyboard([
         ...txButtons(f.dir === 'out' ? 'solana' : cc.key, hashes).map((r) => r.map((x) => Markup.button.url(x.text, x.url))),

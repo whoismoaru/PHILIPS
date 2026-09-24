@@ -208,7 +208,9 @@ export async function lifiBridgeQuote(
     inLabel: fmt(amountWei, Number(inTok.decimals ?? 18), inTok.symbol ?? from.nativeSymbol),
     outLabel: fmt(outWei, Number(outTok.decimals ?? 18), outTok.symbol ?? to.nativeSymbol),
     outWei,
-    impactPct: null,
+    // The same measure Relay reports as totalImpact: value lost between in and out. Left
+    // null, the 3% bridge limit was never applied to a LI.FI route.
+    impactPct: isFinite(inUsd) && isFinite(outUsd) && inUsd > 0 ? -((inUsd - outUsd) / inUsd) * 100 : null,
     feeUsd: feeUsd || null,
     etaSec: q.estimate?.executionDuration != null ? Number(q.estimate.executionDuration) : null,
     steps: [{ to: tr.to, data: tr.data, value: tr.value ?? '0', approvalAddress: q.estimate?.approvalAddress }],

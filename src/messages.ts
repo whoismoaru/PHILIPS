@@ -2685,16 +2685,19 @@ export function msgBridgeDone(o: {
   /** Network fee paid on the origin chain, in dollars. */
   gasUsd?: number | null;
   via?: string;
+  /** Sent, but the destination has not confirmed the fill yet. */
+  pending?: boolean;
 }): string {
   const usd = (n: number) => `$${n < 0.01 ? n.toFixed(4) : n.toFixed(2)}`;
   return [
-    `${o.dryRun ? '\u26AA' : '\u2705'} ${bold(o.dryRun ? 'DRY RUN' : 'BRIDGE FILLED')}`,
+    `${o.dryRun ? '\u26AA' : o.pending ? '\u{1F7E1}' : '\u2705'} ${bold(o.dryRun ? 'DRY RUN' : o.pending ? 'BRIDGE SENT' : 'BRIDGE FILLED')}`,
     '',
     `» Route ${esc(o.fromLabel)} \u2192 ${esc(o.toLabel)}`,
     `» Received ${bold(`+${o.outLabel}`)}`,
     `» Paid ${bold(o.inLabel)} using ${esc(o.via ?? 'Relay')}`,
     ...(o.bridgeFeeUsd != null ? [`» Bridge fee ${bold(usd(o.bridgeFeeUsd))}`] : []),
     ...(o.gasUsd != null ? [`» Gas ${bold(usd(o.gasUsd))}`] : []),
+    ...(o.pending ? ['» Arrival not confirmed yet, track it below'] : []),
     ...txBlock(o.txHashes),
     '',
     note(o.dryRun ? `DRY RUN \u00B7 ${nowWib()}` : nowWib()),
