@@ -653,6 +653,9 @@ async function renderStatus(ctx: any, edit: boolean) {
       }),
     );
     const solAddr = solWallet.address();
+    // Solana LP too: its value and count used to be left out, so the card read "0
+    // positions" with a DLMM position open.
+    const solLpP = solAddr && config.solana.enabled && !chainToggle.isOff('solana') ? solPositions(solAddr).catch(() => []) : Promise.resolve([]);
     const solP = solAddr && config.solana.enabled && !chainToggle.isOff('solana') ? solHoldings(solAddr).catch(() => null) : Promise.resolve(null);
     const [network, chains] = await Promise.all([
       provider.getNetwork(),
@@ -701,6 +704,7 @@ async function renderStatus(ctx: any, edit: boolean) {
     // fail the card; the number that failed is reported so the total does not read as fact.
     let lpUsd: number | null = null;
     let lpFailed = 0;
+    let lpCount = store.active().length;
     const ethUsd = await ethUsdP;
     try {
       const [vals, v4] = await Promise.all([v3ValsP, v4P]);
@@ -714,7 +718,14 @@ async function renderStatus(ctx: any, edit: boolean) {
         const px = pxOf.get(pcc.key) ?? null;
         return p.base === 'USDG' ? v : px !== null ? v * px : null;
       });
-      const all = [...vals, ...v4Vals];
+      const solLp = await solLpP;
+      const solPx = solLp.length ? await solUsd().catch(() => null) : null;
+      const solVals = solLp.map((p) => {
+        const v = p.valueBase + p.feeBase;
+        return p.base?.symbol === 'USDC' ? v : solPx !== null ? v * solPx : null;
+      });
+      lpCount = vals.length + v4.length + solLp.length;
+      const all = [...vals, ...v4Vals, ...solVals];
       lpFailed = all.filter((v) => v === undefined).length;
       const known = all.filter((v): v is number => typeof v === 'number');
       lpUsd = all.some((v) => v === null) && known.length === 0 ? null : known.reduce((a, b) => a + b, 0);
@@ -733,7 +744,7 @@ async function renderStatus(ctx: any, edit: boolean) {
 
     const text = msg.msgStatus({
       dryRun: config.safety.dryRun,
-      positions: store.active().length,
+      positions: lpCount,
       chains: chains.map((c, i) => ({ ...c, tokens: tokenLists[i] })),
       sol: solList,
       totalUsd,
