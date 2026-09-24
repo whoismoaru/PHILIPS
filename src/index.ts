@@ -3905,7 +3905,7 @@ async function renderTokenHub(
 
   // One button per pool shown, opening the LP wizard straight at that pool's range step.
   const poolRows = shown.map((p, i) => [
-    Markup.button.callback(`$${p.otherSymbol}/$${p.baseSymbol} (${p.protocol}, fee ${Number((p.fee / 10_000).toFixed(2))}%)`, `hp:${i}`),
+    Markup.button.callback(`$${p.otherSymbol}/$${p.baseSymbol} (${p.protocol}, fee ${Number((p.fee / 10_000).toFixed(2))}%, bin ${binPctOf(cc, p) ?? "—"})`, `hp:${i}`),
   ]);
   const kb = Markup.inlineKeyboard([
     ...quick,
