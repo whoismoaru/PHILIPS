@@ -138,33 +138,20 @@ export async function cmdSettings(ctx: any) {
   // address, and the two shared one word.
   // Buy / Swap / Add LP amounts, EVM and Solana kept apart (and on EVM, native coin apart
   // from stablecoin), so one number never means two different sizes.
+  // Chain-specific settings live one level down (EVM / SOL), so nothing is listed twice.
   rows.push([
-    Markup.button.callback('⚙️ EVM Presets', 'presets:evm'),
-    Markup.button.callback('⚙️ SOL Presets', 'presets:sol'),
+    Markup.button.callback('⚙️ EVM Settings', 'presets:evm'),
+    Markup.button.callback('⚙️ SOL Settings', 'presets:sol'),
   ]);
-  rows.push([Markup.button.callback('⛔ Close LP % (EVM)', 'pct:stop')]);
   rows.push([
     Markup.button.callback('🌉 Bridge %', 'pct:bridge'),
     Markup.button.callback('📤 Withdraw %', 'pct:send'),
   ]);
-  // The Solana LP flow asks two questions the EVM flows do not: how wide, and how much in
-  // SOL rather than as a share. Both sets of buttons are edited from here like the rest.
-  rows.push([
-    Markup.button.callback('🎯 SOL Range -%', 'pct:solrange'),
-  ]);
-  // The LP shape is a one-off choice, so it lives here rather than being asked on every
-  // deposit. The label carries the current value -- a toggle that does not say what it is
-  // set to makes you tap it to find out.
-  const sh = pctPresets.shape();
-  rows.push([
-    Markup.button.callback(`${sh === 'bidask' ? '◣' : '▬'} LP shape: ${sh === 'bidask' ? 'BID-ASK' : 'SPOT'}`, 'lpshape'),
-    Markup.button.callback('🪜 Ladder legs', 'pct:legs'),
-  ]);
-  rows.push([Markup.button.callback('🔌 Chains on/off', 'chains')]);
   // The PnL card's backdrop. The label says which one is in use, so the state is visible
   // without opening anything.
   rows.push([
-    Markup.button.callback(`🖼 PnL background: ${customBackground() ? 'custom' : 'default'}`, 'pnlbg'),
+    Markup.button.callback('🔌 Chains on/off', 'chains'),
+    Markup.button.callback(`🖼 PnL bg: ${customBackground() ? 'custom' : 'default'}`, 'pnlbg'),
   ]);
   if (addr) rows.push([Markup.button.callback('🔴 Disconnect Wallet', 'disconnect')]);
   else rows.push([Markup.button.callback('🔗 Connect Wallet', 'connect')]);
@@ -176,7 +163,8 @@ export async function cmdSettings(ctx: any) {
       : Markup.button.callback('🔗 Connect SOL Wallet', 'connectsol'),
   ]);
   rows.push([Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
-  return ctx.reply(msg.msgSettings(config.safety.dryRun, maxEthLabel, null, pctPresets.shape(), pctPresets.get('legs').join('/')), {
+  lastMenu.set(ctx.from.id, 'settings');
+  return ctx.reply(msg.msgSettings(config.safety.dryRun), {
     ...html,
     ...Markup.inlineKeyboard(rows),
   });
@@ -221,6 +209,12 @@ bot.action('lpshape', async (ctx: any) => {
   const next = pctPresets.shape() === 'bidask' ? 'spot' : 'bidask';
   pctPresets.setShape(next);
   await ctx.answerCbQuery(next === 'bidask' ? 'Bid-ask ladder' : 'Single spot position');
+  // Redrawn where it was tapped: the shape toggle lives in EVM and SOL Settings.
+  const back = lastMenu.get(ctx.from.id) ?? 'settings';
+  if (back.startsWith('presets:')) {
+    const m = chainMenu(back === 'presets:evm');
+    return ctx.editMessageText(m.text, m.extra).catch(() => {});
+  }
   await ctx.deleteMessage().catch(() => {});
   return cmdSettings(ctx);
 });
@@ -313,24 +307,38 @@ function dualOf(flow: pctPresets.PctFlow): { amt: pctPresets.PctFlow; title: str
   };
 }
 
-/** Preset menus: EVM and Solana apart, and on EVM native coin apart from stablecoin. */
-bot.action(/^presets:(evm|sol)$/, async (ctx) => {
-  pctPresets.clearEdit(ctx.from!.id);
-  await ctx.answerCbQuery();
-  const evm = ctx.match[1] === 'evm';
+/** Which settings screen a sub-card's Back returns to: legs and shape sit under both. */
+const lastMenu = new Map<number, string>();
+
+/** EVM and Solana settings: each chain's presets, LP options and facts, in one place. */
+function chainMenu(evm: boolean) {
+  const sh = pctPresets.shape();
+  const shapeBtn = Markup.button.callback(`${sh === 'bidask' ? '◣' : '▬'} LP shape: ${sh === 'bidask' ? 'BID-ASK' : 'SPOT'}`, 'lpshape');
+  const legsBtn = Markup.button.callback('🪜 Ladder legs', 'pct:legs');
   const rows = evm
     ? [
         [Markup.button.callback('🛒 Buy · Native', 'pctedit:buy'), Markup.button.callback('💱 Swap · Native', 'pctedit:sell')],
         [Markup.button.callback('➕ Add LP · Native', 'pctedit:add')],
         [Markup.button.callback('🛒 Buy · Stablecoin', 'pctedit:buy.evms'), Markup.button.callback('➕ Add LP · Stablecoin', 'pctedit:add.evms')],
+        [shapeBtn, legsBtn],
+        [Markup.button.callback('⛔ Close LP %', 'pct:stop')],
         [Markup.button.callback('⬅️ Back', 'settings')],
       ]
     : [
         [Markup.button.callback('🛒 Buy Token', 'pctedit:buy.sol'), Markup.button.callback('💱 Swap Token', 'pctedit:sell.sol')],
-        [Markup.button.callback('➕ Add LP', 'pctedit:add.sol')],
+        [Markup.button.callback('➕ Add LP', 'pctedit:add.sol'), Markup.button.callback('🎯 Range -%', 'pct:solrange')],
+        [shapeBtn, legsBtn],
         [Markup.button.callback('⬅️ Back', 'settings')],
       ];
-  return ctx.editMessageText(msg.msgPresetMenu(evm), { ...html, ...Markup.inlineKeyboard(rows) });
+  return { text: msg.msgPresetMenu(evm, maxEthLabel, sh, pctPresets.get('legs').join('/')), extra: { ...html, ...Markup.inlineKeyboard(rows) } };
+}
+
+bot.action(/^presets:(evm|sol)$/, async (ctx) => {
+  pctPresets.clearEdit(ctx.from!.id);
+  await ctx.answerCbQuery();
+  lastMenu.set(ctx.from!.id, `presets:${ctx.match[1]}`);
+  const m = chainMenu(ctx.match[1] === 'evm');
+  return ctx.editMessageText(m.text, m.extra);
 });
 
 /** One flow's unit, limits and special notes, shared by all three settings cards. */
@@ -355,10 +363,21 @@ function pctOpts(flow: pctPresets.PctFlow) {
 }
 
 /** One flow's card: the current value plus buttons to change it or restore the defaults. */
+/** Back from a preset card: the settings screen that card belongs to. */
+function backOf(flow: pctPresets.PctFlow): string {
+  if (flow === 'stop') return 'presets:evm';
+  if (flow === 'solrange') return 'presets:sol';
+  const dual = dualOf(flow);
+  if (dual) return dual.back;
+  // Shared by both chains: back to whichever of the two was open. One owner, one entry.
+  if (flow === 'legs') return lastMenu.get(config.telegram.allowedUserId) ?? 'settings';
+  return 'settings';
+}
+
 function pctCardKb(flow: pctPresets.PctFlow) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('✏️ Edit', `pctedit:${flow}`), Markup.button.callback('↩️ Reset', `pctreset:${flow}`)],
-    [Markup.button.callback('⬅️ Back', 'settings')],
+    [Markup.button.callback('⬅️ Back', backOf(flow))],
   ]);
 }
 

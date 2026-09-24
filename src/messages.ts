@@ -956,16 +956,33 @@ export function msgPctPreset(
 /** Prompt to type a list of values. */
 /** The Buy preset prompt, opened straight from /settings. */
 /** The Buy Token prompt: four amounts (native coin) and four percentages in one line. */
-export function msgPresetMenu(evm: boolean): string {
+export function msgPresetMenu(evm: boolean, maxPerTx = '', lpShape: 'spot' | 'bidask' = 'spot', legs = ''): string {
+  const shape = bold(lpShape === 'bidask' ? 'BID-ASK' : 'SPOT');
+  const facts = evm
+    ? [
+        `Tx limit: ${esc(maxPerTx)}`,
+        'Gas: high, from the official RPC',
+        `Swap slippage: 1%, retried at 2% then ${TRADE_LIMIT_PCT}% max`,
+        `Price impact: max ${TRADE_LIMIT_PCT}% to buy, ${SELL_IMPACT_PCT}% to sell`,
+        'LP mint slippage: 0.5%',
+        `LP shape: ${shape}${lpShape === 'bidask' && legs ? `, legs ${esc(legs)}` : ''}`,
+      ]
+    : [
+        `Slippage: ${TRADE_LIMIT_PCT}%`,
+        `Price impact: max ${TRADE_LIMIT_PCT}% to buy, ${SELL_IMPACT_PCT}% to sell`,
+        'Priority fee: high, from the official RPC',
+        `LP shape: ${shape}${lpShape === 'bidask' && legs ? `, legs ${esc(legs)}` : ''}`,
+      ];
   return [
-    `\u2699\uFE0F ${bold(evm ? 'EVM PRESETS' : 'SOL PRESETS')}`,
+    `\u2699\uFE0F ${bold(evm ? 'EVM SETTINGS' : 'SOL SETTINGS')}`,
+    '',
+    ...facts.map((f, i) => `${i + 1}. ${f}`),
     '',
     evm
-      ? '» Native: amounts in each chain\'s coin (ETH, BNB, HYPE)'
-      : '» Amounts in SOL',
-    ...(evm ? ['» Stablecoin: amounts in dollars (USDG, USDT, USDC)'] : []),
+      ? '» Native presets in each chain\'s coin (ETH, BNB, HYPE), Stablecoin presets in dollars'
+      : '» Presets in SOL',
     '',
-    'Pick one to edit its 4 amounts and 4 percentages.',
+    note(nowWib()),
   ].join('\n');
 }
 
@@ -2192,47 +2209,15 @@ export function msgPnlBgReset(): string {
   ].join('\n');
 }
 
-export function msgSettings(
-  dryRun: boolean,
-  maxPerTx: string,
-  gasCeiling?: string | null, // the per-transaction gas cost ceiling; null means none
-  /** Default deposit shape, chosen here instead of on every /add. Shared by both chains. */
-  lpShape?: 'spot' | 'bidask',
-  /** Ladder leg choices, e.g. "3/5/8". EVM only: Meteora shapes its own bid-ask. */
-  legs?: string,
-): string {
-  // Wallet, chain and the quick-% list are deliberately NOT here: the first two already
-  // head the WELCOME card, and each percentage is shown by the button that changes it.
-  // Split by chain because the two paths share almost nothing: the tx limit and gas ceiling
-  // are never checked on Solana, and its slippage is a different constant.
-  const shape = lpShape ? bold(lpShape === 'bidask' ? 'BID-ASK' : 'SPOT') : null;
-  const evm = [
-    `Tx limit: ${esc(maxPerTx)}`,
-    'Gas: high, from the official RPC',
-    // These match what the code ACTUALLY does: a swap steps 1% -> 2% -> 3% and never
-    // beyond, while an LP mint is a separate, far tighter figure.
-    `Swap slippage: 1%, retried at 2% then ${TRADE_LIMIT_PCT}% max`,
-    `Price impact: max ${TRADE_LIMIT_PCT}% to buy, ${SELL_IMPACT_PCT}% to sell`,
-    'LP mint slippage: 0.5%',
-    ...(shape ? [`LP shape: ${shape}${lpShape === 'bidask' && legs ? `, legs ${esc(legs)}` : ''}`] : []),
-  ];
-  const sol = [
-    `Slippage: ${TRADE_LIMIT_PCT}%`,
-    `Price impact: max ${TRADE_LIMIT_PCT}% to buy, ${SELL_IMPACT_PCT}% to sell`,
-    'Priority fee: high, from the official RPC',
-    ...(shape ? [`LP shape: ${shape}`] : []),
-  ];
-  const list = (xs: string[]) => xs.map((f, i) => `${i + 1}. ${f}`);
+export function msgSettings(dryRun: boolean): string {
+  // Chain facts and presets live in EVM / SOL Settings; this card is only the entry point.
   return [
     `\u2699\uFE0F ${bold('SETTINGS')}`,
     '',
     `${bold('Mode')} : ${bold(dryRun ? 'DRY RUN' : 'LIVE')}  ${dryRun ? '\u26AA' : '\u{1F7E2}'}`,
     '',
-    bold('EVM'),
-    ...list(evm),
-    '',
-    bold('Solana'),
-    ...list(sol),
+    '» EVM / SOL Settings: presets, LP shape, legs and limits per chain',
+    '» Bridge % and Withdraw %: shared by every chain',
     '',
     note(nowWib()),
   ].join('\n');
