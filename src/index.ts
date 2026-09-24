@@ -5557,10 +5557,21 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
     const toSol = async (mint: string, amount: bigint, what: string): Promise<bigint> => {
       if (amount <= 0n) return 0n;
       try {
-        const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
-        sigs.push(await jupiter.executeSwap(q, kp));
-        notes.push(`Swap: ${what} → SOL via Jupiter`);
-        return BigInt(q.outAmount);
+        // Right after the close, the RPC that simulates the swap can still be a slot behind
+        // the withdrawal and not see the tokens yet (Jupiter 0x1788). The same swap passes
+        // seconds later, so it is re-quoted and retried rather than left in the wallet.
+        for (let i = 0; ; i++) {
+          try {
+            const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+            sigs.push(await jupiter.executeSwap(q, kp));
+            notes.push(`Swap: ${what} → SOL via Jupiter`);
+            return BigInt(q.outAmount);
+          } catch (e) {
+            if (i >= 3) throw e;
+            console.error(`[sol-close] ${what} -> SOL try ${i + 1} failed, retrying:`, (e as Error).message.slice(0, 120));
+            await new Promise((r) => setTimeout(r, 2_500));
+          }
+        }
       } catch (e) {
         // It stays in the wallet and /swap can move it; the close itself succeeded.
         leftover = true;
