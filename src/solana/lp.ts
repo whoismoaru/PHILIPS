@@ -262,6 +262,19 @@ export async function closePosition(pool: string, position: string, kp: SolKeypa
   const big = (v: unknown) => BigInt(String(v ?? '0').split('.')[0] || '0');
   const x = big(pd.totalXAmount), y = big(pd.totalYAmount);
   const fx = big(pd.feeX?.toString?.() ?? pd.feeX), fy = big(pd.feeY?.toString?.() ?? pd.feeY);
+  // The position's own figures round up per bin; what lands in the wallet can be a few
+  // units less, and a swap for the reported amount then fails (Jupiter 0x1788). So each
+  // SPL side is capped at the wallet's actual balance change.
+  const splBal = async (mint: string): Promise<bigint | null> => {
+    if (mint === 'So11111111111111111111111111111111111111112') return null;
+    try {
+      const r = await conn.getParsedTokenAccountsByOwner(user.publicKey, { mint: new PublicKey(mint) }, 'confirmed');
+      return r.value.reduce((a, v) => a + BigInt(v.account.data.parsed.info.tokenAmount.amount), 0n);
+    } catch {
+      return null;
+    }
+  };
+  const [preX, preY] = await Promise.all([splBal(xMint), splBal(yMint)]);
 
   const txs: Transaction[] = await dlmm.removeLiquidity({
     user: user.publicKey,
@@ -300,10 +313,14 @@ export async function closePosition(pool: string, position: string, kp: SolKeypa
     }
     signatures.push(signature);
   }
+  const [postX, postY] = await Promise.all([splBal(xMint), splBal(yMint)]);
+  const cap = (want: bigint, pre: bigint | null, post: bigint | null) =>
+    pre != null && post != null && post >= pre && post - pre < want ? post - pre : want;
+  const outX = cap(x + fx, preX, postX), outY = cap(y + fy, preY, postY);
   return {
     signatures,
-    baseOut: baseIsX ? x + fx : y + fy,
-    tokenOut: baseIsX ? y + fy : x + fx,
+    baseOut: baseIsX ? outX : outY,
+    tokenOut: baseIsX ? outY : outX,
     baseFee: baseIsX ? fx : fy,
     tokenFee: baseIsX ? fy : fx,
     baseMint: baseIsX ? xMint : yMint,
