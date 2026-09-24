@@ -18,7 +18,18 @@ import { highPriorityMicro, broadcastOfficial } from './fees.js';
 import { signMessage, type SolKeypair } from './keys.js';
 import { solRpc } from './rpc.js';
 
-const JUP = 'https://lite-api.jup.ag/swap/v1';
+/**
+ * Two routes to the same Jupiter router, tried in order:
+ *  1. api.jup.ag with the free API key (JUP_API_KEY): 1 req/s, the supported path.
+ *  2. lite-api.jup.ag, keyless: the public backup (being phased out by Jupiter).
+ * Without a key the first is skipped: keyless api.jup.ag is 0.5 req/s and 429'd a burst
+ * of 8 after 5 in testing (24 Sep 2026), where lite-api took all 8.
+ */
+// Read on each call, so the key is picked up however late .env is loaded.
+const jupHosts = (): Array<{ url: string; headers: Record<string, string> }> => [
+  ...(process.env.JUP_API_KEY ? [{ url: 'https://api.jup.ag/swap/v1', headers: { 'x-api-key': process.env.JUP_API_KEY } }] : []),
+  { url: 'https://lite-api.jup.ag/swap/v1', headers: {} },
+];
 export const WSOL = 'So11111111111111111111111111111111111111112';
 /** Lamports per SOL. */
 export const LAMPORTS = 1_000_000_000;
@@ -35,16 +46,31 @@ export type Quote = {
 };
 
 async function jup<T>(path: string, init?: RequestInit): Promise<T> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 20_000);
-  try {
-    const res = await fetch(`${JUP}${path}`, { ...init, signal: ctrl.signal });
-    const body = await res.text();
-    if (!res.ok) throw new Error(`jupiter ${res.status}: ${body.slice(0, 200)}`);
-    return JSON.parse(body) as T;
-  } finally {
-    clearTimeout(timer);
+  let last: Error | null = null;
+  for (const h of jupHosts()) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20_000);
+    try {
+      const res = await fetch(`${h.url}${path}`, { ...init, headers: { ...(init?.headers as any), ...h.headers }, signal: ctrl.signal });
+      const body = await res.text();
+      // Rate limit, server error or a bad key: the next route may still answer. A 400 is
+      // the request itself (no route, bad amount) and would fail the same way everywhere.
+      if (res.status === 429 || res.status >= 500 || res.status === 401 || res.status === 403) {
+        last = new Error(`jupiter ${res.status}: ${body.slice(0, 200)}`);
+        console.error(`[jupiter] ${new URL(h.url).host} ${res.status}, trying the next route`);
+        continue;
+      }
+      if (!res.ok) throw new Error(`jupiter ${res.status}: ${body.slice(0, 200)}`);
+      return JSON.parse(body) as T;
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError' && !(e instanceof TypeError)) throw e;
+      last = e as Error;
+      console.error(`[jupiter] ${new URL(h.url).host} unreachable, trying the next route`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  throw last ?? new Error('jupiter: no route answered');
 }
 
 /** A quote for spending `amount` base units of inputMint. */
