@@ -2432,6 +2432,12 @@ export function msgCashOut(opts: {
   // closes that returned USDT or USDG, which are never unwrapped and are not ETH. It
   // follows the asset actually received.
   const sym = opts.baseSymbol ?? 'ETH';
+  // A failed swap on Solana: the token is in the wallet and nothing retries it later, so
+  // the card must not claim it was swapped.
+  if (opts.leftover && opts.protocol === 'DLMM') {
+    out.push('', 'The token swap failed, so it is still in your wallet. Sell it with /swap.', '', note(nowWib()));
+    return out.join('\n');
+  }
   out.push(
     '',
     opts.native
