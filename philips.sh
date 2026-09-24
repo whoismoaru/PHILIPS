@@ -293,7 +293,9 @@ function setup_env() {
 
   # API keys the questions above do not ask for survive a re-run of this step.
   local old_env=""; for old in "$f" "$f".bak-*; do [ -f "$old" ] && { old_env="$old"; break; }; done
-  keep() { [ -n "$old_env" ] && grep -m1 "^$1=" "$old_env" 2>/dev/null | cut -d= -f2-; }
+  # Always succeeds: under set -e a failed lookup on a FRESH install (no old .env) would
+  # end the installer on the spot, silently.
+  keep() { [ -n "$old_env" ] && grep -m1 "^$1=" "$old_env" 2>/dev/null | cut -d= -f2-; return 0; }
   [ -z "$JUP" ] && JUP="$(keep JUP_API_KEY)"
   # Read BEFORE the heredoc: its redirect truncates $f, which may be the file read from.
   local GMGN_K KRYSTAL_K; GMGN_K="$(keep GMGN_API_KEY)"; KRYSTAL_K="$(keep KRYSTAL_API_KEY)"
