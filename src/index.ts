@@ -32,7 +32,7 @@ import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
-import { binsForRange, openPosition, quoteOpenCost, closePosition } from './solana/lp.js';
+import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
 import * as solWallet from './solana/walletStore.js';
@@ -564,6 +564,7 @@ bot.action('closeall_confirm', async (ctx: any) => {
   }
   // Solana DLMM too: "Close All" that leaves a chain open is not close all.
   const sol = await solanaRows().catch(() => [] as PosRow[]);
+  collapseLadderRows(sol); // a ladder closes as one: every leg in a single run
   const total = v3.length + v4.length + sol.length;
   if (total === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
 
@@ -1755,6 +1756,14 @@ async function solanaRows(): Promise<PosRow[]> {
   );
   const num = (v: number, dp = 4) => Number(v.toFixed(dp)).toLocaleString('en-US', { maximumFractionDigits: dp });
   for (const p of list) solRowRef.set(p.position.slice(0, 8), { position: p.position, pool: p.pool });
+  // A ladder's range is the span of all its legs, so the merged row shows the whole ladder.
+  const span = new Map<string, { lo: number; hi: number }>();
+  for (const p of list) {
+    const g = solStore.getEntry(p.position)?.groupId;
+    if (!g || p.lowerPrice === null || p.upperPrice === null) continue;
+    const cur = span.get(g);
+    span.set(g, { lo: Math.min(cur?.lo ?? Infinity, p.lowerPrice), hi: Math.max(cur?.hi ?? -Infinity, p.upperPrice) });
+  }
   return list.map((p): PosRow => {
     const baseSym = p.base?.symbol ?? '?';
     // The mint's first four characters only when DexScreener knows no symbol: a pool too
@@ -1775,6 +1784,8 @@ async function solanaRows(): Promise<PosRow[]> {
       pair: `${sym} / ${baseSym}`,
       protocol: 'DLMM',
       chain: 'Solana',
+      groupId: entry?.groupId ?? null,
+      legShape: entry?.groupId ? 'bid-ask' : null,
       // The deposit when it is known, the CURRENT value when it is not -- and the label
       // says which, because "invested" and "worth now" are not the same number.
       investLabel: `${num(entryBase ?? p.valueBase)} ${baseSym}${entryBase === null ? ' (now)' : ''}`,
@@ -1819,9 +1830,11 @@ async function solanaRows(): Promise<PosRow[]> {
         }
         const aM = entry?.anchorMcap ?? mcNow ?? undefined;
         const aP = entry?.anchorPrice ?? p.currentPrice;
+        const sp = entry?.groupId ? span.get(entry.groupId) : undefined;
+        const lo = sp?.lo ?? p.lowerPrice, hi = sp?.hi ?? p.upperPrice;
         return mcapRangeRow(
           aM,
-          aP && p.lowerPrice !== null && p.upperPrice !== null ? [p.upperPrice / aP, p.lowerPrice / aP] : null,
+          aP && lo !== null && hi !== null ? [hi / aP, lo / aP] : null,
           aP && p.currentPrice ? p.currentPrice / aP : null,
         );
       })(),
@@ -3548,6 +3561,7 @@ async function cmdCloseAll(ctx: any) {
     for (const p of await listPositionsV4(c).catch(() => [] as V4Position[])) v4.push({ p, cc: c });
   const v3 = store.active();
   const sol = await solanaRows().catch(() => [] as PosRow[]);
+  collapseLadderRows(sol); // one card per ladder: its Close closes every leg
   if (v3.length + v4.length + sol.length === 0) return ctx.reply(msg.msgNoActiveToStop(), html);
   if (v3.length) await replyActiveCards(ctx, msg.msgCloseAllPick(v3.length, v4.length + sol.length));
   else await ctx.reply(msg.msgCloseAllPick(0, v4.length + sol.length), html);
@@ -4190,7 +4204,7 @@ const fmtSol = (lamports: bigint): string => (Number(lamports) / jupiter.LAMPORT
 type SolPoolPick = { pool: string; pair: string; baseSymbol: string; binStep: number | null; baseFeePct: number | null; mint: string };
 /** What the last CA card offered, per user: the buttons carry an index, not an address. */
 const solPoolPicks = new Map<number, { at: number; pools: SolPoolPick[] }>();
-type SolLpFlow = { pick: SolPoolPick; startedAt: number; rangePct?: number; bins?: number };
+type SolLpFlow = { pick: SolPoolPick; startedAt: number; rangePct?: number; bins?: number; legs?: number };
 const solLpFlows = new Map<number, SolLpFlow>();
 registerFlowReset((uid) => {
   solLpFlows.delete(uid);
@@ -4278,7 +4292,36 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
   // became. A 50% range at bin step 100 wants 69 bins and is trimmed to the 69 a position
   // can hold; saying "50%" alone would hide that.
   f.bins = f.pick.binStep ? binsForRange(f.pick.binStep, rangePct) : undefined;
-  const bal = await jupiter.solBalance(kp.publicKey).catch(() => 0n);
+  f.legs = undefined;
+  // BID-ASK asks how many legs, the same step the EVM ladder has (/settings -> Ladder legs).
+  if (pctPresets.shape() === 'bidask') {
+    const total = f.pick.binStep ? binsForRangeUncapped(f.pick.binStep, rangePct) : 69;
+    const opts = [...new Set(pctPresets.get('legs').map((n) => Math.min(n, total)))];
+    return ctx.editMessageText(msg.msgSolLadderLegs({ pair: f.pick.pair, rangePct: `-${rangePct}%`, bins: total }), {
+      ...html,
+      ...Markup.inlineKeyboard([
+        opts.map((n) => Markup.button.callback(`${n} legs`, `sollpl:${n}`)),
+        [Markup.button.callback('⬅️ Back', 'sollpback'), Markup.button.callback('❌ Cancel', 'cancel')],
+      ]),
+    });
+  }
+  return solLpAmountStep(ctx, f, kp.publicKey);
+});
+
+bot.action(/^sollpl:(\d+)$/, async (ctx) => {
+  const f = solLpFlows.get(ctx.from!.id);
+  if (!f || isStaleFlow(f.startedAt) || f.rangePct === undefined) return ctx.answerCbQuery('Expired. Paste the CA again.');
+  const kp = solWallet.keypair();
+  if (!kp) return ctx.answerCbQuery('No Solana key connected.');
+  await ctx.answerCbQuery();
+  f.legs = Number((ctx.match as RegExpMatchArray)[1]);
+  return solLpAmountStep(ctx, f, kp.publicKey);
+});
+
+/** The amount step, after the range (and on BID-ASK, the leg count). */
+async function solLpAmountStep(ctx: any, f: SolLpFlow, owner: string) {
+  const rangePct = f.rangePct ?? 10;
+  const bal = await jupiter.solBalance(owner).catch(() => 0n);
   const rows = pctPresets.chunkButtons(
     pctPresets.get('addamt.sol').slice(0, 4).map((v) => Markup.button.callback(`${v} SOL`, `sollpa:${Math.round(v * jupiter.LAMPORTS)}`)),
   );
@@ -4288,12 +4331,12 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
     msg.msgSolLpAmount({
       pair: f.pick.pair,
       rangePct: `-${rangePct}%`,
-      bins: f.bins === undefined ? '?' : String(f.bins),
+      bins: f.legs && f.legs > 1 ? `${f.legs} legs` : f.bins === undefined ? '?' : String(f.bins),
       balanceSol: fmtSol(bal),
     }),
     { ...html, ...Markup.inlineKeyboard(rows) },
   );
-});
+}
 
 /**
  * Open the position. Shared by the SOL buttons, the percentage buttons and a typed amount,
@@ -4316,6 +4359,7 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
       ),
     );
   }
+  if (f.legs && f.legs > 1) return solLadderOpen(ctx, f, lamports, edit, kp);
   // Rent Meteora charges to open it. A range that is the first to need a bin array pays to
   // create it, and that part never comes back. At least 90% of the cost must come back on
   // close, or it is refused and never sent (owner's rule, 23 Sep 2026). An unreadable quote
@@ -4383,6 +4427,96 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
     console.error(`[sol-lp] ${f.pick.pool} ${fmtSol(lamports)} SOL failed:`, (e as Error).message);
     return say(msg.msgError('add', (e as Error).message));
   }
+}
+
+type OpenCostT = { refundable: number; nonRefundable: number; total: number };
+
+/**
+ * Open a Solana BID-ASK ladder: N positions, nearest the price first, deepest holding the
+ * most. Every leg's rent is quoted first and the 90%-refundable rule applies to the WHOLE
+ * ladder, before anything is sent. Legs open one transaction each; a failure stops there
+ * and says how many are open, since those are real positions.
+ */
+async function solLadderOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean, kp: SolKeypair): Promise<unknown> {
+  const show = (text: string, extra: Record<string, unknown> = html) =>
+    edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
+  const { plan, legs } = await planLadder(f.pick.pool, f.rangePct ?? 10, f.legs!, lamports);
+  const costs = await Promise.all(legs.map((l) => quoteOpenCost(f.pick.pool, 0, 'spot', l).catch(() => null)));
+  const cost = costs.every(Boolean)
+    ? costs.reduce<OpenCostT>((a, c) => ({ refundable: a.refundable + c!.refundable, nonRefundable: a.nonRefundable + c!.nonRefundable, total: a.total + c!.total }), { refundable: 0, nonRefundable: 0, total: 0 })
+    : null;
+  if (!cost || cost.total <= 0 || cost.refundable / cost.total < SOL_LP_MIN_REFUND) {
+    solLpFlows.delete(ctx.from.id);
+    return show(msg.msgSolLpNonRefund({ pair: f.pick.pair, cost }), {
+      ...html,
+      ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Menu', 'positions_back')]]),
+    });
+  }
+  // Each leg holds a position account's rent until it closes: the wallet must carry it.
+  const spendable = await solSpendable(kp.publicKey, SOL_LP_RESERVE_LAMPORTS);
+  const rent = BigInt(Math.ceil(cost.total * 1e9));
+  if (lamports + rent > spendable + SOL_LP_RESERVE_LAMPORTS) {
+    return show(msg.msgError('add', `${legs.length} legs need about ${fmtSol(rent)} SOL of rent on top of the deposit (it comes back on close). Lower the amount or the legs.`));
+  }
+  if (legs.some((l) => l.amount <= 0n)) return show(msg.msgError('add', 'The amount is too small to split across that many legs.'));
+  if (config.safety.dryRun) {
+    solLpFlows.delete(ctx.from.id);
+    return show(msg.msgDryRunAddDone());
+  }
+  solLpFlows.delete(ctx.from.id);
+  const prog = edit ? { message_id: (ctx.callbackQuery!.message as { message_id: number }).message_id } : undefined;
+  const say = (text: string, extra: Record<string, unknown> = html) =>
+    prog ? editProgress(ctx, prog, text, extra) : ctx.reply(text, extra);
+  const groupId = `sol-${Date.now().toString(36)}`;
+  const entryUsd = f.pick.baseSymbol === 'USDC' ? 1 : ((await solUsd().catch(() => null)) ?? undefined);
+  const sigs: string[] = [];
+  let firstPos = '';
+  for (let k = 0; k < legs.length; k++) {
+    await say(msg.msgProgress(`opening leg ${k + 1}/${legs.length} of ${fmtSol(lamports)} SOL into ${f.pick.pair}…`));
+    try {
+      const r = await openPosition(f.pick.pool, legs[k].amount, f.rangePct ?? 10, 'spot', kp, legs[k]);
+      sigs.push(r.signature);
+      firstPos ||= r.position;
+      solStore.record({
+        position: r.position,
+        pool: f.pick.pool,
+        mint: f.pick.mint,
+        symbol: f.pick.pair.split('/')[0].replace(/^\$+/, '').trim(),
+        baseSymbol: f.pick.baseSymbol,
+        entryBase: legs[k].amount.toString(),
+        openedAt: Date.now(),
+        rangePct: f.rangePct ?? 10,
+        bins: plan.bins,
+        entryUsd,
+        groupId,
+        legIndex: k,
+        legCount: legs.length,
+      });
+    } catch (e) {
+      console.error(`[sol-lp] ladder leg ${k + 1}/${legs.length} failed:`, (e as Error).message);
+      return say(
+        msg.msgError('add', `Leg ${k + 1} of ${legs.length} failed: ${(e as Error).message}. ${k} leg${k === 1 ? ' is' : 's are'} open and listed in /positions.`),
+      );
+    }
+  }
+  const gas = await solTxFee(sigs[sigs.length - 1]);
+  return say(
+    msg.msgPositionOpened({
+      pair: f.pick.pair,
+      tokenId: `${firstPos.slice(0, 4)}…${firstPos.slice(-4)}`,
+      protocol: 'DLMM',
+      size: `${fmtSol(lamports)} SOL`,
+      gas,
+      txHash: sigs[sigs.length - 1],
+      legs: legs.length,
+    }),
+    {
+      ...html,
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('📊 View Position', 'positions'), Markup.button.url('🔍 View Tx', `https://solscan.io/tx/${sigs[sigs.length - 1]}`)],
+      ]),
+    },
+  );
 }
 
 bot.action(/^sollpa:(\d+)$/, async (ctx) => {
@@ -5582,7 +5716,18 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
   if (!ref || !kp || solClosing.has(ref.position)) return false;
   solClosing.add(ref.position);
   const m = [ '', id ];
-  const entry = solStore.getEntry(ref.position);
+  const leg0 = solStore.getEntry(ref.position);
+  // A ladder closes as ONE: every leg, one swap, one card, one PnL (the EVM ladder's rule).
+  const legs = leg0?.groupId ? solStore.group(leg0.groupId) : [];
+  const ladder = legs.length > 1;
+  const entry: solStore.SolEntry | undefined = ladder
+    ? {
+        ...leg0!,
+        position: leg0!.groupId!,
+        entryBase: legs.reduce((a, l) => a + BigInt(l.entryBase), 0n).toString(),
+        openedAt: Math.min(...legs.map((l) => l.openedAt)),
+      }
+    : leg0;
   const pair = entry ? `$${entry.symbol}/${entry.baseSymbol}` : `#${m[1]}`;
   const prog = await ctx.reply(msg.msgProgress(`closing ${pair}…`), html);
   try {
@@ -5590,11 +5735,24 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
       await editProgress(ctx, prog, msg.msgDryRunClose(m[1]));
       return false;
     }
-    const r = await closePosition(ref.pool, ref.position, kp);
+    const targets = ladder ? legs.map((l) => ({ pool: l.pool, position: l.position })) : [ref];
+    const parts = [];
+    for (const [i, t] of targets.entries()) {
+      if (ladder) await editProgress(ctx, prog, msg.msgProgress(`closing ${pair}, leg ${i + 1}/${targets.length}…`));
+      parts.push(await closePosition(t.pool, t.position, kp));
+    }
+    const r = {
+      ...parts[0],
+      signatures: parts.flatMap((p) => p.signatures),
+      baseOut: parts.reduce((a, p) => a + p.baseOut, 0n),
+      tokenOut: parts.reduce((a, p) => a + p.tokenOut, 0n),
+      baseFee: parts.reduce((a, p) => a + p.baseFee, 0n),
+      tokenFee: parts.reduce((a, p) => a + p.tokenFee, 0n),
+    };
     // Everything ends in native SOL, whatever the pool's base (the owner's rule, 24 Sep
     // 2026): the token side is swapped to SOL, and on a USDC pool the USDC side is too.
     const baseIsSol = r.baseMint === jupiter.WSOL;
-    const notes = ['Close DLMM position (withdraw, claim fees, close account)'];
+    const notes = [ladder ? `Close ${targets.length} DLMM legs (withdraw, claim fees, close accounts)` : 'Close DLMM position (withdraw, claim fees, close account)'];
     const sigs = [...r.signatures];
     let leftover = false;
     const unswapped: Array<{ mint: string; amount: bigint }> = [];
@@ -5640,6 +5798,7 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
         tokenId: m[1],
         pair,
         protocol: 'DLMM',
+        legs: ladder ? targets.length : undefined,
         notes,
         ethOut: outLabel,
         txHashes: sigs,
@@ -5657,7 +5816,7 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
     );
     // Whatever did not swap is retried behind the card until it does, and booked into /pnl
     // as a recovery, so the position's PnL ends up complete.
-    for (const u of unswapped) solSweepLater(ctx.chat.id, u.mint, u.amount, ref.position, entry?.symbol ?? '?');
+    for (const u of unswapped) solSweepLater(ctx.chat.id, u.mint, u.amount, entry?.position ?? ref.position, entry?.symbol ?? '?');
     if (entry) {
       // Book it in /pnl, in SOL. A USDC deposit is converted at today's SOL price; with
       // no price there is no honest figure, so it is left out rather than guessed.
@@ -5671,7 +5830,7 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
       if (inLamports !== null && inLamports > 0n) {
         const inF = Number(inLamports) / 1e9, outF = Number(baseTotal) / 1e9;
         journal.record({
-          tokenId: ref.position,
+          tokenId: entry?.position ?? ref.position,
           symbol: `${entry.symbol}/SOL`,
           ca: entry.mint,
           chain: 'solana',

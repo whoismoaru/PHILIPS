@@ -158,7 +158,7 @@ export async function cmdSettings(ctx: any) {
   const sh = pctPresets.shape();
   rows.push([
     Markup.button.callback(`${sh === 'bidask' ? '◣' : '▬'} LP shape: ${sh === 'bidask' ? 'BID-ASK' : 'SPOT'}`, 'lpshape'),
-    Markup.button.callback('🪜 Ladder legs (EVM)', 'pct:legs'),
+    Markup.button.callback('🪜 Ladder legs', 'pct:legs'),
   ]);
   rows.push([Markup.button.callback('🔌 Chains on/off', 'chains')]);
   // The PnL card's backdrop. The label says which one is in use, so the state is visible

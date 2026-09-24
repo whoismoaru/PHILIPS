@@ -63,6 +63,48 @@ export function binsForRange(binStep: number, rangePct: number): number {
   return Math.max(1, Math.min(MAX_BINS, n));
 }
 
+/** Bins a range needs, with no per-position cap: a ladder splits them across legs. */
+export function binsForRangeUncapped(binStep: number, rangePct: number): number {
+  if (!(binStep > 0) || !(rangePct > 0) || rangePct >= 100) return 1;
+  return Math.max(1, Math.ceil(Math.log(1 - rangePct / 100) / Math.log(1 / (1 + binStep / 10_000))));
+}
+
+/** One leg of a Solana ladder: its own bin span and its share of the deposit. */
+export type LadderLeg = { minBinId: number; maxBinId: number; amount: bigint };
+
+/**
+ * Split `rangePct` below the price into `legs` positions, each its own contiguous span,
+ * nearest the price first. Bid-ask weighting, the EVM ladder's rule: leg k gets weight
+ * k+1, so the deepest leg holds the most -- buy the dip. Each leg is SPOT inside its span;
+ * the legs together make the bid-ask shape. A span over the 69-bin position limit raises
+ * the leg count until every leg fits. Legs never outnumber bins.
+ */
+export async function planLadder(pool: string, rangePct: number, legs: number, amount: bigint): Promise<{ plan: OpenPlan; legs: LadderLeg[] }> {
+  const dlmm = await DLMM.create(connection(), new PublicKey(pool));
+  const plan = await planOpen(pool, rangePct);
+  const total = binsForRangeUncapped(Number(dlmm.lbPair.binStep), rangePct);
+  const n = Math.min(total, Math.max(legs, Math.ceil(total / MAX_BINS)));
+  const per = Math.floor(total / n);
+  const extra = total % n;
+  const wsum = BigInt((n * (n + 1)) / 2);
+  const out: LadderLeg[] = [];
+  let offset = 0;
+  let given = 0n;
+  for (let k = 0; k < n; k++) {
+    const width = per + (k < extra ? 1 : 0);
+    const near = offset + 1, far = offset + width; // distance from the active bin, in bins
+    offset += width;
+    const amt = k === n - 1 ? amount - given : (amount * BigInt(k + 1)) / wsum;
+    given += amt;
+    out.push(
+      plan.baseIsX
+        ? { minBinId: plan.activeBinId + near, maxBinId: plan.activeBinId + far, amount: amt }
+        : { minBinId: plan.activeBinId - far, maxBinId: plan.activeBinId - near, amount: amt },
+    );
+  }
+  return { plan: { ...plan, bins: total }, legs: out };
+}
+
 /** What the deposit would look like, without sending anything. */
 export async function planOpen(pool: string, rangePct: number): Promise<OpenPlan> {
   const dlmm = await DLMM.create(connection(), new PublicKey(pool));
@@ -99,9 +141,14 @@ export async function planOpen(pool: string, rangePct: number): Promise<OpenPlan
  */
 export type OpenCost = { refundable: number; nonRefundable: number; total: number };
 
-export async function quoteOpenCost(pool: string, rangePct: number, shape: 'bidask' | 'spot'): Promise<OpenCost> {
+export async function quoteOpenCost(
+  pool: string,
+  rangePct: number,
+  shape: 'bidask' | 'spot',
+  span?: { minBinId: number; maxBinId: number },
+): Promise<OpenCost> {
   const dlmm = await DLMM.create(connection(), new PublicKey(pool));
-  const plan = await planOpen(pool, rangePct);
+  const plan = span ?? (await planOpen(pool, rangePct));
   const q = await dlmm.quoteCreatePosition({
     strategy: {
       minBinId: plan.minBinId,
@@ -128,10 +175,13 @@ export async function openPosition(
   rangePct: number,
   shape: 'bidask' | 'spot',
   kp: SolKeypair,
+  /** A ladder leg's own span; without it the whole range is one position. */
+  span?: { minBinId: number; maxBinId: number },
 ): Promise<OpenResult> {
   const conn = connection();
   const dlmm = await DLMM.create(conn, new PublicKey(pool));
-  const plan = await planOpen(pool, rangePct);
+  const whole = await planOpen(pool, rangePct);
+  const plan = span ? { ...whole, ...span, bins: span.maxBinId - span.minBinId + 1 } : whole;
   const user = Keypair.fromSeed(Buffer.from(kp.seed));
   const positionKp = Keypair.generate();
   const zero = new BN(0);

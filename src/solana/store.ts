@@ -34,6 +34,10 @@ export type SolEntry = {
    *  range bounds are fixed ratios of one snapshot instead of drifting with every read. */
   anchorMcap?: number;
   anchorPrice?: number;
+  /** A ladder's legs share one id; each leg is still its own position. */
+  groupId?: string;
+  legIndex?: number;
+  legCount?: number;
 };
 
 let cache: Record<string, SolEntry> | null = null;
@@ -54,6 +58,11 @@ function load(): Record<string, SolEntry> {
 }
 
 export const getEntry = (position: string): SolEntry | undefined => load()[position];
+/** Every leg of one ladder, nearest the price first. */
+export const group = (groupId: string): SolEntry[] =>
+  Object.values(load())
+    .filter((e) => e.groupId === groupId)
+    .sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
 
 export function record(e: SolEntry): void {
   const next = { ...load(), [e.position]: e };

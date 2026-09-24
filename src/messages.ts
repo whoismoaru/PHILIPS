@@ -1738,6 +1738,19 @@ export function msgSolLpNonRefund(o: { pair: string; cost: { refundable: number;
   ].join('\n');
 }
 
+/** BID-ASK on Solana: how many legs to split the range into. */
+export function msgSolLadderLegs(o: { pair: string; rangePct: string; bins: number }): string {
+  return [
+    `\u{1FA9C} ${bold('LADDER LEGS')} | ${esc(o.pair)}`,
+    '',
+    `» Range ${bold(o.rangePct)} across ${bold(String(o.bins))} bins`,
+    '» Each leg is its own position, the deepest holds the most',
+    '» Each leg holds ~0.057 SOL rent, returned on close',
+    '',
+    'How many legs?',
+  ].join('\n');
+}
+
 /** Step 1 of a Solana LP: how wide. */
 export function msgSolLpRange(o: { pair: string }): string {
   return card(`${bold('OPEN LP')} | ${esc(o.pair)}`, ['How wide should the range be?'], footerMode());
