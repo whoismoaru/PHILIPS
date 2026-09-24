@@ -259,6 +259,21 @@ function setup_env() {
   fi
 
   echo
+  echo "  --- Solana (optional) ---"
+  echo "  Meteora DLMM on Solana needs a keyed Solana RPC (Helius, QuickNode, Triton)."
+  ask "Enable Solana? (y/N)" "N"; local SOL="false" SOL_RPC="" JUP=""
+  if [[ "$REPLY_VAL" =~ ^[Yy]$ ]]; then
+    ask "SOLANA_RPC_URL" ""; SOL_RPC="$REPLY_VAL"
+    if [[ "$SOL_RPC" =~ ^https?:// ]]; then
+      SOL="true"
+      echo "  A free Jupiter key (developers.jup.ag/portal) keeps swaps off the shared rate limit."
+      ask "JUP_API_KEY (Enter = none)" ""; JUP="$REPLY_VAL"
+    else
+      warn "No valid Solana RPC given, so Solana stays off."
+    fi
+  fi
+
+  echo
   echo "  --- Safety limits ---"
   echo "  The most one transaction may spend. 'off' removes the cap."
   ask "Max native per tx (ETH/BNB/HYPE)" "0.05"; local MAXETH="$REPLY_VAL"
@@ -275,6 +290,13 @@ function setup_env() {
   else
     SECRET="$(head -c 32 /dev/urandom | base64 | tr -d '\n=/+' | head -c 40)"
   fi
+
+  # API keys the questions above do not ask for survive a re-run of this step.
+  local old_env=""; for old in "$f" "$f".bak-*; do [ -f "$old" ] && { old_env="$old"; break; }; done
+  keep() { [ -n "$old_env" ] && grep -m1 "^$1=" "$old_env" 2>/dev/null | cut -d= -f2-; }
+  [ -z "$JUP" ] && JUP="$(keep JUP_API_KEY)"
+  # Read BEFORE the heredoc: its redirect truncates $f, which may be the file read from.
+  local GMGN_K KRYSTAL_K; GMGN_K="$(keep GMGN_API_KEY)"; KRYSTAL_K="$(keep KRYSTAL_API_KEY)"
 
   umask 077
   cat > "$f" <<EOF
@@ -308,13 +330,16 @@ ARC_RPC_URL=$ARC_RPC
 
 MAX_ETH_PER_TX=$MAXETH
 MAX_STABLE_PER_TX=$MAXSTABLE
-MAX_TX_FEE_NATIVE=0.005
+
+SOLANA_ENABLED=$SOL
+SOLANA_RPC_URL=$SOL_RPC
+JUP_API_KEY=$JUP
 
 # Keep this true until you have checked /status and /positions.
 DRY_RUN=true
 
-GMGN_API_KEY=
-KRYSTAL_API_KEY=
+GMGN_API_KEY=$GMGN_K
+KRYSTAL_API_KEY=$KRYSTAL_K
 EOF
   chmod 600 "$f"
   ok ".env written with mode 600. $SECRET_NOTE"
@@ -466,7 +491,7 @@ function install_all() {
   echo
   ok "Done. Next steps, in Telegram:"
   echo "      1. /start"
-  echo "      2. /settings -> Connect Wallet -> paste a private key or seed phrase"
+  echo "      2. /settings -> Connect Wallet (and Connect SOL Wallet) -> paste a private key or seed phrase"
   echo "      3. /portfolio, to confirm the balances read correctly"
   echo "      4. come back here and pick 6 when you are ready to go LIVE"
 }
