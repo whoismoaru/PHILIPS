@@ -150,7 +150,7 @@ export async function cmdSettings(ctx: any) {
   // The Solana LP flow asks two questions the EVM flows do not: how wide, and how much in
   // SOL rather than as a share. Both sets of buttons are edited from here like the rest.
   rows.push([
-    Markup.button.callback('🎯 SOL Range %', 'pct:solrange'),
+    Markup.button.callback('🎯 SOL Range -%', 'pct:solrange'),
   ]);
   // The LP shape is a one-off choice, so it lives here rather than being asked on every
   // deposit. The label carries the current value -- a toggle that does not say what it is
@@ -340,6 +340,7 @@ function pctOpts(flow: pctPresets.PctFlow) {
     unit: pctPresets.unitFor(flow),
     min: b.min,
     max: b.max,
+    neg: flow === 'solrange',
     noteLine:
       flow === 'stop'
         ? '100% is not allowed here. Withdrawing everything closes the position, which has its own button.'

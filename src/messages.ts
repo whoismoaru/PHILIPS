@@ -934,15 +934,17 @@ export function msgPctPreset(
   label: string,
   values: number[],
   defaults: number[],
-  o: { unit: string; min: number; max: number; noteLine?: string },
+  o: { unit: string; min: number; max: number; noteLine?: string; neg?: boolean },
 ): string {
+  // A range reads downward from the price: single-sided, so "-10%", never "10%".
+  const sg = o.neg ? '-' : '';
   const same = values.length === defaults.length && values.every((v, i) => v === defaults[i]);
   const u = o.unit === '%' ? '%' : ` ${o.unit}`;
   return [
     `⚙️ ${bold(`${label} · quick picks`)}`,
     '',
-    `🎚 ${bold('Now:')} ${values.map((v) => code(`${v}${u}`)).join('  ')}`,
-    `${note(`default: ${defaults.join(' / ')}${same ? ' (unchanged)' : ''}`)}`,
+    `🎚 ${bold('Now:')} ${values.map((v) => code(`${sg}${v}${u}`)).join('  ')}`,
+    `${note(`default: ${defaults.map((d) => `${sg}${d}`).join(' / ')}${same ? ' (unchanged)' : ''}`)}`,
     '',
     o.unit === '%'
       ? `These are the buttons shown when you pick an amount in ${bold(label)}.`
@@ -988,14 +990,14 @@ export function msgBuyPresetInvalid(): string {
   ].join('\n');
 }
 
-export function msgPctAsk(label: string, current: number[], o: { unit: string; min: number; max: number }): string {
+export function msgPctAsk(label: string, current: number[], o: { unit: string; min: number; max: number; neg?: boolean }): string {
   const example = o.unit === '%' ? '10 25 50 90' : '4 8 12 20';
   return [
     `✏️ ${bold(`Edit ${label}`)}`,
     '',
     `💬 Type up to 6 numbers, separated by spaces. For example ${code(example)}.`,
     '',
-    `${note(`current: ${current.join(' / ')}`)}`,
+    `${note(`current: ${current.map((v) => `${o.neg ? '-' : ''}${v}`).join(' / ')}`)}`,
     note(`each one ${o.min}–${o.max}, duplicates dropped, sorted automatically.`),
   ].join('\n');
 }

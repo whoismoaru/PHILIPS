@@ -4221,7 +4221,7 @@ function rangeOpenedPct(bins: number, binStep: number | null): string {
 /** The range step. Drawn fresh when a pool is picked, and again when Back is tapped. */
 async function solLpRangeCard(ctx: any, pick: SolPoolPick, edit: boolean): Promise<unknown> {
   const rows = pctPresets.chunkButtons(
-    pctPresets.get('solrange').map((p) => Markup.button.callback(`${p}%`, `sollpr:${p}`)),
+    pctPresets.get('solrange').map((p) => Markup.button.callback(`-${p}%`, `sollpr:${p}`)),
   );
   // Back goes to the CA card this pool came from, not to the menu: the owner is choosing
   // between pools, and a dead end here means pasting the address again.
@@ -4283,7 +4283,7 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
   return ctx.editMessageText(
     msg.msgSolLpAmount({
       pair: f.pick.pair,
-      rangePct: `${rangePct}%`,
+      rangePct: `-${rangePct}%`,
       bins: f.bins === undefined ? '?' : String(f.bins),
       balanceSol: fmtSol(bal),
     }),
