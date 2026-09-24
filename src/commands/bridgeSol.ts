@@ -22,6 +22,34 @@ import * as solWallet from '../solana/walletStore.js';
 import { solBalance } from '../solana/jupiter.js';
 import { rpcUrl } from '../solana/rpc.js';
 import { highPriorityMicro, broadcastOfficial } from '../solana/fees.js';
+import { solUsd } from '../solana/holdings.js';
+import { getEthUsd } from '../screening.js';
+
+/** Gas actually burned by these EVM transactions, in dollars. null when unreadable. */
+export async function evmGasUsd(cc: ChainCtx, hashes: string[]): Promise<number | null> {
+  try {
+    let wei = 0n;
+    for (const rc of await Promise.all(hashes.map((h) => cc.provider.getTransactionReceipt(h)))) if (rc) wei += rc.gasUsed * (rc.gasPrice ?? 0n);
+    if (wei === 0n) return null;
+    const px = cc.hasWethBase ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1;
+    return px ? Number(ethers.formatEther(wei)) * px : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The network fee of these Solana transactions, in dollars. */
+async function solGasUsd(sigs: string[]): Promise<number | null> {
+  try {
+    const conn = new Connection(rpcUrl()!, 'confirmed');
+    let lam = 0;
+    for (const s of sigs) lam += (await conn.getTransaction(s, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }))?.meta?.fee ?? 0;
+    const px = await solUsd().catch(() => null);
+    return lam && px ? (lam / 1e9) * px : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * /bridge between an EVM chain and Solana, through Relay (the only provider that quoted
@@ -251,7 +279,10 @@ async function run(ctx: any, f: Flow, amount: bigint): Promise<void> {
       }
     }
     console.log(`[bridge-sol] ${a}→${b} ${inLabel} → ${outLabel} tx ${hashes.join(',')}`);
-    await editProgress(ctx, prog, msg.msgBridgeDone({ fromLabel: a, toLabel: b, inLabel, outLabel, txHashes: hashes, dryRun: false }));
+    const inUsd = Number(d.currencyIn?.amountUsd), outUsd = Number(d.currencyOut?.amountUsd);
+    const bridgeFeeUsd = isFinite(inUsd) && isFinite(outUsd) ? Math.max(0, inUsd - outUsd) : null;
+    const gasUsd = f.dir === 'out' ? await solGasUsd(hashes) : await evmGasUsd(cc, hashes);
+    await editProgress(ctx, prog, msg.msgBridgeDone({ fromLabel: a, toLabel: b, inLabel, outLabel, txHashes: hashes, dryRun: false, bridgeFeeUsd, gasUsd }));
   } catch (e) {
     await editProgress(ctx, prog, msg.msgError('bridge', (e as Error).message));
   } finally {

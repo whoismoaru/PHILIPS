@@ -13,7 +13,7 @@ import { getEthUsd } from '../screening.js';
 import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
-import { solBridgeChains, clearSolBridge } from './bridgeSol.js';
+import { solBridgeChains, clearSolBridge, evmGasUsd } from './bridgeSol.js';
 
 /**
  * /bridge -- move funds between chains.
@@ -45,6 +45,7 @@ type BridgeFlow = {
   minOutWei?: bigint;
   inLabel?: string;
   outLabel?: string;
+  feeUsd?: number | null; // what the route itself charges, from the quote
   provider?: BridgeProvider; // the chosen provider, Relay or LI.FI, re-executed at confirmation
   quotedAt?: number;
   startedAt: number;
@@ -454,6 +455,7 @@ async function bridgeQuote(ctx: any, flow: BridgeFlow, wei: bigint): Promise<voi
     flow.awaitingAmount = false;
     flow.amountWei = wei;
     flow.provider = provider;
+    flow.feeUsd = q.feeUsd;
     // The floor is what the user ACTUALLY saw, less a 1% tolerance.
     flow.minOutWei = (q.outWei * 99n) / 100n;
     flow.inLabel = q.inLabel;
@@ -515,7 +517,7 @@ async function execBridge(ctx: any) {
   }
   if (inFlight.has(uid)) return ctx.answerCbQuery('Processing…');
   inFlight.add(uid);
-  const { fromKey, toKey, amountWei, minOutWei, inLabel, outLabel, provider, originCurrency, destinationCurrency } = flow;
+  const { fromKey, toKey, amountWei, minOutWei, inLabel, outLabel, provider, originCurrency, destinationCurrency, feeUsd } = flow;
   flows.delete(uid); // idempotency: clear it BEFORE executing, so a double-tap cannot bridge twice
   const from = CHAINS[fromKey];
   const to = CHAINS[toKey];
@@ -542,6 +544,9 @@ async function execBridge(ctx: any) {
         outLabel: outLabel!,
         txHashes: r.txHashes,
         dryRun: false,
+        via: provider === 'lifi' ? 'LI.FI' : provider === 'cctp' ? 'CCTP' : 'Relay',
+        bridgeFeeUsd: feeUsd ?? null,
+        gasUsd: await evmGasUsd(from, r.txHashes),
       }),
       html,
     );

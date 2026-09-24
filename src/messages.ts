@@ -2680,13 +2680,21 @@ export function msgBridgeDone(o: {
   outLabel: string;
   txHashes: string[];
   dryRun: boolean;
+  /** What the route kept (value in minus value out), in dollars. */
+  bridgeFeeUsd?: number | null;
+  /** Network fee paid on the origin chain, in dollars. */
+  gasUsd?: number | null;
+  via?: string;
 }): string {
+  const usd = (n: number) => `$${n < 0.01 ? n.toFixed(4) : n.toFixed(2)}`;
   return [
     `${o.dryRun ? '\u26AA' : '\u2705'} ${bold(o.dryRun ? 'DRY RUN' : 'BRIDGE FILLED')}`,
     '',
     `» Route ${esc(o.fromLabel)} \u2192 ${esc(o.toLabel)}`,
     `» Received ${bold(`+${o.outLabel}`)}`,
-    `» Paid ${bold(o.inLabel)} using Relay`,
+    `» Paid ${bold(o.inLabel)} using ${esc(o.via ?? 'Relay')}`,
+    ...(o.bridgeFeeUsd != null ? [`» Bridge fee ${bold(usd(o.bridgeFeeUsd))}`] : []),
+    ...(o.gasUsd != null ? [`» Gas ${bold(usd(o.gasUsd))}`] : []),
     ...txBlock(o.txHashes),
     '',
     note(o.dryRun ? `DRY RUN \u00B7 ${nowWib()}` : nowWib()),
