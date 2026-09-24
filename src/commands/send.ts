@@ -17,6 +17,18 @@ import * as store from '../store.js';
 import * as pctPresets from '../pctPresets.js';
 import * as msg from '../messages.js';
 import { getEthUsd } from '../screening.js';
+import { isSolAddress } from '../solana/addr.js';
+import * as solWallet from '../solana/walletStore.js';
+import { solHoldings, solUsd, type SolHolding } from '../solana/holdings.js';
+import { sendSol } from '../solana/send.js';
+import { txButtons } from '../chains.js';
+
+/** Solana is not in CHAINS; its withdrawals carry this key. */
+const SOL_KEY = 'solana';
+/** SOL kept back for the fee (and a new token account's rent when sending a token). */
+const SOL_RESERVE = 5_000_000n;
+const WSOL = 'So11111111111111111111111111111111111111112';
+const chainLabelOf = (key: string) => (key === SOL_KEY ? 'Solana' : CHAINS[key]!.label);
 
 /**
  * /send -- withdraw funds to another address.
@@ -40,6 +52,8 @@ type SendFlow = {
   asset?: { address: string | null; symbol: string; decimals: number }; // null = native
   isContract?: boolean;
   amountWei?: bigint;
+  /** Solana holdings offered for this withdrawal, indexed by the snds: buttons. */
+  solList?: SolHolding[];
   startedAt: number;
 };
 
@@ -96,8 +110,39 @@ export async function handleSendAddress(ctx: any, raw: string): Promise<boolean>
     return true;
   }
   const t = raw.trim();
+  // A base58 address can only be Solana: list what the Solana wallet holds.
+  if (isSolAddress(t) && !ethers.isAddress(t)) {
+    const own = solWallet.address();
+    if (!own || !solWallet.keypair()) {
+      await ctx.reply(msg.msgError('send', 'No Solana wallet is connected. Connect one in /settings first.'), html);
+      return true;
+    }
+    flow.to = t;
+    flow.awaitingAddress = false;
+    const prog = await ctx.reply(msg.msgProgress('reading your Solana balance…'), html);
+    const list = (await solHoldings(own).catch(() => [] as SolHolding[]))
+      .filter((h) => h.raw > 0n && (h.mint === WSOL || (h.usd ?? 0) >= 0.1))
+      .sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0));
+    if (list.length === 0) {
+      flows.delete(ctx.from.id);
+      await editProgress(ctx, prog, msg.msgError('send', 'No spendable balance on Solana.'));
+      return true;
+    }
+    flow.solList = list;
+    const rows = list.slice(0, 20).map((h, i) => [
+      Markup.button.callback(
+        `Solana: ${h.amount.toLocaleString('id-ID', { maximumFractionDigits: 4 })} ${h.symbol}${h.usd != null ? ` / $${h.usd.toLocaleString('id-ID', { maximumFractionDigits: 2 })}` : ''}`,
+        `snds:${i}`,
+      ),
+    ]);
+    await editProgress(ctx, prog, msg.msgSendPickAsset(t, ['Solana'], false), {
+      ...html,
+      ...Markup.inlineKeyboard([...rows, [Markup.button.callback('⬅️ Back', 'snd:back')], [Markup.button.callback('⬅️ Back to Menu', 'positions_back')]]),
+    });
+    return true;
+  }
   if (!ethers.isAddress(t)) {
-    await ctx.reply(msg.msgError('send', 'That is not a valid EVM address. Paste a 0x… address.'), html);
+    await ctx.reply(msg.msgError('send', 'That is not a valid address. Paste a 0x… (EVM) or a Solana address.'), html);
     return true;
   }
   const to = ethers.getAddress(t);
@@ -172,8 +217,32 @@ bot.action(/^snd:(\w+):(native|0x[0-9a-fA-F]{40})$/, async (ctx) => {
   return renderAmount(ctx, flow, a.wei);
 });
 
+bot.action(/^snds:(\d+)$/, async (ctx) => {
+  const flow = flows.get(ctx.from!.id);
+  const h = flow?.solList?.[Number(ctx.match[1])];
+  if (!flow?.to || !h) return ctx.answerCbQuery('Expired. Start again with /withdraw.');
+  await ctx.answerCbQuery();
+  const decimals = h.amount > 0 ? Math.round(Math.log10(Number(h.raw) / h.amount)) : 9;
+  flow.chainKey = SOL_KEY;
+  flow.asset = { address: h.mint, symbol: h.symbol, decimals };
+  flow.isContract = false;
+  flow.awaitingAmount = true;
+  return renderAmount(ctx, flow, h.raw);
+});
+
+/** What the Solana wallet can send of this asset now: SOL keeps its fee reserve. */
+async function solSendable(flow: SendFlow): Promise<bigint> {
+  const own = solWallet.address()!;
+  const list = await solHoldings(own).catch(() => [] as SolHolding[]);
+  const h = list.find((x) => x.mint === flow.asset!.address);
+  if (!h) return 0n;
+  if (h.mint === WSOL) return h.raw > SOL_RESERVE ? h.raw - SOL_RESERVE : 0n;
+  return h.raw;
+}
+
 /** How much may really be sent: native has its gas reserve taken off first. */
 async function sendableWei(cc: ChainCtx, flow: SendFlow): Promise<bigint> {
+  if (flow.chainKey === SOL_KEY) return solSendable(flow);
   if (flow.asset!.address) {
     return (await new ethers.Contract(flow.asset!.address, ERC20_ABI, cc.provider)
       .balanceOf(cc.wallet.address)
@@ -184,7 +253,7 @@ async function sendableWei(cc: ChainCtx, flow: SendFlow): Promise<bigint> {
 }
 
 async function renderAmount(ctx: any, flow: SendFlow, balWei: bigint) {
-  const cc = CHAINS[flow.chainKey!]!;
+  const cc = CHAINS[flow.chainKey!] ?? (null as unknown as ChainCtx);
   const usable = await sendableWei(cc, flow);
   const rows = [
     ...pctPresets.chunkButtons(pctPresets.get('send').map((p) => Markup.button.callback(`${p}%`, `sndpct:${p}`))),
@@ -193,19 +262,26 @@ async function renderAmount(ctx: any, flow: SendFlow, balWei: bigint) {
   return ctx.editMessageText(
     msg.msgSendAmount({
       to: flow.to!,
-      chainLabel: cc.label,
+      chainLabel: chainLabelOf(flow.chainKey!),
       symbol: flow.asset!.symbol,
       balance: `${fmtAmt(balWei, flow.asset!.decimals)} ${flow.asset!.symbol}`,
       // Same "amount SYMBOL / $value" shape as the button that got here. The dollar half
       // is dropped when the price cannot be read, never shown as $0.
       usable: await (async () => {
         const label = `${fmtAmt(usable, flow.asset!.decimals)} ${flow.asset!.symbol}`;
-        const px = flow.asset!.address === null ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1;
+        const px =
+          flow.chainKey === SOL_KEY
+            ? flow.asset!.address === WSOL
+              ? await solUsd().catch(() => null)
+              : null
+            : flow.asset!.address === null
+              ? await getEthUsd(cc.wethAddress, cc).catch(() => null)
+              : 1;
         if (px === null) return label;
         const usd = Number(ethers.formatUnits(usable, flow.asset!.decimals)) * px;
         return `${label} / $${usd.toLocaleString('id-ID', { maximumFractionDigits: 2 })}`;
       })(),
-      nativeReserve: flow.asset!.address === null,
+      nativeReserve: flow.asset!.address === null || flow.asset!.address === WSOL,
       isContract: !!flow.isContract,
     }),
     { ...html, ...Markup.inlineKeyboard(rows) },
@@ -216,7 +292,7 @@ bot.action(/^sndpct:(\d+)$/, async (ctx) => {
   const flow = flows.get(ctx.from!.id);
   if (!flow?.awaitingAmount || !flow.asset) return ctx.answerCbQuery('Expired. Start again with /send.');
   await ctx.answerCbQuery();
-  const cc = CHAINS[flow.chainKey!]!;
+  const cc = CHAINS[flow.chainKey!] ?? (null as unknown as ChainCtx);
   const usable = await sendableWei(cc, flow);
   const pct = Number(ctx.match[1]);
   const wei = pct >= 100 ? usable : (usable * BigInt(pct)) / 100n;
@@ -235,7 +311,7 @@ export async function handleSendAmount(ctx: any, raw: string): Promise<boolean> 
     await ctx.reply(msg.msgSessionExpired(), html);
     return true;
   }
-  const cc = CHAINS[flow.chainKey!]!;
+  const cc = CHAINS[flow.chainKey!] ?? (null as unknown as ChainCtx);
   // "0.1%" is a PERCENTAGE, not an amount, and the buttons only offer whole numbers.
   // parseAmt rejects it as an invalid amount; without this branch the user just gets
   // "enter a valid amount" with no hint that the percent sign is what went wrong.
@@ -272,7 +348,7 @@ export async function handleSendAmount(ctx: any, raw: string): Promise<boolean> 
 }
 
 async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
-  const cc = CHAINS[flow.chainKey!]!;
+  const cc = CHAINS[flow.chainKey!] ?? (null as unknown as ChainCtx);
   flow.amountWei = wei;
   flow.awaitingAmount = false;
   // No confirm step, matching /swap and /bridge. What the button used to guard is still
@@ -280,7 +356,7 @@ async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
   // before this is reached, and a dry run still sends nothing.
   if (!config.safety.dryRun) {
     const prog = await ctx.reply(
-      msg.msgProgress(`withdrawing ${fmtAmt(wei, flow.asset!.decimals)} ${flow.asset!.symbol} on ${cc.label}…`),
+      msg.msgProgress(`withdrawing ${fmtAmt(wei, flow.asset!.decimals)} ${flow.asset!.symbol} on ${chainLabelOf(flow.chainKey!)}…`),
       html,
     );
     // execSend is written for a button press: hand it the two callback-only methods,
@@ -294,7 +370,7 @@ async function confirm(ctx: any, flow: SendFlow, wei: bigint) {
   return ctx.reply(
     msg.msgSendConfirm({
       to: flow.to!,
-      chainLabel: cc.label,
+      chainLabel: chainLabelOf(flow.chainKey!),
       amount: `${fmtAmt(wei, flow.asset!.decimals)} ${flow.asset!.symbol}`,
       isContract: !!flow.isContract,
       dryRun: config.safety.dryRun,
@@ -322,14 +398,25 @@ async function execSend(ctx: any) {
   if (sending.has(uid)) return ctx.answerCbQuery('Processing…');
   sending.add(uid);
   store.beginMoneyOp();
-  const cc = CHAINS[flow.chainKey!]!;
+  const cc = CHAINS[flow.chainKey!] ?? (null as unknown as ChainCtx);
   const { to, asset, amountWei } = flow;
   flows.delete(uid); // idempotency: clear it BEFORE executing, so a double-tap cannot send twice
   await ctx.answerCbQuery('Sending…');
   try {
     const label = `${fmtAmt(amountWei, asset.decimals)} ${asset.symbol}`;
+    const chainLabel = chainLabelOf(flow.chainKey!);
     if (config.safety.dryRun) {
-      return void (await ctx.editMessageText(msg.msgSendDone({ to, chainLabel: cc.label, amount: label, txHash: null, dryRun: true }), html));
+      return void (await ctx.editMessageText(msg.msgSendDone({ to, chainLabel, amount: label, txHash: null, dryRun: true }), html));
+    }
+    if (flow.chainKey === SOL_KEY) {
+      await ctx.editMessageText(msg.msgProgress(`sending ${label} on Solana…`), html).catch(() => {});
+      const sig = await sendSol(solWallet.keypair()!, to, asset.address!, amountWei);
+      console.log(`[send] ${label} → ${to} (solana) tx ${sig}`);
+      await ctx.editMessageText(msg.msgSendDone({ to, chainLabel, amount: label, txHash: sig, dryRun: false }), {
+        ...html,
+        ...Markup.inlineKeyboard(txButtons(SOL_KEY, [sig]).map((row) => row.map((x) => Markup.button.url(x.text, x.url)))),
+      });
+      return;
     }
     await ctx.editMessageText(msg.msgProgress(`sending ${label} on ${cc.label}…`), html).catch(() => {});
     const tx = asset.address
@@ -338,7 +425,10 @@ async function execSend(ctx: any) {
     const rc = await tx.wait();
     const hash = rc?.hash ?? tx.hash;
     console.log(`[send] ${label} → ${to} (${cc.key}) tx ${hash}`);
-    await ctx.editMessageText(msg.msgSendDone({ to, chainLabel: cc.label, amount: label, txHash: hash, dryRun: false }), html);
+    await ctx.editMessageText(msg.msgSendDone({ to, chainLabel, amount: label, txHash: hash, dryRun: false }), {
+      ...html,
+      ...Markup.inlineKeyboard(txButtons(cc.key, [hash]).map((row) => row.map((x) => Markup.button.url(x.text, x.url)))),
+    });
   } catch (e) {
     await ctx.reply(msg.msgError('send', (e as Error).message), html);
   } finally {

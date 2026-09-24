@@ -2720,7 +2720,10 @@ export function msgSendAskAddress(): string {
     '',
     'Paste the destination address',
     '',
-    note('an EVM address is the same on every chain, so the bot cannot tell which one you mean from the address alone. It will show you where you have a balance and let you pick.'),
+    '» EVM (0x…): pick the chain and asset where you hold a balance',
+    '» Solana: pick SOL or any token you hold',
+    '',
+    note('an EVM address is the same on every chain, so you pick which one to send from.'),
   ].join('\n');
 }
 
