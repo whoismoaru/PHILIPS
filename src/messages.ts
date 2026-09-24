@@ -1608,7 +1608,11 @@ export function msgSolToken(opts: {
         ? note(
             `this token trades on ${opts.otherVenueCount} other pool${opts.otherVenueCount === 1 ? '' : 's'} (DAMM v2, Raydium, pumpswap), none of which PHILIPS uses. The token is real; the venue is not one we LP in.`,
           )
-        : note('DexScreener lists no Solana pool for this address at all.'),
+        : note(
+            (opts.chainLabel ?? 'Solana') === 'Solana'
+              ? 'DexScreener lists no Solana pool for this address at all.'
+              : `no v3 or v4 pool on ${opts.chainLabel} pairs this token with a base PHILIPS LPs in.`,
+          ),
     );
   }
 

@@ -2887,6 +2887,8 @@ bot.command('add_lp', async (ctx: any) => {
   // With no CA, go to the briefed step 1: pick a pair from the top pools, or search.
   if (!token) return pairPicker(ctx);
   if (!ethers.isAddress(token)) return ctx.reply(msg.msgInvalidAddress(), html);
+  // The same TOKEN STATISTICS card as a pasted CA: its pool buttons open the LP wizard.
+  return startTokenHub(ctx, ethers.getAddress(token));
 
   // 0) Detect the chain — one progress bubble, edited at the next step.
   const prog = await ctx.reply(msg.msgProgress('detecting chain…'), html);
@@ -3861,7 +3863,7 @@ async function renderTokenHub(
     chainLabel: cc.label,
     poolTitle: `💦 ${msg.bold('AVAILABLE POOLS')} :`,
     poolDetail: (p) => `(${p.binStep}, fee ${p.fee})`,
-    poolLine: (p) => `Tvl: ${p.tvl} | Vol: ${p.vol} | Apr: ${p.feeTvl} | Bin: ${p.bin ?? '—'}`,
+    poolLine: (p) => `Tvl: ${p.tvl} | Vol: ${p.vol} | Bin: ${p.bin ?? '—'}`,
     pools: shown.map((p) => ({
       pair: `$${p.otherSymbol}/$${p.baseSymbol}`,
       binStep: p.protocol,
@@ -7078,6 +7080,8 @@ bot.on(message('text'), async (ctx) => {
   if (tflow?.awaitingCA) {
     // /buy, CA-first: the user pastes a CA, the chain is detected, then safety.
     tflow.awaitingCA = false;
+    // Every EVM CA lands on the one TOKEN STATISTICS card, which carries the buy buttons.
+    if (ethers.isAddress(raw.trim())) return startTokenHub(ctx, ethers.getAddress(raw.trim()));
     const prog = await ctx.reply(msg.msgProgress('detecting chain…'), html);
     return buyStartFromCA(ctx, raw.trim(), { message_id: prog.message_id });
   }
