@@ -38,6 +38,8 @@ export type SolEntry = {
   groupId?: string;
   legIndex?: number;
   legCount?: number;
+  /** 'spot' when a wide SPOT range was split into equal positions; empty means bid-ask. */
+  shape?: 'spot' | 'bidask';
 };
 
 let cache: Record<string, SolEntry> | null = null;

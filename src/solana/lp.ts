@@ -79,14 +79,21 @@ export type LadderLeg = { minBinId: number; maxBinId: number; amount: bigint };
  * the legs together make the bid-ask shape. A span over the 69-bin position limit raises
  * the leg count until every leg fits. Legs never outnumber bins.
  */
-export async function planLadder(pool: string, rangePct: number, legs: number, amount: bigint): Promise<{ plan: OpenPlan; legs: LadderLeg[] }> {
+export async function planLadder(
+  pool: string,
+  rangePct: number,
+  legs: number,
+  amount: bigint,
+  /** 'even' splits a SPOT range wider than one position into equal parts. */
+  weights: 'bidask' | 'even' = 'bidask',
+): Promise<{ plan: OpenPlan; legs: LadderLeg[] }> {
   const dlmm = await DLMM.create(connection(), new PublicKey(pool));
   const plan = await planOpen(pool, rangePct);
   const total = binsForRangeUncapped(Number(dlmm.lbPair.binStep), rangePct);
   const n = Math.min(total, Math.max(legs, Math.ceil(total / MAX_BINS)));
   const per = Math.floor(total / n);
   const extra = total % n;
-  const wsum = BigInt((n * (n + 1)) / 2);
+  const wsum = weights === 'even' ? BigInt(n) : BigInt((n * (n + 1)) / 2);
   const out: LadderLeg[] = [];
   let offset = 0;
   let given = 0n;
@@ -94,7 +101,7 @@ export async function planLadder(pool: string, rangePct: number, legs: number, a
     const width = per + (k < extra ? 1 : 0);
     const near = offset + 1, far = offset + width; // distance from the active bin, in bins
     offset += width;
-    const amt = k === n - 1 ? amount - given : (amount * BigInt(k + 1)) / wsum;
+    const amt = k === n - 1 ? amount - given : (amount * BigInt(weights === 'even' ? 1 : k + 1)) / wsum;
     given += amt;
     out.push(
       plan.baseIsX

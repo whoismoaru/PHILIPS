@@ -33,7 +33,7 @@ import * as solStore from './solana/store.js';
 import * as limits from './limits.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
-import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition } from './solana/lp.js';
+import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, MAX_BINS } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
 import * as solWallet from './solana/walletStore.js';
@@ -1788,7 +1788,7 @@ async function solanaRows(): Promise<PosRow[]> {
       protocol: 'DLMM',
       chain: 'Solana',
       groupId: entry?.groupId ?? null,
-      legShape: entry?.groupId ? 'bid-ask' : null,
+      legShape: entry?.groupId ? (entry.shape === 'spot' ? 'spot' : 'bid-ask') : null,
       // The deposit when it is known, the CURRENT value when it is not -- and the label
       // says which, because "invested" and "worth now" are not the same number.
       investLabel: `${num(entryBase ?? p.valueBase)} ${baseSym}${entryBase === null ? ' (now)' : ''}`,
@@ -4216,7 +4216,7 @@ const fmtSol = (lamports: bigint): string => (Number(lamports) / jupiter.LAMPORT
 type SolPoolPick = { pool: string; pair: string; baseSymbol: string; binStep: number | null; baseFeePct: number | null; mint: string };
 /** What the last CA card offered, per user: the buttons carry an index, not an address. */
 const solPoolPicks = new Map<number, { at: number; pools: SolPoolPick[] }>();
-type SolLpFlow = { pick: SolPoolPick; startedAt: number; rangePct?: number; bins?: number; legs?: number };
+type SolLpFlow = { pick: SolPoolPick; startedAt: number; rangePct?: number; bins?: number; legs?: number; even?: boolean };
 const solLpFlows = new Map<number, SolLpFlow>();
 registerFlowReset((uid) => {
   solLpFlows.delete(uid);
@@ -4305,6 +4305,17 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
   // can hold; saying "50%" alone would hide that.
   f.bins = f.pick.binStep ? binsForRange(f.pick.binStep, rangePct) : undefined;
   f.legs = undefined;
+  f.even = false;
+  // SPOT past one position's 69 bins: split into equal positions instead of quietly cutting
+  // the range short. -90% at bin step 100 is 232 bins; one position stops near -50%.
+  if (pctPresets.shape() !== 'bidask' && f.pick.binStep) {
+    const total = binsForRangeUncapped(f.pick.binStep, rangePct);
+    if (total > MAX_BINS) {
+      f.legs = Math.ceil(total / MAX_BINS);
+      f.even = true;
+      f.bins = total;
+    }
+  }
   // BID-ASK asks how many legs, the same step the EVM ladder has (/settings -> Ladder legs).
   if (pctPresets.shape() === 'bidask') {
     const total = f.pick.binStep ? binsForRangeUncapped(f.pick.binStep, rangePct) : 69;
@@ -4344,7 +4355,7 @@ async function solLpAmountStep(ctx: any, f: SolLpFlow, owner: string) {
     msg.msgSolLpAmount({
       pair: f.pick.pair,
       rangePct: `-${rangePct}%`,
-      bins: f.legs && f.legs > 1 ? `${f.legs} legs` : `${f.bins ?? '?'} bins`,
+      bins: f.even ? `${f.bins} bins over ${f.legs} positions` : f.legs && f.legs > 1 ? `${f.legs} legs` : `${f.bins ?? '?'} bins`,
       balanceSol: fmtSol(bal),
     }),
     { ...html, ...Markup.inlineKeyboard(rows) },
@@ -4453,7 +4464,7 @@ type OpenCostT = { refundable: number; nonRefundable: number; total: number };
 async function solLadderOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean, kp: SolKeypair): Promise<unknown> {
   const show = (text: string, extra: Record<string, unknown> = html) =>
     edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
-  const { plan, legs } = await planLadder(f.pick.pool, f.rangePct ?? 10, f.legs!, lamports);
+  const { plan, legs } = await planLadder(f.pick.pool, f.rangePct ?? 10, f.legs!, lamports, f.even ? 'even' : 'bidask');
   const costs = await Promise.all(legs.map((l) => quoteOpenCost(f.pick.pool, 0, 'spot', l).catch(() => null)));
   const cost = costs.every(Boolean)
     ? costs.reduce<OpenCostT>((a, c) => ({ refundable: a.refundable + c!.refundable, nonRefundable: a.nonRefundable + c!.nonRefundable, total: a.total + c!.total }), { refundable: 0, nonRefundable: 0, total: 0 })
@@ -4504,6 +4515,7 @@ async function solLadderOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boo
         groupId,
         legIndex: k,
         legCount: legs.length,
+        shape: f.even ? 'spot' : 'bidask',
       });
     } catch (e) {
       console.error(`[sol-lp] ladder leg ${k + 1}/${legs.length} failed:`, (e as Error).message);
