@@ -1,4 +1,5 @@
 import { solUsd } from '../solana/holdings.js';
+import { ALL_CHAIN_DEFS } from '../chains.js';
 import { Markup, Input } from 'telegraf';
 import { config } from '../config.js';
 import { bot, html } from '../core.js';
@@ -37,8 +38,10 @@ export function cmdHistory(ctx: any) {
 // ETH and USDG; BSC: BNB and USDT).
 
 /** Display name for a chain: from config when it is enabled, otherwise its key. */
+// A switched-off chain is not in CHAINS but still has history; its real name comes from
+// the full chain list ("HyperEVM", not "Hyperevm").
 const chainLabel = (key: string): string =>
-  CHAINS[key]?.label ?? key.charAt(0).toUpperCase() + key.slice(1);
+  CHAINS[key]?.label ?? ALL_CHAIN_DEFS().find((d) => d.key === key)?.label ?? key.charAt(0).toUpperCase() + key.slice(1);
 
 /**
  * Chains on offer = the ones enabled now, plus any with history in the journal.

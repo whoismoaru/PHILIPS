@@ -761,12 +761,12 @@ export function msgPnlPicker(chains: Array<{ label: string; trades: number; scor
   if (per.length) {
     out.push(
       'Pick a chain to recap its closed trades :',
-      ...per.map((c, i) => `${i === per.length - 1 ? '└' : '├'} ${esc(c.label)}: ${bold(String(count(c)))} positions`),
+      ...per.map((c, i) => `${i === per.length - 1 ? '└' : '├'} ${esc(c.label)}: ${bold(String(count(c)))} ${count(c) === 1 ? 'trade' : 'trades'}`),
     );
   } else {
     out.push('No closed trades yet.');
   }
-  if (all) out.push('', `${bold('All chains')}: ${bold(String(count(all)))} positions`);
+  if (all) out.push('', `${bold('All chains')}: ${bold(String(count(all)))} ${count(all) === 1 ? 'trade' : 'trades'}`, note('Break-even trades under $0.1 are not counted.'));
   out.push('', note(nowWib()));
   return out.join('\n');
 }
