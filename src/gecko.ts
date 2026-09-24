@@ -121,17 +121,18 @@ export async function geckoPools(cc: ChainCtx, token: string, opts: { keys?: boo
       ...(isV4 ? { poolKey: undefined } : {}),
       _poolId: String(a.address ?? ''),
       _tokens: [t0, t1],
-    } as TokenPool & { _poolId: string; _tokens: string[] });
+      _created: a.pool_created_at ?? undefined,
+    } as TokenPool & { _poolId: string; _tokens: string[]; _created?: string });
   }
   out.sort((x, y) => y.tvlUsd - x.tvlUsd);
   // A card only shows pools; resolving keys there would cost seconds for nothing.
   if (opts.keys === false) return out;
   // poolKeys for the deepest v4 pools only: the rest would never be picked, and each first
   // resolution costs a Krystal call.
-  const v4 = out.filter((p) => p.protocol === 'v4' && p.tvlUsd >= 500).slice(0, opts.maxKeys ?? MAX_V4_KEYS) as Array<TokenPool & { _poolId: string; _tokens: string[] }>;
+  const v4 = out.filter((p) => p.protocol === 'v4' && p.tvlUsd >= 500).slice(0, opts.maxKeys ?? MAX_V4_KEYS) as Array<TokenPool & { _poolId: string; _tokens: string[]; _created?: string }>;
   await Promise.all(
     v4.map(async (p) => {
-      const pk = await v4KeyFor(cc, p._poolId, p._tokens[0], p._tokens[1]).catch(() => null);
+      const pk = await v4KeyFor(cc, p._poolId, p._tokens[0], p._tokens[1], p._created).catch(() => null);
       if (!pk) return;
       p.poolKey = pk;
       p.fee = pk.fee;

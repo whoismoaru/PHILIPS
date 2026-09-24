@@ -228,9 +228,18 @@ export async function krystalPools(cc: ChainCtx, token: string, sortBy = 0): Pro
  * indexer usable for LP at all. Cached forever inside resolveV4PoolKey: a poolKey never
  * changes.
  */
-export async function v4KeyFor(cc: ChainCtx, poolId: string, tokenA: string, tokenB: string): Promise<PoolKeyV4 | null> {
-  if (!krystalConfigured(cc)) return null;
-  return resolveV4PoolKey(cc, { poolAddress: poolId, token0: { token: { address: tokenA } }, token1: { token: { address: tokenB } } });
+export async function v4KeyFor(cc: ChainCtx, poolId: string, tokenA: string, tokenB: string, createdAt?: string): Promise<PoolKeyV4 | null> {
+  const hit = pkCache.get(poolId);
+  if (hit) return hit;
+  const k = krystalConfigured(cc)
+    ? await resolveV4PoolKey(cc, { poolAddress: poolId, token0: { token: { address: tokenA } }, token1: { token: { address: tokenB } } }).catch(() => null)
+    : null;
+  if (k) return k;
+  // Krystal does not know every pool: read the key off the chain instead.
+  const { v4KeyFromChain } = await import('./uniswapV4.js');
+  const c = await v4KeyFromChain(cc, poolId, createdAt).catch(() => null);
+  if (c) pkCache.set(poolId, c);
+  return c;
 }
 
 export { baseOfPair };

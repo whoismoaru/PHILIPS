@@ -10,7 +10,7 @@ import { allV4 } from './v4store.js';
 const Q96 = 2n ** 96n;
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 // The v4 PoolManager singleton, per chain.
-const V4_POOL_MANAGER: Record<string, string> = {
+export const V4_POOL_MANAGER: Record<string, string> = {
   robinhood: '0x8366a39CC670B4001A1121B8F6A443A643e40951',
   bsc: '0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF',
   // Verified on-chain before adding: both contracts carry code on Base, and the
@@ -1452,4 +1452,57 @@ export async function checkV4Status(
   } catch {
     return { exists: true, inRange: null, tick: null, val: null }; // transient: neither delete nor alert
   }
+}
+
+const INIT_TOPIC = ethers.id('Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)');
+
+/** The first block at or after `ts` (unix seconds), by binary search over headers. */
+async function blockAtOrAfter(cc: ChainCtx, ts: number): Promise<number> {
+  let hi = await cc.provider.getBlockNumber();
+  let lo = Math.max(0, hi - 50_000_000);
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    const b = await cc.provider.getBlock(mid);
+    if (!b) break;
+    if (b.timestamp < ts) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
+/**
+ * A v4 poolKey read straight off the chain: the PoolManager's Initialize event for this
+ * pool id, found in a small window around the pool's creation time. The fallback when
+ * Krystal does not know the pool (BSC's TRUMAN pools, 24 Sep 2026): without a key the
+ * card could not show the bin, and the pool could not be opened at all.
+ */
+export async function v4KeyFromChain(cc: ChainCtx, poolId: string, createdAt: string | undefined): Promise<PoolKeyV4 | null> {
+  const mgr = V4_POOL_MANAGER[cc.key];
+  const t = createdAt ? Date.parse(createdAt) / 1000 : NaN;
+  if (!mgr || !isFinite(t)) return null;
+  // The window stays tiny: Alchemy's free tier refuses log ranges over 10 blocks, and the
+  // creation time is to the second, so the binary search lands within a few blocks.
+  const around = await blockAtOrAfter(cc, t);
+  for (const w of [4, 40]) {
+    const logs: ethers.Log[] = [];
+    for (let from = around - w; from <= around + w; from += 9) {
+      logs.push(
+        ...(await cc.provider
+          .getLogs({ address: mgr, topics: [INIT_TOPIC, poolId], fromBlock: Math.max(0, from), toBlock: Math.min(from + 8, around + w) })
+          .catch(() => [] as ethers.Log[])),
+      );
+      if (logs.length) break;
+    }
+    const l = logs[0];
+    if (!l) continue;
+    const [fee, tickSpacing, hooks] = ethers.AbiCoder.defaultAbiCoder().decode(['uint24', 'int24', 'address', 'uint160', 'int24'], l.data);
+    return {
+      currency0: ethers.getAddress(ethers.dataSlice(l.topics[2], 12)),
+      currency1: ethers.getAddress(ethers.dataSlice(l.topics[3], 12)),
+      fee: Number(fee),
+      tickSpacing: Number(tickSpacing),
+      hooks: ethers.getAddress(hooks),
+    };
+  }
+  return null;
 }

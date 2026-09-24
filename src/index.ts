@@ -3865,7 +3865,13 @@ async function renderTokenHub(
     ['MCap', st?.mcapUsd != null ? msg.usdCompact(st.mcapUsd) : '—'],
     ['Liq', st?.liquidityUsd != null ? msg.usdCompact(st.liquidityUsd) : '—'],
     ['Vol 24h', st?.vol24hUsd != null ? msg.usdCompact(st.vol24hUsd) : '—'],
-    ['Age', st?.ageHours != null ? msg.fmtAge(st.ageHours * 3_600_000) : '—'],
+    ['Age', (() => {
+      // GMGN's creation time first; failing that, the oldest pool GeckoTerminal lists --
+      // a token trades from its first pool, so that is its age to within minutes.
+      const born = (gPools ?? []).map((p: any) => Date.parse(p._created ?? '')).filter((x) => isFinite(x));
+      const ms = st?.ageHours != null ? st.ageHours * 3_600_000 : born.length ? Date.now() - Math.min(...born) : null;
+      return ms !== null ? msg.fmtAge(ms) : '—';
+    })()],
   ];
   const text = msg.msgSolToken({
     symbol: sym,
@@ -3883,8 +3889,9 @@ async function renderTokenHub(
       binStep: p.protocol,
       fee: `${Number((p.fee / 10_000).toFixed(2))}%`,
       tvl: msg.usdCompact(p.tvlUsd),
-      // The gateway reports 0 for v4 volume it does not track; 0 would read as a dead pool.
-      vol: p.vol24hUsd ? msg.usdCompact(p.vol24hUsd) : '—',
+      // Krystal reports 0 for v4 volume it does not track, so its 0 is a dash. GeckoTerminal's
+      // 0 is a real zero (no trades in 24h) and reads as $0.
+      vol: p.vol24hUsd ? msg.usdCompact(p.vol24hUsd) : gPools ? msg.usdCompact(0) : '—',
       feeTvl: p.aprPct == null ? '—' : aprLabel(p.aprPct),
       bin: binPctOf(cc, p),
     })),
