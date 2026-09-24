@@ -101,6 +101,9 @@ bot.action('snd:back', async (ctx: any) => {
 });
 
 /** An address is pasted: scan all five chains and offer the ones holding something. */
+/** True while /withdraw is waiting for a destination address. */
+export const sendWantsAddress = (uid: number): boolean => !!flows.get(uid)?.awaitingAddress;
+
 export async function handleSendAddress(ctx: any, raw: string): Promise<boolean> {
   const flow = flows.get(ctx.from.id);
   if (!flow?.awaitingAddress) return false;

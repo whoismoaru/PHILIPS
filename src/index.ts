@@ -92,7 +92,7 @@ import './commands/send.js';
 import { handlePctReply } from './commands/wallet.js';
 import { handleBridgeAmount } from './commands/bridge.js';
 import { handleSolBridgeAmount } from './commands/bridgeSol.js';
-import { handleSendAddress, handleSendAmount } from './commands/send.js';
+import { handleSendAddress, handleSendAmount, sendWantsAddress } from './commands/send.js';
 import {
   CHAINS,
   getChain,
@@ -7220,6 +7220,15 @@ bot.on(message('text'), async (ctx) => {
     return ctx.reply(msg.msgSecretLeakWarning(), html);
   }
 
+  // A contract address is never an amount: pasting one mid-flow means "show me this token".
+  // Only /withdraw's address prompt keeps it (an address is its answer). Without this the
+  // CA was read by whatever amount step was open and refused as "enter a valid amount".
+  if ((ethers.isAddress(raw) || isSolAddress(raw)) && !sendWantsAddress(ctx.from.id)) {
+    resetFlows(ctx.from.id);
+    pctPresets.clearEdit(ctx.from.id);
+    return ethers.isAddress(raw) ? startTokenHub(ctx, ethers.getAddress(raw)) : startSolToken(ctx, raw);
+  }
+
   // /bridge waiting on an amount — checked first because its state is separate.
   if (await handleBridgeAmount(ctx, raw)) return;
   if (await handleSolBridgeAmount(ctx, raw)) return;
@@ -7557,8 +7566,13 @@ function launchWithRetry(attempt = 1, maxTries = 6) {
       },
     );
 }
-launchWithRetry();
-startMonitor(bot); // the auto-monitor for active positions
+// PHILIPS_HARNESS=1: load every handler but never poll Telegram or start the loops, so an
+// audit script can drive commands through bot.handleUpdate with its own fake API.
+const HARNESS = process.env.PHILIPS_HARNESS === '1';
+if (!HARNESS) {
+  launchWithRetry();
+  startMonitor(bot); // the auto-monitor for active positions
+}
 
 // --- Liveness watchdog: telegraf long-polling can STALL silently (a wedged getUpdates, a
 // 502 from the bot DC) — the process stays "alive" while the bot goes mute for hours: no
@@ -7589,14 +7603,16 @@ function startWatchdog() {
     }
   }, EVERY_MS).unref();
 }
-startWatchdog();
+if (!HARNESS) startWatchdog();
 // Keep each chain's v4 list warm, so /positions, /portfolio and /stop answer from memory
 // instead of a ~3s cold read.
 const warmV4 = () => {
   for (const c of Object.values(CHAINS)) if (v4Supported(c)) listPositionsV4(c).catch(() => {});
 };
-warmV4();
-setInterval(warmV4, 4 * 60_000);
+if (!HARNESS) {
+  warmV4();
+  setInterval(warmV4, 4 * 60_000);
+}
 
 // --- Auto-recovery: an unhandled error logs, notifies, and restarts via systemd ---
 async function notifyCrash(kind: string, err: unknown) {
