@@ -679,7 +679,13 @@ export async function getBridgeQuote(
     outLabel: `${trim(d?.currencyOut?.amountFormatted, outWei)} ${d?.currencyOut?.currency?.symbol ?? to.nativeSymbol}`,
     outWei,
     impactPct: d?.totalImpact?.percent != null ? Number(d.totalImpact.percent) : null,
-    feeUsd: q?.fees?.relayer?.amountUsd != null ? Number(q.fees.relayer.amountUsd) : null,
+    // Value in minus value out, as on every bridge card; the relayer fee alone left out the
+    // swap spread on a native-to-native route.
+    feeUsd: (() => {
+      const i = Number(d?.currencyIn?.amountUsd), o = Number(d?.currencyOut?.amountUsd);
+      if (isFinite(i) && isFinite(o) && i > 0) return Math.max(0, i - o);
+      return q?.fees?.relayer?.amountUsd != null ? Number(q.fees.relayer.amountUsd) : null;
+    })(),
     etaSec: d?.timeEstimate != null ? Number(d.timeEstimate) : null,
     steps,
   };

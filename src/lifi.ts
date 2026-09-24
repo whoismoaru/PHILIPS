@@ -197,8 +197,13 @@ export async function lifiBridgeQuote(
   const inTok = q.action?.fromToken ?? {};
   const outTok = q.action?.toToken ?? {};
   const fmt = (wei: bigint, dec: number, sym: string) => `${Number(ethers.formatUnits(wei, dec)).toFixed(6)} ${sym}`;
-  const feeUsd = [...(q.estimate?.feeCosts ?? []), ...(q.estimate?.gasCosts ?? [])]
-    .reduce((s: number, c: any) => s + Number(c.amountUSD ?? 0), 0);
+  // What the route keeps: value in minus value out, the same measure every bridge card
+  // uses. Gas is NOT in it -- the card reads the gas actually burned from the receipts.
+  const inUsd = Number(q.estimate?.fromAmountUSD), outUsd = Number(q.estimate?.toAmountUSD);
+  const feeUsd =
+    isFinite(inUsd) && isFinite(outUsd) && inUsd > 0
+      ? Math.max(0, inUsd - outUsd)
+      : (q.estimate?.feeCosts ?? []).reduce((s: number, c: any) => s + Number(c.amountUSD ?? 0), 0);
   return {
     inLabel: fmt(amountWei, Number(inTok.decimals ?? 18), inTok.symbol ?? from.nativeSymbol),
     outLabel: fmt(outWei, Number(outTok.decimals ?? 18), outTok.symbol ?? to.nativeSymbol),

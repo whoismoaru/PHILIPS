@@ -2661,7 +2661,7 @@ export function msgBridgeConfirm(o: {
     `- You send: ${bold(o.inLabel)}`,
     `- You receive ≈ ${bold(o.outLabel)}`,
     ...(o.impactPct !== null ? [`- Value Impact: ${fmtPct(o.impactPct)}`] : []),
-    ...(o.feeUsd !== null ? [`- Relayer Fee: ${usdPlain(o.feeUsd)}`] : []),
+    ...(o.feeUsd !== null ? [`- Bridge fee: ${usdPlain(o.feeUsd)}`] : []),
     ...(o.etaSec !== null ? [`- Estimated Time: ~${Math.max(1, Math.round(o.etaSec))}s`] : []),
     '',
     // The quote is refreshed at confirmation; the figure above becomes its floor.
