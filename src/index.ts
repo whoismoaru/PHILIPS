@@ -2372,8 +2372,11 @@ async function renderAmountStep(ctx: any, flow: AddFlow, edit: boolean) {
   const rows: any[] = [];
   // Four amounts in the chain's native coin and four shares of the balance (/settings ->
   // Add LP). A stablecoin pool converts the native amount at the live price on tap.
-  rows.push(pctPresets.get('addamt').slice(0, 4).map((v) => Markup.button.callback(`${v} ${wizardCtx(flow).nativeSymbol}`, `addamt:${v}`)));
-  rows.push(pctPresets.get('add').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `amt:${p}`)));
+  // A stablecoin pool takes the stablecoin preset, in dollars; a native pool the native one.
+  const addScope = scopeOfBase(!wizardBase(flow).wrappable);
+  const addUnit = addScope === 'evms' ? wizardBase(flow).symbol : wizardCtx(flow).nativeSymbol;
+  rows.push(pctPresets.get(pctPresets.scoped('addamt', addScope)).slice(0, 4).map((v) => Markup.button.callback(`${v} ${addUnit}`, `addamt:${v}`)));
+  rows.push(pctPresets.get(pctPresets.scoped('add', addScope)).slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `amt:${p}`)));
   // Back goes to whichever step really precedes the amount now: the leg picker on a
   // ladder, the range picker otherwise.
   rows.push(
@@ -2472,13 +2475,8 @@ bot.action(/^addamt:([\d.]+)$/, async (ctx: any) => {
   const cc = wizardCtx(flow);
   const base = wizardBase(flow);
   const native = Number(ctx.match[1]);
-  // A stablecoin pool is funded in that stablecoin: the native amount becomes its dollar value.
-  let amount = native;
-  if (!base.wrappable) {
-    const px = cc.hasWethBase ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : 1;
-    if (!px) return ctx.reply(msg.msgError('amount', `The ${cc.nativeSymbol} price could not be read. Type the amount instead.`), html);
-    amount = native * px;
-  }
+  // A stablecoin pool's buttons come from the stablecoin preset: already dollars.
+  const amount = native;
   const wei = ethers.parseUnits(amount.toFixed(Math.min(base.decimals, 8)), base.decimals);
   const usable = await usableFor(flow).catch(() => null);
   if (usable === null) return ctx.reply(msg.msgError('amount', 'Balance read failed. Type the amount instead.'), html);
@@ -3745,8 +3743,8 @@ async function buySizeStep(ctx: any, flow: TSwapFlow, edit: boolean) {
   const multiBase = basesFor(cc).length > 1;
   const backSize = multiBase ? 'buyback:base' : flow.fromHub ? 'hub:back' : 'buyback:safety';
   const rows: any[] = [
-    buyAmountPresets(unit).map((a) => Markup.button.callback(`${a} ${unit}`, `buyamt:${a}`)),
-    pctPresets.get('buy').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `buypct:${p}`)),
+    buyAmountPresets(scopeOfBase(!base.wrappable)).map((a) => Markup.button.callback(`${a} ${unit}`, `buyamt:${a}`)),
+    pctPresets.get(pctPresets.scoped('buy', scopeOfBase(!base.wrappable))).slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `buypct:${p}`)),
     [Markup.button.callback('⬅️ Back', backSize)],
   ];
   const extra = { ...html, ...Markup.inlineKeyboard(rows) };
@@ -3881,8 +3879,8 @@ async function renderTokenHub(
   const quickUnit = cc.hasWethBase ? cc.nativeSymbol : (basesFor(cc)[0]?.symbol ?? cc.nativeSymbol);
   const quick = swappable
     ? [
-        buyAmountPresets(quickUnit).map((a) => Markup.button.callback(`🛒 ${a} ${quickUnit}`, `qba:${a}`)),
-        pctPresets.get('buy').slice(0, 4).map((p) => Markup.button.callback(`🛒 ${p}%`, `qbp:${p}`)),
+        buyAmountPresets(scopeOfBase(!cc.hasWethBase)).map((a) => Markup.button.callback(`🛒 ${a} ${quickUnit}`, `qba:${a}`)),
+        pctPresets.get(pctPresets.scoped('buy', scopeOfBase(!cc.hasWethBase))).slice(0, 4).map((p) => Markup.button.callback(`🛒 ${p}%`, `qbp:${p}`)),
       ]
     : [];
 
@@ -4120,8 +4118,8 @@ async function startSolToken(ctx: any, mint: string, edit = false, prevMsg?: any
   // Quick buy straight from the card: four fixed SOL amounts, four shares of the spendable
   // balance. 'qsa:' + lamports + mint stays under Telegram's 64-byte callback limit.
   solCardSym.set(mint, sym);
-  kb.push(buyAmountPresets('SOL').map((a) => Markup.button.callback(`🛒 ${a} SOL`, `qsa:${Math.round(a * 1e9)}:${mint}`)));
-  kb.push(pctPresets.get('buy').slice(0, 4).map((p) => Markup.button.callback(`🛒 ${p}%`, `qsp:${p}:${mint}`)));
+  kb.push(buyAmountPresets('sol').map((a) => Markup.button.callback(`🛒 ${a} SOL`, `qsa:${Math.round(a * 1e9)}:${mint}`)));
+  kb.push(pctPresets.get('buy.sol').slice(0, 4).map((p) => Markup.button.callback(`🛒 ${p}%`, `qsp:${p}:${mint}`)));
   // One pool per row, above Refresh, named like the pool list: "$GROK/$SOL (bin 100, fee 2%)".
   shown.forEach((p, i) =>
     kb.push([
@@ -4263,9 +4261,9 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
   f.bins = f.pick.binStep ? binsForRange(f.pick.binStep, rangePct) : undefined;
   const bal = await jupiter.solBalance(kp.publicKey).catch(() => 0n);
   const rows = pctPresets.chunkButtons(
-    pctPresets.get('addamt').slice(0, 4).map((v) => Markup.button.callback(`${v} SOL`, `sollpa:${Math.round(v * jupiter.LAMPORTS)}`)),
+    pctPresets.get('addamt.sol').slice(0, 4).map((v) => Markup.button.callback(`${v} SOL`, `sollpa:${Math.round(v * jupiter.LAMPORTS)}`)),
   );
-  rows.push(pctPresets.get('add').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `sollpp:${p}`)));
+  rows.push(pctPresets.get('add.sol').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `sollpp:${p}`)));
   rows.push([Markup.button.callback('⬅️ Back', 'sollpback'), Markup.button.callback('❌ Cancel', 'cancel')]);
   return ctx.editMessageText(
     msg.msgSolLpAmount({
@@ -4429,8 +4427,8 @@ bot.action(/^solbuy:(.+)$/, async (ctx) => {
   const symbol = view?.facts?.symbol ?? '?';
   solBuyFlows.set(ctx.from!.id, { mint, symbol, decimals: await mintDecimals(mint), startedAt: Date.now() });
   const rows = [
-    buyAmountPresets('SOL').map((a) => Markup.button.callback(`${a} SOL`, `solbuya:${Math.round(a * 1e9)}`)),
-    pctPresets.get('buy').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `solamt:${p}`)),
+    buyAmountPresets('sol').map((a) => Markup.button.callback(`${a} SOL`, `solbuya:${Math.round(a * 1e9)}`)),
+    pctPresets.get('buy.sol').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `solamt:${p}`)),
     [Markup.button.callback('⬅️ Back', `solref:${mint}`)],
   ];
   const px = await solUsd().catch(() => null);
@@ -4810,10 +4808,11 @@ async function buyFromPct(ctx: any, flow: TSwapFlow, pct: number): Promise<unkno
  * Fixed amounts for the buy buttons, in the chain's native coin. One list for every chain
  * (the owner's choice, 23 Sep 2026), edited from /settings -> Buy Token.
  */
-function buyAmountPresets(_unit: string): number[] {
-  // One list for every chain, in its native coin (/settings -> Buy Token), the first four.
-  return pctPresets.get('buyamt').slice(0, 4);
+/** The Buy amounts for a scope (/settings -> EVM or SOL Presets), the first four. */
+function buyAmountPresets(scope: pctPresets.Scope): number[] {
+  return pctPresets.get(pctPresets.scoped('buyamt', scope)).slice(0, 4);
 }
+const scopeOfBase = (stable: boolean): pctPresets.Scope => (stable ? 'evms' : 'evm');
 
 /**
  * The price step between two usable ticks, as a percentage: Uniswap's analogue of a DLMM
@@ -5251,8 +5250,8 @@ bot.action(/^solsell:(\d+)$/, async (ctx) => {
   // Four amounts worth that much SOL, and four shares of the holding (/settings -> Swap
   // Token). For SOL itself the amount is simply that much SOL.
   const rows: any[] = [
-    pctPresets.get('sellamt').slice(0, 4).map((a) => Markup.button.callback(`${a} SOL`, `solsella:${Math.round(a * 1e9)}`)),
-    pctPresets.get('sell').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `solsellp:${p}`)),
+    pctPresets.get('sellamt.sol').slice(0, 4).map((a) => Markup.button.callback(`${a} SOL`, `solsella:${Math.round(a * 1e9)}`)),
+    pctPresets.get('sell.sol').slice(0, 4).map((p) => Markup.button.callback(`${p}%`, `solsellp:${p}`)),
   ];
   rows.push([Markup.button.callback('✏️ Type an amount', 'solselltype')]);
   rows.push([Markup.button.callback('⬅️ Back', 'sell:refresh'), Markup.button.callback('❌ Cancel', 'cancel')]);

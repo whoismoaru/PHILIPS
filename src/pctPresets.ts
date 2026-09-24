@@ -10,9 +10,22 @@ import { writeJson } from './store.js';
  * 30/50/70/90 while the rest offered 25/50/75/100. Changing one meant editing four places
  * and restarting, so in practice they were never changed at all.
  */
-export type PctFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs' | 'send' | 'solrange' | 'solsize' | 'buyamt' | 'sellamt' | 'addamt';
+type BaseFlow = 'buy' | 'sell' | 'add' | 'stop' | 'bridge' | 'legs' | 'send' | 'solrange' | 'solsize' | 'buyamt' | 'sellamt' | 'addamt';
+/**
+ * Scoped copies of the quick-amount flows, so one number never means 0.5 ETH on one chain
+ * and 0.5 SOL on another (owner's call, 24 Sep 2026). The bare names are EVM paid in the
+ * native coin; `.evms` is EVM paid in a stablecoin (dollars); `.sol` is Solana, in SOL.
+ */
+export type Scope = 'evm' | 'evms' | 'sol';
+type ScopedFlow = `${'buy' | 'sell' | 'add' | 'buyamt' | 'sellamt' | 'addamt'}.${'evms' | 'sol'}`;
+export type PctFlow = BaseFlow | ScopedFlow;
+const SCOPED: ScopedFlow[] = ['buy.evms', 'add.evms', 'buyamt.evms', 'addamt.evms', 'buy.sol', 'sell.sol', 'add.sol', 'buyamt.sol', 'sellamt.sol', 'addamt.sol'];
+const bareOf = (f: PctFlow): BaseFlow => f.split('.')[0] as BaseFlow;
+/** The flow name for `flow` in `scope`: the bare name for EVM native. */
+export const scoped = (flow: 'buy' | 'sell' | 'add' | 'buyamt' | 'sellamt' | 'addamt', scope: Scope): PctFlow =>
+  scope === 'evm' ? flow : (`${flow}.${scope}` as PctFlow);
 
-export const FLOW_LABEL: Record<PctFlow, string> = {
+export const FLOW_LABEL: Record<BaseFlow, string> = {
   buy: 'Buy',
   sell: 'Sell',
   add: 'Add LP',
@@ -32,7 +45,7 @@ export const FLOW_LABEL: Record<PctFlow, string> = {
 
 // `stop` deliberately omits 100: pulling everything out means closing the position, which
 // has its own button and its own path -- not a partial decreaseLiquidity.
-const DEFAULTS: Record<PctFlow, number[]> = {
+const BASE_DEFAULTS: Record<BaseFlow, number[]> = {
   buy: [25, 50, 75, 100],
   sell: [25, 50, 75, 100],
   add: [30, 50, 70, 90],
@@ -71,7 +84,7 @@ let cache: Record<PctFlow, number[]> | null = null;
  * path with its own button. `legs` is not a percentage at all -- it is a number of rungs,
  * at least 2 (one leg is not a ladder) and capped at 69, matching the open path.
  */
-const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
+const BASE_BOUNDS: Record<BaseFlow, { min: number; max: number }> = {
   // Fractions allowed: 0.01% of a large balance is a real buy size.
   buy: { min: 0.01, max: 100 },
   sell: { min: 0.01, max: 100 },
@@ -89,9 +102,16 @@ const BOUNDS: Record<PctFlow, { min: number; max: number }> = {
   sellamt: { min: 0.0001, max: 100000 },
   addamt: { min: 0.0001, max: 100000 },
 };
+const STABLE_AMT = [5, 10, 25, 50];
+const DEFAULTS = Object.fromEntries([
+  ...Object.entries(BASE_DEFAULTS),
+  ...SCOPED.map((f) => [f, f.endsWith('.evms') && f.includes('amt') ? STABLE_AMT : f.startsWith('addamt') ? [0.1, 0.25, 0.5, 1] : BASE_DEFAULTS[bareOf(f)]]),
+]) as Record<PctFlow, number[]>;
+const BOUNDS = new Proxy({} as Record<PctFlow, { min: number; max: number }>, { get: (_t, k) => BASE_BOUNDS[bareOf(String(k) as PctFlow)] });
 export const boundsFor = (flow: PctFlow) => BOUNDS[flow];
+export const labelOf = (flow: PctFlow): string => FLOW_LABEL[bareOf(flow)];
 /** The unit the settings card shows: '%' for amounts, 'legs' for a ladder. */
-export const unitFor = (flow: PctFlow): string => (flow === 'legs' ? 'legs' : flow === 'solsize' ? 'SOL' : flow === 'buyamt' || flow === 'sellamt' || flow === 'addamt' ? 'native' : '%');
+export const unitFor = (flow: PctFlow): string => (flow.endsWith('.evms') && flow.includes('amt') ? '$' : flow.endsWith('.sol') && flow.includes('amt') ? 'SOL' : flow === 'legs' ? 'legs' : flow === 'solsize' ? 'SOL' : flow === 'buyamt' || flow === 'sellamt' || flow === 'addamt' ? 'native' : '%');
 
 /** Valid values: whole numbers inside the flow's range, ascending, no duplicates, at most 4. */
 export function sanitize(values: number[], flow: PctFlow): number[] | null {
@@ -101,7 +121,7 @@ export function sanitize(values: number[], flow: PctFlow): number[] | null {
   // solsize is an AMOUNT in SOL, so 0.25 is a legitimate value there and nowhere else.
   // Everywhere else a non-integer is a typo, and storing "0.5" as a percentage would make
   // a button that deposits nothing.
-  const decimals = ['solsize', 'buyamt', 'sellamt', 'addamt', 'buy', 'sell', 'add'].includes(flow);
+  const decimals = ['solsize', 'buyamt', 'sellamt', 'addamt', 'buy', 'sell', 'add'].includes(bareOf(flow));
   if (values.some((v) => (decimals ? !(v > 0) : !Number.isInteger(v)) || v < min || v > max)) return null;
   const clean = [...new Set(values)].sort((a, b) => a - b);
   if (clean.length === 0 || clean.length > MAX_BUTTONS) return null;
@@ -115,7 +135,9 @@ function load(): Record<PctFlow, number[]> {
     try {
       const raw = JSON.parse(readFileSync(FILE, 'utf8')) as Partial<Record<PctFlow, number[]>>;
       for (const f of Object.keys(DEFAULTS) as PctFlow[]) {
-        const v = raw[f];
+        // A scoped list never saved yet starts as a copy of the old shared one, except an
+        // EVM-stablecoin amount: the old list was in ETH/BNB, never dollars.
+        const v = raw[f] ?? (f.includes('.') && !(f.endsWith('.evms') && f.includes('amt')) ? raw[bareOf(f)] : undefined);
         const ok = Array.isArray(v) ? sanitize(v, f) : null;
         if (ok) cache[f] = ok;
       }

@@ -136,15 +136,13 @@ export async function cmdSettings(ctx: any) {
   // Labels follow the flows as they are now named. "Withdraw %" used to sit on pct:stop,
   // which is the share of an LP you close -- a different thing from a withdrawal to an
   // address, and the two shared one word.
+  // Buy / Swap / Add LP amounts, EVM and Solana kept apart (and on EVM, native coin apart
+  // from stablecoin), so one number never means two different sizes.
   rows.push([
-    // Straight into the edit prompt: the value is shown there anyway, one tap saved.
-    Markup.button.callback('🛒 Buy Token', 'pctedit:buy'),
-    Markup.button.callback('💱 Swap Token', 'pctedit:sell'),
+    Markup.button.callback('⚙️ EVM Presets', 'presets:evm'),
+    Markup.button.callback('⚙️ SOL Presets', 'presets:sol'),
   ]);
-  rows.push([
-    Markup.button.callback('➕ Add LP', 'pctedit:add'),
-    Markup.button.callback('⛔ Close LP % (EVM)', 'pct:stop'),
-  ]);
+  rows.push([Markup.button.callback('⛔ Close LP % (EVM)', 'pct:stop')]);
   rows.push([
     Markup.button.callback('🌉 Bridge %', 'pct:bridge'),
     Markup.button.callback('📤 Withdraw %', 'pct:send'),
@@ -303,11 +301,37 @@ registerFlowReset((uid) => {
 });
 
 /** Flows edited as "amounts & percentages" in one line, each with its amount list. */
-const DUAL: Partial<Record<pctPresets.PctFlow, { amt: pctPresets.PctFlow; title: string }>> = {
-  buy: { amt: 'buyamt', title: '🛒 BUY TOKEN' },
-  sell: { amt: 'sellamt', title: '💱 SWAP TOKEN' },
-  add: { amt: 'addamt', title: '➕ ADD LP' },
-};
+const DUAL_TITLE: Record<string, string> = { buy: '🛒 BUY TOKEN', sell: '💱 SWAP TOKEN', add: '➕ ADD LP' };
+const SCOPE_TAG: Record<string, string> = { '': 'EVM · Native', evms: 'EVM · Stablecoin', sol: 'Solana · SOL' };
+function dualOf(flow: pctPresets.PctFlow): { amt: pctPresets.PctFlow; title: string; back: string } | undefined {
+  const [bare, scope = ''] = flow.split('.');
+  if (!DUAL_TITLE[bare]) return undefined;
+  return {
+    amt: (`${bare}amt${scope ? `.${scope}` : ''}`) as pctPresets.PctFlow,
+    title: `${DUAL_TITLE[bare]} · ${SCOPE_TAG[scope]}`,
+    back: scope === 'sol' ? 'presets:sol' : 'presets:evm',
+  };
+}
+
+/** Preset menus: EVM and Solana apart, and on EVM native coin apart from stablecoin. */
+bot.action(/^presets:(evm|sol)$/, async (ctx) => {
+  pctPresets.clearEdit(ctx.from!.id);
+  await ctx.answerCbQuery();
+  const evm = ctx.match[1] === 'evm';
+  const rows = evm
+    ? [
+        [Markup.button.callback('🛒 Buy · Native', 'pctedit:buy'), Markup.button.callback('💱 Swap · Native', 'pctedit:sell')],
+        [Markup.button.callback('➕ Add LP · Native', 'pctedit:add')],
+        [Markup.button.callback('🛒 Buy · Stablecoin', 'pctedit:buy.evms'), Markup.button.callback('➕ Add LP · Stablecoin', 'pctedit:add.evms')],
+        [Markup.button.callback('⬅️ Back', 'settings')],
+      ]
+    : [
+        [Markup.button.callback('🛒 Buy Token', 'pctedit:buy.sol'), Markup.button.callback('💱 Swap Token', 'pctedit:sell.sol')],
+        [Markup.button.callback('➕ Add LP', 'pctedit:add.sol')],
+        [Markup.button.callback('⬅️ Back', 'settings')],
+      ];
+  return ctx.editMessageText(msg.msgPresetMenu(evm), { ...html, ...Markup.inlineKeyboard(rows) });
+});
 
 /** One flow's unit, limits and special notes, shared by all three settings cards. */
 function pctOpts(flow: pctPresets.PctFlow) {
@@ -344,29 +368,29 @@ bot.action(/^pct:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, async 
   pctPresets.clearEdit(ctx.from!.id);
   await ctx.answerCbQuery();
   return ctx.editMessageText(
-    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctPresets.defaultsFor(flow), pctOpts(flow)),
+    msg.msgPctPreset(pctPresets.labelOf(flow), pctPresets.get(flow), pctPresets.defaultsFor(flow), pctOpts(flow)),
     { ...html, ...pctCardKb(flow) },
   );
 });
 
-bot.action(/^pctedit:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, async (ctx) => {
+bot.action(/^pctedit:((?:buy|sell|add)(?:\.evms|\.sol)?|stop|bridge|legs|send|solrange|solsize)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.askEdit(ctx.from!.id, flow);
   await ctx.answerCbQuery();
-  const dual = DUAL[flow];
-  const text = dual ? msg.msgBuyPresetAsk(pctPresets.get(dual.amt), pctPresets.get(flow), false, dual.title) : msg.msgPctAsk(pctPresets.FLOW_LABEL[flow], pctPresets.get(flow), pctOpts(flow));
+  const dual = dualOf(flow);
+  const text = dual ? msg.msgBuyPresetAsk(pctPresets.get(dual.amt), pctPresets.get(flow), false, dual.title) : msg.msgPctAsk(pctPresets.labelOf(flow), pctPresets.get(flow), pctOpts(flow));
   return ctx.editMessageText(text, {
     ...html,
     // Buy opens here directly from /settings, so its Back goes there too.
-    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', dual ? 'settings' : `pct:${flow}`)]]),
+    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', dual ? dual.back : `pct:${flow}`)]]),
   });
 });
 
-bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, async (ctx) => {
+bot.action(/^pctreset:((?:buy|sell|add)(?:\.evms|\.sol)?|stop|bridge|legs|send|solrange|solsize)$/, async (ctx) => {
   const flow = ctx.match[1] as pctPresets.PctFlow;
   pctPresets.clearEdit(ctx.from!.id);
   const v = pctPresets.reset(flow);
-  const dualR = DUAL[flow];
+  const dualR = dualOf(flow);
   if (dualR) {
     const a = pctPresets.reset(dualR.amt);
     await ctx.answerCbQuery('Reset');
@@ -374,7 +398,7 @@ bot.action(/^pctreset:(buy|sell|add|stop|bridge|legs|send|solrange|solsize)$/, a
   }
   await ctx.answerCbQuery('Reset');
   return ctx.editMessageText(
-    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], v, pctPresets.defaultsFor(flow), pctOpts(flow)),
+    msg.msgPctPreset(pctPresets.labelOf(flow), v, pctPresets.defaultsFor(flow), pctOpts(flow)),
     { ...html, ...pctCardKb(flow) },
   );
 });
@@ -388,7 +412,7 @@ export async function handlePctReply(ctx: any, raw: string): Promise<boolean> {
   const flow = pctPresets.pendingEdit(ctx.from?.id);
   if (!flow) return false;
   // Buy Token, Swap Token and Add LP edit two lists at once: "0.01 0.05 0.1 0.5 & 10% 25% 50% 100%".
-  const dual = DUAL[flow];
+  const dual = dualOf(flow);
   if (dual) {
     const [l, r] = raw.split('&');
     const amts = l ? pctPresets.parseList(l) : null;
@@ -414,7 +438,7 @@ export async function handlePctReply(ctx: any, raw: string): Promise<boolean> {
   }
   pctPresets.clearEdit(ctx.from.id);
   await ctx.reply(
-    msg.msgPctPreset(pctPresets.FLOW_LABEL[flow], saved, pctPresets.defaultsFor(flow), pctOpts(flow)),
+    msg.msgPctPreset(pctPresets.labelOf(flow), saved, pctPresets.defaultsFor(flow), pctOpts(flow)),
     { ...html, ...pctCardKb(flow) },
   );
   return true;

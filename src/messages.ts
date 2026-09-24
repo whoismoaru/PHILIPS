@@ -954,6 +954,19 @@ export function msgPctPreset(
 /** Prompt to type a list of values. */
 /** The Buy preset prompt, opened straight from /settings. */
 /** The Buy Token prompt: four amounts (native coin) and four percentages in one line. */
+export function msgPresetMenu(evm: boolean): string {
+  return [
+    `\u2699\uFE0F ${bold(evm ? 'EVM PRESETS' : 'SOL PRESETS')}`,
+    '',
+    evm
+      ? '» Native: amounts in each chain\'s coin (ETH, BNB, HYPE)'
+      : '» Amounts in SOL',
+    ...(evm ? ['» Stablecoin: amounts in dollars (USDG, USDT, USDC)'] : []),
+    '',
+    'Pick one to edit its 4 amounts and 4 percentages.',
+  ].join('\n');
+}
+
 export function msgBuyPresetAsk(amounts: number[], pcts: number[], saved = false, title = '🛒 BUY TOKEN'): string {
   const [icon, ...words] = title.split(' ');
   return [
