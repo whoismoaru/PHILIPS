@@ -2,7 +2,7 @@ import { Markup } from 'telegraf';
 import { ethers } from 'ethers';
 import { config } from '../config.js';
 import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset } from '../core.js';
-import { CHAINS, getChain, isStableBase, type ChainCtx, type BaseKind } from '../chains.js';
+import { CHAINS, getChain, isStableBase, txButtons, type ChainCtx, type BaseKind } from '../chains.js';
 import { TRADE_LIMIT_PCT } from '../tradeLimit.js';
 import { bestBridgeQuote, executeBridgeVia, type BridgeProvider } from '../bridgeRoute.js';
 import { NATIVE } from '../relay.js';
@@ -548,7 +548,17 @@ async function execBridge(ctx: any) {
         bridgeFeeUsd: feeUsd ?? null,
         gasUsd: await evmGasUsd(from, r.txHashes),
       }),
-      html,
+      {
+        ...html,
+        ...Markup.inlineKeyboard([
+          ...txButtons(from.key, r.txHashes).map((row) => row.map((x) => Markup.button.url(x.text, x.url))),
+          ...((provider ?? 'relay') === 'relay' && r.txHashes.length
+            ? [[Markup.button.url('🌉 Track on Relay', `https://relay.link/transaction/${r.txHashes[r.txHashes.length - 1]}`)]]
+            : provider === 'lifi' && r.txHashes.length
+              ? [[Markup.button.url('🌉 Track on LI.FI', `https://scan.li.fi/tx/${r.txHashes[r.txHashes.length - 1]}`)]]
+              : []),
+        ]),
+      },
     );
   } catch (e) {
     await ctx.reply(msg.msgError('bridge', (e as Error).message), html);

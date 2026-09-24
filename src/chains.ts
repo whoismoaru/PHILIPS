@@ -623,3 +623,27 @@ export { ERC20_ABI };
 /** Every chain this build knows, on or off: what the /settings switches list. */
 export const ALL_CHAIN_DEFS = (): Array<{ key: string; label: string }> =>
   Object.entries(DEFS).map(([key, d]) => ({ key, label: d.label }));
+
+/** Transaction page on each chain's explorer, keyed like CHAINS (plus 'solana'). */
+export const EXPLORER_TX: Record<string, string> = {
+  robinhood: 'https://robinhoodchain.blockscout.com/tx/',
+  bsc: 'https://bscscan.com/tx/',
+  base: 'https://basescan.org/tx/',
+  hyperevm: 'https://hyperevmscan.io/tx/',
+  arc: 'https://arc-scan.org/tx/',
+  ink: 'https://explorer.inkonchain.com/tx/',
+  solana: 'https://solscan.io/tx/',
+};
+
+/**
+ * One "🔍 View Tx" button per hash, on the chain it was sent on, two to a row; numbered
+ * when there are several (an approve then the deposit).
+ */
+export function txButtons(chainKey: string, hashes: string[]): Array<Array<{ text: string; url: string }>> {
+  const base = EXPLORER_TX[chainKey];
+  if (!base) return [];
+  const btns = hashes.map((h, i) => ({ text: hashes.length > 1 ? `🔍 View Tx ${i + 1}` : '🔍 View Tx', url: `${base}${h}` }));
+  const rows: Array<Array<{ text: string; url: string }>> = [];
+  for (let i = 0; i < btns.length; i += 2) rows.push(btns.slice(i, i + 2));
+  return rows;
+}

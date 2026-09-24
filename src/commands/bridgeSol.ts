@@ -12,7 +12,7 @@ import {
 } from '@solana/web3.js';
 import { config } from '../config.js';
 import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset, sendTxNonceSafe } from '../core.js';
-import { CHAINS, isStableBase, type ChainCtx, type BaseKind } from '../chains.js';
+import { CHAINS, isStableBase, txButtons, type ChainCtx, type BaseKind } from '../chains.js';
 import { TRADE_LIMIT_PCT } from '../tradeLimit.js';
 import { ERC20_ABI } from '../chain.js';
 import * as store from '../store.js';
@@ -282,7 +282,14 @@ async function run(ctx: any, f: Flow, amount: bigint): Promise<void> {
     const inUsd = Number(d.currencyIn?.amountUsd), outUsd = Number(d.currencyOut?.amountUsd);
     const bridgeFeeUsd = isFinite(inUsd) && isFinite(outUsd) ? Math.max(0, inUsd - outUsd) : null;
     const gasUsd = f.dir === 'out' ? await solGasUsd(hashes) : await evmGasUsd(cc, hashes);
-    await editProgress(ctx, prog, msg.msgBridgeDone({ fromLabel: a, toLabel: b, inLabel, outLabel, txHashes: hashes, dryRun: false, bridgeFeeUsd, gasUsd }));
+    await editProgress(ctx, prog, msg.msgBridgeDone({ fromLabel: a, toLabel: b, inLabel, outLabel, txHashes: hashes, dryRun: false, bridgeFeeUsd, gasUsd }), {
+      ...html,
+      ...Markup.inlineKeyboard([
+        ...txButtons(f.dir === 'out' ? 'solana' : cc.key, hashes).map((r) => r.map((x) => Markup.button.url(x.text, x.url))),
+        // Relay's page follows the fill to the destination chain as well.
+        ...(hashes[0] ? [[Markup.button.url('🌉 Track on Relay', `https://relay.link/transaction/${hashes[hashes.length - 1]}`)]] : []),
+      ]),
+    });
   } catch (e) {
     await editProgress(ctx, prog, msg.msgError('bridge', (e as Error).message));
   } finally {

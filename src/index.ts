@@ -110,6 +110,7 @@ import {
   venueCtx,
   ctxOf,
   pairLabel,
+  EXPLORER_TX,
 } from './chains.js';
 import { swapExactInBest, previewSwapOut } from './swapRoute.js';
 
@@ -5445,14 +5446,6 @@ bot.action('sellback:amount', async (ctx) => {
 
 /** Quote the best route and build the confirmation card. Shared by the typed and preset paths. */
 /** Block explorers, by chain: the tx link on the opened card. */
-const EXPLORER_TX: Record<string, string> = {
-  robinhood: 'https://robinhoodchain.blockscout.com/tx/',
-  bsc: 'https://bscscan.com/tx/',
-  base: 'https://basescan.org/tx/',
-  hyperevm: 'https://hyperevmscan.io/tx/',
-  arc: 'https://arc-scan.org/tx/',
-  ink: 'https://explorer.inkonchain.com/tx/',
-};
 
 /** Gas actually paid by these transactions: "$0.02 (0.00003 BNB)", or null when unreadable. */
 async function gasPaid(cc: ChainCtx, hashes: string[]): Promise<string | null> {
