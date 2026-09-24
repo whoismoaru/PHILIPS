@@ -523,6 +523,11 @@ export function msgV4Position(p: {
 }
 
 /** The result of closing a v4 position (or a dry-run simulation). */
+const txBlock = (hs: Array<string | null | undefined>): string[] => {
+  const h = hs.filter(Boolean) as string[];
+  return h.length ? ['', bold('Tx Hash :'), ...h.map((x) => code(x))] : [];
+};
+
 export function msgV4Closed(o: {
   tokenId: string;
   base: 'ETH' | 'USDG' | null;
@@ -533,17 +538,18 @@ export function msgV4Closed(o: {
   dryRun: boolean;
 }): string {
   if (o.dryRun) {
-    return card(`⚪ ${title('CLOSE v4 (DRY)', `#${o.tokenId}`)}`, [
-      note(`simulation valid: when live, funds return${o.base ? ` and are cashed out to ${o.base}` : ''}.`),
-    ]);
+    return [`\u26AA ${bold('DRY RUN')}`, '', `» #${esc(o.tokenId)} would close${o.base ? ` and cash out to ${o.base}` : ''}`, '', note(`DRY RUN \u00B7 ${nowWib()}`)].join('\n');
   }
-  const body: string[] = [];
-  if (o.cashedOut) body.push(`💰 ${bold(`all converted to ${o.base}`)}`);
-  else if (o.leftover) body.push(`⚠️ ${bold('dust token has no swap route')} — it stays in your wallet (sell it later via /sell).`);
-  else body.push(`💰 ${bold('funds returned to your wallet')}`);
-  if (o.pnlText) body.push('', bold(`PnL  ${o.pnlText}`));
-  if (o.txHash) body.push('', ...hrows([['tx', shortAddr(o.txHash)]]));
-  return card(`✅ ${title('CLOSED v4', `#${o.tokenId}`)}`, body, nowWib());
+  return [
+    `\u2705 ${bold('POSITION CLOSED')}`,
+    '',
+    `» #${esc(o.tokenId)} (V4)`,
+    `» ${o.cashedOut ? `All converted to ${bold(String(o.base))}` : o.leftover ? 'Token has no swap route, it stays in your wallet (use /swap)' : 'Funds returned to your wallet'}`,
+    ...(o.pnlText ? [`» PnL: ${bold(o.pnlText)}`] : []),
+    ...txBlock([o.txHash]),
+    '',
+    note(nowWib()),
+  ].join('\n');
 }
 
 /** The result of adding v4 liquidity (or a dry-run simulation). */
@@ -1661,16 +1667,15 @@ export function msgSolBuyConfirm(o: {
 /** The result of a Solana buy that landed. */
 export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: string; sig: string; gas?: string | null }): string {
   const sym = o.symbol.replace(/^\$+/, '');
-  // The same card as an EVM fill. Fee and slippage are not measured on this path yet, so
-  // those lines are left out rather than printed as guesses.
+  // The same card as an EVM fill. Slippage is not measured on this path yet, so it is
+  // left out rather than printed as a guess.
   return [
     `\u2705 ${bold('ORDER FILLED')}`,
     '',
     `» Received ${bold(`+${o.received} ${sym}`)}`,
     `» Paid ${bold(`${o.spendSol} SOL`)} using Jupiter`,
     ...(o.gas ? [`» Fee ${bold(esc(o.gas))}`] : []),
-    '',
-    `${bold('Tx')} : ${code(o.sig)}`,
+    ...txBlock([o.sig]),
     '',
     note(nowWib()),
   ].join('\n');
@@ -1678,16 +1683,16 @@ export function msgSolBuyDone(o: { symbol: string; spendSol: string; received: s
 
 export function msgSolSellDone(o: { symbol: string; sold: string; received: string; sig: string; gas?: string | null }): string {
   const sym = o.symbol.replace(/^\$+/, '');
-  return card(
-    `\u2705 ${bold('SWAP FILLED')}`,
-    [
-      `${bold(`${esc(o.sold)} $${esc(sym)}`)} \u2192 ${bold(esc(o.received))}`,
-      ...(o.gas ? [`Gas fee: ${bold(esc(o.gas))}`] : []),
-      '',
-      `${bold('Tx')} : ${code(o.sig)}`,
-    ],
-    footerMode(),
-  );
+  return [
+    `\u2705 ${bold('ORDER FILLED')}`,
+    '',
+    `» Received ${bold(`+${esc(o.received)}`)}`,
+    `» Paid ${bold(`${esc(o.sold)} ${esc(sym)}`)} using Jupiter`,
+    ...(o.gas ? [`» Fee ${bold(esc(o.gas))}`] : []),
+    ...txBlock([o.sig]),
+    '',
+    note(nowWib()),
+  ].join('\n');
 }
 
 /** Refused before sending: opening would leave rent behind that never comes back. */
@@ -1794,7 +1799,7 @@ export function msgPositionOpened(o: { pair: string; tokenId: string; protocol: 
     `» Size: ${bold(o.size)}`,
     `» Gas: ${bold(o.gas ?? '—')}`,
     // The FULL hash: a shortened one cannot be pasted into an explorer.
-    ...(o.txHash ? ['', 'tx :', code(o.txHash)] : []),
+    ...txBlock([o.txHash]),
     '',
     note(nowWib()),
   ].join('\n');
@@ -2288,10 +2293,11 @@ export function msgClaimPick(rows: Array<{ symbol: string; id: string; label: st
 
 export function msgClaimDone(id: string, label: string, txHash: string | null): string {
   return [
-    `✅ ${bold('Fees Harvested!')}`,
+    `\u2705 ${bold('FEES CLAIMED')}`,
     '',
-    `Position ${bold(`#${id}`)} → ${bold(label)} is now in your wallet.`,
-    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN: no transaction was sent.')]),
+    `» #${esc(id)}`,
+    `» Received ${bold(`+${label}`)}`,
+    ...(txHash ? txBlock([txHash]) : ['', note('DRY RUN, no transaction was sent.')]),
     '',
     note(nowWib()),
   ].join('\n');
@@ -2329,9 +2335,10 @@ export function msgRemoveDone(id: string, pct: number, txHash: string | null): s
   return [
     `\u2705 ${bold('LIQUIDITY REMOVED')}`,
     '',
-    `${bold(`${pct}%`)} of #${esc(id)} is now in your wallet, along with any unclaimed fees.`,
-    `The remaining ${bold(`${100 - pct}%`)} is still working in the pool.`,
-    ...(txHash ? ['', bold('Tx Hash :'), code(txHash)] : ['', note('DRY RUN, no transaction was sent.')]),
+    `» #${esc(id)}`,
+    `» Removed ${bold(`${pct}%`)} plus unclaimed fees`,
+    `» Still in pool ${bold(`${100 - pct}%`)}`,
+    ...(txHash ? txBlock([txHash]) : ['', note('DRY RUN, no transaction was sent.')]),
     '',
     note(nowWib()),
   ].join('\n');
@@ -2572,10 +2579,11 @@ export function msgUnwrapConfirm(
 
 export function msgUnwrapDone(amount: string, txHash: string | null, wrapped = 'WETH', native = 'ETH'): string {
   return [
-    `✅ ${bold('Unwrapped')}`,
+    `\u2705 ${bold('UNWRAPPED')}`,
     '',
-    `${bold(amount)} ${esc(wrapped)} → native ${esc(native)}, now in your wallet.`,
-    ...(txHash ? ['', '🔗 Tx:', code(txHash)] : ['', note('DRY RUN: no transaction was sent.')]),
+    `» Received ${bold(`+${amount} ${native}`)}`,
+    `» Paid ${bold(`${amount} ${wrapped}`)}`,
+    ...(txHash ? txBlock([txHash]) : ['', note('DRY RUN, no transaction was sent.')]),
     '',
     note(nowWib()),
   ].join('\n');
@@ -2658,25 +2666,16 @@ export function msgBridgeDone(o: {
   txHashes: string[];
   dryRun: boolean;
 }): string {
-  const out = [
-    `\u2705 ${bold(o.dryRun ? 'BRIDGE (DRY RUN)' : 'BRIDGE SUCCESS')}`,
+  return [
+    `${o.dryRun ? '\u26AA' : '\u2705'} ${bold(o.dryRun ? 'DRY RUN' : 'BRIDGE FILLED')}`,
     '',
-    `${esc(o.fromLabel)} \u2192 ${esc(o.toLabel)}`,
-    `${bold(o.inLabel)} \u2192 ${bold(o.outLabel)}`,
-  ];
-  if (o.txHashes.length) {
-    out.push('', `${bold('Tx Hash :')}`);
-    // Own line each, as <code>: a hash is copied, and a wrapped one copies broken.
-    for (const h of o.txHashes) out.push(code(h));
-  }
-  if (o.dryRun) out.push('', note('DRY RUN: no transaction was sent.'));
-  out.push(
+    `» Route ${esc(o.fromLabel)} \u2192 ${esc(o.toLabel)}`,
+    `» Received ${bold(`+${o.outLabel}`)}`,
+    `» Paid ${bold(o.inLabel)} using Relay`,
+    ...txBlock(o.txHashes),
     '',
-    'Funds usually arrive within seconds. Check /portfolio once the destination chain updates.',
-    '',
-    note(nowWib()),
-  );
-  return out.join('\n');
+    note(o.dryRun ? `DRY RUN \u00B7 ${nowWib()}` : nowWib()),
+  ].join('\n');
 }
 
 export function msgBridgeUnavailable(): string {
@@ -2778,16 +2777,15 @@ export function msgSendDone(o: {
   txHash: string | null;
   dryRun: boolean;
 }): string {
-  const out = [
-    `\u2705 ${bold(o.dryRun ? 'WITHDRAW (DRY RUN)' : 'WITHDRAW SUCCESS')}`,
+  return [
+    `${o.dryRun ? '\u26AA' : '\u2705'} ${bold(o.dryRun ? 'DRY RUN' : 'WITHDRAW SENT')}`,
     '',
-    `${bold(o.amount)} on ${esc(o.chainLabel)}`,
-    `\u2192 ${code(o.to)}`,
-  ];
-  if (o.txHash) out.push('', bold('Tx Hash :'), code(o.txHash));
-  if (o.dryRun) out.push('', note('DRY RUN, nothing was withdrawn.'));
-  out.push('', note(nowWib()));
-  return out.join('\n');
+    `» Sent ${bold(o.amount)} on ${esc(o.chainLabel)}`,
+    `» To ${code(o.to)}`,
+    ...txBlock([o.txHash]),
+    '',
+    note(o.dryRun ? `DRY RUN \u00B7 ${nowWib()}` : nowWib()),
+  ].join('\n');
 }
 
 /**
@@ -2807,12 +2805,10 @@ export function msgSwept(o: {
   return [
     `\u267B\uFE0F ${bold('LEFTOVER SWEPT')}`,
     '',
-    `${bold(`$${o.symbol}`)} / #${esc(o.tokenId)}: ${bold(`+${o.amountLabel}`)}`,
-    'recovered from a closed position, and added to its PnL.',
+    `» ${bold(`$${esc(o.symbol)}`)} | #${esc(o.tokenId)}`,
+    `» Received ${bold(`+${o.amountLabel}`)}, added to its PnL`,
     '',
-    // Chain and route stay in the service log: neither changes what the reader does
-    // with this, and both pushed the figure off the first line on a phone.
-    note(`${o.dryRun ? 'DRY RUN' : 'LIVE'} \u00B7 ${nowWib()}`),
+    note(o.dryRun ? `DRY RUN \u00B7 ${nowWib()}` : nowWib()),
   ].join('\n');
 }
 
@@ -2822,8 +2818,8 @@ export function msgCloseAllDone(done: number, total: number, failed: string[]): 
   return [
     `${ok ? '\u2705' : '\u{1F7E1}'} ${bold(ok ? 'ALL POSITIONS CLOSED' : 'CLOSE ALL PARTLY DONE')}`,
     '',
-    `${bold(String(done))} of ${bold(String(total))} closed`,
-    ...(failed.length ? ['', bold('Still open :'), ...failed.map((f) => `\u2022 ${esc(f)}`)] : []),
+    `» Closed ${bold(`${done} of ${total}`)}`,
+    ...failed.map((f) => `» Still open ${bold(esc(f))}`),
     '',
     note(nowWib()),
   ].join('\n');
