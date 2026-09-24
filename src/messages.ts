@@ -1071,7 +1071,7 @@ export function msgTSwapConfirm(o: {
 function routeLabel(route?: string): string {
   if (!route) return 'the best route';
   const r = route.toLowerCase();
-  if (r.startsWith('lifi')) return 'Li.fi';
+  if (r.startsWith('lifi')) return 'LI.FI';
   if (r.startsWith('relay')) return 'Relay';
   if (r.startsWith('uniswap')) return 'Uniswap';
   return route;
@@ -1762,7 +1762,7 @@ export function msgSolLpAmount(o: { pair: string; rangePct: string; bins: string
     `${bold('OPEN LP')} | ${esc(o.pair)}`,
     [
       // The bins are what the range BECAME, so the two are read together on one line.
-      `${bold('Range')}: ${esc(o.rangePct)} (${esc(o.bins)} bins)`,
+      `${bold('Range')}: ${esc(o.rangePct)} (${esc(o.bins)})`,
       `${bold('Balance')}: ${esc(o.balanceSol)} SOL`,
       '',
       'Pick an amount in SOL, a share of the balance, or type an amount.',

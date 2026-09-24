@@ -4338,7 +4338,7 @@ async function solLpAmountStep(ctx: any, f: SolLpFlow, owner: string) {
     msg.msgSolLpAmount({
       pair: f.pick.pair,
       rangePct: `-${rangePct}%`,
-      bins: f.legs && f.legs > 1 ? `${f.legs} legs` : f.bins === undefined ? '?' : String(f.bins),
+      bins: f.legs && f.legs > 1 ? `${f.legs} legs` : `${f.bins ?? '?'} bins`,
       balanceSol: fmtSol(bal),
     }),
     { ...html, ...Markup.inlineKeyboard(rows) },
@@ -4748,7 +4748,12 @@ bot.action(/^solamt:([\d.]+)$/, async (ctx) => {
  * chain: "$0.0012 (0.0000054 SOL)". Null when the transaction cannot be read yet.
  */
 async function solTxFee(sig: string): Promise<string | null> {
-  const tx = await solRpc<any>('getTransaction', [sig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]).catch(() => null);
+  // Retried: right after landing, or under an RPC rate limit, the first read can be empty.
+  let tx: any = null;
+  for (let i = 0; i < 4 && !tx?.meta; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 1_500));
+    tx = await solRpc<any>('getTransaction', [sig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]).catch(() => null);
+  }
   const lamports = Number(tx?.meta?.fee ?? 0);
   if (!lamports) return null;
   const sol = lamports / 1e9;

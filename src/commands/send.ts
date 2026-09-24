@@ -63,7 +63,8 @@ registerFlowReset((uid) => flows.delete(uid));
 
 /** Native that MUST be left for gas -- sending everything fails the transaction itself. */
 const fmtAmt = (wei: bigint, dec: number) => Number(ethers.formatUnits(wei, dec)).toLocaleString('id-ID', {
-  maximumFractionDigits: dec >= 18 ? 6 : 2,
+  // SOL has 9 decimals: at 2 digits a 0.001 SOL withdrawal printed as "0 SOL".
+  maximumFractionDigits: dec >= 9 ? 6 : 2,
 });
 
 /** What can actually be sent from one chain: its native asset plus each funded base. */
