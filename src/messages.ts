@@ -1395,7 +1395,7 @@ export function msgPositionsList(opts: {
     const pnl =
       r.pnlPct === null
         ? `— ${italic('(entry unknown)')}`
-        : fmtPct(r.pnlPct) + (r.pnlUsd === null ? '' : ` / ${usdCompact(r.pnlUsd)}`);
+        : fmtPct(r.pnlPct) + (r.pnlUsd === null ? '' : ` / ${r.pnlUsd < 0 ? "-" : ""}${usdCompact(Math.abs(r.pnlUsd))}`);
     const fields = [
       ...(r.chain ? [`Chain: ${esc(r.chain)}`] : []),
       `Strategy: ${esc(side)}`,

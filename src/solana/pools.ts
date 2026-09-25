@@ -143,6 +143,25 @@ export function classifyPairs(mint: string, allPairs: any[]): Classified {
   return { facts, inScope, otherVenueCount, offBaseCount };
 }
 
+/**
+ * A pool's bin step and fee, retried and remembered. A rate-limited read (429) used to come
+ * back as "bin ?", and an LP opened from that card could not size its range.
+ */
+const lbCache = new Map<string, Awaited<ReturnType<typeof lbPair>>>();
+async function lbPairSteady(pool: string): Promise<Awaited<ReturnType<typeof lbPair>>> {
+  const hit = lbCache.get(pool);
+  if (hit) return hit;
+  for (let i = 0; i < 3; i++) {
+    const info = await lbPair(pool).catch(() => null);
+    if (info) {
+      lbCache.set(pool, info);
+      return info;
+    }
+    await new Promise((r) => setTimeout(r, 600 * (i + 1)));
+  }
+  return null;
+}
+
 export async function solTokenView(mint: string): Promise<SolTokenView> {
   if (!isSolAddress(mint)) throw new Error('not a Solana address');
   const { facts, inScope, otherVenueCount, offBaseCount } = classifyPairs(mint, await fetchPairs(mint));
@@ -153,7 +172,7 @@ export async function solTokenView(mint: string): Promise<SolTokenView> {
       const liquidityUsd = Number(p?.liquidity?.usd ?? 0);
       const vol24hUsd = Number(p?.volume?.h24 ?? 0);
       // A failed pool read must not lose the pool: TVL and volume are still worth showing.
-      const info = chainReadSkipped ? null : await lbPair(p.pairAddress).catch(() => null);
+      const info = chainReadSkipped ? null : await lbPairSteady(String(p.pairAddress));
       const tokenSide = p?.baseToken?.address === mint ? p?.baseToken : p?.quoteToken;
       return {
         pairAddress: String(p.pairAddress),

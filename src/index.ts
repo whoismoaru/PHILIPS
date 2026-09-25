@@ -4407,7 +4407,8 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
     prog ? editProgress(ctx, prog, text, extra) : ctx.reply(text, extra);
   await say(msg.msgProgress(`opening ${fmtSol(lamports)} SOL into ${f.pick.pair}…`));
   try {
-    const r = await openPosition(f.pick.pool, lamports, f.rangePct ?? 10, pctPresets.shape(), kp);
+    const dep = await solToBase(f, lamports, kp);
+    const r = await openPosition(f.pick.pool, dep, f.rangePct ?? 10, pctPresets.shape(), kp);
     // Recorded AFTER the chain confirmed it, so /positions never carries an entry for a
     // position that does not exist. Failing to record costs a PnL, not a position.
     try {
@@ -4417,7 +4418,7 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
         mint: f.pick.mint,
         symbol: f.pick.pair.split('/')[0].replace(/^\$+/, '').trim(),
         baseSymbol: f.pick.baseSymbol,
-        entryBase: lamports.toString(),
+        entryBase: dep.toString(),
         openedAt: Date.now(),
         rangePct: f.rangePct ?? 10,
         bins: r.plan.bins,
@@ -4496,6 +4497,13 @@ async function solLadderOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boo
   const entryUsd = f.pick.baseSymbol === 'USDC' ? 1 : ((await solUsd().catch(() => null)) ?? undefined);
   const sigs: string[] = [];
   let firstPos = '';
+  // A USDC pool deposits USDC: the SOL is swapped first and every leg scaled to what came back.
+  try {
+    const dep = await solToBase(f, lamports, kp);
+    if (dep !== lamports) for (const l of legs) l.amount = (l.amount * dep) / lamports;
+  } catch (e) {
+    return say(msg.msgError('add', (e as Error).message));
+  }
   for (let k = 0; k < legs.length; k++) {
     await say(msg.msgProgress(`opening leg ${k + 1}/${legs.length} of ${fmtSol(lamports)} SOL into ${f.pick.pair}…`));
     try {
@@ -5517,6 +5525,14 @@ async function solSellExec(ctx: any, h: SolHolding, amount: bigint, edit: boolea
     prog ? editProgress(ctx, prog, text, extra) : ctx.editMessageText(text, extra);
   if (!prog) await show(msg.msgProgress(`swapping ${sold} $${h.symbol} to ${out.symbol}…`));
   try {
+    // The list's balance can be a sale behind (25 Sep 2026: 50% then 100% sold the old
+    // full balance and failed on-chain, 6024). So a token sale never asks for more than the
+    // wallet holds right now.
+    if (!isSol) {
+      const live = await splHave(kp, h.mint);
+      if (live !== null && live < amount) amount = live;
+      if (amount <= 0n) return show(msg.msgError('swap', `No $${h.symbol} left in the wallet.`));
+    }
     const q = await jupiter.quote(h.mint, out.mint, amount, SOL_SLIPPAGE_BPS);
     // A sale: the looser sell limit (10%), so a thin token can still be exited.
     if (Number(q.priceImpactPct) * 100 > SELL_IMPACT_PCT)
@@ -5652,7 +5668,10 @@ bot.action(/^solpos:(\w{8})$/, async (ctx) => {
   const ref = solRowRef.get(ctx.match[1]);
   if (!ref) return ctx.answerCbQuery('Expired. Open /positions again.');
   await ctx.answerCbQuery('Loading…');
-  const row = (await solanaRows().catch(() => [] as PosRow[])).find((r) => r.id === ctx.match[1]);
+  // Merged like /positions merges them: a ladder's card shows the whole ladder, not leg 1.
+  const rows = await solanaRows().catch(() => [] as PosRow[]);
+  collapseLadderRows(rows);
+  const row = rows.find((r) => r.id === ctx.match[1]);
   if (!row) return ctx.reply(msg.msgAlreadyClosed(ctx.match[1]), html);
   const c = solPosCard(row, ref.pool);
   return ctx.reply(c.text, c.extra);
@@ -5741,6 +5760,30 @@ function solSweepLater(chatId: number, mint: string, amount: bigint, position: s
     }
   };
   setTimeout(tick, 5_000);
+}
+
+/**
+ * The deposit in the pool's own base. A SOL pool takes the lamports as they are; a USDC pool
+ * gets them swapped to USDC first (the amount step always asks in SOL). The minimum the
+ * swap guarantees is what gets deposited, so the deposit never asks for more than arrived.
+ */
+async function solToBase(f: SolLpFlow, lamports: bigint, kp: SolKeypair): Promise<bigint> {
+  if (f.pick.baseSymbol !== 'USDC') return lamports;
+  const q = await jupiter.quote(jupiter.WSOL, SOL_USDC.mint, lamports, SOL_SLIPPAGE_BPS);
+  await jupiter.executeSwap(q, kp);
+  const min = BigInt(q.otherAmountThreshold);
+  return splSeen(kp, SOL_USDC.mint, min);
+}
+
+/** What the wallet holds of `mint` right now, raw units; null when it cannot be read. */
+async function splHave(kp: SolKeypair, mint: string): Promise<bigint | null> {
+  try {
+    const owner = Keypair.fromSeed(Buffer.from(kp.seed)).publicKey;
+    const r = await solConn().getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(mint) }, 'confirmed');
+    return r.value.reduce((a, v) => a + BigInt(v.account.data.parsed.info.tokenAmount.amount), 0n);
+  } catch {
+    return null;
+  }
 }
 
 /** Wait (up to 20s) until the wallet shows `want` of `mint`; returns what it holds, capped. */
@@ -6904,7 +6947,7 @@ async function stopAndCashOut(
     // (2) USDG stays a stablecoin (never unwrapped). The net total is the balance increase.
     const baseAfter: bigint = await baseC.balanceOf(w.address).catch(() => baseBefore);
     baseOutWei = baseAfter > baseBefore ? baseAfter - baseBefore : sw.baseOut;
-    notes.push(`Received ${ethers.formatUnits(baseOutWei, base.decimals)} ${base.symbol} (kept as stablecoin)`);
+    // No "Received" note: the card adds that line itself, so it was printed twice.
   }
 
   if (sw.leftover) {
@@ -6916,7 +6959,7 @@ async function stopAndCashOut(
   // card — a wrong unit means misreading the whole trade's result.
   const ethOut = base.wrappable
     ? `${msg.fmtEth(baseOutWei)} ${cc.nativeSymbol}`
-    : `${ethers.formatUnits(baseOutWei, base.decimals)} ${base.symbol}`;
+    : `${msg.cleanUnits(baseOutWei, base.decimals)} ${base.symbol}`;
   console.log(`[cashout] #${tokenId}:`, notes.join(' | ')); // rekam ke journal
   const text = msg.msgCashOut({
     tokenId,
