@@ -5867,9 +5867,13 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
             notes.push(`Swap: ${what} → SOL via Jupiter`);
             return BigInt(q.outAmount);
           } catch (e) {
-            if (i >= 3) throw e;
+            if (i >= 4) throw e;
             console.error(`[sol-close] ${what} -> SOL try ${i + 1} failed, retrying:`, (e as Error).message.slice(0, 120));
-            await new Promise((r) => setTimeout(r, 2_500));
+            // Growing waits (3s, 6s, 9s, 12s): the close just drained liquidity from a pool
+            // Jupiter routes through, and its quote engine prices that pool from a cache a
+            // few seconds old -- every quick retry failed (SWARM 25 Sep 2026: 4 tries in 8s),
+            // the same swap passed ~13s after the close.
+            await new Promise((r) => setTimeout(r, 3_000 * (i + 1)));
           }
         }
       } catch (e) {
