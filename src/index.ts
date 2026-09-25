@@ -4410,6 +4410,7 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
         openedAt: Date.now(),
         rangePct: f.rangePct ?? 10,
         bins: r.plan.bins,
+        shape: pctPresets.shape(),
         entryUsd: f.pick.baseSymbol === 'USDC' ? 1 : ((await solUsd().catch(() => null)) ?? undefined),
       });
     } catch (e) {
@@ -5700,7 +5701,7 @@ bot.action(/^solcl:(\w{8})$/, async (ctx) => {
  * minutes. Success is booked as a 'recovery' in the journal and reported with the
  * LEFTOVER SWEPT card.
  */
-function solSweepLater(chatId: number, mint: string, amount: bigint, position: string, symbol: string): void {
+function solSweepLater(chatId: number, mint: string, amount: bigint, position: string, symbol: string, onDone?: (lamports: bigint) => void): void {
   let tries = 0;
   const tick = async () => {
     const kp = solWallet.keypair();
@@ -5712,6 +5713,7 @@ function solSweepLater(chatId: number, mint: string, amount: bigint, position: s
       const out = BigInt(q.outAmount);
       journal.noteUsdRate('SOL', await solUsd().catch(() => null));
       journal.recordRecovery({ tokenId: position, symbol: `${symbol}/SOL`, ca: mint, chain: 'solana', amountWei: out });
+      onDone?.(out);
       await bot.telegram
         .sendMessage(chatId, msg.msgSwept({ symbol, tokenId: position.slice(0, 8), amountLabel: `${Number((Number(out) / 1e9).toFixed(5))} SOL`, dryRun: false }), html)
         .catch(() => {});
@@ -5721,6 +5723,7 @@ function solSweepLater(chatId: number, mint: string, amount: bigint, position: s
         await bot.telegram
           .sendMessage(chatId, msg.msgError('sweep', `$${symbol} could not be sold for SOL after 15 minutes. It is in your wallet: sell it with /swap.`), html)
           .catch(() => {});
+        onDone?.(0n);
         return;
       }
       setTimeout(tick, 30_000);
@@ -5837,7 +5840,16 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
     );
     // Whatever did not swap is retried behind the card until it does, and booked into /pnl
     // as a recovery, so the position's PnL ends up complete.
-    for (const u of unswapped) solSweepLater(ctx.chat.id, u.mint, u.amount, entry?.position ?? ref.position, entry?.symbol ?? '?');
+    // The PnL card waits for those sweeps: drawn now it would show the unswapped tokens as a
+    // loss (GROK, 25 Sep 2026: card -5.5%, the real result after the sweep about -1.5%).
+    let pendingSweeps = unswapped.length;
+    let recovered = 0n;
+    let cardNow: ((extra: bigint) => void) | null = null;
+    for (const u of unswapped)
+      solSweepLater(ctx.chat.id, u.mint, u.amount, entry?.position ?? ref.position, entry?.symbol ?? '?', (got) => {
+        recovered += got;
+        if (--pendingSweeps === 0) cardNow?.(recovered);
+      });
     if (entry) {
       // Book it in /pnl, in SOL. A USDC deposit is converted at today's SOL price; with
       // no price there is no honest figure, so it is left out rather than guessed.
@@ -5869,9 +5881,12 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
       const feeSol =
         (baseIsSol ? r.baseFee : r.baseOut > 0n ? (r.baseFee * baseSol) / r.baseOut : 0n) +
         (r.tokenOut > 0n ? (r.tokenFee * swapOut) / r.tokenOut : 0n);
-      await sendSolProfitCard(ctx, entry, baseTotal, feeSol, baseSym, 9).catch((e) =>
-        console.error('[sol-close] PnL card failed:', (e as Error).message.slice(0, 120)),
-      );
+      const card = (extra: bigint) =>
+        sendSolProfitCard(ctx, entry, baseTotal + extra, feeSol, baseSym, 9).catch((e) =>
+          console.error('[sol-close] PnL card failed:', (e as Error).message.slice(0, 120)),
+        );
+      if (pendingSweeps > 0) cardNow = (extra) => void card(extra);
+      else await card(0n);
     }
     return true;
   } catch (e) {
@@ -5913,7 +5928,7 @@ async function sendSolProfitCard(ctx: any, e: solStore.SolEntry, outRaw: bigint,
       ...(fees > 0 ? [{ label: 'fees', value: usdKnown ? `$${usd2(fees * nowUsd!)}` : `${fmt(fees)} ${baseSym}` }] : []),
     ],
     footerLeft: `Solana · ${msg.dateWibFull()}`,
-    shape: pctPresets.shape(),
+    shape: e.shape ?? pctPresets.shape(),
   });
   await ctx.replyWithDocument(Input.fromBuffer(buf, `philips-${e.position.slice(0, 8)}.png`));
 }
