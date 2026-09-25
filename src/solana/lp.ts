@@ -30,6 +30,8 @@ const BN: any = req('bn.js');
 
 /** A position account holds 70 bins, so a range spans at most 69 steps from the edge. */
 export const MAX_BINS = 69;
+/** An extended position grows past 70 bins, up to this; one account, one row. */
+export const MAX_WIDE_BINS = 1400;
 
 export type OpenPlan = {
   /** Bins the deposit is spread across. */
@@ -123,7 +125,7 @@ export async function planOpen(pool: string, rangePct: number): Promise<OpenPlan
   const baseY = baseOfMint(yMint);
   const base = baseX ?? baseY;
   if (!base) throw new Error('this pool is not quoted in SOL or USDC');
-  const bins = binsForRange(binStep, rangePct);
+  const bins = Math.min(MAX_WIDE_BINS, binsForRangeUncapped(binStep, rangePct));
   const activeBinId = Number(active.binId);
   // The base side decides WHICH WAY the range points. With the base as token Y the deposit
   // sits below the active bin and converts as price falls; with the base as token X it is
@@ -193,6 +195,28 @@ export async function openPosition(
   const positionKp = Keypair.generate();
   const zero = new BN(0);
   const amt = new BN(amount.toString());
+  if (plan.bins > MAX_BINS) {
+    // Wider than one standard account: create an extended position (init + resize), then
+    // deposit in chunks. Still ONE position, so it shows and closes as one row.
+    const strategyType = shape === 'bidask' ? DLMM.StrategyType.BidAsk : DLMM.StrategyType.Spot;
+    const create: Transaction = await dlmm.createExtendedEmptyPosition(plan.minBinId, plan.maxBinId, positionKp.publicKey, user.publicKey);
+    const signature = await landTx(conn, create, [user, positionKp], pool, 'open');
+    const deposits: Transaction[] = await dlmm.addLiquidityByStrategyChunkable({
+      positionPubKey: positionKp.publicKey,
+      user: user.publicKey,
+      totalXAmount: plan.baseIsX ? amt : zero,
+      totalYAmount: plan.baseIsX ? zero : amt,
+      strategy: { minBinId: plan.minBinId, maxBinId: plan.maxBinId, strategyType, singleSidedX: plan.baseIsX },
+      slippage: 1,
+    });
+    try {
+      for (const tx of deposits) await landTx(conn, tx, [user], pool, 'deposit');
+    } catch (e) {
+      console.error(`[sol-lp] wide deposit failed after create ${positionKp.publicKey.toBase58()}:`, (e as Error).message);
+      throw new Error(`the position was created but the deposit failed (${(e as Error).message.slice(0, 80)}); close it from /positions to get the rent back`);
+    }
+    return { signature, position: positionKp.publicKey.toBase58(), plan };
+  }
   const tx: Transaction = await dlmm.initializePositionAndAddLiquidityByStrategy({
     positionPubKey: positionKp.publicKey,
     user: user.publicKey,
@@ -270,6 +294,33 @@ async function landedStatus(conn: Connection, signature: string): Promise<'ok' |
     await new Promise((r) => setTimeout(r, 3_000));
   }
   return 'absent';
+}
+
+/** Fee, sign, send, re-broadcast, confirm; an expiry asks the chain before failing. */
+async function landTx(conn: Connection, tx: Transaction, signers: Keypair[], pool: string, what: string): Promise<string> {
+  await addPriorityFee(tx, pool);
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = signers[0].publicKey;
+  tx.sign(...signers);
+  const signature = encodeBase58(Uint8Array.from(tx.signature!));
+  const raw = tx.serialize();
+  await conn.sendRawTransaction(raw, { maxRetries: 3 });
+  const b64 = Buffer.from(raw).toString('base64');
+  broadcastOfficial(b64);
+  const resend = setInterval(() => {
+    conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+    broadcastOfficial(b64);
+  }, 2_000);
+  try {
+    const r = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed').finally(() => clearInterval(resend));
+    if (r.value.err) throw new Error(`the ${what} failed on-chain (${signature})`);
+  } catch (e) {
+    const landed = await landedStatus(conn, signature);
+    if (landed === 'failed') throw new Error(`the ${what} failed on-chain (${signature})`);
+    if (landed === 'absent') throw new Error(`the ${what} never landed (${signature})`);
+  }
+  return signature;
 }
 
 /** A floor, so a quiet market still does not bid zero. */

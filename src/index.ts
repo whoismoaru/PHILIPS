@@ -33,7 +33,7 @@ import * as solStore from './solana/store.js';
 import * as limits from './limits.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
-import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, MAX_BINS } from './solana/lp.js';
+import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, MAX_BINS, MAX_WIDE_BINS } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import * as jupiter from './solana/jupiter.js';
 import * as solWallet from './solana/walletStore.js';
@@ -4300,22 +4300,11 @@ bot.action(/^sollpr:(\d+)$/, async (ctx) => {
   const rangePct = Number((ctx.match as RegExpMatchArray)[1]);
   await ctx.answerCbQuery();
   f.rangePct = rangePct;
-  // The bins are computed from the POOL's bin step, so the card says what the range really
-  // became. A 50% range at bin step 100 wants 69 bins and is trimmed to the 69 a position
-  // can hold; saying "50%" alone would hide that.
-  f.bins = f.pick.binStep ? binsForRange(f.pick.binStep, rangePct) : undefined;
+  // Bins from the POOL's bin step. Past 69 bins SPOT opens ONE extended position (up to
+  // 1400 bins), so -90% at bin step 100 is one 232-bin position, not a split or a cut.
+  f.bins = f.pick.binStep ? Math.min(MAX_WIDE_BINS, binsForRangeUncapped(f.pick.binStep, rangePct)) : undefined;
   f.legs = undefined;
   f.even = false;
-  // SPOT past one position's 69 bins: split into equal positions instead of quietly cutting
-  // the range short. -90% at bin step 100 is 232 bins; one position stops near -50%.
-  if (pctPresets.shape() !== 'bidask' && f.pick.binStep) {
-    const total = binsForRangeUncapped(f.pick.binStep, rangePct);
-    if (total > MAX_BINS) {
-      f.legs = Math.ceil(total / MAX_BINS);
-      f.even = true;
-      f.bins = total;
-    }
-  }
   // BID-ASK asks how many legs, the same step the EVM ladder has (/settings -> Ladder legs).
   if (pctPresets.shape() === 'bidask') {
     const total = f.pick.binStep ? binsForRangeUncapped(f.pick.binStep, rangePct) : 69;
