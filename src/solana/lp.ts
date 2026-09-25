@@ -201,19 +201,41 @@ export async function openPosition(
     const strategyType = shape === 'bidask' ? DLMM.StrategyType.BidAsk : DLMM.StrategyType.Spot;
     const create: Transaction = await dlmm.createExtendedEmptyPosition(plan.minBinId, plan.maxBinId, positionKp.publicKey, user.publicKey);
     const signature = await landTx(conn, create, [user, positionKp], pool, 'open');
-    const deposits: Transaction[] = await dlmm.addLiquidityByStrategyChunkable({
-      positionPubKey: positionKp.publicKey,
-      user: user.publicKey,
-      totalXAmount: plan.baseIsX ? amt : zero,
-      totalYAmount: plan.baseIsX ? zero : amt,
-      strategy: { minBinId: plan.minBinId, maxBinId: plan.maxBinId, strategyType, singleSidedX: plan.baseIsX },
-      slippage: 1,
-    });
-    try {
-      for (const tx of deposits) await landTx(conn, tx, [user], pool, 'deposit');
-    } catch (e) {
-      console.error(`[sol-lp] wide deposit failed after create ${positionKp.publicKey.toBase58()}:`, (e as Error).message);
-      throw new Error(`the position was created but the deposit failed (${(e as Error).message.slice(0, 80)}); close it from /positions to get the rent back`);
+    // The deposit is built and simulated against the NEW account: an RPC a slot behind
+    // still sees it as missing (AccountOwnedByWrongProgram, JEANPHIL 25 Sep 2026).
+    for (let i = 0; i < 15; i++) {
+      const acc = await conn.getAccountInfo(positionKp.publicKey, 'confirmed').catch(() => null);
+      if (acc && acc.owner.equals(dlmm.program.programId)) break;
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+    // Built fresh on each try: a retry after a lagging RPC must not resend stale bytes.
+    const build = (): Promise<Transaction[]> =>
+      dlmm.addLiquidityByStrategyChunkable({
+        positionPubKey: positionKp.publicKey,
+        user: user.publicKey,
+        totalXAmount: plan.baseIsX ? amt : zero,
+        totalYAmount: plan.baseIsX ? zero : amt,
+        strategy: { minBinId: plan.minBinId, maxBinId: plan.maxBinId, strategyType, singleSidedX: plan.baseIsX },
+        slippage: 1,
+      });
+    let done = 0;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const deposits = await build();
+        // Only the chunks not yet landed; each covers its own bins.
+        for (const tx of deposits.slice(done)) {
+          await landTx(conn, tx, [user], pool, 'deposit');
+          done++;
+        }
+        break;
+      } catch (e) {
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 3_000));
+          continue;
+        }
+        console.error(`[sol-lp] wide deposit failed after create ${positionKp.publicKey.toBase58()}:`, (e as Error).message);
+        throw new Error(`the position was created but the deposit failed (${(e as Error).message.slice(0, 80)}); close it from /positions to get the rent back`);
+      }
     }
     return { signature, position: positionKp.publicKey.toBase58(), plan };
   }
@@ -383,6 +405,15 @@ export async function closePosition(pool: string, position: string, kp: SolKeypa
     }
   };
   const [preX, preY] = await Promise.all([splBal(xMint), splBal(yMint)]);
+
+  // An EMPTY position (created, deposit never landed) has no bins to withdraw from and the
+  // SDK's removeLiquidity crashes on it ("reading 'binId'"). It only needs closing, which
+  // returns its rent.
+  if (x === 0n && y === 0n && fx === 0n && fy === 0n) {
+    const tx: Transaction = await dlmm.closePositionIfEmpty({ owner: user.publicKey, position: pos });
+    const sig = await landTx(conn, tx, [user], pool, 'close');
+    return { signatures: [sig], baseOut: 0n, tokenOut: 0n, baseFee: 0n, tokenFee: 0n, baseMint: baseIsX ? xMint : yMint, tokenMint: baseIsX ? yMint : xMint };
+  }
 
   const txs: Transaction[] = await dlmm.removeLiquidity({
     user: user.publicKey,
