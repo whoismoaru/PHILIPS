@@ -31,6 +31,10 @@ bot.use((ctx, next) => {
   // A limit order replaying the owner's taps: its callback ids are made up, and Telegram
   // would refuse to answer them, which would abort the handler before it did anything.
   if ((ctx.callbackQuery as any)?.id?.startsWith('lim-')) (ctx as any).answerCbQuery = async () => true;
+  // Any /command starts fresh: a half-finished flow (a limit order's replay, an LP amount
+  // step) must not read the NEXT message. 25 Sep 2026: a withdraw amount "0.001" went to a
+  // leftover SOL LP step and opened a position instead.
+  if (/^\//.test((ctx.message as any)?.text ?? '')) resetFlows(ctx.from!.id);
   // Slow handlers name themselves in the log, so the next thing to speed up is measured,
   // not guessed.
   const t0 = Date.now();

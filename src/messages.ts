@@ -2462,7 +2462,10 @@ export function msgCashOut(opts: {
     out.push('', 'The token swap failed. It is retried in the background and added to this PnL once sold.', '', note(nowWib()));
     return out.join('\n');
   }
-  out.push(
+  // Only when a swap actually ran: an untouched range returns the base alone, and the
+  // sentence then described a swap that never happened.
+  const swapped = !opts.notes || opts.notes.some((n: string) => /swap|unwrap/i.test(n));
+  if (swapped) out.push(
     '',
     opts.native
       ? `The paired token was swapped and unwrapped back into ${bold(`native ${sym}`)}, now in your wallet.`
@@ -2880,7 +2883,7 @@ export function msgLimitAsk(o: { kind: 'entry' | 'tp'; label: string; range?: nu
       ? `Type the target market cap, then the amount in ${esc(o.unit ?? '')}. For example: ${code('500K 100')}`
       : `Type the target market cap to close at. For example: ${code('2M')}`,
     '',
-    note('the bot checks every 30 seconds and runs it for you when the target is crossed.'),
+    note('the bot checks every 5 seconds and runs it for you when the target is crossed.'),
   ].join('\n');
 }
 

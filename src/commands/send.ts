@@ -1,7 +1,7 @@
 import { Markup } from 'telegraf';
 import { ethers } from 'ethers';
 import { config } from '../config.js';
-import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset } from '../core.js';
+import { bot, html, editProgress, parseAmt, isStaleFlow, registerFlowReset, resetFlows } from '../core.js';
 import { CHAINS, isStableBase, type ChainCtx, type BaseAsset } from '../chains.js';
 import { ERC20_ABI } from '../chain.js';
 
@@ -83,6 +83,7 @@ async function assetsOn(cc: ChainCtx): Promise<Array<{ address: string | null; s
 }
 
 export async function cmdSend(ctx: any) {
+  resetFlows(ctx.from.id);
   flows.set(ctx.from.id, { awaitingAddress: true, startedAt: Date.now() });
   return ctx.reply(msg.msgSendAskAddress(), {
     ...html,

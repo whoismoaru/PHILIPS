@@ -4370,7 +4370,8 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
   if (!kp) return ctx.reply(msg.msgError('add', 'No Solana key connected.'), html);
   const show = (text: string, extra: Record<string, unknown> = html) =>
     edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
-  const spendable = await solSpendable(kp.publicKey, SOL_LP_RESERVE_LAMPORTS);
+  const spendable = await solSpendable(kp.publicKey, SOL_LP_RESERVE_LAMPORTS).catch(() => null);
+  if (spendable === null) return show(msg.msgError('add', 'The SOL balance could not be read (RPC busy). Try again in a moment.'));
   if (lamports <= 0n) return show(msg.msgError('add', 'That amount rounds to zero.'));
   if (lamports > spendable) {
     // The reserve is named here rather than on the card, so the number appears exactly
@@ -4706,7 +4707,7 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
 
 /** The spendable balance: everything except the reserve kept back for fees and rent. */
 async function solSpendable(owner: string, reserve: bigint = SOL_RESERVE_LAMPORTS): Promise<bigint> {
-  const bal = await jupiter.solBalance(owner).catch(() => 0n);
+  const bal = await jupiter.solBalance(owner);
   return bal > reserve ? bal - reserve : 0n;
 }
 
@@ -7481,14 +7482,20 @@ async function fireLimit(l: limits.Limit, now: number): Promise<void> {
     why = (e as Error).message;
   } finally {
     limitSeen = null;
+    // Whatever step the replay stopped on is dropped, or it would read the owner's next message.
+    resetFlows(config.telegram.allowedUserId);
   }
   // One shot either way: a failed order that stayed armed would retry every 30 seconds.
   limits.remove(l.id);
   await bot.telegram.sendMessage(uid, msg.msgLimitResult(l, why), { ...html, ...Markup.inlineKeyboard([limitsKbRow()]) }).catch(() => {});
 }
 
-const lastLine = (texts: string[]): string =>
-  (texts.filter((t) => !/…<\/i>$|…$/.test(t)).pop() ?? 'no result card came back').replace(/<[^>]+>/g, '').split('\n').filter(Boolean).slice(0, 2).join(' · ').slice(0, 200);
+/** The reason out of the last card the replay produced: its "Reason" line when it has one. */
+const lastLine = (texts: string[]): string => {
+  const lines = (texts.filter((t) => !/…<\/i>$|…$/.test(t)).pop() ?? 'no result card came back').replace(/<[^>]+>/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const reason = lines.find((l) => /^Reason\s*:/.test(l));
+  return (reason ? reason.replace(/^Reason\s*:\s*/, '') : lines.filter((l) => !/TRANSACTION ERROR|^Step\s*:|WIB$|Powered by/.test(l)).slice(0, 2).join(' · ')).slice(0, 200);
+};
 
 /**
  * A number proportional to the token's price, read straight from the order's pool: the

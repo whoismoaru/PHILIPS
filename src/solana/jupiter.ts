@@ -171,6 +171,16 @@ export async function executeSwap(q: Quote, kp: SolKeypair): Promise<string> {
 
 /** A wallet's SOL balance, in lamports. */
 export async function solBalance(owner: string): Promise<bigint> {
-  const r = await solRpc<{ value: number }>('getBalance', [owner]);
-  return BigInt(r?.value ?? 0);
+  // Retried: a rate-limited RPC (429) used to read as a zero balance, which then refused a
+  // limit order with "Only 0.0000 SOL is spendable" on a wallet holding 9.5 SOL.
+  for (let i = 0; ; i++) {
+    try {
+      const r = await solRpc<{ value: number }>('getBalance', [owner]);
+      if (typeof r?.value === 'number') return BigInt(r.value);
+    } catch (e) {
+      if (i >= 3) throw e;
+    }
+    if (i >= 3) throw new Error('the SOL balance could not be read, try again');
+    await new Promise((res) => setTimeout(res, 800 * (i + 1)));
+  }
 }
