@@ -123,7 +123,7 @@ async function sweepLeftovers(bot: Telegraf) {
       })),
     ...journal
       .readMine(80)
-      .filter((e) => e.ca && Date.now() - e.closedAt < SWEEP_RECENT_MS)
+      .filter((e) => e.ca && e.chain !== 'solana' && Date.now() - e.closedAt < SWEEP_RECENT_MS)
       .map((e) => ({
         tokenId: e.tokenId,
         ca: e.ca as string,

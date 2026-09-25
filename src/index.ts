@@ -5718,7 +5718,7 @@ function solSweepLater(chatId: number, mint: string, amount: bigint, position: s
     if (!kp) return;
     tries++;
     try {
-      const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+      const q = await jupiter.quote(mint, jupiter.WSOL, amount, Math.min(1500, SOL_SLIPPAGE_BPS * (1 + Math.floor(tries / 3))));
       await jupiter.executeSwap(q, kp);
       const out = BigInt(q.outAmount);
       journal.noteUsdRate('SOL', await solUsd().catch(() => null));
@@ -5796,7 +5796,8 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
         // seconds later, so it is re-quoted and retried rather than left in the wallet.
         for (let i = 0; ; i++) {
           try {
-            const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+            // 0x1788 is Jupiter's slippage error: a meme moves fast, so each retry widens it.
+            const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS * (i + 1));
             sigs.push(await jupiter.executeSwap(q, kp));
             notes.push(`Swap: ${what} → SOL via Jupiter`);
             return BigInt(q.outAmount);
