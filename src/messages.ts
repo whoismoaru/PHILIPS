@@ -689,10 +689,10 @@ export function msgStatus(opts: {
   };
   const amt = (n: number) =>
     n >= 1e6
-      ? `${(n / 1e6).toLocaleString('en-US', { maximumFractionDigits: 2 })}M`
+      ? `${(n / 1e6).toLocaleString('id-ID', { maximumFractionDigits: 2 })}M`
       : n >= 1e4
-        ? `${(n / 1e3).toLocaleString('en-US', { maximumFractionDigits: 1 })}K`
-        : n.toLocaleString('en-US', { maximumSignificantDigits: 4 });
+        ? `${(n / 1e3).toLocaleString('id-ID', { maximumFractionDigits: 1 })}K`
+        : n.toLocaleString('id-ID', { maximumSignificantDigits: 4 });
 
   const groups: Array<{ name: string; rows: Holding[] }> = opts.chains.map((c) => ({
     name: NAME[c.label] ?? c.label,
