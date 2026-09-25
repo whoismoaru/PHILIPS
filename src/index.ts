@@ -35,6 +35,7 @@ import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
 import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, MAX_BINS, MAX_WIDE_BINS } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
+import { lbPair, binPrice } from './solana/lbpair.js';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import { solConn } from './solana/send.js';
 import * as jupiter from './solana/jupiter.js';
@@ -63,6 +64,7 @@ import {
   listPositions,
   type AddPlan,
   type PositionDetail,
+  priceInfo as uniPriceInfo,
 } from './uniswap.js';
 import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4StillOpen, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnerOf, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
@@ -7252,7 +7254,7 @@ bot.on(message('document'), async (ctx: any) => {
 
 // ─── Limit orders: entry (open an LP at a market cap) and take profit ────────────────
 //
-// The bot watches market cap every 30s. When a target is crossed it REPLAYS the owner's
+// The bot watches market cap every 5s, from the pool's own price where it can. When a target is crossed it REPLAYS the owner's
 // own taps through bot.handleUpdate -- paste CA, pool, range, legs, amount, or the close
 // button -- so every guard on those paths still runs. See src/limits.ts.
 
@@ -7488,12 +7490,51 @@ async function fireLimit(l: limits.Limit, now: number): Promise<void> {
 const lastLine = (texts: string[]): string =>
   (texts.filter((t) => !/…<\/i>$|…$/.test(t)).pop() ?? 'no result card came back').replace(/<[^>]+>/g, '').split('\n').filter(Boolean).slice(0, 2).join(' · ').slice(0, 200);
 
+/**
+ * A number proportional to the token's price, read straight from the order's pool: the
+ * Meteora active bin, or a Uniswap v3 slot0. null where the pool cannot be read that way
+ * (v4, a non-default venue), and the aggregator figure is used instead.
+ */
+async function livePx(l: limits.Limit): Promise<number | null> {
+  try {
+    if (l.chain === 'solana') {
+      const pool = l.kind === 'entry' ? l.poolRef : solStore.getEntry(l.posRef.replace(/^sol:/, ''))?.pool;
+      const lp = pool ? await lbPair(pool) : null;
+      if (!lp) return null;
+      const bp = binPrice(lp.binStep, lp.activeId);
+      return lp.tokenX === l.ca ? bp : 1 / bp;
+    }
+    if (l.kind !== 'entry') return null;
+    const [proto, fee, baseSym, , , venue] = l.poolRef.split(':');
+    const cc = CHAINS[l.chain];
+    const base = cc?.bases.find((b) => b.symbol === baseSym);
+    if (proto !== 'v3' || venue || !cc || !base) return null;
+    const px = Number((await uniPriceInfo(l.ca, Number(fee), base, cc)).priceTokenInBase);
+    return px > 0 && isFinite(px) ? px : null;
+  } catch {
+    return null;
+  }
+}
+
+/** mcap / price, refreshed from the aggregator each minute; the live pool price does the rest. */
+const limitRef = new Map<string, { k: number; t: number }>();
+async function limitMcap(l: limits.Limit): Promise<number | null> {
+  const px = await livePx(l);
+  if (px === null) return mcapOf(l.chain, l.ca);
+  let ref = limitRef.get(l.id);
+  if (!ref || Date.now() - ref.t > 60_000) {
+    const mc = await mcapOf(l.chain, l.ca);
+    if (mc !== null) limitRef.set(l.id, (ref = { k: mc / px, t: Date.now() }));
+  }
+  return ref ? ref.k * px : null;
+}
+
 async function checkLimits(): Promise<void> {
   if (limitBusy || config.safety.dryRun && !process.env.LIMITS_IN_DRY_RUN) return;
   limitBusy = true;
   try {
     for (const l of limits.all()) {
-      const now = await mcapOf(l.chain, l.ca);
+      const now = await limitMcap(l);
       if (now === null) continue;
       const hit = l.kind === 'tp' ? now >= l.targetMcap : l.dir === 'below' ? now <= l.targetMcap : now >= l.targetMcap;
       if (hit) await fireLimit(l, now).catch((e) => console.error('[limits] fire failed:', (e as Error).message));
@@ -7502,7 +7543,7 @@ async function checkLimits(): Promise<void> {
     limitBusy = false;
   }
 }
-if (process.env.PHILIPS_HARNESS !== '1') setInterval(() => void checkLimits(), 30_000);
+if (process.env.PHILIPS_HARNESS !== '1') setInterval(() => void checkLimits(), 5_000);
 else (globalThis as any).__checkLimits = checkLimits; // an audit script drives it by hand
 
 bot.on(message('text'), async (ctx) => {
