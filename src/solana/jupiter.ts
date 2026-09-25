@@ -74,7 +74,7 @@ async function jup<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** A quote for spending `amount` base units of inputMint. */
-export function quote(inputMint: string, outputMint: string, amount: bigint, slippageBps: number): Promise<Quote> {
+export function quote(inputMint: string, outputMint: string, amount: bigint, slippageBps: number, excludeDexes?: string): Promise<Quote> {
   // The mints go in verbatim: base58 is case-sensitive and a folded mint quotes a
   // different token, or nothing at all.
   const q = new URLSearchParams({
@@ -83,6 +83,7 @@ export function quote(inputMint: string, outputMint: string, amount: bigint, sli
     amount: amount.toString(),
     slippageBps: String(slippageBps),
   });
+  if (excludeDexes) q.set('excludeDexes', excludeDexes);
   return jup<Quote>(`/quote?${q}`);
 }
 
