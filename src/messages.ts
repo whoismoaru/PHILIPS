@@ -148,7 +148,9 @@ export function usdCompact(n: number): string {
 
 /** Signed percentage, ONE format across the whole bot: '+13.3%' / '-0.7%'. */
 export function fmtPct(n: number): string {
-  return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+  // A figure that rounds to 0.0 carries no sign: "-0.0%" reads as a loss.
+  const r = Number(n.toFixed(1));
+  return (r > 0 ? '+' : '') + (r === 0 ? '0.0' : r.toFixed(1)) + '%';
 }
 
 export function feeLabel(fee: number): string {

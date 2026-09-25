@@ -5985,14 +5985,15 @@ async function sendSolProfitCard(ctx: any, e: solStore.SolEntry, outRaw: bigint,
   const usdKnown = nowUsd !== null && entryUsd !== null && entryUsd > 0;
   const pnl = usdKnown ? baseOut * nowUsd! - baseIn * entryUsd! : baseOut - baseIn;
   const pnlPct = usdKnown ? (baseIn * entryUsd! > 0 ? (pnl / (baseIn * entryUsd!)) * 100 : 0) : baseIn > 0 ? ((baseOut - baseIn) / baseIn) * 100 : 0;
-  const positive = pnl === 0 ? null : pnl > 0;
+  // Under half a cent (or half a unit's 1e-6) is flat: a rounding crumb is not a loss.
+  const positive = Math.abs(pnl) < (usdKnown ? 0.005 : 1e-6) ? null : pnl > 0;
   const fmt = (n: number) => n.toLocaleString('id-ID', { maximumFractionDigits: dec >= 9 ? 5 : 2 });
   const usd2 = (n: number) => n.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fees = Number(feeRaw) / 10 ** dec;
   const buf = await renderProfitCard({
     pair: pairLabel(baseSym, e.symbol),
     positive,
-    pnlBig: usdKnown ? `${positive ? '+' : '-'}$${usd2(Math.abs(pnl))}` : `${positive ? '+' : ''}${fmt(pnl)} ${baseSym}`,
+    pnlBig: usdKnown ? `${positive ? '+' : positive === null ? '' : '-'}$${usd2(Math.abs(pnl))}` : `${positive ? '+' : ''}${fmt(positive === null ? 0 : pnl)} ${baseSym}`,
     pnlPct: msg.fmtPct(pnlPct),
     stats: [
       { label: 'deposit', value: usdKnown ? `$${usd2(baseIn * entryUsd!)}` : `${fmt(baseIn)} ${baseSym}` },
@@ -6442,14 +6443,15 @@ async function sendProfitCard(
       ? ((baseOut - baseIn) / baseIn) * 100
       : 0;
   // Zero is flat, not a win: null leaves the card neutral.
-  const positive = pnl === 0 ? null : pnl > 0;
+  // Under half a cent (or half a unit's 1e-6) is flat: a rounding crumb is not a loss.
+  const positive = Math.abs(pnl) < (usdKnown ? 0.005 : 1e-6) ? null : pnl > 0;
   const fmt = (n: number) => n.toLocaleString('id-ID', { maximumFractionDigits: dec >= 18 ? 5 : 2 });
   // Dollars when both rates are known; otherwise the base asset, because an unpriced
   // close must not invent a dollar figure.
   const usd2 = (n: number) => n.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pnlBig = usdKnown
-    ? `${positive ? '+' : '-'}$${usd2(Math.abs(pnl))}`
-    : `${positive ? '+' : ''}${fmt(pnl)} ${baseSym}`;
+    ? `${positive ? '+' : positive === null ? '' : '-'}$${usd2(Math.abs(pnl))}`
+    : `${positive ? '+' : ''}${fmt(positive === null ? 0 : pnl)} ${baseSym}`;
   const buf = await renderProfitCard({
     pair: pairLabel(baseSym, rec.symbol),
     positive,
