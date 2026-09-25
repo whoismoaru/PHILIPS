@@ -35,6 +35,8 @@ import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
 import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, MAX_BINS, MAX_WIDE_BINS } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
+import { Keypair, PublicKey } from '@solana/web3.js';
+import { solConn } from './solana/send.js';
 import * as jupiter from './solana/jupiter.js';
 import * as solWallet from './solana/walletStore.js';
 import { message } from 'telegraf/filters';
@@ -1653,8 +1655,11 @@ function collapseLadderRows(rows: PosRow[]): void {
     const pnlVals = legs.map((r) => r.pnlUsd).filter((x): x is number => x !== null);
     const sumPnlUsd = pnlVals.length ? pnlVals.reduce((a, b) => a + b, 0) : null;
     const sumWethEq = legs.reduce((s, r) => s + r.wethEq, 0);
-    const wsum = legs.reduce((s, r) => s + r.wethEq, 0) || 1;
-    const pct = legs.reduce((s, r) => s + (r.pnlPct ?? 0) * r.wethEq, 0) / wsum;
+    // Weighted by the ETH-equivalent, or by the deposit where there is none: Solana rows
+    // carry wethEq 0, which made every merged Solana ladder read 0.0%.
+    const wOf = (r: PosRow) => (sumWethEq > 0 ? r.wethEq : (r.investNum ?? 0));
+    const wsum = legs.reduce((s, r) => s + wOf(r), 0) || 1;
+    const pct = legs.reduce((s, r) => s + (r.pnlPct ?? 0) * wOf(r), 0) / wsum;
     // The badge is its OWN field, never glued into the pair string. Appended to `pair` it
     // went through posPair(), which splits on '/' and rebuilds TOKEN/BASE: whether the
     // badge survived depended on which side the token sorted to. On BSC (token second) it
@@ -1774,7 +1779,10 @@ async function solanaRows(): Promise<PosRow[]> {
     const sym = symbols.get(p.tokenMint) ?? `${p.tokenMint.slice(0, 4)}…`;
     const entry = solStore.getEntry(p.position);
     const entryBase = entry ? Number(entry.entryBase) / Math.pow(10, p.base?.decimals ?? 9) : null;
-    const pnlBase = entryBase !== null ? p.valueBase + p.feeBase - entryBase : null;
+    // Fees on BOTH sides, the token side priced at the current bin: that is how Meteora
+    // shows it. Base-side fees alone left out every fee earned while price fell.
+    const feeAll = p.feeBase + (p.currentPrice !== null ? p.feeToken * p.currentPrice : 0);
+    const pnlBase = entryBase !== null ? p.valueBase + feeAll - entryBase : null;
     // Dollars are only reachable for a SOL-based position, and only when a SOL-quoted pair
     // gave a price. A USDC base is already dollars; anything else stays in its own unit.
     const usdPer = baseSym === 'USDC' ? 1 : baseSym === 'SOL' ? solUsd : null;
@@ -1808,10 +1816,10 @@ async function solanaRows(): Promise<PosRow[]> {
       // Fully converted: price has fallen through the whole range and the base side is gone.
       converted: !p.inRange && p.baseAmount === 0 && p.tokenAmount > 0,
       convertedInto: sym,
-      feesBase: p.feeBase,
-      feesLabel: `${num(p.feeBase, 6)} ${baseSym}`,
+      feesBase: feeAll,
+      feesLabel: `${num(feeAll, 6)} ${baseSym}`,
       ...(usdPer !== null
-        ? { feesUsd: p.feeBase * usdPer, feesUsdLabel: `+${msg.usdPlain(p.feeBase * usdPer)}` }
+        ? { feesUsd: feeAll * usdPer, feesUsdLabel: `+${msg.usdPlain(feeAll * usdPer)}` }
         : {}),
       rangeLabel:
         p.lowerPrice === null || p.upperPrice === null
@@ -5708,7 +5716,7 @@ function solSweepLater(chatId: number, mint: string, amount: bigint, position: s
     if (!kp) return;
     tries++;
     try {
-      const q = await jupiter.quote(mint, jupiter.WSOL, amount, Math.min(1500, SOL_SLIPPAGE_BPS * (1 + Math.floor(tries / 3))));
+      const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
       await jupiter.executeSwap(q, kp);
       const out = BigInt(q.outAmount);
       journal.noteUsdRate('SOL', await solUsd().catch(() => null));
@@ -5730,6 +5738,22 @@ function solSweepLater(chatId: number, mint: string, amount: bigint, position: s
     }
   };
   setTimeout(tick, 5_000);
+}
+
+/** Wait (up to 20s) until the wallet shows `want` of `mint`; returns what it holds, capped. */
+async function splSeen(kp: SolKeypair, mint: string, want: bigint): Promise<bigint> {
+  const owner = Keypair.fromSeed(Buffer.from(kp.seed)).publicKey;
+  const conn = solConn();
+  let have = 0n;
+  for (let t = 0; t < 10; t++) {
+    try {
+      const r = await conn.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(mint) }, 'confirmed');
+      have = r.value.reduce((a, v) => a + BigInt(v.account.data.parsed.info.tokenAmount.amount), 0n);
+      if (have >= want) return want;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  return have > 0n && have < want ? have : want;
 }
 
 /** Close one Solana position by its row id. Returns false when it did not close. */
@@ -5788,8 +5812,11 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
         // seconds later, so it is re-quoted and retried rather than left in the wallet.
         for (let i = 0; ; i++) {
           try {
-            // 0x1788 is Jupiter's slippage error: a meme moves fast, so each retry widens it.
-            const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS * (i + 1));
+            // 0x1788 here is "insufficient funds": the swap RPC does not see the withdrawn
+            // tokens yet (COLLECT, 25 Sep 2026: 4 tries failed, the same swap passed 7s
+            // later). So the wallet is polled until the tokens show, and never asked for more.
+            amount = await splSeen(kp, mint, amount);
+            const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
             sigs.push(await jupiter.executeSwap(q, kp));
             notes.push(`Swap: ${what} → SOL via Jupiter`);
             return BigInt(q.outAmount);
