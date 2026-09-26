@@ -133,7 +133,9 @@ export function signTransaction(txBase64: string, kp: SolKeypair): string {
 async function sendAndConfirm(signedBase64: string): Promise<string> {
   const sig = await solRpc<string>('sendTransaction', [
     signedBase64,
-    { encoding: 'base64', skipPreflight: false, maxRetries: 3 },
+    // Preflight defaults to 'finalized', ~13s behind: tokens a close just withdrew are not
+    // there yet and the swap fails 0x1788 (insufficient funds) until they finalize.
+    { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3 },
   ]);
   broadcastOfficial(signedBase64);
   // Polled rather than subscribed: one websocket for one confirmation is not worth the

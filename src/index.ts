@@ -5862,19 +5862,14 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
             // tokens yet (COLLECT, 25 Sep 2026: 4 tries failed, the same swap passed 7s
             // later). So the wallet is polled until the tokens show, and never asked for more.
             amount = await splSeen(kp, mint, amount);
-            // Odd tries route AROUND Meteora DLMM: the pool this close just drained is priced
-            // from a stale cache for a few seconds, which is what fails the swap (0x1788).
-            const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS, i % 2 === 1 ? 'Meteora DLMM' : undefined);
+            const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
             sigs.push(await jupiter.executeSwap(q, kp));
             notes.push(`Swap: ${what} → SOL via Jupiter`);
             return BigInt(q.outAmount);
           } catch (e) {
             if (i >= 4) throw e;
             console.error(`[sol-close] ${what} -> SOL try ${i + 1} failed, retrying:`, (e as Error).message.slice(0, 120));
-            // The DLMM-free route is tried at once; a plain retry waits for Jupiter's cache
-            // to catch up (SWARM 25 Sep 2026: 4 quick tries failed, the same swap passed ~13s
-            // after the close).
-            await new Promise((r) => setTimeout(r, i % 2 === 0 ? 300 : 4_000));
+            await new Promise((r) => setTimeout(r, 1_500));
           }
         }
       } catch (e) {

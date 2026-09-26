@@ -209,15 +209,19 @@ export async function openPosition(
       await new Promise((r) => setTimeout(r, 1_000));
     }
     // Built fresh on each try: a retry after a lagging RPC must not resend stale bytes.
-    const build = (): Promise<Transaction[]> =>
-      dlmm.addLiquidityByStrategyChunkable({
+    // The pool is re-read first: a moved active bin fails the deposit with
+    // ExceededBinSlippageTolerance, and retrying against the cached bin fails every time.
+    const build = async (): Promise<Transaction[]> => {
+      await dlmm.refetchStates();
+      return dlmm.addLiquidityByStrategyChunkable({
         positionPubKey: positionKp.publicKey,
         user: user.publicKey,
         totalXAmount: plan.baseIsX ? amt : zero,
         totalYAmount: plan.baseIsX ? zero : amt,
         strategy: { minBinId: plan.minBinId, maxBinId: plan.maxBinId, strategyType, singleSidedX: plan.baseIsX },
-        slippage: 1,
+        slippage: 5,
       });
+    };
     let done = 0;
     for (let attempt = 0; ; attempt++) {
       try {
