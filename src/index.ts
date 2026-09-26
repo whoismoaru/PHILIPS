@@ -5829,6 +5829,9 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
       return false;
     }
     const targets = ladder ? legs.map((l) => ({ pool: l.pool, position: l.position })) : [ref];
+    // The token balance before the close: afterwards everything above it came out of this
+    // pool and is sold, dust included, while tokens held before stay untouched.
+    const tokenBefore = leg0?.mint ? await splHave(kp, leg0.mint) : null;
     const parts = [];
     for (const [i, t] of targets.entries()) {
       if (ladder) await editProgress(ctx, prog, msg.msgProgress(`closing ${pair}, leg ${i + 1}/${targets.length}…`));
@@ -5881,7 +5884,13 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
         return 0n;
       }
     };
-    const tokenSol = await toSol(r.tokenMint, r.tokenOut, 'token');
+    let tokenAmt = r.tokenOut;
+    if (tokenBefore !== null && r.tokenMint === leg0?.mint) {
+      await splSeen(kp, r.tokenMint, tokenBefore + r.tokenOut);
+      const after = await splHave(kp, r.tokenMint);
+      if (after !== null && after > tokenBefore) tokenAmt = after - tokenBefore;
+    }
+    const tokenSol = await toSol(r.tokenMint, tokenAmt, 'token');
     const baseSol = baseIsSol ? r.baseOut : await toSol(r.baseMint, r.baseOut, 'USDC');
     const baseTotal = baseSol + tokenSol;
     const outLabel = `${Number((Number(baseTotal) / 1e9).toFixed(5))} SOL`;
