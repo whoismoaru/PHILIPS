@@ -5739,8 +5739,9 @@ function solSweepLater(chatId: number, mint: string, amount: bigint, position: s
     tries++;
     try {
       const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+      const before = await solLamports(kp);
       await jupiter.executeSwap(q, kp);
-      const out = BigInt(q.outAmount);
+      const out = (await solArrived(kp, before)) ?? BigInt(q.outAmount);
       journal.noteUsdRate('SOL', await solUsd().catch(() => null));
       journal.recordRecovery({ tokenId: position, symbol: `${symbol}/SOL`, ca: mint, chain: 'solana', amountWei: out });
       onDone?.(out);
@@ -5773,6 +5774,26 @@ async function solToBase(f: SolLpFlow, lamports: bigint, kp: SolKeypair): Promis
   await jupiter.executeSwap(q, kp);
   const min = BigInt(q.otherAmountThreshold);
   return splSeen(kp, SOL_USDC.mint, min);
+}
+
+/** The wallet's SOL at 'confirmed', null when unreadable. */
+async function solLamports(kp: SolKeypair): Promise<bigint | null> {
+  try {
+    return BigInt(await solConn().getBalance(Keypair.fromSeed(Buffer.from(kp.seed)).publicKey, 'confirmed'));
+  } catch {
+    return null;
+  }
+}
+
+/** SOL gained since `before` once the swap shows (up to ~10s); null when it cannot be told. */
+async function solArrived(kp: SolKeypair, before: bigint | null): Promise<bigint | null> {
+  if (before === null) return null;
+  for (let t = 0; t < 10; t++) {
+    const now = await solLamports(kp);
+    if (now !== null && now > before) return now - before;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  return null;
 }
 
 /** What the wallet holds of `mint` right now, raw units; null when it cannot be read. */
@@ -5866,9 +5887,11 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
             // later). So the wallet is polled until the tokens show, and never asked for more.
             amount = await splSeen(kp, mint, amount);
             const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+            const before = await solLamports(kp);
             sigs.push(await jupiter.executeSwap(q, kp));
             notes.push(`Swap: ${what} → SOL via Jupiter`);
-            return BigInt(q.outAmount);
+            // What actually arrived, not the quote: the card has to match the wallet.
+            return (await solArrived(kp, before)) ?? BigInt(q.outAmount);
           } catch (e) {
             if (i >= 4) throw e;
             console.error(`[sol-close] ${what} -> SOL try ${i + 1} failed, retrying:`, (e as Error).message.slice(0, 120));
@@ -5962,9 +5985,11 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
       // Fees in SOL: each side's fee at the rate that side was actually swapped at.
       const feeSol =
         (baseIsSol ? r.baseFee : r.baseOut > 0n ? (r.baseFee * baseSol) / r.baseOut : 0n) +
-        (r.tokenOut > 0n ? (r.tokenFee * swapOut) / r.tokenOut : 0n);
+        0n;
+      // The token fee's share of what the token sold for, sweep proceeds included.
+      const tokenFeeSol = (sold: bigint) => (tokenAmt > 0n ? (r.tokenFee * sold) / tokenAmt : 0n);
       const card = (extra: bigint) =>
-        sendSolProfitCard(ctx, entry, baseTotal + extra, feeSol, baseSym, 9).catch((e) =>
+        sendSolProfitCard(ctx, entry, baseTotal + extra, feeSol + tokenFeeSol(swapOut + extra), baseSym, 9).catch((e) =>
           console.error('[sol-close] PnL card failed:', (e as Error).message.slice(0, 120)),
         );
       if (pendingSweeps > 0) cardNow = (extra) => void card(extra);
