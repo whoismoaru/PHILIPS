@@ -5782,6 +5782,25 @@ async function solToBase(f: SolLpFlow, lamports: bigint, kp: SolKeypair): Promis
   return splSeen(kp, SOL_USDC.mint, min);
 }
 
+/** Tokens of `mint` these transactions added to the wallet (post minus pre); null when unreadable. */
+async function solTxGain(kp: SolKeypair, sigs: string[], mint: string): Promise<bigint | null> {
+  const owner = Keypair.fromSeed(Buffer.from(kp.seed)).publicKey.toBase58();
+  const conn = solConn();
+  let gain = 0n;
+  for (const sig of sigs) {
+    let tx = null;
+    for (let t = 0; t < 8 && !tx; t++) {
+      tx = await conn.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }).catch(() => null);
+      if (!tx) await new Promise((r) => setTimeout(r, 1_000));
+    }
+    if (!tx?.meta) return null;
+    const sum = (b: typeof tx.meta.preTokenBalances) =>
+      (b ?? []).filter((x) => x.owner === owner && x.mint === mint).reduce((a, x) => a + BigInt(x.uiTokenAmount.amount), 0n);
+    gain += sum(tx.meta.postTokenBalances) - sum(tx.meta.preTokenBalances);
+  }
+  return gain > 0n ? gain : 0n;
+}
+
 /** The wallet's SOL at 'confirmed', null when unreadable. */
 async function solLamports(kp: SolKeypair): Promise<bigint | null> {
   try {
@@ -5913,8 +5932,10 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
         return 0n;
       }
     };
-    let tokenAmt = r.tokenOut;
-    if (tokenBefore !== null && r.tokenMint === leg0?.mint) {
+    // What the close transactions themselves moved into the wallet: the position read before
+    // the close can say 0 tokens while 13,761 came out (Bagwork, 26 Sep 2026: nothing sold).
+    let tokenAmt = (await solTxGain(kp, r.signatures, r.tokenMint)) ?? r.tokenOut;
+    if (tokenAmt === r.tokenOut && tokenBefore !== null && r.tokenMint === leg0?.mint) {
       await splSeen(kp, r.tokenMint, tokenBefore + r.tokenOut);
       const after = await splHave(kp, r.tokenMint);
       if (after !== null && after > tokenBefore) tokenAmt = after - tokenBefore;
