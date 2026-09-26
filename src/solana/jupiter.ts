@@ -178,7 +178,7 @@ export async function solBalance(owner: string): Promise<bigint> {
   // limit order with "Only 0.0000 SOL is spendable" on a wallet holding 9.5 SOL.
   for (let i = 0; ; i++) {
     try {
-      const r = await solRpc<{ value: number }>('getBalance', [owner]);
+      const r = await solRpc<{ value: number }>('getBalance', [owner, { commitment: 'confirmed' }]);
       if (typeof r?.value === 'number') return BigInt(r.value);
     } catch (e) {
       if (i >= 3) throw e;

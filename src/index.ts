@@ -5461,7 +5461,13 @@ bot.action(/^solsellp:([\d.]+)$/, async (ctx) => {
   const h = solSellPick.get(ctx.from!.id);
   if (!h) return ctx.answerCbQuery('Expired. Open /swap again.');
   await ctx.answerCbQuery('Quoting…');
-  return solSellExec(ctx, h, pctOf(h.raw, Number((ctx.match as RegExpMatchArray)[1])), true);
+  const pct = Number((ctx.match as RegExpMatchArray)[1]);
+  // 100% of a token sells what the wallet holds NOW: the card's figure can be seconds old
+  // and left dust behind (0.36 NPC, 26 Sep 2026).
+  const kp = solWallet.keypair();
+  const live = pct === 100 && kp && h.mint !== jupiter.WSOL ? await splHave(kp, h.mint) : null;
+  if (live !== null && live > 0n) return solSellExec(ctx, { ...h, raw: live }, live, true);
+  return solSellExec(ctx, h, pctOf(h.raw, pct), true);
 });
 
 /** Sell as much of the token as is worth `lamports` of SOL (SOL itself: that much SOL). */

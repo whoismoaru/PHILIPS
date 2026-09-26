@@ -45,9 +45,9 @@ export async function solUsd(): Promise<number | null> {
 
 export async function solHoldings(owner: string): Promise<SolHolding[]> {
   const [lamports, ...lists] = await Promise.all([
-    solRpc<{ value: number }>('getBalance', [owner]),
+    solRpc<{ value: number }>('getBalance', [owner, { commitment: 'confirmed' }]),
     ...PROGRAMS.map((programId) =>
-      solRpc<{ value: any[] }>('getTokenAccountsByOwner', [owner, { programId }, { encoding: 'jsonParsed' }]).catch(() => ({ value: [] })),
+      solRpc<{ value: any[] }>('getTokenAccountsByOwner', [owner, { programId }, { encoding: 'jsonParsed', commitment: 'confirmed' }]).catch(() => ({ value: [] })),
     ),
   ]);
   const bal = new Map<string, number>();
