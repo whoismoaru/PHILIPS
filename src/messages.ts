@@ -1093,6 +1093,7 @@ function routeLabel(route?: string): string {
   if (r.startsWith('lifi')) return 'LI.FI';
   if (r.startsWith('relay')) return 'Relay';
   if (r.startsWith('uniswap')) return 'Uniswap';
+  if (r.startsWith('pancake')) return 'PancakeSwap';
   return route;
 }
 

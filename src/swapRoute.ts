@@ -34,6 +34,42 @@ const bal = (token: string, ctx: ChainCtx): Promise<bigint> =>
 // alternative by more than LIFI_TOL, and its quote arrives inside LIFI_TIMEOUT_MS. Worse
 // or slower, and the best-of between Relay and Uniswap takes over.
 const LIFI_TIMEOUT_MS = 12_000;
+
+/**
+ * PancakeSwap v2 on BSC, read on-chain: a new token's main pool is often v2 against WBNB,
+ * which no aggregator indexes yet. WIRED (27 Sep 2026) sold through a thin v3 USDT pool for
+ * 71.10 USDT while v2 via WBNB paid ~78.3.
+ */
+const V2_ROUTER: Record<string, string> = { bsc: '0x10ED43C718714eb63d5aA57B78B54704E256024E' };
+const V2_ABI = [
+  'function getAmountsOut(uint256,address[]) view returns (uint256[])',
+  'function swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)',
+];
+export async function quoteV2(fromAddr: string, toAddr: string, amountInWei: bigint, ctx: ChainCtx): Promise<{ out: bigint; path: string[] } | null> {
+  const addr = V2_ROUTER[ctx.key];
+  if (!addr || fromAddr === NATIVE || toAddr === NATIVE) return null;
+  const r = new ethers.Contract(addr, V2_ABI, ctx.provider);
+  const wn = ctx.weth.target as string;
+  const paths = [[fromAddr, toAddr], ...(fromAddr.toLowerCase() !== wn.toLowerCase() && toAddr.toLowerCase() !== wn.toLowerCase() ? [[fromAddr, wn, toAddr]] : [])];
+  let best: { out: bigint; path: string[] } | null = null;
+  for (const path of paths) {
+    const out = await r.getAmountsOut(amountInWei, path).then((a: bigint[]) => a[a.length - 1]).catch(() => 0n);
+    if (out > 0n && (!best || out > best.out)) best = { out, path };
+  }
+  return best;
+}
+export async function v2Exec(fromAddr: string, toAddr: string, amountInWei: bigint, path: string[], minOut: bigint, ctx: ChainCtx): Promise<{ outWei: bigint; txHashes: string[] }> {
+  const addr = V2_ROUTER[ctx.key];
+  const txHashes: string[] = [];
+  txHashes.push(...(await approveExact(fromAddr, addr, amountInWei, ctx.wallet)));
+  const before = await bal(toAddr, ctx);
+  const tx = await new ethers.Contract(addr, V2_ABI, ctx.wallet).swapExactTokensForTokensSupportingFeeOnTransferTokens(
+    amountInWei, minOut, path, ctx.wallet.address, BigInt(Math.floor(Date.now() / 1000) + 600),
+  );
+  await tx.wait();
+  txHashes.push(tx.hash);
+  return { outWei: (await bal(toAddr, ctx)) - before, txHashes };
+}
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
 }
@@ -86,19 +122,22 @@ export async function previewSwapOut(
   toAddr: string,
   amountInWei: bigint,
   ctx: ChainCtx = getChain(),
-): Promise<{ route: 'uniswap' | 'relay' | 'lifi'; out: bigint } | null> {
-  const [uni, relay, lifi] = await Promise.all([
+): Promise<{ route: 'uniswap' | 'relay' | 'lifi' | 'pancake-v2'; out: bigint } | null> {
+  const [uni, relay, lifi, v2] = await Promise.all([
     quoteUniswap(fromAddr, toAddr, amountInWei, ctx),
     relayQuoteOut(fromAddr, toAddr, amountInWei, ctx),
     withTimeout(lifiQuoteOut(fromAddr, toAddr, amountInWei, ctx), LIFI_TIMEOUT_MS),
+    quoteV2(fromAddr, toAddr, amountInWei, ctx).catch(() => null),
   ]);
+  const v2Out = v2?.out ?? 0n;
   const uniOut = uni?.out ?? 0n;
   const rOut = relay ?? 0n;
   const lOut = lifi ?? 0n;
-  const bestOther = uniOut > rOut ? uniOut : rOut;
+  const bestOther = [uniOut, rOut, v2Out].reduce((a, b) => (b > a ? b : a), 0n);
   // LI.FI leads while its rate holds up; worse or slower, the best-of takes over.
   if (lifiPreferred(lOut, bestOther)) return { route: 'lifi', out: lOut };
-  const cands: Array<{ route: 'uniswap' | 'relay' | 'lifi'; out: bigint }> = [
+  const cands: Array<{ route: 'uniswap' | 'relay' | 'lifi' | 'pancake-v2'; out: bigint }> = [
+    { route: 'pancake-v2' as const, out: v2Out },
     { route: 'uniswap' as const, out: uniOut },
     { route: 'relay' as const, out: rOut },
     { route: 'lifi' as const, out: lOut },
@@ -186,11 +225,13 @@ export async function swapExactInBest(
   slipPct = SLIP_MAX_PCT,
   maxSlipPct?: number,
 ): Promise<{ outWei: bigint; route: string; txHashes: string[] }> {
-  const [uni, relayOut, lifiOut] = await Promise.all([
+  const [uni, relayOut, lifiOut, v2] = await Promise.all([
     quoteUniswap(fromAddr, toAddr, amountInWei, ctx),
     relayQuoteOut(fromAddr, toAddr, amountInWei, ctx),
     withTimeout(lifiQuoteOut(fromAddr, toAddr, amountInWei, ctx), LIFI_TIMEOUT_MS),
+    quoteV2(fromAddr, toAddr, amountInWei, ctx).catch(() => null),
   ]);
+  const v2Out = v2?.out ?? 0n;
   const uniOut = uni?.out ?? 0n;
   const rOut = relayOut ?? 0n;
   const lOut = lifiOut ?? 0n;
@@ -216,11 +257,20 @@ export async function swapExactInBest(
     { out: uniOut, steps: uniOut > 0n ? uniSteps : [] },
     { out: rOut, steps: rOut > 0n ? [tryRelay] : [] },
     { out: lOut, steps: lOut > 0n ? [tryLifi] : [] },
+    {
+      out: v2Out,
+      steps: v2
+        ? slipLadder(maxSlipPct).map((slip) => async () => ({
+            ...(await v2Exec(fromAddr, toAddr, amountInWei, v2.path, (v2.out * BigInt(Math.floor((100 - slip) * 100))) / 10000n, ctx)),
+            route: `pancake-v2(slip ${slip}%)`,
+          }))
+        : [],
+    },
   ].sort((a, b) => (b.out > a.out ? 1 : b.out < a.out ? -1 : 0));
   // LI.FI is the PRIMARY router: if its rate is within tolerance and it quoted in time, it
   // moves to the front and the rest become fallbacks. Worse or slower, the ordinary
   // best-of order stands.
-  const bestOther = uniOut > rOut ? uniOut : rOut;
+  const bestOther = [uniOut, rOut, v2Out].reduce((a, b) => (b > a ? b : a), 0n);
   if (lifiPreferred(lOut, bestOther)) {
     const idx = providers.findIndex((p) => p.out === lOut && p.steps.length && p.steps[0] === tryLifi);
     if (idx > 0) providers.unshift(providers.splice(idx, 1)[0]);
