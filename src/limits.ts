@@ -39,6 +39,9 @@ export type LimitTp = {
   /** What closes it: 'v3:<tokenId>', 'v4:<tokenId>' or 'sol:<position>'. */
   posRef: string;
   targetMcap: number;
+  /** Absent: close on market cap. 'pct' / 'usd': close when the position's PnL reaches `target`. */
+  metric?: 'pct' | 'usd';
+  target?: number;
   createdAt: number;
 };
 
@@ -81,4 +84,15 @@ export function parseMcap(raw: string): number | null {
   const mult = m[2] ? { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase() as 'k' | 'm' | 'b'] : 1;
   const v = Number(m[1]) * mult;
   return v > 0 && isFinite(v) ? v : null;
+}
+
+/** A take-profit target: "2M" market cap, "5%" PnL, or "$10" PnL. null when it is none of them. */
+export function parseTp(raw: string): { metric: 'mcap' | 'pct' | 'usd'; value: number } | null {
+  const t = raw.trim().replace(',', '.');
+  const pct = t.match(/^\+?(\d+(?:\.\d+)?)\s*%$/);
+  if (pct) return Number(pct[1]) > 0 ? { metric: 'pct', value: Number(pct[1]) } : null;
+  const usd = t.match(/^\+?\$(\d+(?:\.\d+)?)$/);
+  if (usd) return Number(usd[1]) > 0 ? { metric: 'usd', value: Number(usd[1]) } : null;
+  const mc = parseMcap(t);
+  return mc ? { metric: 'mcap', value: mc } : null;
 }

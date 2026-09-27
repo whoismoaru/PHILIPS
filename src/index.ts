@@ -7458,7 +7458,8 @@ bot.action(/^tp:(v3|v4|sol):(\w+)$/, async (ctx: any) => {
   if (!ca) return ctx.answerCbQuery('Expired. Open /positions again.');
   await ctx.answerCbQuery();
   limitDrafts.set(ctx.from.id, { type: 'tp', at: Date.now(), order: { kind: 'tp', chain, ca, symbol, posRef } });
-  return ctx.reply(msg.msgLimitAsk({ kind: 'tp', label: `$${symbol} #${id}`, nowMcap: await mcapOf(chain, ca) }), {
+  const [nowMcap, pnl] = await Promise.all([mcapOf(chain, ca), posPnl(posRef)]);
+  return ctx.reply(msg.msgLimitAsk({ kind: 'tp', label: `$${symbol} #${id}`, nowMcap, pnl }), {
     ...html,
     ...Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'cancel')]]),
   });
@@ -7486,15 +7487,28 @@ async function handleLimitReply(ctx: any, raw: string): Promise<boolean> {
     await ctx.reply(msg.msgLimitSaved(o, now), { ...html, ...Markup.inlineKeyboard([limitsKbRow()]) });
     return true;
   }
-  if (!target || parts.length > 1) {
-    await ctx.reply(msg.msgLimitInvalid('Type the target market cap. For example: 2M'), html);
+  const tp = parts.length === 1 ? limits.parseTp(parts[0]) : null;
+  if (!tp) {
+    await ctx.reply(msg.msgLimitInvalid('Type a market cap (2M), a PnL % (5%) or a PnL in dollars ($10).'), html);
     return true;
   }
-  if (now !== null && target <= now) {
+  if (tp.metric !== 'mcap') {
+    const pnl = await posPnl(d.order.posRef);
+    const cur = pnl?.[tp.metric] ?? null;
+    if (cur !== null && tp.value <= cur) {
+      await ctx.reply(msg.msgLimitInvalid(`PnL is already ${tp.metric === 'pct' ? msg.fmtPct(cur) : msg.usdPlain(cur)}. Take profit needs a target above it.`), html);
+      return true;
+    }
+    const o = limits.add({ ...d.order, targetMcap: 0, metric: tp.metric, target: tp.value });
+    limitDrafts.delete(ctx.from.id);
+    await ctx.reply(msg.msgLimitSaved(o, cur), { ...html, ...Markup.inlineKeyboard([limitsKbRow()]) });
+    return true;
+  }
+  if (now !== null && tp.value <= now) {
     await ctx.reply(msg.msgLimitInvalid(`Market cap is already ${explore.usdShort(now)}. Take profit needs a target above it.`), html);
     return true;
   }
-  const o = limits.add({ ...d.order, targetMcap: target });
+  const o = limits.add({ ...d.order, targetMcap: tp.value });
   limitDrafts.delete(ctx.from.id);
   await ctx.reply(msg.msgLimitSaved(o, now), { ...html, ...Markup.inlineKeyboard([limitsKbRow()]) });
   return true;
@@ -7502,7 +7516,7 @@ async function handleLimitReply(ctx: any, raw: string): Promise<boolean> {
 
 async function cmdLimits(ctx: any, edit = false) {
   const list = limits.all();
-  const nows = await Promise.all(list.map((l) => mcapOf(l.chain, l.ca)));
+  const nows = await Promise.all(list.map((l) => (l.kind === 'tp' && l.metric ? limitNow(l) : mcapOf(l.chain, l.ca))));
   const rows = list.map((l, i) => [Markup.button.callback(`❌ Cancel ${i + 1}`, `limdel:${l.id}`)]);
   rows.push([Markup.button.callback('🔄 Refresh', 'limits'), Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   const text = msg.msgLimits(list, nows);
@@ -7642,14 +7656,71 @@ async function limitMcap(l: limits.Limit): Promise<number | null> {
   return ref ? ref.k * px : null;
 }
 
+/**
+ * A position's PnL, valued the way its card values it: value plus unclaimed fees against the
+ * deposit. Cached 30s per position, since the limit loop ticks every 5s and each read is RPC.
+ */
+const pnlCache = new Map<string, { v: { pct: number; usd: number } | null; t: number }>();
+async function posPnl(posRef: string): Promise<{ pct: number; usd: number } | null> {
+  const hit = pnlCache.get(posRef);
+  if (hit && Date.now() - hit.t < 30_000) return hit.v;
+  const [k, id] = posRef.split(':');
+  let v: { pct: number; usd: number } | null = null;
+  try {
+    if (k === 'v3') {
+      const rec = store.get(id);
+      if (rec && !rec.imported) {
+        const rcc = ctxOf(rec);
+        const d = await getPositionDetail(id, rcc);
+        const now = Number(ethers.formatUnits(d.valueBaseWei + d.feesBaseWei, d.baseDecimals));
+        const cost = Number(ethers.formatUnits(BigInt(rec.initialWethWei || '0'), d.baseDecimals));
+        const per = isStableBase(d.baseKind) ? 1 : await getEthUsd(rcc.wethAddress, rcc).catch(() => null);
+        if (cost > 0 && per !== null) v = { pct: (now / cost - 1) * 100, usd: (now - cost) * per };
+      }
+    } else if (k === 'v4') {
+      const rec = v4store.getV4(id);
+      if (rec) {
+        const cc = getChain(rec.chain);
+        const st = await checkV4Status(cc, id);
+        if (st.val) {
+          const dec = v4BaseDecimals(cc, rec.base);
+          const now = Number(ethers.formatUnits(st.val.valueBaseWei + st.val.feesBaseWei, dec));
+          const cost = Number(ethers.formatUnits(BigInt(rec.entryBaseWei || '0'), dec));
+          const per = rec.base === 'USDG' ? 1 : await getEthUsd(cc.wethAddress, cc).catch(() => null);
+          const entryPer = rec.entryEthUsd && rec.entryEthUsd > 0 ? rec.entryEthUsd : per;
+          if (cost > 0 && per !== null && entryPer !== null) {
+            const usd = now * per - cost * entryPer;
+            v = { pct: (usd / (cost * entryPer)) * 100, usd };
+          }
+        }
+      }
+    } else if (k === 'sol') {
+      const rows = await solanaRows();
+      const rowId = [...solRowRef.entries()].find(([, r]) => r.position === id)?.[0];
+      const row = rows.find((r) => r.id === rowId);
+      if (row && row.pnlPct !== null && row.pnlUsd !== null) v = { pct: row.pnlPct, usd: row.pnlUsd };
+    }
+  } catch {
+    v = null;
+  }
+  pnlCache.set(posRef, { v, t: Date.now() });
+  return v;
+}
+
+/** A limit's live figure: the position's PnL for a % / $ take profit, market cap otherwise. */
+async function limitNow(l: limits.Limit): Promise<number | null> {
+  if (l.kind === 'tp' && l.metric) return (await posPnl(l.posRef))?.[l.metric] ?? null;
+  return limitMcap(l);
+}
+
 async function checkLimits(): Promise<void> {
   if (limitBusy || config.safety.dryRun && !process.env.LIMITS_IN_DRY_RUN) return;
   limitBusy = true;
   try {
     for (const l of limits.all()) {
-      const now = await limitMcap(l);
+      const now = await limitNow(l);
       if (now === null) continue;
-      const hit = l.kind === 'tp' ? now >= l.targetMcap : l.dir === 'below' ? now <= l.targetMcap : now >= l.targetMcap;
+      const hit = l.kind === 'tp' ? now >= (l.metric ? l.target ?? Infinity : l.targetMcap) : l.dir === 'below' ? now <= l.targetMcap : now >= l.targetMcap;
       if (hit) await fireLimit(l, now).catch((e) => console.error('[limits] fire failed:', (e as Error).message));
     }
   } finally {

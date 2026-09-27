@@ -2866,32 +2866,41 @@ export function msgCloseAllDone(done: number, total: number, failed: string[]): 
 
 type LimitView =
   | { kind: 'entry'; symbol: string; chain: string; poolLabel: string; rangePct: number; legs?: number; amount: string; unit: string; targetMcap: number; dir: 'below' | 'above' }
-  | { kind: 'tp'; symbol: string; chain: string; posRef: string; targetMcap: number };
+  | { kind: 'tp'; symbol: string; chain: string; posRef: string; targetMcap: number; metric?: 'pct' | 'usd'; target?: number };
 
 const chainName = (k: string) => (k === 'solana' ? 'Solana' : k === 'bsc' ? 'BSC' : k.charAt(0).toUpperCase() + k.slice(1));
 const mc = (n: number | null | undefined) => (n == null ? '—' : usdCompact(n));
+const signedUsd = (n: number) => `${n < 0 ? '-' : '+'}${usdPlain(Math.abs(n))}`;
+/** A limit's live figure in its own unit: market cap, or the position's PnL in % or $. */
+const limitNow = (l: LimitView, n: number | null | undefined): string =>
+  n == null ? '—' : l.kind === 'tp' && l.metric === 'pct' ? fmtPct(n) : l.kind === 'tp' && l.metric === 'usd' ? signedUsd(n) : mc(n);
+const limitNowLine = (l: LimitView, n: number | null | undefined): string =>
+  `» ${l.kind === 'tp' && l.metric ? 'PnL' : 'Market cap'} now ${bold(limitNow(l, n))}`;
 const limitLine = (l: LimitView): string =>
   l.kind === 'entry'
     ? `${bold('ENTRY')} ${esc(l.poolLabel)} · ${esc(chainName(l.chain))}\n   └ ${esc(`${l.amount} ${l.unit}`)}, range -${l.rangePct}%${l.legs && l.legs > 1 ? `, ${l.legs} legs` : ''}, when mcap ${l.dir === 'below' ? '≤' : '≥'} ${bold(mc(l.targetMcap))}`
-    : `${bold('TAKE PROFIT')} $${esc(l.symbol)} #${esc(l.posRef.split(':')[1].slice(0, 8))} · ${esc(chainName(l.chain))}\n   └ close when mcap ≥ ${bold(mc(l.targetMcap))}`;
+    : `${bold('TAKE PROFIT')} $${esc(l.symbol)} #${esc(l.posRef.split(':')[1].slice(0, 8))} · ${esc(chainName(l.chain))}\n   └ close when ${l.metric ? 'PnL' : 'mcap'} ≥ ${bold(limitNow(l, l.metric ? l.target : l.targetMcap))}`;
 
-export function msgLimitAsk(o: { kind: 'entry' | 'tp'; label: string; range?: number; legs?: number; unit?: string; nowMcap: number | null }): string {
+export function msgLimitAsk(o: { kind: 'entry' | 'tp'; label: string; range?: number; legs?: number; unit?: string; nowMcap: number | null; pnl?: { pct: number; usd: number } | null }): string {
   return [
     `⏰ ${bold(o.kind === 'entry' ? 'LIMIT ENTRY' : 'TAKE PROFIT')} | ${esc(o.label)}`,
     '',
     `» Market cap now ${bold(mc(o.nowMcap))}`,
+    ...(o.kind === 'tp' ? [`» PnL now ${bold(o.pnl ? `${fmtPct(o.pnl.pct)} (${signedUsd(o.pnl.usd)})` : '—')}`] : []),
     ...(o.kind === 'entry' ? [`» Range -${o.range}%${o.legs && o.legs > 1 ? `, ${o.legs} legs` : ''}`] : []),
     '',
     o.kind === 'entry'
       ? `Type the target market cap, then the amount in ${esc(o.unit ?? '')}. For example: ${code('500K 100')}`
-      : `Type the target market cap to close at. For example: ${code('2M')}`,
+      : `Type the target to close at:\n• market cap ${code('2M')}\n• PnL % ${code('5%')}\n• PnL $ ${code('$10')}`,
     '',
-    note('the bot checks every 5 seconds and runs it for you when the target is crossed.'),
+    note(o.kind === 'tp'
+      ? 'mcap is checked every 5s, PnL every 30s. PnL reads the card figure; the swap back can shave 1-3% on a thin pool.'
+      : 'the bot checks every 5 seconds and runs it for you when the target is crossed.'),
   ].join('\n');
 }
 
 export function msgLimitSaved(l: LimitView, nowMcap: number | null): string {
-  return [`⏰ ${bold('LIMIT ORDER SET')}`, '', limitLine(l), '', `» Market cap now ${bold(mc(nowMcap))}`, '', note(nowWib())].join('\n');
+  return [`⏰ ${bold('LIMIT ORDER SET')}`, '', limitLine(l), '', limitNowLine(l, nowMcap), '', note(nowWib())].join('\n');
 }
 
 export function msgLimits(list: LimitView[], nows: Array<number | null>): string {
@@ -2899,14 +2908,14 @@ export function msgLimits(list: LimitView[], nows: Array<number | null>): string
   return [
     `⏰ ${bold('LIMIT ORDERS')}`,
     '',
-    ...list.map((l, i) => `${i + 1}. ${limitLine(l)} · now ${mc(nows[i])}`),
+    ...list.map((l, i) => `${i + 1}. ${limitLine(l)} · now ${limitNow(l, nows[i])}`),
     '',
     note(nowWib()),
   ].join('\n');
 }
 
 export function msgLimitTriggered(l: LimitView, nowMcap: number): string {
-  return [`⏰ ${bold('LIMIT TRIGGERED')}`, '', limitLine(l), `» Market cap now ${bold(mc(nowMcap))}`, '', note('running it now…')].join('\n');
+  return [`⏰ ${bold('LIMIT TRIGGERED')}`, '', limitLine(l), limitNowLine(l, nowMcap), '', note('running it now…')].join('\n');
 }
 
 export function msgLimitResult(l: LimitView, why: string | null): string {
