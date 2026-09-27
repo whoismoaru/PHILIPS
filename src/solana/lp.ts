@@ -23,6 +23,33 @@ import { baseOfMint } from './bases.js';
 import type { SolKeypair } from './keys.js';
 import { encodeBase58 } from './addr.js';
 
+/**
+ * Blockhash, sign, send with preflight. "Blockhash not found" from preflight means the RPC
+ * node that simulated is behind the one that handed out the hash (27 Sep 2026, 11:32 WIB:
+ * a close failed that way and the same tap 12s later went through). Preflight rejecting it
+ * means nothing was forwarded, so a fresh hash and a resend cannot land twice.
+ */
+async function signAndSend(conn: Connection, tx: Transaction, signers: Keypair[]) {
+  for (let i = 0; ; i++) {
+    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = signers[0].publicKey;
+    tx.signatures = [];
+    tx.sign(...signers);
+    const raw = tx.serialize();
+    try {
+      await conn.sendRawTransaction(raw, { maxRetries: 3 });
+    } catch (e) {
+      if (i < 2 && /blockhash not found/i.test((e as Error).message)) {
+        await new Promise((r) => setTimeout(r, 1_500));
+        continue;
+      }
+      throw e;
+    }
+    return { signature: encodeBase58(Uint8Array.from(tx.signature!)), raw, blockhash, lastValidBlockHeight };
+  }
+}
+
 const req = createRequire(import.meta.url);
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const DLMM: any = req('@meteora-ag/dlmm');
@@ -243,64 +270,65 @@ export async function openPosition(
     }
     return { signature, position: positionKp.publicKey.toBase58(), plan };
   }
-  const tx: Transaction = await dlmm.initializePositionAndAddLiquidityByStrategy({
-    positionPubKey: positionKp.publicKey,
-    user: user.publicKey,
-    // Only the base side is funded; the other side is zero. This is the single-side
-    // invariant, in the one place it can actually be broken.
-    totalXAmount: plan.baseIsX ? amt : zero,
-    totalYAmount: plan.baseIsX ? zero : amt,
-    strategy: {
-      minBinId: plan.minBinId,
-      maxBinId: plan.maxBinId,
-      strategyType: shape === 'bidask' ? DLMM.StrategyType.BidAsk : DLMM.StrategyType.Spot,
-    },
-  });
-  // A PRICE for the compute units, which the SDK does not set.
-  //
-  // It emits SetComputeUnitLimit and nothing else, so the transaction goes out bidding
-  // zero. On 22 Sep 2026 at 21:15 WIB that is exactly what happened: signature 2kwdfKed…
-  // never landed and died with "block height exceeded" after sitting behind everything
-  // that did pay. The Jupiter buy path has always set a fee; this one now matches it.
-  await addPriorityFee(tx, pool);
+  for (let attempt = 0; ; attempt++) {
+    await dlmm.refetchStates();
+    const tx: Transaction = await dlmm.initializePositionAndAddLiquidityByStrategy({
+      positionPubKey: positionKp.publicKey,
+      user: user.publicKey,
+      // Only the base side is funded; the other side is zero. This is the single-side
+      // invariant, in the one place it can actually be broken.
+      totalXAmount: plan.baseIsX ? amt : zero,
+      totalYAmount: plan.baseIsX ? zero : amt,
+      strategy: {
+        minBinId: plan.minBinId,
+        maxBinId: plan.maxBinId,
+        strategyType: shape === 'bidask' ? DLMM.StrategyType.BidAsk : DLMM.StrategyType.Spot,
+      },
+      // Same tolerance as the wide deposit. Unset, the SDK allows 3 bins of drift, and a
+      // moving memecoin outran that on 27 Sep 2026 (ExceededBinSlippageTolerance, QSVwVvtJ…).
+      slippage: 5,
+    });
+    // A PRICE for the compute units, which the SDK does not set.
+    //
+    // It emits SetComputeUnitLimit and nothing else, so the transaction goes out bidding
+    // zero. On 22 Sep 2026 at 21:15 WIB that is exactly what happened: signature 2kwdfKed…
+    // never landed and died with "block height exceeded" after sitting behind everything
+    // that did pay. The Jupiter buy path has always set a fee; this one now matches it.
+    await addPriorityFee(tx, pool);
 
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
-  tx.recentBlockhash = blockhash;
-  tx.feePayer = user.publicKey;
-  // Signed here rather than inside sendAndConfirmTransaction, because the SIGNATURE is what
-  // makes an expiry answerable: without it there is nothing to ask the chain about.
-  tx.sign(user, positionKp);
-  const signature = encodeBase58(Uint8Array.from(tx.signature!));
-  await conn.sendRawTransaction(tx.serialize(), {
-    // The position keypair is single-use, so a resend cannot duplicate the position: the
-    // second attempt collides with an account that already exists and fails.
-    maxRetries: 3,
-  });
-
-  // Re-sent every 2s until confirmed or expired: a node that cannot forward in time drops
-  // it. Same bytes and a single-use position key, so it can land at most once.
-  const raw = tx.serialize();
-  const b64 = Buffer.from(raw).toString('base64');
-    broadcastOfficial(b64);
-    const resend = setInterval(() => {
-      conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+    const { signature, raw, blockhash, lastValidBlockHeight } = await signAndSend(conn, tx, [user, positionKp]);
+    // Re-sent every 2s until confirmed or expired: a node that cannot forward in time drops
+    // it. Same bytes and a single-use position key, so it can land at most once.
+    const b64 = Buffer.from(raw).toString('base64');
       broadcastOfficial(b64);
-    }, 2_000);
-  try {
-    const r = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed').finally(() => clearInterval(resend));
-    if (r.value.err) throw new Error(`the position failed on-chain (${signature})`);
-  } catch (e) {
-    // An expiry is not an answer, it is the absence of one. A transaction whose blockhash
-    // ran out can still have landed, and telling the owner to "try again" then opens a
-    // SECOND position. So the chain is asked before anything is claimed -- the same rule
-    // the four EVM close paths carry since 20 Sep 2026.
-    const landed = await landedStatus(conn, signature);
-    if (landed === 'ok') return { signature, position: positionKp.publicKey.toBase58(), plan };
-    if (landed === 'failed') throw new Error(`the position failed on-chain (${signature})`);
-    console.error(`[sol-lp] open did not land: ${signature} — ${(e as Error).message}`);
-    throw new Error(`the transaction never landed (${signature}); nothing was deposited, so it is safe to try again`);
+      const resend = setInterval(() => {
+        conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+        broadcastOfficial(b64);
+      }, 2_000);
+    try {
+      const r = await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed').finally(() => clearInterval(resend));
+      // The active bin outran the tolerance while the tx was in flight. A failed tx is
+      // atomic -- the position account was never created -- so the same key can go again
+      // against the pool re-read.
+      if (attempt === 0 && JSON.stringify(r.value.err).includes('"Custom":6004')) {
+        console.log(`[sol-lp] ${pool} bin moved past tolerance, retrying once (${signature})`);
+        continue;
+      }
+      if (r.value.err) throw new Error(`the position failed on-chain (${signature})`);
+    } catch (e) {
+      if ((e as Error).message.startsWith('the position failed')) throw e;
+      // An expiry is not an answer, it is the absence of one. A transaction whose blockhash
+      // ran out can still have landed, and telling the owner to "try again" then opens a
+      // SECOND position. So the chain is asked before anything is claimed -- the same rule
+      // the four EVM close paths carry since 20 Sep 2026.
+      const landed = await landedStatus(conn, signature);
+      if (landed === 'ok') return { signature, position: positionKp.publicKey.toBase58(), plan };
+      if (landed === 'failed') throw new Error(`the position failed on-chain (${signature})`);
+      console.error(`[sol-lp] open did not land: ${signature} — ${(e as Error).message}`);
+      throw new Error(`the transaction never landed (${signature}); nothing was deposited, so it is safe to try again`);
+    }
+    return { signature, position: positionKp.publicKey.toBase58(), plan };
   }
-  return { signature, position: positionKp.publicKey.toBase58(), plan };
 }
 
 /**
@@ -325,13 +353,7 @@ async function landedStatus(conn: Connection, signature: string): Promise<'ok' |
 /** Fee, sign, send, re-broadcast, confirm; an expiry asks the chain before failing. */
 async function landTx(conn: Connection, tx: Transaction, signers: Keypair[], pool: string, what: string): Promise<string> {
   await addPriorityFee(tx, pool);
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
-  tx.recentBlockhash = blockhash;
-  tx.feePayer = signers[0].publicKey;
-  tx.sign(...signers);
-  const signature = encodeBase58(Uint8Array.from(tx.signature!));
-  const raw = tx.serialize();
-  await conn.sendRawTransaction(raw, { maxRetries: 3 });
+  const { signature, raw, blockhash, lastValidBlockHeight } = await signAndSend(conn, tx, signers);
   const b64 = Buffer.from(raw).toString('base64');
   broadcastOfficial(b64);
   const resend = setInterval(() => {
@@ -430,13 +452,7 @@ export async function closePosition(pool: string, position: string, kp: SolKeypa
   const signatures: string[] = [];
   for (const tx of txs) {
     await addPriorityFee(tx, pool);
-    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
-    tx.recentBlockhash = blockhash;
-    tx.feePayer = user.publicKey;
-    tx.sign(user);
-    const signature = encodeBase58(Uint8Array.from(tx.signature!));
-    const raw = tx.serialize();
-    await conn.sendRawTransaction(raw, { maxRetries: 3 });
+    const { signature, raw, blockhash, lastValidBlockHeight } = await signAndSend(conn, tx, [user]);
     const b64 = Buffer.from(raw).toString('base64');
     broadcastOfficial(b64);
     const resend = setInterval(() => {

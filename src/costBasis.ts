@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeJson } from './store.js';
 
 /**
  * What the bot paid for tokens it bought through /buy, in dollars, so a later sell can
@@ -10,8 +11,14 @@ import { join } from 'node:path';
 const FILE = join(process.cwd(), 'data', 'costbasis.json');
 
 type Lot = { symbol: string; tokens: number; costUsd: number; firstAt: number };
-let db: Record<string, Lot> = existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')) : {};
-const save = () => writeFileSync(FILE, JSON.stringify(db, null, 2));
+let db: Record<string, Lot> = {};
+try {
+  db = existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')) : {};
+} catch {
+  // A bad file costs the PnL cards, never the bot's startup.
+  console.error('[costbasis] unreadable, starting empty');
+}
+const save = () => writeJson(FILE, db);
 const key = (chain: string, ca: string) => `${chain}:${chain === 'solana' ? ca : ca.toLowerCase()}`;
 
 export function addBuy(chain: string, ca: string, symbol: string, tokens: number, costUsd: number): void {
