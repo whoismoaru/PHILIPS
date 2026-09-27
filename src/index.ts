@@ -31,6 +31,7 @@ import { TRADE_LIMIT_PCT, SELL_IMPACT_PCT } from './tradeLimit.js';
 import { USDC as SOL_USDC } from './solana/bases.js';
 import * as solStore from './solana/store.js';
 import * as limits from './limits.js';
+import * as costBasis from './costBasis.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
 import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, MAX_BINS, MAX_WIDE_BINS } from './solana/lp.js';
@@ -4667,6 +4668,9 @@ async function solBuyQuoteCard(ctx: any, f: SolBuyFlow, lamports: bigint, edit: 
     solBuyFlows.delete(ctx.from!.id);
     try {
       const sig = await jupiter.executeSwap(q, kp);
+      const px = await solUsd().catch(() => null);
+      if (px !== null && dec !== null)
+        costBasis.addBuy('solana', f.mint, f.symbol, Number(q.outAmount) / 10 ** dec, (Number(lamports) / 1e9) * px);
       return say(
         msg.msgSolBuyDone({ symbol: f.symbol, spendSol: fmtSol(lamports), received: amt(q.outAmount), sig, gas: await solTxFee(sig) }),
         {
@@ -5545,12 +5549,17 @@ async function solSellExec(ctx: any, h: SolHolding, amount: bigint, edit: boolea
       return show(msg.msgError('swap', `Price impact is ${(Number(q.priceImpactPct) * 100).toFixed(1)}%, above the ${SELL_IMPACT_PCT}% sell limit. Nothing was sent. Try a smaller amount.`));
     const sig = await jupiter.executeSwap(q, kp);
     const got = (Number(q.outAmount) / 10 ** out.decimals).toLocaleString('en-US', { maximumFractionDigits: 4 });
-    return show(msg.msgSolSellDone({ symbol: h.symbol, sold, received: `${got} ${out.symbol}`, sig, gas: await solTxFee(sig) }), {
+    await show(msg.msgSolSellDone({ symbol: h.symbol, sold, received: `${got} ${out.symbol}`, sig, gas: await solTxFee(sig) }), {
       ...html,
       ...Markup.inlineKeyboard([
         [Markup.button.url('🔍 Solscan', `https://solscan.io/tx/${sig}`), Markup.button.callback('💰 Portfolio', 'portfolio')],
       ]),
     });
+    if (!isSol) {
+      const px = await solUsd().catch(() => null);
+      await sendSellCard(ctx, 'solana', 'Solana', h.mint, (h.amount * Number(amount)) / Number(h.raw), px === null ? null : (Number(q.outAmount) / 1e9) * px);
+    }
+    return;
   } catch (e) {
     console.error(`[sol-sell] ${h.mint} ${amount} failed:`, (e as Error).message);
     return show(msg.msgError('swap', (e as Error).message));
@@ -6305,6 +6314,35 @@ async function wrapWithGasReserve(cc: ChainCtx, wrapWei: bigint): Promise<void> 
 }
 
 /**
+ * The PnL card for a sell of tokens the bot bought. Nothing is sent for a token with no
+ * recorded buy. Decoration: a failure here must never touch the sell that already landed.
+ */
+async function sendSellCard(ctx: any, chain: string, chainLabel: string, ca: string, tokens: number, proceedsUsd: number | null): Promise<void> {
+  try {
+    if (proceedsUsd === null) return;
+    const r = costBasis.takeSell(chain, ca, tokens, proceedsUsd);
+    if (!r) return;
+    const positive = Math.abs(r.pnlUsd) < 0.005 ? null : r.pnlUsd > 0;
+    const usd2 = (n: number) => n.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const buf = await renderProfitCard({
+      pair: `$${r.symbol}`,
+      positive,
+      pnlBig: `${positive ? '+' : positive === null ? '' : '-'}$${usd2(Math.abs(r.pnlUsd))}`,
+      pnlPct: msg.fmtPct(r.pnlPct),
+      stats: [
+        { label: 'bought', value: `$${usd2(r.costUsd)}` },
+        { label: 'sold', value: `$${usd2(r.proceedsUsd)}` },
+        { label: 'held', value: msg.fmtAge(Date.now() - r.firstAt) },
+      ],
+      footerLeft: `${chainLabel} · ${msg.dateWibFull()}`,
+    });
+    await ctx.replyWithDocument(Input.fromBuffer(buf, `philips-${r.symbol}.png`));
+  } catch (e) {
+    console.error(`[sell-card] ${ca}:`, (e as Error).message);
+  }
+}
+
+/**
  * Execute the swap the flow describes. Registered as the Confirm button, and called
  * directly when a typed amount executes straight away -- one implementation, so the
  * auto path cannot drift from the confirmed one.
@@ -6428,6 +6466,13 @@ async function execTSwap(ctx: any) {
         ]),
       },
     );
+    if (buy) {
+      const cost = await baseToUsd(base!.kind, Number(ethers.formatUnits(amountWei, base!.decimals)), cc).catch(() => null);
+      if (cost !== null) costBasis.addBuy(chainKey, token!, tokenSym!, Number(ethers.formatUnits(outWei, tokenDec!)), cost);
+    } else if (!sellNative) {
+      const proceeds = await baseToUsd('weth', Number(ethers.formatEther(outWei)), cc).catch(() => null);
+      await sendSellCard(ctx, chainKey, cc.label, token!, Number(ethers.formatUnits(amountWei, tokenDec!)), proceeds);
+    }
   } catch (e) {
     await ctx.reply(msg.msgError('swap', e), html);
   } finally {
