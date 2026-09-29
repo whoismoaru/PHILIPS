@@ -758,6 +758,7 @@ async function renderStatus(ctx: any, edit: boolean) {
       totalUsd,
       lpUsd,
       lpFailed,
+      wallets: { evm: walletStore.address(), sol: solWallet.address() },
     });
     const extra = {
       ...html,

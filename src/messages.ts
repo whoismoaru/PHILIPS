@@ -671,6 +671,8 @@ export function msgStatus(opts: {
   totalUsd: number | null; // null means the native price could not be read; never 0
   lpUsd?: number | null; // the value of the active LP positions
   lpFailed?: number; // positions that failed to read, so the total is incomplete
+  /** The wallets this card reads. EVM and Solana connect separately, so both are named. */
+  wallets?: { evm: string | null; sol: string | null };
 }): string {
   // An unreadable USD figure becomes '—' (neutral). NEVER '$0.00', which reads as a fact.
   const usdCol = (u: number | null | undefined) => (u === null || u === undefined ? '—' : usdPlain(u));
@@ -732,6 +734,12 @@ export function msgStatus(opts: {
       `Liquid/Free: ${bold(usdCol(opts.totalUsd))}`,
     ]),
   ];
+  // Which wallets: without this a Solana wallet left from before an EVM switch reads
+  // as the new wallet's money (30 Sep 2026).
+  if (opts.wallets) {
+    const short = (a: string | null) => (a ? code(`${a.slice(0, 6)}…${a.slice(-4)}`) : 'not connected');
+    parts.push('', bold('WALLETS :'), ...tree([`EVM: ${short(opts.wallets.evm)}`, `SOL: ${short(opts.wallets.sol)}`]));
+  }
 
   if (shown.length) {
     parts.push('', bold('BY CHAIN :'));
