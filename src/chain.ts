@@ -6,9 +6,7 @@ import { config } from './config.js';
  * The ABIs here are deliberately minimal -- only the functions actually called.
  */
 
-export const provider = new ethers.JsonRpcProvider(config.chain.rpcUrl, config.chain.chainId);
-// The wallet is no longer built here: walletStore is its source (see chains.ts).
-// What is left in this module is the provider plus the ABI collection.
+// Providers live in chains.ts (per chain, with fallbacks); the wallet in walletStore.
 
 export const ERC20_ABI = [
   'function symbol() view returns (string)',

@@ -263,6 +263,7 @@ export function resetV4EnumCache(): void {
  * tap paid it again. The tap has to answer either way, so cap the wait and fall back.
  */
 const LOGS_TIMEOUT_MS = 4_000;
+const LOGS_WINDOW = 10_000_000;
 
 async function logsRpc(url: string, params: unknown): Promise<any[]> {
   const res = await fetch(url, {
@@ -303,11 +304,17 @@ export async function walletV4TokenIds(cc: ChainCtx): Promise<string[]> {
       for (const id of cache.ids) ids.add(id);
       return [...ids];
     }
-    const range = { fromBlock: '0x' + scanFrom.toString(16), toBlock: '0x' + scanTo.toString(16), address: pm };
-    const [incoming, outgoing] = await Promise.all([
-      logsRpc(rpc, { ...range, topics: [TRANSFER_TOPIC, null, w] }),
-      logsRpc(rpc, { ...range, topics: [TRANSFER_TOPIC, w, null] }),
-    ]);
+    // In windows: since 30 Sep 2026 the public Robinhood RPC refuses a range over 10M blocks
+    // ("query spans 76009445 blocks … only 10000000 are allowed"). Sequential, because two
+    // at once already drew 429s from it.
+    const incoming: any[] = [];
+    const outgoing: any[] = [];
+    for (let from = scanFrom; from <= scanTo; from += LOGS_WINDOW) {
+      const to = Math.min(scanTo, from + LOGS_WINDOW - 1);
+      const range = { fromBlock: '0x' + from.toString(16), toBlock: '0x' + to.toString(16), address: pm };
+      incoming.push(...(await logsRpc(rpc, { ...range, topics: [TRANSFER_TOPIC, null, w] })));
+      outgoing.push(...(await logsRpc(rpc, { ...range, topics: [TRANSFER_TOPIC, w, null] })));
+    }
     // An NFT can leave and come back, so the LAST event per tokenId decides ownership.
     // Ordering by (block, logIndex) is what makes a mint-then-burn in one transaction
     // resolve correctly.

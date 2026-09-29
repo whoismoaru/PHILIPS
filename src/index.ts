@@ -44,7 +44,7 @@ import * as solWallet from './solana/walletStore.js';
 import { message } from 'telegraf/filters';
 import { ethers } from 'ethers';
 import { config, EXIT_CONFIG } from './config.js';
-import { provider, ERC20_ABI, EXPLORER_HEADERS } from './chain.js';
+import { ERC20_ABI, EXPLORER_HEADERS } from './chain.js';
 import { retryOnce } from './retry.js';
 import * as walletStore from './walletStore.js';
 import {
@@ -666,8 +666,7 @@ async function renderStatus(ctx: any, edit: boolean) {
     // positions" with a DLMM position open.
     const solLpP = solAddr && config.solana.enabled && !chainToggle.isOff('solana') ? solPositions(solAddr).catch(() => []) : Promise.resolve([]);
     const solP = solAddr && config.solana.enabled && !chainToggle.isOff('solana') ? solHoldings(solAddr).catch(() => null) : Promise.resolve(null);
-    const [network, chains] = await Promise.all([
-      provider.getNetwork(),
+    const [chains] = await Promise.all([
       // Native balances on EVERY chain (in parallel; a failed chain gives amount '?' and null usd).
       Promise.all(
         Object.values(CHAINS).map(async (c) => {
@@ -5133,7 +5132,12 @@ async function walletErc20s(cc: ChainCtx): Promise<Map<string, bigint>> {
   const out = new Map<string, bigint>();
   // Straight at the primary endpoint: cc.provider may be a FallbackProvider, which has no
   // .send() for a vendor method like this one.
-  const rpc = new ethers.JsonRpcProvider(cc.rpcUrl, cc.chainId, { staticNetwork: true });
+  // Fail fast: with ethers' default 429 backoff a capped Alchemy plan held /portfolio for
+  // 196s (30 Sep 2026). A miss here only costs the tokens the bot never touched.
+  const req = new ethers.FetchRequest(cc.rpcUrl);
+  req.timeout = 8_000;
+  req.setThrottleParams({ maxAttempts: 1 });
+  const rpc = new ethers.JsonRpcProvider(req, cc.chainId, { staticNetwork: true });
   const res: any = await rpc.send('alchemy_getTokenBalances', [cc.wallet.address]).catch(() => null);
   for (const t of res?.tokenBalances ?? []) {
     const ca = String(t?.contractAddress ?? '').toLowerCase();

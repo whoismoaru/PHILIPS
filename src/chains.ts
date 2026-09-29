@@ -403,12 +403,23 @@ function build(key: string, d: Def): ChainCtx {
   // FallbackProvider: the primary (priority 1) is used while healthy; on a
   // failure or stall it falls to the public one, and as soon as the primary
   // recovers the next request returns to it (quorum 1, evaluated per call).
+  //
+  // Members fail FAST. ethers retries a 429 with growing backoff, and FallbackProvider
+  // waits on every member before its first answer, so one throttled RPC froze the whole
+  // chain: 29 Sep 2026, Alchemy's monthly cap on Robinhood hung every read for 45s+ while
+  // both public RPCs were healthy (sweep-weth failed ~400 times in 24h).
+  const mkMember = (url: string) => {
+    const req = new ethers.FetchRequest(url);
+    req.timeout = 10_000;
+    req.setThrottleParams({ maxAttempts: 1 });
+    return new ethers.JsonRpcProvider(req, d.chainId, jsonOpts);
+  };
   const provider: ethers.Provider =
     d.fallbackRpc && d.fallbackRpc.length
       ? new ethers.FallbackProvider(
           [
-            { provider: mkJson(d.rpc), priority: 1, stallTimeout: 1500, weight: 1 },
-            ...d.fallbackRpc.map((u, i) => ({ provider: mkJson(u), priority: 2 + i, stallTimeout: 1500, weight: 1 })),
+            { provider: mkMember(d.rpc), priority: 1, stallTimeout: 1500, weight: 1 },
+            ...d.fallbackRpc.map((u, i) => ({ provider: mkMember(u), priority: 2 + i, stallTimeout: 1500, weight: 1 })),
           ],
           d.chainId,
           { quorum: 1 },
