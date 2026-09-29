@@ -12,6 +12,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeJson } from '../store.js';
+import { ownerOf, isMine } from '../owner.js';
 
 const FILE = join(process.cwd(), 'data', 'solpositions.json');
 
@@ -40,6 +41,8 @@ export type SolEntry = {
   legCount?: number;
   /** 'spot' when a wide SPOT range was split into equal positions; empty means bid-ask. */
   shape?: 'spot' | 'bidask';
+  /** The Solana address that opened it (owner.ts). */
+  wallet?: string;
 };
 
 let cache: Record<string, SolEntry> | null = null;
@@ -59,15 +62,19 @@ function load(): Record<string, SolEntry> {
   return cache;
 }
 
-export const getEntry = (position: string): SolEntry | undefined => load()[position];
+const mine = (e: SolEntry | undefined) => !!e && isMine('solana', e.wallet);
+export const getEntry = (position: string): SolEntry | undefined => {
+  const e = load()[position];
+  return mine(e) ? e : undefined;
+};
 /** Every leg of one ladder, nearest the price first. */
 export const group = (groupId: string): SolEntry[] =>
   Object.values(load())
-    .filter((e) => e.groupId === groupId)
+    .filter((e) => mine(e) && e.groupId === groupId)
     .sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
 
 export function record(e: SolEntry): void {
-  const next = { ...load(), [e.position]: e };
+  const next = { ...load(), [e.position]: { ...e, wallet: e.wallet ?? ownerOf('solana') } };
   cache = next;
   writeJson(FILE, next);
 }
@@ -76,7 +83,8 @@ export function record(e: SolEntry): void {
 export function keepOnly(positions: string[]): void {
   const live = new Set(positions);
   const cur = load();
-  const next = Object.fromEntries(Object.entries(cur).filter(([k]) => live.has(k)));
+  // `positions` is the CONNECTED wallet's list: another wallet's entries are not judged by it.
+  const next = Object.fromEntries(Object.entries(cur).filter(([k, e]) => live.has(k) || !mine(e)));
   if (Object.keys(next).length === Object.keys(cur).length) return;
   cache = next;
   writeJson(FILE, next);

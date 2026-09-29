@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeJson } from './store.js';
+import { ownerOf, isMine } from './owner.js';
 
 /**
  * Limit orders, kept in data/limits.json so they survive a restart.
@@ -28,6 +29,7 @@ export type LimitEntry = {
   /** 'below' fires when mcap falls to the target, 'above' when it rises to it. */
   dir: 'below' | 'above';
   createdAt: number;
+  wallet?: string; // owner (owner.ts)
 };
 
 export type LimitTp = {
@@ -43,6 +45,7 @@ export type LimitTp = {
   metric?: 'pct' | 'usd';
   target?: number;
   createdAt: number;
+  wallet?: string; // owner (owner.ts)
 };
 
 export type Limit = LimitEntry | LimitTp;
@@ -60,11 +63,12 @@ function load(): Limit[] {
   return cache;
 }
 
-export const all = (): Limit[] => [...load()];
-export const get = (id: string): Limit | undefined => load().find((l) => l.id === id);
+const mine = (l: Limit) => isMine(l.chain, l.wallet);
+export const all = (): Limit[] => load().filter(mine);
+export const get = (id: string): Limit | undefined => load().find((l) => l.id === id && mine(l));
 
 export function add(l: Omit<LimitEntry, 'id' | 'createdAt'> | Omit<LimitTp, 'id' | 'createdAt'>): Limit {
-  const full = { ...l, id: Date.now().toString(36).slice(-6), createdAt: Date.now() } as Limit;
+  const full = { ...l, id: Date.now().toString(36).slice(-6), createdAt: Date.now(), wallet: ownerOf(l.chain) } as Limit;
   cache = [...load(), full];
   writeJson(FILE, cache);
   return full;

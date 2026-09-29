@@ -1,6 +1,7 @@
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ethers } from 'ethers';
+import { ownerOf } from './owner.js';
 import { baseDecimalsOf as evmDecimalsOf, getChain, CHAINS, type BaseKind } from './chains.js';
 
 /** Solana entries are always booked in SOL (lamports, 9 decimals). */
@@ -80,6 +81,16 @@ export function recordRecovery(r: {
 }
 
 /** The wallet address in use, lowercased. undefined when not connected yet. */
+/**
+ * Is this entry the connected wallet's? Solana entries match the Solana address; ones
+ * written before 30 Sep 2026 carry the EVM address and still match that.
+ */
+function ownedByMe(e: JournalEntry): boolean {
+  if (!e.wallet) return false;
+  if (e.chain === 'solana' && e.wallet === ownerOf('solana')) return true;
+  return e.wallet === currentWallet();
+}
+
 export function currentWallet(): string | undefined {
   try {
     return getChain().wallet.address.toLowerCase();
@@ -119,7 +130,8 @@ export function record(e: JournalEntry): void {
     // into /pnl. Once written, an entry belongs to its owner.
     const stamped: JournalEntry = {
       ...e,
-      wallet: e.wallet ?? currentWallet(),
+      // A Solana trade belongs to the Solana address, not the EVM one.
+      wallet: e.wallet ?? (e.chain === 'solana' ? ownerOf('solana') : currentWallet()),
       // The rate AT CLOSE. Once recorded, this value stops moving.
       usdRate: e.usdRate ?? rateNow(unitOf(e.chain, e.baseKind)),
     };
@@ -319,7 +331,7 @@ export function statsFor(sinceMs = 0, chain?: string, usdOf?: (unit: string) => 
       (!chain || (e.chain ?? 'robinhood') === chain) &&
       // Only trades from the wallet IN USE. An entry without an owner stamp is
       // treated as someone else's; mixing them makes PnL lie after a wallet swap.
-      e.wallet === me,
+      ownedByMe(e),
   );
   const byUnit = new Map<string, Book>();
   let known = 0, untracked = 0, excluded = 0, noCapital = 0, recovered = 0, unconverted = 0, estimated = 0;
@@ -501,7 +513,7 @@ export function chainsWithHistory(): Array<{ key: string; trades: number }> {
   const me = currentWallet();
   const n = new Map<string, number>();
   for (const e of read(Number.MAX_SAFE_INTEGER)) {
-    if (me && e.wallet !== me) continue; // the chain bubbles follow whichever wallet is in use
+    if (me && !ownedByMe(e)) continue; // the chain bubbles follow whichever wallet is in use
     const k = e.chain ?? 'robinhood';
     n.set(k, (n.get(k) ?? 0) + 1);
   }
@@ -541,7 +553,7 @@ export function readMine(limit = 20): JournalEntry[] {
   // owns it. Empty is obviously wrong and visible immediately; a contaminated list
   // looks correct.
   if (!me) return [];
-  const all = read(Number.MAX_SAFE_INTEGER).filter((e) => e.wallet === me);
+  const all = read(Number.MAX_SAFE_INTEGER).filter(ownedByMe);
   return all.slice(0, limit);
 }
 

@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeJson } from './store.js';
+import { ownerOf } from './owner.js';
 
 /**
  * What the bot paid for tokens it bought through /buy, in dollars, so a later sell can
@@ -19,7 +20,8 @@ try {
   console.error('[costbasis] unreadable, starting empty');
 }
 const save = () => writeJson(FILE, db);
-const key = (chain: string, ca: string) => `${chain}:${chain === 'solana' ? ca : ca.toLowerCase()}`;
+// Keyed by owner too: a lot bought by one wallet is not the cost of another's sell.
+const key = (chain: string, ca: string) => `${ownerOf(chain)}:${chain}:${chain === 'solana' ? ca : ca.toLowerCase()}`;
 
 export function addBuy(chain: string, ca: string, symbol: string, tokens: number, costUsd: number): void {
   if (!(tokens > 0) || !(costUsd > 0)) return;

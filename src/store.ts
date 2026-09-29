@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { ownerOf, isMine } from './owner.js';
 import type { BaseKind } from './chains.js';
 
 /**
@@ -51,11 +52,12 @@ export type PosRecord = {
   legIndex?: number; // the leg's order within the group (0 is nearest the price)
   legCount?: number; // the total number of legs in the group
   shape?: 'spot' | 'bidask'; // how the ladder distributes its capital
+  wallet?: string; // owner, stamped on write (owner.ts); empty means a record from before 30 Sep 2026
 };
 
 /** Every leg of one ladder group, ordered by legIndex. An empty groupId returns an empty array. */
 export function group(groupId: string): PosRecord[] {
-  return records.filter((r) => r.groupId === groupId).sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
+  return records.filter((r) => mine(r) && r.groupId === groupId).sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
 }
 
 const FILE = join(process.cwd(), 'data', 'positions.json');
@@ -107,9 +109,11 @@ export const endMoneyOp = (): void => {
 };
 export const isBusy = (): boolean => moneyOps > 0 || closing.size > 0;
 
-export const all = (): PosRecord[] => records;
-export const active = (): PosRecord[] => records.filter((r) => r.status === 'ACTIVE');
-export const get = (tokenId: string): PosRecord | undefined => records.find((r) => r.tokenId === tokenId);
+// Reads see only the connected wallet's positions; writes (update/remove) still reach any.
+const mine = (r: PosRecord) => isMine(r.chain ?? 'robinhood', r.wallet);
+export const all = (): PosRecord[] => records.filter(mine);
+export const active = (): PosRecord[] => records.filter((r) => mine(r) && r.status === 'ACTIVE');
+export const get = (tokenId: string): PosRecord | undefined => records.find((r) => r.tokenId === tokenId && mine(r));
 
 /** Import a position found on chain rather than opened here. A no-op if it already exists. */
 export function addImported(rec: {
@@ -132,12 +136,13 @@ export function addImported(rec: {
     openedAt: Date.now(),
     status: 'ACTIVE',
     imported: true,
+    wallet: ownerOf(rec.chain),
   });
   persist();
 }
 
 export function add(rec: PosRecord) {
-  records = records.filter((r) => r.tokenId !== rec.tokenId).concat(rec);
+  records = records.filter((r) => r.tokenId !== rec.tokenId).concat({ ...rec, wallet: rec.wallet ?? ownerOf(rec.chain ?? 'robinhood') });
   persist();
 }
 

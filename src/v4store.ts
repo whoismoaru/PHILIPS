@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeJson } from './store.js';
+import { ownerOf, isMine } from './owner.js';
 
 /**
  * Lightweight tracking for the Uniswap v4 positions the bot OPENED, kept separate from the
@@ -31,11 +32,12 @@ export type V4Record = {
   dropTier?: number; // the drop-alert rung that already fired (same as v3)
   dropAlerted?: boolean;
   ilAlerted?: boolean; // the net-loss alert already fired; it re-arms on recovery
+  wallet?: string; // owner, stamped on write (owner.ts)
 };
 
 /** Every leg of one v4 ladder group, ordered by legIndex. */
 export function groupV4(groupId: string): V4Record[] {
-  return records.filter((r) => r.groupId === groupId).sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
+  return records.filter((r) => isMine(r.chain, r.wallet) && r.groupId === groupId).sort((a, b) => (a.legIndex ?? 0) - (b.legIndex ?? 0));
 }
 
 const FILE = join(process.cwd(), 'data', 'v4positions.json');
@@ -57,12 +59,13 @@ function persist(): void {
   writeJson(FILE, records);
 }
 
-export const allV4 = (): V4Record[] => records;
-export const getV4 = (tokenId: string): V4Record | undefined => records.find((r) => r.tokenId === tokenId);
+export const allV4 = (): V4Record[] => records.filter((r) => isMine(r.chain, r.wallet));
+export const getV4 = (tokenId: string): V4Record | undefined =>
+  records.find((r) => r.tokenId === tokenId && isMine(r.chain, r.wallet));
 
 export function trackV4(rec: Omit<V4Record, 'openedAt' | 'lastInRange'> & { openedAt?: number }): void {
   if (records.some((r) => r.tokenId === rec.tokenId)) return;
-  records.push({ ...rec, openedAt: rec.openedAt ?? Date.now() });
+  records.push({ ...rec, openedAt: rec.openedAt ?? Date.now(), wallet: rec.wallet ?? ownerOf(rec.chain) });
   persist();
 }
 
