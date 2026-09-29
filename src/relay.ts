@@ -32,6 +32,8 @@ export async function swapTokenViaRelay(
 
   const res = await fetch(RELAY_API, {
     method: 'POST',
+    // A hung quote must not hold the command until the 90s bot timeout.
+    signal: AbortSignal.timeout(15_000),
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -90,6 +92,7 @@ export async function relayQuoteOut(
   try {
     const res = await fetch(RELAY_API, {
       method: 'POST',
+      signal: AbortSignal.timeout(15_000),
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         user: ctx.wallet.address,
@@ -655,6 +658,8 @@ export async function getBridgeQuote(
   };
   const res = await fetch(RELAY_API, {
     method: 'POST',
+    // A hung quote must not hold the command until the 90s bot timeout.
+    signal: AbortSignal.timeout(15_000),
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });

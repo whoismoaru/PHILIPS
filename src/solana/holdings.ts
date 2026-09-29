@@ -18,7 +18,7 @@ async function prices(mints: string[]): Promise<Map<string, { px: number; sym: s
   const out = new Map<string, { px: number; sym: string }>();
   // DexScreener takes 30 addresses per call.
   for (let i = 0; i < mints.length; i += 30) {
-    const res = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${mints.slice(i, i + 30).join(',')}`).catch(() => null);
+    const res = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${mints.slice(i, i + 30).join(',')}`, { signal: AbortSignal.timeout(8_000) }).catch(() => null);
     const pairs: any[] = res?.ok ? ((await res.json().catch(() => [])) as any[]) : [];
     // The deepest pair wins, so a thin scam pool cannot set the price.
     const best = new Map<string, { liq: number; px: number; sym: string }>();

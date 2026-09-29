@@ -36,16 +36,30 @@ export async function landInstructions(
   const conn = solConn();
   const user = Keypair.fromSeed(Buffer.from(kp.seed));
   const micro = Math.max(50_000, (await highPriorityMicro())?.micro ?? 0);
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
-  const message = new TransactionMessage({
-    payerKey: user.publicKey,
-    recentBlockhash: blockhash,
-    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: micro }), ...ixs],
-  }).compileToV0Message(alts);
-  const tx = new VersionedTransaction(message);
-  tx.sign([user]);
-  const raw = tx.serialize();
-  const sig = await conn.sendRawTransaction(raw, { maxRetries: 3 });
+  // A preflight "Blockhash not found" means a lagging node simulated it and nothing was
+  // forwarded, so a fresh hash and a resend cannot land twice (same fix as lp.ts).
+  let blockhash = '', lastValidBlockHeight = 0, raw: Uint8Array = new Uint8Array(), sig = '';
+  for (let i = 0; ; i++) {
+    ({ blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed'));
+    const message = new TransactionMessage({
+      payerKey: user.publicKey,
+      recentBlockhash: blockhash,
+      instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: micro }), ...ixs],
+    }).compileToV0Message(alts);
+    const tx = new VersionedTransaction(message);
+    tx.sign([user]);
+    raw = tx.serialize();
+    try {
+      sig = await conn.sendRawTransaction(raw, { maxRetries: 3 });
+      break;
+    } catch (e) {
+      if (i < 2 && /blockhash not found/i.test((e as Error).message)) {
+        await new Promise((r) => setTimeout(r, 1_500));
+        continue;
+      }
+      throw e;
+    }
+  }
   const b64 = Buffer.from(raw).toString('base64');
   broadcastOfficial(b64);
   const resend = setInterval(() => {

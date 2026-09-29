@@ -169,7 +169,16 @@ async function sendAndConfirm(signedBase64: string): Promise<string> {
 
 /** Quote -> transaction -> signature. Returns the confirmed signature. */
 export async function executeSwap(q: Quote, kp: SolKeypair): Promise<string> {
-  return sendAndConfirm(signTransaction(await buildSwap(q, kp.publicKey), kp));
+  for (let i = 0; ; i++) {
+    try {
+      return await sendAndConfirm(signTransaction(await buildSwap(q, kp.publicKey), kp));
+    } catch (e) {
+      // Preflight on a node behind the one Jupiter took the hash from (25 Sep 2026, 00:38).
+      // A rejected preflight forwarded nothing, so a freshly built transaction is safe.
+      if (i < 2 && /blockhash not found/i.test((e as Error).message)) continue;
+      throw e;
+    }
+  }
 }
 
 /** A wallet's SOL balance, in lamports. */
