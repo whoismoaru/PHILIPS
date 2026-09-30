@@ -26,9 +26,30 @@ const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)',
 ];
 
-const bal = (token: string, ctx: ChainCtx): Promise<bigint> =>
+const bal = (token: string, ctx: ChainCtx, blockTag?: number): Promise<bigint> =>
   new ethers.Contract(token, ['function balanceOf(address) view returns (uint256)'], ctx.provider)
-    .balanceOf(ctx.wallet.address) as Promise<bigint>;
+    .balanceOf(ctx.wallet.address, blockTag === undefined ? {} : { blockTag }) as Promise<bigint>;
+
+/**
+ * The balance AS OF the block the swap landed in. Read as "latest" right after the receipt,
+ * a node one block behind still shows the old balance: 30 Sep 2026, #7592391, a LI.FI swap
+ * that had landed was judged "did not reduce the input balance", the next routes then hit
+ * STF on an empty wallet, and only the recount noticed. A node that has not reached the
+ * block errors, so it is retried rather than trusted.
+ */
+async function balAfter(token: string, ctx: ChainCtx, txHashes: string[]): Promise<bigint> {
+  const last = txHashes[txHashes.length - 1];
+  for (let i = 0; ; i++) {
+    try {
+      const rc = last ? await ctx.provider.getTransactionReceipt(last) : null;
+      if (last && !rc) throw new Error(`no receipt yet for ${last}`);
+      return await bal(token, ctx, rc?.blockNumber ?? undefined);
+    } catch (e) {
+      if (i >= 5) throw e;
+      await new Promise((res) => setTimeout(res, 1_500));
+    }
+  }
+}
 
 // LI.FI is the PRIMARY router. It is used as long as its rate is no worse than the best
 // alternative by more than LIFI_TOL, and its quote arrives inside LIFI_TIMEOUT_MS. Worse
@@ -174,7 +195,7 @@ async function uniExec(
   });
   await tx.wait();
   txHashes.push(tx.hash);
-  const outWei = (await bal(toAddr, ctx)) - before;
+  const outWei = (await balAfter(toAddr, ctx, txHashes)) - before;
   return { outWei, txHashes };
 }
 
@@ -187,11 +208,11 @@ async function relayExec(
   const beforeFrom = await bal(fromAddr, ctx);
   const beforeTo = await bal(toAddr, ctx);
   const r = await swapTokenViaRelay(fromAddr, amountInWei, ethers.getAddress(toAddr), ctx);
-  const afterFrom = await bal(fromAddr, ctx);
+  const afterFrom = await balAfter(fromAddr, ctx, r.txHashes);
   if (beforeFrom - afterFrom < (amountInWei * 9n) / 10n) {
     throw new Error('relay did not reduce the input balance');
   }
-  const outWei = (await bal(toAddr, ctx)) - beforeTo;
+  const outWei = (await balAfter(toAddr, ctx, r.txHashes)) - beforeTo;
   return { outWei, txHashes: r.txHashes };
 }
 
@@ -205,11 +226,11 @@ async function lifiExec(
   const beforeFrom = await bal(fromAddr, ctx);
   const beforeTo = await bal(toAddr, ctx);
   const r = await swapViaLifi(fromAddr, toAddr, amountInWei, ctx, slipPct);
-  const afterFrom = await bal(fromAddr, ctx);
+  const afterFrom = await balAfter(fromAddr, ctx, r.txHashes);
   if (beforeFrom - afterFrom < (amountInWei * 9n) / 10n) {
     throw new Error('LI.FI did not reduce the input balance');
   }
-  const outWei = (await bal(toAddr, ctx)) - beforeTo;
+  const outWei = (await balAfter(toAddr, ctx, r.txHashes)) - beforeTo;
   return { outWei, txHashes: r.txHashes };
 }
 
