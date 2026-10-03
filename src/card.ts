@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs';
 
 const DEJAVU = '/usr/share/fonts/truetype/dejavu';
 let fontsReady = false;
-function ensureFonts() {
+export function ensureFonts() {
   if (fontsReady) return;
   const reg = (path: string, alias: string) => {
     try {

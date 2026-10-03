@@ -69,6 +69,7 @@ import {
 } from './uniswap.js';
 import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4StillOpen, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnerOf, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
+import * as chart from './chart.js';
 import * as pctPresets from './pctPresets.js';
 import { screenToken, formatScreen, bustScreenCache, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE, SLIP_MAX_PCT } from './relay.js';
@@ -1075,7 +1076,7 @@ async function buildPositionCard(
     // whichever protocol it sits on. Fees are harvested from /claim_fees, which covers
     // both protocols on every chain.
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`)],
+      [Markup.button.callback('🔄 Refresh', `back:card:${rec.tokenId}`), Markup.button.callback('📈 Chart', `cht:15m:${cc.key}:${rec.ca}`)],
       // Straight to the executor, no confirmation card -- the same shape as swap, bridge
       // and withdraw. `stop:` (which asks first) stays registered for older cards.
       [Markup.button.callback('⛔ Close Position', `close:${rec.tokenId}`)],
@@ -1551,7 +1552,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
   const extra = {
     ...html,
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('🔄 Refresh', `posv4:${p.tokenId}`)],
+      [Markup.button.callback('🔄 Refresh', `posv4:${p.tokenId}`), ...v4ChartBtn(p, cc)],
       // Straight to the executor, as on the v3 card. `closev4:` still asks, for older cards.
       [Markup.button.callback('⛔ Close Position', `closev4go:${p.tokenId}`)],
       [Markup.button.callback('🎯 Take Profit', `tp:v4:${p.tokenId}`)],
@@ -7111,6 +7112,52 @@ async function v4ChainOf(tokenId: string): Promise<ReturnType<typeof getChain> |
   }
   return undefined;
 }
+
+// ── Chart button on the position cards ──────────────────────────────────────
+/** The v4 pair's non-base side; [] when it cannot tell (no button beats a wrong chart). */
+function v4ChartBtn(p: V4Position, cc: ChainCtx) {
+  const bases = new Set([ethers.ZeroAddress, ...basesFor(cc).map((b) => b.address)].map((a) => a.toLowerCase()));
+  const tok = [p.poolKey.currency0, p.poolKey.currency1].filter((a) => !bases.has(a.toLowerCase()));
+  return tok.length === 1 ? [Markup.button.callback('📈 Chart', `cht:15m:${cc.key}:${tok[0]}`)] : [];
+}
+
+const chartBusy = new Set<number>();
+// 'cht:' + tf + chain key + a 42-char address stays under Telegram's 64 bytes.
+bot.action(/^cht:(5m|15m|1h|4h|1d):(\w+):(\w+)$/, async (ctx) => {
+  const [, tf, chain, ca] = ctx.match as unknown as [string, chart.Tf, string, string];
+  const chatId = ctx.chat?.id ?? 0;
+  if (chartBusy.has(chatId)) return ctx.answerCbQuery('Loading…').catch(() => {});
+  chartBusy.add(chatId);
+  await ctx.answerCbQuery('Loading chart…').catch(() => {});
+  try {
+    const d = await chart.fetchCandles(chain, ca, tf);
+    if (!d) return void (await ctx.reply('🟡 Chart unavailable. GeckoTerminal has no data yet, try again in a minute.', html));
+    const sym = d.poolName.split(' / ')[0] || ca.slice(0, 6);
+    const png = chart.renderChart(d, `$${sym}`, tf);
+    const kb = Markup.inlineKeyboard([
+      (Object.keys(chart.TIMEFRAMES) as chart.Tf[]).map((t) => Markup.button.callback(t === tf ? `• ${t}` : t, `cht:${t}:${chain}:${ca}`)),
+      [Markup.button.callback('✖ Close', 'chtx')],
+    ]);
+    const caption = `📈 <b>$${msg.esc(sym)}</b> · ${msg.esc(tf)}\n<i>${new Date().toISOString().slice(11, 16)} UTC</i>`;
+    // Timeframe taps come from the chart itself: swap the image in place, no new bubble.
+    if ((ctx.callbackQuery as any)?.message?.photo) {
+      await ctx.editMessageMedia({ type: 'photo', media: { source: png }, caption, parse_mode: 'HTML' }, kb).catch((e) => {
+        if (!/not modified/i.test(e.message)) throw e;
+      });
+    } else {
+      await ctx.replyWithPhoto(Input.fromBuffer(png, 'chart.png'), { caption, ...html, ...kb });
+    }
+  } catch (e) {
+    console.error('[chart]', (e as Error).message);
+    await ctx.reply('❌ Chart failed to load. Tap Chart again.', html).catch(() => {});
+  } finally {
+    chartBusy.delete(chatId);
+  }
+});
+bot.action('chtx', async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await ctx.deleteMessage().catch(() => {});
+});
 
 bot.action(/^posv4:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();

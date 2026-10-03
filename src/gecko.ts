@@ -28,7 +28,7 @@ const MAX_V4_KEYS = 8;
 let benchedUntil = 0;
 const cache = new Map<string, { t: number; v: any }>();
 
-async function get(path: string): Promise<any | null> {
+export async function get(path: string): Promise<any | null> {
   const hit = cache.get(path);
   if (hit && Date.now() - hit.t < CACHE_MS) return hit.v;
   if (Date.now() < benchedUntil) return null;
