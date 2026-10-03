@@ -1,7 +1,7 @@
 /**
  * Price chart for an open position: GeckoTerminal candles, drawn to a PNG.
  *
- * Charts the TOKEN, not the position's own pool: GeckoTerminal is asked for the token's
+ * Drawn as MARKET CAP (the unit the cards use). Charts the TOKEN, not the position's own pool: GeckoTerminal is asked for the token's
  * deepest pool and its candles priced in USD. One path for v3, v4 and any chain the
  * index covers, with no pool address to store. Free, no key; gecko.get carries the
  * 429 bench, so a rate-limited tap answers "try again" instead of hammering.
@@ -30,11 +30,25 @@ export async function fetchCandles(chain: string, token: string, tf: Tf): Promis
   const pool = String(top.attributes?.address ?? top.id.split('_').pop());
   const [unit, agg] = TIMEFRAMES[tf];
   const r = await get(`/networks/${net}/pools/${pool}/ohlcv/${unit}?aggregate=${agg}&limit=96&currency=usd&token=${token}`);
-  const list: Candle[] = (r?.data?.attributes?.ohlcv_list ?? []).map((x: number[]) => x.map(Number)).reverse();
-  return list.length >= 2 ? { candles: list, poolName: String(top.attributes?.name ?? '') } : null;
+  let list: Candle[] = (r?.data?.attributes?.ohlcv_list ?? []).map((x: number[]) => x.map(Number)).reverse();
+  if (list.length < 2) return null;
+  // Market cap scales linearly with price (supply is fixed), so the candles are rescaled
+  // by mcap/price. Real mcap first, FDV when the index has no circulating figure.
+  const t = (await get(`/networks/${net}/tokens/${token}`))?.data?.attributes;
+  const mc = Number(t?.market_cap_usd) || Number(t?.fdv_usd);
+  const px = Number(t?.price_usd);
+  if (!(mc > 0 && px > 0)) return null;
+  const k = mc / px;
+  list = list.map(([ts, o, h, l, c, v]) => [ts, o * k, h * k, l * k, c * k, v]);
+  return { candles: list, poolName: String(top.attributes?.name ?? '') };
 }
 
-const fmtPrice = (p: number): string => (p >= 1 ? p.toFixed(p >= 1000 ? 0 : 2) : p.toPrecision(4));
+/** $1.23M / $456K / $2.1B: the candles are market cap, not price. */
+const fmtPrice = (v: number): string => {
+  const [d, u] = v >= 1e9 ? [1e9, 'B'] : v >= 1e6 ? [1e6, 'M'] : v >= 1e3 ? [1e3, 'K'] : [1, ''];
+  const x = v / d;
+  return `${x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2)}${u}`;
+};
 
 /** The LP range as % from the current price (the card's own figures): upper and lower edge. */
 export type RangePct = { hi: number; lo: number };
@@ -98,7 +112,7 @@ export function renderChart(d: ChartData, title: string, tf: Tf, range?: RangePc
       g.lineTo(W - padR, yy[i]);
       g.stroke();
       g.lineWidth = 1;
-      const tag = `${i ? 'LOW' : 'HIGH'} $${fmtPrice(edges[i])} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)${pinned ? (i ? ' ↓' : ' ↑') : ''}`;
+      const tag = `${i ? 'LOW' : 'HIGH'} MC $${fmtPrice(edges[i])} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)${pinned ? (i ? ' ↓' : ' ↑') : ''}`;
       g.fillText(tag, padL + 8, yy[i] + (i ? -8 : 22));
     });
   }
@@ -123,7 +137,7 @@ export function renderChart(d: ChartData, title: string, tf: Tf, range?: RangePc
   g.textAlign = 'right';
   g.font = '34px PhSansB';
   g.fillStyle = tone;
-  g.fillText(`$${fmtPrice(last)}  ${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%`, W - 30, 50);
+  g.fillText(`MC $${fmtPrice(last)}  ${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%`, W - 30, 50);
   g.font = '18px PhMono';
   g.fillStyle = C.muted;
   g.fillText('GeckoTerminal', W - 30, H - 16);
