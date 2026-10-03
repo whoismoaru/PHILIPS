@@ -169,6 +169,23 @@ const HOLDINGS_CAND_MAX = 20;
  * keeping a bag. The side effect — a spot bag of the same token gets sold too — is
  * documented in the README.
  */
+/**
+ * Wait until the RPC answering reads has the block holding `hash` (a FallbackProvider can
+ * route a read to a member a block behind). Replaces fixed 1.5s "settle" sleeps: usually
+ * one round trip, capped at 2s so a slow RPC never costs more than the old sleep did.
+ */
+async function settled(cc: ChainCtx, hash: string | undefined): Promise<void> {
+  if (!hash) return void (await sleep(1500));
+  const until = Date.now() + 2000;
+  while (Date.now() < until) {
+    const rc = await cc.provider.getTransactionReceipt(hash).catch(() => null);
+    if (rc && (await cc.provider.getBlockNumber().catch(() => 0)) >= rc.blockNumber) return;
+    await sleep(250);
+  }
+}
+/** The last tx hash written into a step's notes ("... (tx 0xabc…)"). */
+const lastTx = (notes: string[]): string | undefined => notes.join(' ').match(/0x[0-9a-fA-F]{64}/g)?.pop();
+
 async function sweepTokenToBase(
   otherAddr: string,
   otherC: ethers.Contract,
@@ -225,7 +242,7 @@ async function sweepTokenToBase(
       if (landed) continue; // the token moved, so measure again on the next pass
       break;
     }
-    await sleep(1500); // give the balance time to settle on the RPC before re-checking
+    await settled(cc, txHashes[txHashes.length - 1]); // the RPC must see the swap before the balance re-check
   }
   const finalTotal: bigint = await otherC.balanceOf(cc.wallet.address);
   const leftoverWei = finalTotal > keepFloor ? finalTotal - keepFloor : 0n;
@@ -6639,17 +6656,16 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
     const otherAddr = base.address.toLowerCase() === p.token0.toLowerCase() ? p.token1 : p.token0;
     const otherC = new ethers.Contract(otherAddr, ERC20_ABI, cc.wallet);
     const baseC = base.wrappable ? cc.weth : new ethers.Contract(base.address, ERC20_ABI, cc.wallet);
-    const baseBefore: bigint = await baseC.balanceOf(cc.wallet.address);
-    const otherBefore: bigint = await otherC.balanceOf(cc.wallet.address).catch(() => 0n);
-
-    await ctx.editMessageText(msg.msgProgress(`closing ${legs.length}-leg ladder (batched)…`), html);
-    const notes: string[] = [];
+    // Balances, fees and the progress edit all run at once: none depends on another.
     // Fees are read BEFORE the burn: afterwards they have merged into the cash-out proceeds.
-    const feesWei = (
-      await Promise.all(
-        tokenIds.map((id) => getPositionDetail(id, cc).then((dd) => dd.feesBaseWei).catch(() => 0n)),
-      )
-    ).reduce((a, b) => a + b, 0n);
+    const [baseBefore, otherBefore, feeList] = await Promise.all([
+      baseC.balanceOf(cc.wallet.address) as Promise<bigint>,
+      (otherC.balanceOf(cc.wallet.address) as Promise<bigint>).catch(() => 0n),
+      Promise.all(tokenIds.map((id) => getPositionDetail(id, cc).then((dd) => dd.feesBaseWei).catch(() => 0n))),
+      ctx.editMessageText(msg.msgProgress(`closing ${legs.length}-leg ladder (batched)…`), html).catch(() => {}),
+    ]);
+    const notes: string[] = [];
+    const feesWei = feeList.reduce((a, b) => a + b, 0n);
     notes.push(...(await executeRemoveBatch(tokenIds, cc)).notes);
     // No withdrawal tx sent means nothing was closed. Carrying on to finalisation would
     // mark LIVE positions as closed and then delete their records — exactly what happened
@@ -6659,7 +6675,7 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
         'No withdrawal transaction was sent, so nothing was closed. Your positions are untouched. Try again.',
       );
     }
-    await sleep(1500);
+    await settled(cc, lastTx(notes));
     const sw = await sweepTokenToBase(otherAddr, otherC, base, cc, notes, otherBefore).catch(() => ({
       baseOut: 0n,
       txHashes: [] as string[],
@@ -6974,6 +6990,12 @@ async function stopAndCashOut(
   cc: ChainCtx = getChain(),
 ): Promise<{ text: string; baseOutWei: bigint; leftover: boolean; leftoverWei: bigint; feesBaseWei?: bigint }> {
   const { positionManager: pm, weth: wethC, wallet: w } = cc;
+  // Unclaimed fees are READ BEFORE the burn: afterwards the position is gone and the fees
+  // have merged into the cash-out proceeds, never to be separated. A failed read is not
+  // close: the card merely loses one box. Started now, alongside the other pre-burn reads.
+  const feesP = getPositionDetail(tokenId, cc)
+    .then((d) => d.feesBaseWei)
+    .catch(() => undefined);
   const p = await pm.positions(tokenId);
   // A pool with no base we recognise (an imported TOKENA/TOKENB, say) has no two-sided
   // cash-out route. Falling back to WETH would burn the position, then miscalculate
@@ -6988,21 +7010,17 @@ async function stopAndCashOut(
   const otherAddr = base.address.toLowerCase() === p.token0.toLowerCase() ? p.token1 : p.token0;
   const otherC = new ethers.Contract(otherAddr, ERC20_ABI, w);
   const baseC = base.wrappable ? wethC : new ethers.Contract(base.address, ERC20_ABI, w);
-  const baseBefore: bigint = await baseC.balanceOf(w.address);
   // The token balance BEFORE the burn is any spot bag you hold separately. The cash-out may
   // only sell what THIS position produced (the delta above it), never your bag.
-  const otherBefore: bigint = await otherC.balanceOf(w.address).catch(() => 0n);
-
-  // Unclaimed fees are READ BEFORE the burn: afterwards the position is gone and the fees
-  // have merged into the cash-out proceeds, never to be separated. A failed read is not
-  // close: the card merely loses one box.
-  const feesBaseWei = await getPositionDetail(tokenId, cc)
-    .then((d) => d.feesBaseWei)
-    .catch(() => undefined);
+  const [baseBefore, otherBefore, feesBaseWei] = await Promise.all([
+    baseC.balanceOf(w.address) as Promise<bigint>,
+    (otherC.balanceOf(w.address) as Promise<bigint>).catch(() => 0n),
+    feesP,
+  ]);
 
   const notes: string[] = [];
   notes.push(...(await executeRemove(tokenId, cc)).notes);
-  await sleep(1500); // give the collect time to settle before reading the balance
+  await settled(cc, lastTx(notes)); // the collect must be visible before reading the balance
 
   const txHashes: string[] = [];
   // (1) Swap the position's token proceeds (above the old bag) to base, repeating until

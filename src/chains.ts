@@ -392,12 +392,19 @@ function basesOf(d: Def): BaseAsset[] {
   return out;
 }
 
+/**
+ * How often tx.wait() asks for the receipt. ethers' default is 4s, which cost up to 4s per
+ * step on chains with sub-second blocks (a close waits 2-3 times). Polling only runs while
+ * something is waiting: the bot keeps no permanent block listener.
+ */
+const POLL_MS = 500;
+
 function build(key: string, d: Def): ChainCtx {
   // staticNetwork: we already know the chainId, so do not spend a round-trip
   // detecting it. batchMaxCount 1: public BSC RPCs reject batched JSON-RPC and
   // ethers batches by default, which failed every read at once ("failed to detect
   // network").
-  const jsonOpts = { staticNetwork: true, ...(d.noBatch ? { batchMaxCount: 1 } : {}) };
+  const jsonOpts = { staticNetwork: true, pollingInterval: POLL_MS, ...(d.noBatch ? { batchMaxCount: 1 } : {}) };
   const mkJson = (url: string) => new ethers.JsonRpcProvider(url, d.chainId, jsonOpts);
   // One RPC gives a plain JsonRpcProvider. With a backup it becomes a
   // FallbackProvider: the primary (priority 1) is used while healthy; on a
@@ -422,7 +429,7 @@ function build(key: string, d: Def): ChainCtx {
             ...d.fallbackRpc.map((u, i) => ({ provider: mkMember(u), priority: 2 + i, stallTimeout: 1500, weight: 1 })),
           ],
           d.chainId,
-          { quorum: 1 },
+          { quorum: 1, pollingInterval: POLL_MS },
         )
       : mkJson(d.rpc);
 
