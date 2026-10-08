@@ -69,7 +69,6 @@ import {
 } from './uniswap.js';
 import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4StillOpen, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnerOf, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
-import * as chart from './chart.js';
 import * as pctPresets from './pctPresets.js';
 import { screenToken, formatScreen, bustScreenCache, getEthUsd, getTokenEthPrice } from './screening.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust, NATIVE, SLIP_MAX_PCT } from './relay.js';
@@ -888,7 +887,6 @@ async function buildPositionCard(
     if (now > 0) {
       const pf = (p: string) => (Number(p) / now - 1) * 100;
       const [a, b] = [pf(d.priceUpper), pf(d.priceLower)].sort((x, y) => y - x);
-      chartSpecs.set(rec.tokenId, { chain: ctxOf(rec).key, ca: rec.ca, sym: rec.symbol, range: { hi: a, lo: b } });
       return `${msg.fmtPct(a)} ⇄ ${msg.fmtPct(b)}`;
     }
     // The live price is unreadable, so use the tick (same source, different path).
@@ -1241,11 +1239,6 @@ function v4Kind(cc: ChainCtx, base: 'ETH' | 'USDG' | null): store.PosRecord['bas
 }
 
 async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain()): Promise<{ text: string; extra: Record<string, unknown> }> {
-  {
-    const tok = v4TokenOf(p, cc);
-    if (tok && p.rangePctHigh !== null && p.rangePctLow !== null)
-      chartSpecs.set(p.tokenId, { chain: cc.key, ca: tok, sym: tok.toLowerCase() === p.poolKey.currency0.toLowerCase() ? p.sym0 : p.sym1, range: { hi: p.rangePctHigh, lo: p.rangePctLow } });
-  }
   const tracked0 = v4store.getV4(p.tokenId);
   const feeLabel = p.dynamicFee ? 'dynamic' : `${(p.fee / 10000).toFixed(p.fee % 100 ? 2 : 0)}%`;
   const dec = v4BaseDecimals(cc, p.base);
@@ -2184,7 +2177,6 @@ bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
   if (rec) {
     try {
       const c = await buildPositionCard(rec);
-      await sendPositionChart(ctx, id);
       return ctx.reply(c.text, c.extra);
     } catch (e) {
       return ctx.reply(msg.msgError('detail', (e as Error).message), html);
@@ -2203,7 +2195,6 @@ bot.action(/^pos_detail_(\d+)$/, async (ctx) => {
     const { cc, p } = found;
     const ethUsdV4 = p.base === 'ETH' ? await getEthUsd(cc.wethAddress, cc).catch(() => null) : null;
     const c = await buildV4Card(p, ethUsdV4, cc);
-    await sendPositionChart(ctx, id);
     return ctx.reply(c.text, c.extra);
   } catch (e) {
     return ctx.reply(msg.msgError('detail', (e as Error).message), html);
@@ -7138,61 +7129,6 @@ async function v4ChainOf(tokenId: string): Promise<ReturnType<typeof getChain> |
   }
   return undefined;
 }
-
-// ── Position chart: sent with the card when a position is opened from the list ──
-/** The v4 pair's non-base side; null when it cannot tell (no chart beats a wrong chart). */
-function v4TokenOf(p: V4Position, cc: ChainCtx): string | null {
-  const bases = new Set([ethers.ZeroAddress, ...basesFor(cc).map((b) => b.address)].map((a) => a.toLowerCase()));
-  const tok = [p.poolKey.currency0, p.poolKey.currency1].filter((a) => !bases.has(a.toLowerCase()));
-  return tok.length === 1 ? tok[0] : null;
-}
-
-/** Filled by the card builders, so the chart draws the same range the card states. */
-const chartSpecs = new Map<string, { chain: string; ca: string; sym: string; range: chart.RangePct }>();
-const chartBusy = new Set<number>();
-
-async function chartPhoto(tokenId: string, tf: chart.Tf) {
-  const sp = chartSpecs.get(tokenId);
-  if (!sp) return null;
-  const d = await chart.fetchCandles(sp.chain, sp.ca, tf);
-  if (!d) return null;
-  const png = chart.renderChart(d, `$${sp.sym}`, tf, sp.range);
-  const kb = Markup.inlineKeyboard([
-    (Object.keys(chart.TIMEFRAMES) as chart.Tf[]).map((t) => Markup.button.callback(t === tf ? `• ${t}` : t, `cht:${t}:${tokenId}`)),
-  ]);
-  const caption = `📈 <b>$${msg.esc(sp.sym)}</b> · #${msg.esc(tokenId)} · ${tf}\n<i>lines = your range · ${new Date().toISOString().slice(11, 16)} UTC</i>`;
-  return { png, kb, caption };
-}
-
-/** Chart above the card. Never throws: a missing chart must not cost the card. */
-async function sendPositionChart(ctx: any, tokenId: string) {
-  try {
-    const c = await chartPhoto(tokenId, '15m');
-    if (c) await ctx.replyWithPhoto(Input.fromBuffer(c.png, 'chart.png'), { caption: c.caption, ...html, ...c.kb });
-  } catch (e) {
-    console.error('[chart]', (e as Error).message);
-  }
-}
-
-// Timeframe taps swap the image in place, no new bubble.
-bot.action(/^cht:(5m|15m|1h|4h|1d):(\d+)$/, async (ctx) => {
-  const tf = ctx.match[1] as chart.Tf;
-  const chatId = ctx.chat?.id ?? 0;
-  if (chartBusy.has(chatId)) return ctx.answerCbQuery('Loading…').catch(() => {});
-  chartBusy.add(chatId);
-  await ctx.answerCbQuery('Loading chart…').catch(() => {});
-  try {
-    const c = await chartPhoto(ctx.match[2], tf);
-    if (!c) return void (await ctx.answerCbQuery('Chart unavailable. Open the position again.').catch(() => {}));
-    await ctx.editMessageMedia({ type: 'photo', media: { source: c.png }, caption: c.caption, parse_mode: 'HTML' }, c.kb).catch((e) => {
-      if (!/not modified/i.test(e.message)) throw e;
-    });
-  } catch (e) {
-    console.error('[chart]', (e as Error).message);
-  } finally {
-    chartBusy.delete(chatId);
-  }
-});
 
 bot.action(/^posv4:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
