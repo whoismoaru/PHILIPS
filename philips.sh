@@ -31,12 +31,21 @@ ask() { # ask "Question" "default" -> the answer lands in $REPLY_VAL
 function install_node() {
   if command -v node >/dev/null 2>&1; then
     local v; v="$(node -v | sed 's/v//;s/\..*//')"
-    if [ "$v" -ge 20 ]; then ok "Node $(node -v) is already here, skipping."; return; fi
+    if [ "$v" -ge 20 ]; then
+      # Ubuntu's own nodejs package ships WITHOUT npm, and npm ci is the next step.
+      if ! command -v npm >/dev/null 2>&1; then
+        info "Node $(node -v) is here but npm is not, installing npm..."
+        sudo apt-get install -y npm
+        command -v npm >/dev/null 2>&1 || { warn "npm could not be installed. Run: sudo apt install npm"; return 1; }
+      fi
+      ok "Node $(node -v) is already here, skipping."; return
+    fi
     warn "Node $(node -v) is too old; PHILIPS needs 20 or newer."
   fi
   info "Installing Node.js 20..."
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt-get install -y nodejs
+  command -v npm >/dev/null 2>&1 || { warn "npm is missing after the Node install. Run: sudo apt install npm"; return 1; }
   ok "Node $(node -v) installed."
 }
 
