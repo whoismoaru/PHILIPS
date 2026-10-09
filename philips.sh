@@ -71,10 +71,16 @@ function clone_repo() {
     git -C "$APP_DIR" pull --ff-only || warn "pull skipped: there are local changes."
   else
     info "Downloading PHILIPS into $APP_DIR..."
-    git clone "$REPO" "$APP_DIR"
+    git clone "$REPO" "$APP_DIR" || { warn "Download failed. Check the network, then run this again."; return 1; }
   fi
   info "Installing dependencies (this takes a minute or two)..."
-  ( cd "$APP_DIR" && npm ci --include=dev )  # tsx is a devDependency and ExecStart runs it
+  # Checked by hand: the menu calls this under `|| true`, which turns set -e off, so a failed
+  # npm ci used to fall through to "Code ready." and a service whose tsx did not exist.
+  if ! ( cd "$APP_DIR" && npm ci --include=dev ); then  # tsx is a devDependency and ExecStart runs it
+    warn "npm install failed (see the error above). Low RAM? Add swap, then run this again."
+    return 1
+  fi
+  [ -x "$APP_DIR/node_modules/.bin/tsx" ] || { warn "tsx is missing after install. Run this again."; return 1; }
   ok "Code ready."
 }
 
