@@ -7550,7 +7550,12 @@ async function handleLimitReply(ctx: any, raw: string): Promise<boolean> {
       await ctx.reply(msg.msgLimitInvalid(`Type the target market cap, then the amount in ${d.order.unit}. For example: 500K 100`), html);
       return true;
     }
-    const o = limits.add({ ...d.order, targetMcap: target, amount, dir: now !== null && target > now ? 'above' : 'below' });
+    // An entry buys the dip: it only ever waits for mcap to FALL to the target.
+    if (now !== null && target >= now) {
+      await ctx.reply(msg.msgLimitInvalid(`An entry waits for a dip. Pick a target below the current mcap (${msg.usdCompact(now)}).`), html);
+      return true;
+    }
+    const o = limits.add({ ...d.order, targetMcap: target, amount, dir: 'below' });
     limitDrafts.delete(ctx.from.id);
     await ctx.reply(msg.msgLimitSaved(o, now), { ...html, ...Markup.inlineKeyboard([limitsKbRow()]) });
     return true;

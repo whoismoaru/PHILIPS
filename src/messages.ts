@@ -2903,7 +2903,7 @@ export function msgLimitAsk(o: { kind: 'entry' | 'tp'; label: string; range?: nu
     '',
     note(o.kind === 'tp'
       ? 'mcap is checked every 5s, PnL every 30s. PnL reads the card figure; the swap back can shave 1-3% on a thin pool.'
-      : 'the bot checks every 5 seconds and runs it for you when the target is crossed.'),
+      : 'the target must be below the current mcap. The bot checks every 5 seconds and enters when mcap falls to it.'),
   ].join('\n');
 }
 
