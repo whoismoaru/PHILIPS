@@ -22,12 +22,12 @@ assert.equal(LIFI_TOL, 0.015, 'the tolerance changed by accident');
 
 console.log('ok: LI.FI-first route selection holds in every case');
 
-// Slippage band: every swap steps 1% -> 2% -> 3%, and 3 is a ceiling nobody escapes.
+// Slippage band: every swap steps 1% -> 3% -> 5% -> 10%, and 10 is a ceiling nobody escapes.
 import { slipLadder, SLIP_MAX_PCT } from '../src/relay.js';
-assert.deepEqual(slipLadder(), [1, 2, 3], 'the default ladder is 1-3%');
-assert.deepEqual(slipLadder(3), [1, 2, 3], 'cap 3 = tangga penuh');
-assert.deepEqual(slipLadder(2), [1, 2], 'a cap of 2 stops at 2%');
+assert.deepEqual(slipLadder(), [1, 3, 5, 10], 'the default ladder is 1-10%');
+assert.deepEqual(slipLadder(10), [1, 3, 5, 10], 'cap 10 = tangga penuh');
+assert.deepEqual(slipLadder(3), [1, 3], 'a cap of 3 stops at 3%');
 assert.deepEqual(slipLadder(1), [1], 'a cap of 1 gives only 1%');
-assert.deepEqual(slipLadder(15), [1, 2, 3], 'a request for 15% is clamped to 3%');
-assert.equal(SLIP_MAX_PCT, 3, 'the slippage ceiling changed by accident');
-console.log('ok: slippage stays locked to the 1-3% band even when the caller asks for more');
+assert.deepEqual(slipLadder(15), [1, 3, 5, 10], 'a request for 15% is clamped to 10%');
+assert.equal(SLIP_MAX_PCT, 10, 'the slippage ceiling changed by accident');
+console.log('ok: slippage stays locked to the 1-10% band even when the caller asks for more');

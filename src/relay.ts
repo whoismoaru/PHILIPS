@@ -180,9 +180,10 @@ const QUOTER_ABI = [
 ];
 
 /**
- * The slippage band for EVERY swap the bot sends: start at 1%, step to 2%, then 3%,
- * and never past it. 3 is a hard ceiling -- a caller asking for more is clamped down,
- * not honoured. This replaced a 5%-then-15% ladder that close and sweep used
+ * The slippage band for EVERY swap the bot sends: start at 1%, step to 3%, 5%, then 10%,
+ * and never past it. 10 is a hard ceiling -- a caller asking for more is clamped down,
+ * not honoured. Raised from 3 on 11 Oct 2026 (owner's call): at 3% a fast token stayed
+ * in the wallet after a close and kept falling. The 3% ceiling had replaced a 5%-then-15% ladder that close and sweep used
  * uncapped, on the reasoning that a failed sell means a stuck token; the trade is
  * deliberate, a swap that will not fill inside 3% now fails and is retried later
  * rather than filling 15% down.
@@ -190,10 +191,10 @@ const QUOTER_ABI = [
  * Relay is left out of this: its own default is already 1% (verified 2 Aug 2026 -- sending
  * slippageTolerance=300 actually loosened it to 3%), so it is left alone.
  */
-export const SLIP_MAX_PCT = 3;
+export const SLIP_MAX_PCT = 10;
 export function slipLadder(max: number = SLIP_MAX_PCT): number[] {
   const cap = Math.min(max, SLIP_MAX_PCT);
-  return [...new Set([1, 2, 3].map((s) => Math.min(s, cap)))].filter((s) => s > 0);
+  return [...new Set([1, 3, 5, 10].map((s) => Math.min(s, cap)))].filter((s) => s > 0);
 }
 
 /** Fallback: swap the token straight into WETH through Uniswap's SwapRouter02, on the deepest pool. */

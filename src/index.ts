@@ -4231,6 +4231,8 @@ registerFlowReset((uid) => solBuyFlows.delete(uid));
 const SOL_RESERVE_LAMPORTS = 10_000_000n;
 /** 3%, which is what a DLMM-era token actually needs. Not yet adjustable from /settings. */
 const SOL_SLIPPAGE_BPS = 300;
+/** Sell retries (close, sweep) widen step by step, never past 10% -- same ceiling as SLIP_MAX_PCT on EVM. */
+const SOL_SLIP_LADDER = [300, 500, 800, 1000];
 
 const fmtSol = (lamports: bigint): string => (Number(lamports) / jupiter.LAMPORTS).toFixed(4);
 
@@ -5775,7 +5777,7 @@ function solSweepLater(chatId: number, mint: string, amount: bigint, position: s
     if (!kp) return;
     tries++;
     try {
-      const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+      const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIP_LADDER[Math.min(tries - 1, 3)]);
       const before = await solLamports(kp);
       await jupiter.executeSwap(q, kp);
       const out = (await solArrived(kp, before)) ?? BigInt(q.outAmount);
@@ -5942,7 +5944,7 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
             // tokens yet (COLLECT, 25 Sep 2026: 4 tries failed, the same swap passed 7s
             // later). So the wallet is polled until the tokens show, and never asked for more.
             amount = await splSeen(kp, mint, amount);
-            const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIPPAGE_BPS);
+            const q = await jupiter.quote(mint, jupiter.WSOL, amount, SOL_SLIP_LADDER[Math.min(i, 3)]);
             const before = await solLamports(kp);
             sigs.push(await jupiter.executeSwap(q, kp));
             notes.push(`Swap: ${what} → SOL via Jupiter`);
