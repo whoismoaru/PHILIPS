@@ -173,7 +173,7 @@ export async function lifiBridgeQuote(
     fromAmount: amountWei.toString(),
     fromAddress: from.wallet.address,
     toAddress: from.wallet.address,
-    slippage: String(SLIP_MAX_PCT / 100),
+    slippage: String(3 / 100), // bridges stay at 3%: the 10% swap ceiling is for stuck sells, not cross-chain transfers
     // FASTEST, not the default RECOMMENDED. Measured Base -> Arc on 16 Sep 2026: the
     // recommended route (polymerStandard) takes 1080 seconds and delivers 49.8750 of a $50
     // transfer; the fastest (polymer) takes 10 seconds and delivers 49.8684. Six tenths of
