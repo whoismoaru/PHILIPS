@@ -805,6 +805,9 @@ export async function tokenMarketCap(ctx: ChainCtx, token: string): Promise<numb
       let bestLiq = -1;
       for (const p of j?.pairs ?? []) {
         if (p?.chainId !== ctx.dexKey) continue;
+        // marketCap/fdv belong to the pair's BASE token; a pair quoted in this token describes
+        // the other token (see classifyPairs in solana/pools.ts).
+        if (String(p?.baseToken?.address ?? '').toLowerCase() !== token.toLowerCase()) continue;
         const n = Number(p?.marketCap ?? p?.fdv ?? NaN);
         const liq = Number(p?.liquidity?.usd ?? 0);
         if (Number.isFinite(n) && n > 0 && n < 1e13 && liq > bestLiq) {

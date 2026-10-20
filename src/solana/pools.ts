@@ -107,14 +107,21 @@ export function classifyPairs(mint: string, allPairs: any[]): Classified {
     (a, b) => Number(b?.liquidity?.usd ?? 0) - Number(a?.liquidity?.usd ?? 0),
   )[0];
   const tok = deepest?.baseToken?.address === mint ? deepest?.baseToken : deepest?.quoteToken;
+  // DexScreener's priceUsd, priceNative, marketCap and fdv describe a pair's BASE token. Where the
+  // token is the QUOTE side (CHARIZARD/Pokemon, 2026-10-20) they belong to the other token:
+  // Pokemon read $303K against a real $1.78M and a limit entry fired on it. So price and market
+  // cap come only from the deepest pair that has the token as its base; none means unknown.
+  const priced = [...pairs]
+    .filter((p) => p?.baseToken?.address === mint)
+    .sort((a, b) => Number(b?.liquidity?.usd ?? 0) - Number(a?.liquidity?.usd ?? 0))[0];
   const facts: SolTokenFacts = {
     mint,
     name: String(tok?.name ?? '?'),
     symbol: String(tok?.symbol ?? '?'),
-    priceUsd: deepest?.priceUsd ?? null,
-    priceNative: deepest?.priceNative ?? null,
-    quoteMint: deepest?.quoteToken?.address ?? null,
-    marketCapUsd: Number(deepest?.marketCap ?? deepest?.fdv ?? 0) || null,
+    priceUsd: priced?.priceUsd ?? null,
+    priceNative: priced?.priceNative ?? null,
+    quoteMint: priced?.quoteToken?.address ?? null,
+    marketCapUsd: Number(priced?.marketCap ?? priced?.fdv ?? 0) || null,
     liquidityUsd: Number(deepest?.liquidity?.usd ?? 0) || null,
     volume24h: Number(deepest?.volume?.h24 ?? 0) || null,
     buys24h: Number(deepest?.txns?.h24?.buys ?? 0) || null,
