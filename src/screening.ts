@@ -317,8 +317,11 @@ export async function screenToken(
     volume24h = sum((x) => x.volume?.h24);
     buys24h = sum((x) => x.txns?.h24?.buys);
     sells24h = sum((x) => x.txns?.h24?.sells);
-    priceUsd = p.priceUsd ?? null;
-    marketCapUsd = p.marketCap ?? p.fdv ?? null;
+    // Price and market cap from the deepest pair with this token as its BASE: DexScreener's
+    // figures describe the base token, so a pair quoted in this token prices the other one.
+    const pb = pairs.find((x) => (x.baseToken?.address || '').toLowerCase() === addr.toLowerCase());
+    priceUsd = pb?.priceUsd ?? null;
+    marketCapUsd = pb?.marketCap ?? pb?.fdv ?? null;
     if (p.pairCreatedAt) pairAgeHours = (Date.now() - p.pairCreatedAt) / 3_600_000;
 
     if (liquidityUsd !== null && liquidityUsd < 2000)
