@@ -100,3 +100,49 @@ export function withdrawFloors(
     min1: floor(smaller(lower.amount1, upper.amount1)),
   };
 }
+
+/**
+ * Where a single-sided base range sits, in ticks: `near` is the edge closest to the price,
+ * `far` the edge furthest from it. The base as token0 puts the range ABOVE the current
+ * tick (a rising tick is a falling token price), the base as token1 puts it BELOW.
+ *
+ * Without `target` the near edge is flush against the current price: the first spacing
+ * multiple strictly past it. With `target` (a limit entry: the target price as a raw tick,
+ * see tickAtRatio) the range hangs from the target as if the price were already there, so
+ * the position starts buying only at the target. Both edges are fixed by the target, which
+ * is what keeps a limit from being dragged: if the price has already passed the target the
+ * near edge falls back to flush, but the far edge stays `width` past the target.
+ */
+export function rangeEdges(
+  current: number,
+  spacing: number,
+  baseIsToken0: boolean,
+  width: number,
+  target?: number,
+): { near: number; far: number } {
+  const flush = (t: number) => {
+    if (baseIsToken0) {
+      const up = Math.ceil(t / spacing) * spacing;
+      return up <= t ? up + spacing : up;
+    }
+    const down = Math.floor(t / spacing) * spacing;
+    return down >= t ? down - spacing : down;
+  };
+  const dir = baseIsToken0 ? 1 : -1;
+  const now = flush(current);
+  if (target === undefined) return { near: now, far: now + dir * width };
+  const at = flush(target);
+  const near = baseIsToken0 ? Math.max(now, at) : Math.min(now, at);
+  const far = at + dir * width;
+  if ((far - near) * dir < spacing) throw new Error('The price has already fallen through the whole range of this limit entry.');
+  return { near, far };
+}
+
+/**
+ * The raw tick at which the token's price is `ratio` times what it is at `current`.
+ * The token price per base is 1.0001^(sgn*tick), sgn = -1 when the base is token0, the
+ * same convention as monitor.ts dropPctFromTick.
+ */
+export function tickAtRatio(current: number, baseIsToken0: boolean, ratio: number): number {
+  return current + ((baseIsToken0 ? -1 : 1) * Math.log(ratio)) / Math.log(1.0001);
+}

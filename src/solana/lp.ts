@@ -98,6 +98,33 @@ export function binsForRangeUncapped(binStep: number, rangePct: number): number 
   return Math.max(1, Math.ceil(Math.log(1 - rangePct / 100) / Math.log(1 / (1 + binStep / 10_000))));
 }
 
+/**
+ * The bins a single-sided range covers. The base as token Y sits below the active bin, as
+ * token X above it, `bins` wide, never touching the active bin itself.
+ *
+ * `target` is a limit entry: the bin its target price falls in (see binAtRatio). The range
+ * is laid out as if that were the active bin, so it starts buying only at the target, and
+ * both ends are fixed by it. If the price has already passed the target the near end falls
+ * back against the active bin; the far end does not move, so a limit is never dragged.
+ */
+export function binEdges(active: number, baseIsX: boolean, bins: number, target?: number): { minBinId: number; maxBinId: number } {
+  const v = target ?? active;
+  const r = baseIsX
+    ? { minBinId: Math.max(active + 1, v + 1), maxBinId: v + bins }
+    : { minBinId: v - bins, maxBinId: Math.min(active - 1, v - 1) };
+  if (r.minBinId > r.maxBinId) throw new Error('The price has already fallen through the whole range of this limit entry.');
+  return r;
+}
+
+/**
+ * The bin the token's price is `ratio` times its price in the active bin. A bin's price is
+ * (1 + binStep/10000)^id in Y per X, so the token is X (the base Y) when its price rises
+ * with the id. Floored: the bin holding that price, whose edge never sits above it.
+ */
+export function binAtRatio(active: number, binStep: number, baseIsX: boolean, ratio: number): number {
+  return Math.floor(active + ((baseIsX ? -1 : 1) * Math.log(ratio)) / Math.log(1 + binStep / 10_000));
+}
+
 /** One leg of a Solana ladder: its own bin span and its share of the deposit. */
 export type LadderLeg = { minBinId: number; maxBinId: number; amount: bigint };
 
@@ -115,10 +142,13 @@ export async function planLadder(
   amount: bigint,
   /** 'even' splits a SPOT range wider than one position into equal parts. */
   weights: 'bidask' | 'even' = 'bidask',
+  /** A limit entry's target bin, as in binEdges. */
+  target?: number,
 ): Promise<{ plan: OpenPlan; legs: LadderLeg[] }> {
   const dlmm = await DLMM.create(connection(), new PublicKey(pool));
-  const plan = await planOpen(pool, rangePct);
-  const total = binsForRangeUncapped(Number(dlmm.lbPair.binStep), rangePct);
+  const plan = await planOpen(pool, rangePct, target);
+  const edge = binEdges(plan.activeBinId, plan.baseIsX, binsForRangeUncapped(Number(dlmm.lbPair.binStep), rangePct), target);
+  const total = edge.maxBinId - edge.minBinId + 1;
   const n = Math.min(total, Math.max(legs, Math.ceil(total / MAX_BINS)));
   const per = Math.floor(total / n);
   const extra = total % n;
@@ -128,21 +158,26 @@ export async function planLadder(
   let given = 0n;
   for (let k = 0; k < n; k++) {
     const width = per + (k < extra ? 1 : 0);
-    const near = offset + 1, far = offset + width; // distance from the active bin, in bins
+    const near = offset, far = offset + width - 1; // distance from the range's near end, in bins
     offset += width;
     const amt = k === n - 1 ? amount - given : (amount * BigInt(weights === 'even' ? 1 : k + 1)) / wsum;
     given += amt;
     out.push(
       plan.baseIsX
-        ? { minBinId: plan.activeBinId + near, maxBinId: plan.activeBinId + far, amount: amt }
-        : { minBinId: plan.activeBinId - far, maxBinId: plan.activeBinId - near, amount: amt },
+        ? { minBinId: edge.minBinId + near, maxBinId: edge.minBinId + far, amount: amt }
+        : { minBinId: edge.maxBinId - far, maxBinId: edge.maxBinId - near, amount: amt },
     );
   }
   return { plan: { ...plan, bins: total }, legs: out };
 }
 
 /** What the deposit would look like, without sending anything. */
-export async function planOpen(pool: string, rangePct: number): Promise<OpenPlan> {
+export async function planOpen(
+  pool: string,
+  rangePct: number,
+  /** A limit entry's target bin, as in binEdges. */
+  target?: number,
+): Promise<OpenPlan> {
   const dlmm = await DLMM.create(connection(), new PublicKey(pool));
   const active = await dlmm.getActiveBin();
   const binStep = Number(dlmm.lbPair.binStep);
@@ -159,11 +194,11 @@ export async function planOpen(pool: string, rangePct: number): Promise<OpenPlan
   // the mirror image. Getting this backwards would open a position that is already fully
   // converted -- an instant market order, not a limit order.
   const baseIsX = !!baseX;
+  const edge = binEdges(activeBinId, baseIsX, bins, target);
   return {
-    bins,
+    bins: edge.maxBinId - edge.minBinId + 1,
     activeBinId,
-    minBinId: baseIsX ? activeBinId + 1 : activeBinId - bins,
-    maxBinId: baseIsX ? activeBinId + bins : activeBinId - 1,
+    ...edge,
     baseSymbol: base.symbol,
     baseDecimals: base.decimals,
     baseIsX,
@@ -182,9 +217,11 @@ export async function quoteOpenCost(
   rangePct: number,
   shape: 'bidask' | 'spot',
   span?: { minBinId: number; maxBinId: number },
+  /** A limit entry's target bin, as in binEdges. */
+  target?: number,
 ): Promise<OpenCost> {
   const dlmm = await DLMM.create(connection(), new PublicKey(pool));
-  const plan = span ?? (await planOpen(pool, rangePct));
+  const plan = span ?? (await planOpen(pool, rangePct, target));
   const q = await dlmm.quoteCreatePosition({
     strategy: {
       minBinId: plan.minBinId,
@@ -213,10 +250,12 @@ export async function openPosition(
   kp: SolKeypair,
   /** A ladder leg's own span; without it the whole range is one position. */
   span?: { minBinId: number; maxBinId: number },
+  /** A limit entry's target bin, as in binEdges; re-planned here against the live active bin. */
+  target?: number,
 ): Promise<OpenResult> {
   const conn = connection();
   const dlmm = await DLMM.create(conn, new PublicKey(pool));
-  const whole = await planOpen(pool, rangePct);
+  const whole = await planOpen(pool, rangePct, target);
   const plan = span ? { ...whole, ...span, bins: span.maxBinId - span.minBinId + 1 } : whole;
   const user = Keypair.fromSeed(Buffer.from(kp.seed));
   const positionKp = Keypair.generate();

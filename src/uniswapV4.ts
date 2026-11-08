@@ -1,10 +1,10 @@
 import { ethers } from 'ethers';
-import { TickMath, nearestUsableTick } from '@uniswap/v3-sdk';
+import { TickMath } from '@uniswap/v3-sdk';
 import { isStableBase, type ChainCtx } from './chains.js';
 import { EXPLORER_HEADERS } from './chain.js';
 import { swapTokenToEthRobust, swapTokenToUsdgRobust } from './relay.js';
 import { sendTxNonceSafe, mapLimit } from './core.js';
-import { amountsForLiquidity, withdrawFloors } from './lpmath.js';
+import { amountsForLiquidity, withdrawFloors, rangeEdges } from './lpmath.js';
 import { allV4 } from './v4store.js';
 
 const Q96 = 2n ** 96n;
@@ -970,36 +970,22 @@ export async function openPositionV4(
   poolKey: PoolKeyV4,
   baseIsCurrency0: boolean,
   baseAmountWei: bigint,
-  opts: { widthSpacings?: number; gapSpacings?: number; dryRun: boolean },
+  /** target: a limit entry's target price as a raw tick; the range hangs from it (lpmath rangeEdges). */
+  opts: { widthSpacings?: number; target?: number; dryRun: boolean },
 ): Promise<{ dryRun?: boolean; txHash?: string; tokenId?: string; tickLower: number; tickUpper: number; liquidity: bigint; baseIsCurrency0: boolean }> {
   const pmAddr = V4_PM[cc.key];
   if (!pmAddr || !V4_POOL_MANAGER[cc.key]) throw new Error(`Uniswap v4 is not supported on ${cc.label}.`);
   const spacing = poolKey.tickSpacing;
   const width = (opts.widthSpacings ?? 50) * spacing;
-  // A default gap of 0 puts the near edge FLUSH against the current price, so the
-  // position starts filling on the first move our way rather than waiting out a gap.
-  const gap = (opts.gapSpacings ?? 0) * spacing;
   const state = await readPoolState(cc, poolKey);
   // An empty slot0 means the poolKey matches no pool. Without this check the revert
   // only surfaces as an 'unknown custom error' (PoolNotInitialized) in the plan preview.
   if (state.sqrtPriceX96 === 0n) throw new Error('This v4 pool is not initialised. Pick another pool.');
-  const current = state.tick;
-  const aligned = nearestUsableTick(current, spacing);
-  let tickLower: number;
-  let tickUpper: number;
-  if (baseIsCurrency0) {
-    // Depositing currency0 puts the range ABOVE the price. A rising tick means a
-    // falling token price, which fills it. The near edge is the SMALLEST usable tick
-    // strictly above current (flush), plus an optional gap.
-    tickLower = (aligned > current ? aligned : aligned + spacing) + gap;
-    tickUpper = tickLower + width;
-  } else {
-    // Depositing currency1 puts the range BELOW the price. A falling tick means a
-    // falling token price, which fills it. The near edge is the LARGEST usable tick
-    // strictly below current (flush), minus an optional gap.
-    tickUpper = (aligned < current ? aligned : aligned - spacing) - gap;
-    tickLower = tickUpper - width;
-  }
+  // Depositing currency0 puts the range ABOVE the price (a rising tick is a falling token
+  // price, which fills it); currency1 puts it BELOW. The near edge is the first usable tick
+  // strictly past current (flush), or a limit entry's target.
+  const edge = rangeEdges(state.tick, spacing, baseIsCurrency0, width, opts.target);
+  const [tickLower, tickUpper] = baseIsCurrency0 ? [edge.near, edge.far] : [edge.far, edge.near];
   const sqrtL = sqrtAtTick(tickLower);
   const sqrtU = sqrtAtTick(tickUpper);
   const liquidity = baseIsCurrency0 ? liqForAmount0(sqrtL, sqrtU, baseAmountWei) : liqForAmount1(sqrtL, sqrtU, baseAmountWei);
@@ -1095,18 +1081,23 @@ export async function planLadderV4(
   rangePercent: number,
   legs: number,
   shape: 'spot' | 'bidask',
+  /** A limit entry's target price as a raw tick, as in openPositionV4. */
+  target?: number,
 ): Promise<V4LadderLeg[]> {
   const spacing = poolKey.tickSpacing;
   const state = await readPoolState(cc, poolKey);
   if (state.sqrtPriceX96 === 0n) throw new Error('This v4 pool is not initialised. Pick another pool.');
   const current = state.tick;
   const frac = Math.min(Math.max(rangePercent, 0.1), 95) / 100;
-  const fullWidth = Math.max(spacing, Math.ceil(Math.abs(Math.log(1 - frac)) / Math.log(1.0001) / spacing) * spacing);
+  const width = Math.max(spacing, Math.ceil(Math.abs(Math.log(1 - frac)) / Math.log(1.0001) / spacing) * spacing);
+  // The anchor is the near edge: flush against the price, or hung from a limit's target.
+  const edge = rangeEdges(current, spacing, baseIsCurrency0, width, target);
+  const anchor = edge.near;
+  const fullWidth = Math.abs(edge.far - edge.near);
   const maxLegs = Math.max(1, Math.floor(fullWidth / spacing));
   const n = Math.max(1, Math.min(legs, 69, maxLegs));
   const legWidth = Math.max(spacing, Math.round(fullWidth / n / spacing) * spacing);
   const weights = ladderWeightsV4(n, shape);
-  const aligned = nearestUsableTick(current, spacing);
   const sgn = baseIsCurrency0 ? -1 : 1;
   const pctOf = (tk: number) => (Math.pow(1.0001, sgn * (tk - current)) - 1) * 100;
 
@@ -1118,11 +1109,9 @@ export async function planLadderV4(
     let tickLower: number;
     let tickUpper: number;
     if (baseIsCurrency0) {
-      const anchor = aligned > current ? aligned : aligned + spacing;
       tickLower = anchor + k * legWidth;
       tickUpper = tickLower + legWidth;
     } else {
-      const anchor = aligned < current ? aligned : aligned - spacing;
       tickUpper = anchor - k * legWidth;
       tickLower = tickUpper - legWidth;
     }

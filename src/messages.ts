@@ -2903,8 +2903,13 @@ export function msgLimitAsk(o: { kind: 'entry' | 'tp'; label: string; range?: nu
     '',
     note(o.kind === 'tp'
       ? 'mcap is checked every 5s, PnL every 30s. PnL reads the card figure; the swap back can shave 1-3% on a thin pool.'
-      : 'the target must be below the current mcap. The bot checks every 5 seconds and enters when mcap falls to it.'),
+      : 'the target must be below the current mcap. The position goes on-chain now with its range starting at the target, so it only buys from the target down. It shows in /positions and earns fees once the price reaches it.'),
   ].join('\n');
+}
+
+/** A limit entry about to go on-chain: the position card that follows is the order itself. */
+export function msgLimitPlacing(l: LimitView, nowMcap: number): string {
+  return [`⏰ ${bold('LIMIT ENTRY')}`, '', limitLine(l), limitNowLine(l, nowMcap), '', note('placing it on-chain now, with the range starting at the target…')].join('\n');
 }
 
 export function msgLimitSaved(l: LimitView, nowMcap: number | null): string {
@@ -2912,7 +2917,7 @@ export function msgLimitSaved(l: LimitView, nowMcap: number | null): string {
 }
 
 export function msgLimits(list: LimitView[], nows: Array<number | null>): string {
-  if (!list.length) return [`⏰ ${bold('LIMIT ORDERS')}`, '', 'No open orders.', '', note('set one from the amount step of an LP (⏰ Limit Entry) or from a position card (🎯 Take Profit).')].join('\n');
+  if (!list.length) return [`⏰ ${bold('LIMIT ORDERS')}`, '', 'No open orders.', '', note('set a take profit from a position card (🎯 Take Profit). A limit entry (⏰ Limit Entry at the amount step) is placed on-chain, so it shows in /positions.')].join('\n');
   return [
     `⏰ ${bold('LIMIT ORDERS')}`,
     '',
