@@ -21,7 +21,7 @@ const { Token, Percent, CurrencyAmount } = sdkCore;
 (TICK_SPACINGS as Record<number, number>)[2500] = 50;
 import { ERC20_ABI, approveExact } from './chain.js';
 import { sendTxNonceSafe, isGoneErr } from './core.js';
-import { withdrawFloors } from './lpmath.js';
+import { withdrawFloors, rangeEdges } from './lpmath.js';
 import { getChain, baseOf, basesFor, detectBase, type ChainCtx, type BaseAsset, type BaseKind } from './chains.js';
 
 const MAX_UINT128 = (1n << 128n) - 1n;
@@ -200,23 +200,23 @@ export async function planAddSingleSided(
   rangePercent: number,
   base: BaseAsset,
   ctx: ChainCtx = getChain(),
+  /** A limit entry's target price as a raw tick: the range hangs from it (lpmath rangeEdges). */
+  target?: number,
 ): Promise<AddPlan> {
   const st = await loadPool(tokenAddress, fee, base, ctx);
   const spacing = spacingOf(fee, ctx);
   const width = widthInTicks(rangePercent, spacing);
   const baseWei = ethers.parseUnits(amount, base.decimals);
+  const edge = rangeEdges(st.currentTick, spacing, st.baseIsToken0, width, target);
 
   let tickLower: number;
   let tickUpper: number;
   let position: TPosition;
 
   if (st.baseIsToken0) {
-    // A range ABOVE the current tick needs only token0 (the base). Take the nearest
-    // spacing multiple above current (ceil) to sit tight against the price.
-    let lower = Math.ceil(st.currentTick / spacing) * spacing;
-    if (lower <= st.currentTick) lower += spacing;
-    tickLower = lower;
-    tickUpper = lower + width;
+    // A range ABOVE the current tick needs only token0 (the base), tight against the price.
+    tickLower = edge.near;
+    tickUpper = edge.far;
     position = Position.fromAmount0({
       pool: st.sdkPool,
       tickLower,
@@ -226,10 +226,8 @@ export async function planAddSingleSided(
     });
   } else {
     // A range BELOW the current tick needs only token1 (the base).
-    let upper = Math.floor(st.currentTick / spacing) * spacing;
-    if (upper >= st.currentTick) upper -= spacing;
-    tickUpper = upper;
-    tickLower = upper - width;
+    tickUpper = edge.near;
+    tickLower = edge.far;
     position = Position.fromAmount1({
       pool: st.sdkPool,
       tickLower,
@@ -307,10 +305,15 @@ export async function planLadderSingleSided(
   shape: LadderShape,
   base: BaseAsset,
   ctx: ChainCtx = getChain(),
+  /** A limit entry's target price as a raw tick, as in planAddSingleSided. */
+  target?: number,
 ): Promise<AddPlan[]> {
   const st = await loadPool(tokenAddress, fee, base, ctx);
   const spacing = spacingOf(fee, ctx);
-  const fullWidth = widthInTicks(rangePercent, spacing);
+  // The anchor tick is the near edge: flush against the price, or hung from a limit's target.
+  const edge = rangeEdges(st.currentTick, spacing, st.baseIsToken0, widthInTicks(rangePercent, spacing), target);
+  const anchor = edge.near;
+  const fullWidth = Math.abs(edge.far - edge.near);
   // Auto-cap: every leg needs at least one tick spacing. A coarse pool (large
   // spacing) cannot fit many legs in the range, so N is cut to the spacings
   // available (max 69).
@@ -322,16 +325,6 @@ export async function planLadderSingleSided(
   const totalWei = ethers.parseUnits(totalAmount, base.decimals);
   const currentPrice = st.sdkPool.priceOf(st.tokenOther).toSignificant(8);
   const cur = Number(currentPrice);
-
-  // The anchor tick (flush against the current price), same as planAddSingleSided.
-  let anchor: number;
-  if (st.baseIsToken0) {
-    anchor = Math.ceil(st.currentTick / spacing) * spacing;
-    if (anchor <= st.currentTick) anchor += spacing;
-  } else {
-    anchor = Math.floor(st.currentTick / spacing) * spacing;
-    if (anchor >= st.currentTick) anchor -= spacing;
-  }
 
   const plans: AddPlan[] = [];
   let allocated = 0n;

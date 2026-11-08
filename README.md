@@ -198,24 +198,32 @@ So you don't have to watch the chart. Both are based on **market cap**.
 
 - **Limit entry.** Walk through the LP flow as usual, and at the amount step tap
   **⏰ Limit Entry** instead of an amount. Type the target market cap and the amount,
-  for example `500K 100`. When the market cap reaches that target, the bot opens the
-  position with the pool, range and legs you picked.
+  for example `500K 100`. The bot places the position on-chain right away, with the pool
+  and legs you picked, and with the range starting at the target and reaching down by
+  the range you picked. It is a range order: it buys only from the target down, so a
+  fast dump cannot drag it lower. It shows in `/positions` and earns fees once the price
+  gets there.
 - **Take profit.** Open a position from `/positions` and tap **🎯 Take Profit**. Type
   the market cap to close at, for example `2M`. When it gets there, the bot closes the
   position exactly as the Close button would.
 
-`/limits` lists your open orders and lets you cancel them.
+`/limits` lists your open take-profit orders and lets you cancel them.
 
 How it works, and what that means for you:
 
-- The bot checks every 30 seconds. A move that starts and ends inside that window can
-  be missed.
-- Nothing is placed on-chain. If the bot is stopped, nothing fires.
-- When a target is crossed, the bot replays the same taps you would make, so every
-  normal check still applies: balance, gas reserve, price impact, the Solana rent rule.
-  It fills at the price of that moment, not at your target.
-- An order runs once. If it fails, the bot tells you why and removes it.
-- Limit orders only run in LIVE mode.
+- A limit entry spends the deposit now: it sits in the pool until the price comes down.
+  To cancel, close the position. The deposit comes back, and on Solana so does the
+  position rent (a new bin array's rent does not, and the usual 90%-refundable rule
+  applies).
+- If the price is already below the target by the time the position lands, the range
+  starts at the price instead. Its bottom still sits at the target minus your range.
+- Take profit is watched by the bot, every few seconds. Nothing is placed on-chain: if
+  the bot is stopped, it does not fire. A move that starts and ends between two checks
+  can be missed.
+- When a take profit fires, the bot replays the same taps you would make, so every
+  normal check still applies. It fills at the price of that moment, not at your target.
+- A take profit runs once. If it fails, the bot tells you why and removes it.
+- Take profit only runs in LIVE mode.
 
 ---
 
@@ -226,7 +234,7 @@ How it works, and what that means for you:
 | `/start` | The main menu |
 | `/portfolio` | Total equity, what is in LP, and your balances on every chain |
 | `/positions` | Open positions on every chain; tap one to see it, close it, or set a take profit |
-| `/limits` | Your limit entry and take-profit orders |
+| `/limits` | Your take-profit orders |
 | `/pnl` | Pick a chain and a period; the recap comes back as a picture |
 | paste an address | The token card: buy, sell, or open an LP |
 | `/swap` | Sell anything in your wallets, EVM or Solana, sorted by value |
@@ -322,7 +330,7 @@ wallet, not a vault.
   wrapped native once a minute.
 - **There is no stop-loss.** Alerts tell you when a position moves. They don't act.
   Take profit is the only automatic close.
-- **Limit orders act on their own.** When a target is crossed, the bot opens or closes a
+- **Take profit acts on its own.** When its target is crossed, the bot closes the
   position without asking.
 - **Gas has no ceiling.** The bot pays whatever each chain's official "high" rate is at
   that moment. During a spike that can be expensive.
