@@ -17,6 +17,7 @@ export const OFFICIAL_RPC: Record<number, string> = {
   8453: 'https://mainnet.base.org',
   999: 'https://rpc.hyperliquid.xyz/evm',
   57073: 'https://rpc-gel.inkonchain.com',
+  99901: 'https://rpc.elysium.kinetiq.xyz',
 };
 
 /** The tip percentile read from fee history: 75 is "high". */

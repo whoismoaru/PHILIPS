@@ -154,6 +154,7 @@ export function fmtPct(n: number): string {
 }
 
 export function feeLabel(fee: number): string {
+  if (fee & 0x800000) return 'dynamic'; // v4 dynamic-fee flag: the hook sets the rate
   return `${(fee / 10000).toFixed(2)}%`;
 }
 
@@ -689,6 +690,7 @@ export function msgStatus(opts: {
     Base: 'Base (BASE)',
     Arc: 'Arc (ARC)',
     Ink: 'Ink (INK)',
+    Elysium: 'Elysium (HYPE)',
     Solana: 'Solana (SOL)',
   };
   const amt = (n: number) =>

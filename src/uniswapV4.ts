@@ -21,6 +21,9 @@ export const V4_POOL_MANAGER: Record<string, string> = {
   // PositionManager's poolManager() returns exactly this). Arc shares its PoolManager
   // address with Robinhood -- same deployer, same salt, different chain.
   arc: '0x8366a39CC670B4001A1121B8F6A443A643e40951',
+  // Elysium, found from the Initialize events of its live pools and verified on-chain
+  // (24,009 bytes, deployed at block 256,083).
+  elysium: '0xE2e105d3F7209A9DA11f83cCf3E7398a753823F1',
 };
 // Extra v4 actions (add).
 const MINT_POSITION = 0x02;
@@ -43,6 +46,10 @@ const V4_PM: Record<string, string> = {
   base: '0x7C5f5A4bBd8fD63184577525326123B519429bDc',
   // Arc, verified on-chain: 47,756 bytes, poolManager() and permit2() both resolve.
   arc: '0x6049c9a0e26405C0985f9E3685C87d0aE917f82B',
+  // Elysium has three "Uniswap v4 Positions NFT" contracts on this PoolManager. This one
+  // was deployed 3 blocks after the PoolManager (256,086) and holds the most positions
+  // (1,449); poolManager(), permit2() and WETH9() (WHYPE 0xbA87...5E81) all resolve.
+  elysium: '0x1d1C51b9d07fD27d36412A2b66CC23D19Eb3E518',
 };
 
 /**
@@ -228,6 +235,8 @@ export function v4ListDegraded(): boolean {
 // public RPC answers the same query over all 58M blocks in under a second.
 const LOGS_RPC: Record<string, string> = {
   robinhood: 'https://rpc.mainnet.chain.robinhood.com',
+  // Answers a block-0-to-latest Transfer query on the PositionManager (tested 9 Nov 2026).
+  elysium: 'https://rpc.elysium.kinetiq.xyz',
   // Arc is deliberately ABSENT. Its public endpoint prunes history ("pruned history
   // unavailable"), so a scan from block 0 can never succeed there, and Alchemy's free tier
   // caps the range at 10 blocks. The bot's own v4 records still answer /positions; what is
@@ -1249,6 +1258,40 @@ export async function getPoolKeyV4(cc: ChainCtx, tokenId: string): Promise<{ poo
 /** The v4 pool's current tick, used to stamp entryTick when opening. */
 export async function currentTickV4(cc: ChainCtx, pk: PoolKeyV4): Promise<number> {
   return (await readPoolState(cc, pk)).tick;
+}
+
+/**
+ * Whether a hooked pool takes liquidity from our PositionManager at all.
+ *
+ * A launchpad hook can keep its pool to itself through beforeAddLiquidity. On Elysium
+ * (9 Nov 2026) the hook behind e/acc, A/ACC and AETHER reverts 0xf09c8c8e for any
+ * outside add, so offering those pools cost four taps and a revert at the last step.
+ * Asked the way the PoolManager asks: call the hook from the PoolManager's address with
+ * a small range below the price. Only a REVERT says no; an RPC failure says yes and
+ * leaves the decision to the open's own staticCall.
+ */
+export async function hookAcceptsLp(cc: ChainCtx, pk: PoolKeyV4): Promise<boolean> {
+  if ((BigInt(pk.hooks) & 0x800n) === 0n) return true; // no beforeAddLiquidity permission
+  const pm = V4_PM[cc.key];
+  const mgr = V4_POOL_MANAGER[cc.key];
+  if (!pm || !mgr) return false;
+  const iface = new ethers.Interface([
+    'function beforeAddLiquidity(address,(address,address,uint24,int24,address),(int24,int24,int256,bytes32),bytes) returns (bytes4)',
+  ]);
+  try {
+    const s = pk.tickSpacing;
+    const lo = Math.floor((await currentTickV4(cc, pk)) / s) * s - 10 * s;
+    const data = iface.encodeFunctionData('beforeAddLiquidity', [
+      pm,
+      [pk.currency0, pk.currency1, pk.fee, s, pk.hooks],
+      [lo, lo + 5 * s, 10n ** 18n, ethers.ZeroHash],
+      '0x',
+    ]);
+    await cc.provider.call({ from: mgr, to: pk.hooks, data });
+    return true;
+  } catch (e: any) {
+    return e?.code !== 'CALL_EXCEPTION';
+  }
 }
 
 /** Read a v4 pool's slot0: current tick and sqrtPriceX96. */

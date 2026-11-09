@@ -3,7 +3,7 @@ import path from 'node:path';
 import { ethers } from 'ethers';
 import type { ChainCtx } from './chains.js';
 import { baseKindOf, type TokenPool } from './explore.js';
-import { v4Supported } from './uniswapV4.js';
+import { v4Supported, hookAcceptsLp } from './uniswapV4.js';
 
 const DEXSCREENER_TOKENS = 'https://api.dexscreener.com/latest/dex/tokens';
 const TIMEOUT_MS = 15_000;
@@ -45,6 +45,7 @@ function cacheSave(id: string, k: Key): void {
 const V4_MANAGER: Record<string, string> = {
   robinhood: '0x8366a39CC670B4001A1121B8F6A443A643e40951',
   bsc: '0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF',
+  elysium: '0xE2e105d3F7209A9DA11f83cCf3E7398a753823F1',
 };
 
 const IFACE = new ethers.Interface([
@@ -55,6 +56,7 @@ const TOPIC = IFACE.getEvent('Initialize')!.topicHash;
 /** Public RPC that accepts a full-range eth_getLogs (the wallet's does not). */
 const LOGS_RPC: Record<string, string> = {
   robinhood: 'https://rpc.mainnet.chain.robinhood.com',
+  elysium: 'https://rpc.elysium.kinetiq.xyz',
 };
 
 const poolIdOf = (k: { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string }): string =>
@@ -178,12 +180,13 @@ export async function onchainV4Pools(ctx: ChainCtx, token: string): Promise<Toke
     // be supplied here. Without it baseKindOf sees an unknown address and rejects
     // the pool — which silently dropped the single largest RSTR pool ($86k) while
     // keeping two dust ones.
-    const symOf = (a: string) => (a === ethers.ZeroAddress ? 'ETH' : (sym[a.toLowerCase()] ?? '?'));
+    const symOf = (a: string) => (a === ethers.ZeroAddress ? ctx.nativeSymbol : (sym[a.toLowerCase()] ?? '?'));
     const b0 = baseKindOf(symOf(key.currency0), key.currency0, ctx);
     const b1 = baseKindOf(symOf(key.currency1), key.currency1, ctx);
     // Exactly one base side, or it cannot be opened single-sided.
     if ((b0 && b1) || (!b0 && !b1)) continue;
     if (!key.tickSpacing) continue;
+    if (!(await hookAcceptsLp(ctx, key).catch(() => true))) continue; // the hook keeps the pool to itself
 
     const baseIsCurrency0 = !!b0;
 
@@ -200,7 +203,8 @@ export async function onchainV4Pools(ctx: ChainCtx, token: string): Promise<Toke
       // fee 0 means the HOOK charges instead of the pool (dynamic fee). Feeding a
       // zero into the APR formula would print a confident 0% for a pool that does
       // earn — better to admit the number is unknown.
-      aprPct: key.fee > 0 && tvlUsd > 0 && vol24hUsd > 0 ? ((vol24hUsd * (key.fee / 1e6) * 365) / tvlUsd) * 100 : null,
+      // The same goes for the dynamic-fee flag (0x800000): it is a marker, not a rate.
+      aprPct: key.fee > 0 && key.fee < 1e6 && tvlUsd > 0 && vol24hUsd > 0 ? ((vol24hUsd * (key.fee / 1e6) * 365) / tvlUsd) * 100 : null,
       poolKey: key,
       baseIsCurrency0,
     });

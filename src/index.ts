@@ -1501,7 +1501,7 @@ async function buildV4Card(p: V4Position, ethUsdV4: number | null, cc = getChain
         // volume * fee. A dynamic fee makes this an estimate, hence '?' when unknown.
         apr: (() => {
           const feeFrac = Number(p.poolKey.fee) / 1e6;
-          if (!dex.vol24hUsd || !dex.tvlUsd || !isFinite(feeFrac) || feeFrac <= 0) return '?';
+          if (!dex.vol24hUsd || !dex.tvlUsd || !isFinite(feeFrac) || feeFrac <= 0 || feeFrac >= 1) return '?'; // >= 1: the dynamic-fee flag
           return aprLabel(((dex.vol24hUsd * feeFrac) / dex.tvlUsd) * 365 * 100);
         })(),
       };

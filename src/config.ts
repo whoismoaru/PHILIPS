@@ -52,6 +52,11 @@ export const config = {
     enabled: (process.env.INK_ENABLED ?? 'false').toLowerCase() === 'true',
     rpcUrl: process.env.INK_RPC_URL || 'https://rpc-gel.inkonchain.com',
   },
+  /** Elysium (Kinetiq's Hyperliquid L2, chain 99901, gas HYPE). LPs on Uniswap v4. */
+  elysium: {
+    enabled: (process.env.ELYSIUM_ENABLED ?? 'false').toLowerCase() === 'true',
+    rpcUrl: process.env.ELYSIUM_RPC_URL || 'https://rpc.elysium.kinetiq.xyz',
+  },
   /**
    * Arc (Circle's USDC-gas L1, chain 5042). OFF until an RPC is supplied: the one public
    * endpoint that answers, rpc.arc-scan.org, dropped roughly a third of the calls made
