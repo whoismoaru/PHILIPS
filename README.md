@@ -63,8 +63,13 @@ Every EVM chain also has a public backup RPC that takes over when yours errors o
 | Solana | Meteora DLMM | SOL | when `SOLANA_ENABLED` and an RPC are set |
 | Arc | Uniswap v3 + v4 | USDC only | no, needs `ARC_RPC_URL` |
 | Ink | Velodrome Slipstream | ETH, USDT0 | no |
+| Elysium | Uniswap v4 | HYPE, USDC | no, needs `ELYSIUM_ENABLED=true` |
 
 You can switch chains on and off at any time: `/settings` → **Chains on/off**.
+
+**Elysium** (Kinetiq's Hyperliquid L2) LPs on Uniswap v4. Most launchpad tokens there sit
+in pools whose hook refuses outside liquidity; `/add` leaves those out and offers only the
+pools that accept a deposit.
 
 **Arc** pays gas in USDC, so USDC is the only thing you can deposit there. `/bridge`
 reaches it through Circle's CCTP.

@@ -379,6 +379,39 @@ const DEFS: Record<string, Def> = {
         },
       }
     : {}),
+  ...(config.elysium.enabled
+    ? {
+        elysium: {
+          label: 'Elysium',
+          chainId: 99901,
+          nativeSymbol: 'HYPE',
+          dexKey: 'elysium', // DexScreener's chain key (it indexes Uniswap v4 here)
+          // No public Blockscout (the explorer sits behind a Vercel checkpoint):
+          // screening falls back to GMGN + DexScreener, as on HyperEVM.
+          blockscout: null,
+          rpc: config.elysium.rpcUrl,
+          // Uniswap v3 code deployed by ArkhamPad, verified on-chain 9 Nov 2026: NFPM.factory()
+          // is this factory, router and quoter point at it, the router carries the
+          // exactInputSingle-with-deadline selector 0x414bf389. It holds almost nothing
+          // (87 pools, all at $0 and paired with ANOTHER WHYPE, 0x43Ca...6090), so in
+          // practice every LP here is v4. Kept because ChainCtx needs a v3 venue.
+          factory: '0x75656d8d2A59293DBdA4178F11Af6EE506ef60dD',
+          pm: '0x1a5453a1D4c32a9B46aCCc48B3Fa2CB5C78e072b',
+          router: '0x84a9a3a2b2568d5b0dd1a06deaab494121cf7aec',
+          quoter: '0xC11622d1E479B9821a551E2040bC3Aff7cdf6736',
+          // The WHYPE the v4 PositionManager wraps (WETH9()) and every live pair quotes
+          // against: 18.8k supply, versus 2.85 for the v3 one. Never swap these two.
+          weth: '0xbA876237B0F021A6c6D852d6c26E107997cC5E81',
+          wrappedSymbol: 'WHYPE',
+          // USDC, 6 decimals, verified on-chain (Relay lists it as Elysium's ERC-20).
+          usdc: '0xb47c4C8F73F009CC0C0d3f92B388d13E293F0B65',
+          // feeAmountTickSpacing on the factory: 500/10, 3000/60, 10000/200; 100 is unset.
+          feeTiers: [500, 3000, 10000],
+          tickSpacing: { 500: 10, 3000: 60, 10000: 200 },
+          routerHasDeadline: true,
+        },
+      }
+    : {}),
 };
 
 function basesOf(d: Def): BaseAsset[] {
@@ -650,6 +683,7 @@ export const EXPLORER_TX: Record<string, string> = {
   hyperevm: 'https://hyperevmscan.io/tx/',
   arc: 'https://arc-scan.org/tx/',
   ink: 'https://explorer.inkonchain.com/tx/',
+  elysium: 'https://elysium.kinetiq.xyz/explorer/tx/',
   solana: 'https://solscan.io/tx/',
 };
 

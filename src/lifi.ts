@@ -30,6 +30,7 @@ const DIAMOND: Record<number, string> = {
   // so far; Arc -> anywhere still returns no route, which is why the menu probes each Arc
   // pair before offering it (see bridge.ts).
   5042: '0xA4072583658Fae592A3506A42431cb6316a8d40b',
+  99901: '0x24E6dA91AA4A8FEe2447F542c92E006243bd6Dc5', // Elysium (li.quest/v1/chains, code on-chain)
 };
 
 /**
