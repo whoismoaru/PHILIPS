@@ -7556,21 +7556,56 @@ bot.action(/^tp:(v3|v4|sol):(\w+)$/, async (ctx: any) => {
 });
 
 /** A limit entry's target as a raw tick of the wizard's pool. `ratio` = target mcap / mcap now. */
-async function evmLimitTick(f: AddFlow, ratio: number): Promise<number> {
+async function evmLimitTick(f: AddFlow, target: number, aggNow: number): Promise<{ at: number; now: number }> {
   if (f.selected?.protocol === 'v4') {
-    const tick = await currentTickV4(getChain(f.chain), f.selected.poolKey!);
-    return tickAtRatio(tick, f.selected.baseIsCurrency0!, ratio);
+    const cc = getChain(f.chain);
+    const pk = f.selected.poolKey!;
+    const b0 = f.selected.baseIsCurrency0!;
+    const tick = await currentTickV4(cc, pk);
+    let now = aggNow;
+    if (f.tokenDec !== undefined) {
+      const [d0, d1] = b0 ? [wizardBase(f).decimals, f.tokenDec] : [f.tokenDec, wizardBase(f).decimals];
+      const c1PerC0 = Math.pow(1.0001, tick) * 10 ** (d0 - d1);
+      now = (await poolMcapNow(cc.dexKey, poolIdV4(pk), f.token, b0 ? 1 / c1PerC0 : c1PerC0)) ?? aggNow;
+    }
+    return { at: tickAtRatio(tick, b0, target / now), now };
   }
   const cc = wizardCtx(f);
   const st = await loadPool(f.token, f.fee!, baseOf(cc, f.base ?? 'weth'), cc);
-  return tickAtRatio(st.currentTick, st.baseIsToken0, ratio);
+  const px = Number(st.sdkPool.priceOf(st.tokenOther).toSignificant(8));
+  const now = (await poolMcapNow(cc.dexKey, st.poolAddress, f.token, px)) ?? aggNow;
+  return { at: tickAtRatio(st.currentTick, st.baseIsToken0, target / now), now };
 }
 
 /** A limit entry's target as a bin of the wizard's DLMM pool, as evmLimitTick. */
-async function solLimitBin(sf: SolLpFlow, ratio: number): Promise<number> {
+async function solLimitBin(sf: SolLpFlow, target: number, aggNow: number): Promise<{ at: number; now: number }> {
   const lp = await lbPair(sf.pick.pool);
   if (!lp) throw new Error('the pool account was not found');
-  return binAtRatio(lp.activeId, lp.binStep, lp.tokenX !== sf.pick.mint, ratio);
+  const tokenIsX = lp.tokenX === sf.pick.mint;
+  const [dx, dy] = await Promise.all([mintDecimals(lp.tokenX), mintDecimals(lp.tokenY)]);
+  let now = aggNow;
+  if (dx !== null && dy !== null) {
+    const yPerX = binPrice(lp.binStep, lp.activeId) * 10 ** (dx - dy);
+    now = (await poolMcapNow('solana', sf.pick.pool, sf.pick.mint, tokenIsX ? yPerX : 1 / yPerX)) ?? aggNow;
+  }
+  return { at: binAtRatio(lp.activeId, lp.binStep, !tokenIsX, target / now), now };
+}
+
+/**
+ * The market cap at a pool's LIVE price. DexScreener lags the chain by 30-60s, so a target
+ * placed against its mcap lands off by however far the price moved meanwhile (HUNG, 12 Nov
+ * 2026: $641K read against $619K on-chain after a 19% drop in 90s). Its marketCap and
+ * priceNative for this pool's own pair come from ONE snapshot, so their ratio (supply x base
+ * USD) carries no lag; times the price read on-chain now, it is the mcap right now.
+ * null when the pair is missing or lists our token as its quote; the caller falls back.
+ */
+async function poolMcapNow(dexChain: string, pool: string, ca: string, pxBase: number): Promise<number | null> {
+  const r = await fetch(`https://api.dexscreener.com/latest/dex/pairs/${dexChain}/${pool}`, { signal: AbortSignal.timeout(8_000) }).catch(() => null);
+  const p: any = r?.ok ? ((await r.json().catch(() => null)) as any)?.pairs?.[0] : null;
+  const addr = String(p?.baseToken?.address ?? '');
+  if (!p || (ca.startsWith('0x') ? addr.toLowerCase() !== ca.toLowerCase() : addr !== ca)) return null;
+  const k = Number(p.marketCap ?? p.fdv) / Number(p.priceNative);
+  return k > 0 && isFinite(k) && pxBase > 0 && isFinite(pxBase) ? k * pxBase : null;
 }
 
 /** The owner's answer to a limit prompt. Returns true when the message was consumed. */
@@ -7601,22 +7636,27 @@ async function handleLimitReply(ctx: any, raw: string): Promise<boolean> {
       await ctx.reply(msg.msgLimitInvalid('The market cap could not be read, so the target cannot be placed. Try again in a moment.'), html);
       return true;
     }
-    // An entry buys the dip: the range sits below the price, starting at the target.
-    if (target >= now) {
-      await ctx.reply(msg.msgLimitInvalid(`An entry waits for a dip. Pick a target below the current mcap (${msg.usdCompact(now)}).`), html);
-      return true;
-    }
     // Not a watcher any more: the position goes on-chain now, its near edge at the target,
-    // so it buys only from the target down and no fast move can drag where it fills.
+    // so it buys only from the target down and no fast move can drag where it fills. The
+    // edge is placed against the mcap at the pool's live price, not DexScreener's lagged one.
+    let placed: { at: number; now: number } | null = null;
     try {
-      if (sf && d.order.chain === 'solana') sf.limitBin = await solLimitBin(sf, target / now);
-      else if (f) f.limitTick = await evmLimitTick(f, target / now);
+      if (sf && d.order.chain === 'solana') placed = await solLimitBin(sf, target, now);
+      else if (f) placed = await evmLimitTick(f, target, now);
     } catch (e) {
       await ctx.reply(msg.msgLimitInvalid(`The pool price could not be read (${(e as Error).message.slice(0, 80)}). Try again in a moment.`), html);
       return true;
     }
+    const nowLive = placed?.now ?? now;
+    // An entry buys the dip: the range sits below the price, starting at the target.
+    if (!placed || target >= nowLive) {
+      await ctx.reply(msg.msgLimitInvalid(`An entry waits for a dip. Pick a target below the current mcap (${msg.usdCompact(nowLive)}).`), html);
+      return true;
+    }
+    if (sf && d.order.chain === 'solana') sf.limitBin = placed.at;
+    else if (f) f.limitTick = placed.at;
     limitDrafts.delete(ctx.from.id);
-    await ctx.reply(msg.msgLimitPlacing({ ...d.order, targetMcap: target, amount, dir: 'below' }, now), html);
+    await ctx.reply(msg.msgLimitPlacing({ ...d.order, targetMcap: target, amount, dir: 'below' }, nowLive), html);
     try {
       // The amount step's own handler: every balance, cap and rent guard still applies.
       return d.order.chain === 'solana' ? await handleSolLpAmount(ctx, amount) : await handleAddAmount(ctx, amount);

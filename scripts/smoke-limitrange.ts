@@ -66,5 +66,9 @@ for (const l of idx.split('\n').filter((x) => /await (planLadder|openPosition|qu
 const reply = idx.slice(idx.indexOf('async function handleLimitReply'), idx.indexOf('async function cmdLimits'));
 assert.ok(!/limits\.add\(\{ \.\.\.d\.order, targetMcap: target, amount, dir: 'below' \}\)/.test(reply), 'entries must not be saved as watchers');
 assert.ok(/handleSolLpAmount\(ctx, amount\)/.test(reply) && /handleAddAmount\(ctx, amount\)/.test(reply), 'the reply must open through the amount handlers');
+// The edge is placed against the mcap at the pool's LIVE price, and the dip check uses it too.
+const helpers = idx.slice(idx.indexOf('async function evmLimitTick'), idx.indexOf('async function poolMcapNow'));
+assert.equal(helpers.split('poolMcapNow(').length - 1, 3, 'v3, v4 and DLMM must each price the target live');
+assert.ok(/target >= nowLive/.test(reply), 'the dip check must use the live mcap');
 
 console.log('ok: a limit entry is a range order hung from its target, on v3, v4 and DLMM');
