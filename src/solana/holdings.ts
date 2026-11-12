@@ -7,6 +7,8 @@
  * the same as worthless.
  */
 import { solRpc } from './rpc.js';
+import { pricedPair } from '../explore.js';
+import { SOL_BASES } from './bases.js';
 
 const WSOL = 'So11111111111111111111111111111111111111112';
 const PROGRAMS = ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'];
@@ -20,16 +22,12 @@ async function prices(mints: string[]): Promise<Map<string, { px: number; sym: s
   for (let i = 0; i < mints.length; i += 30) {
     const res = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${mints.slice(i, i + 30).join(',')}`, { signal: AbortSignal.timeout(8_000) }).catch(() => null);
     const pairs: any[] = res?.ok ? ((await res.json().catch(() => [])) as any[]) : [];
-    // The deepest pair wins, so a thin scam pool cannot set the price.
-    const best = new Map<string, { liq: number; px: number; sym: string }>();
-    for (const p of pairs) {
-      const m = p?.baseToken?.address;
-      const px = Number(p?.priceUsd);
-      const liq = Number(p?.liquidity?.usd ?? 0);
-      if (!m || !(px > 0)) continue;
-      if ((best.get(m)?.liq ?? -1) < liq) best.set(m, { liq, px, sym: String(p.baseToken.symbol ?? '?') });
+    // The deepest pair wins, so a thin scam pool cannot set the price; SOL/USDC-quoted first (pricedPair).
+    const priced = pairs.filter((p) => Number(p?.priceUsd) > 0);
+    for (const m of new Set(priced.map((p) => p?.baseToken?.address).filter(Boolean))) {
+      const p = pricedPair(priced, m, SOL_BASES.map((b) => b.mint));
+      if (p) out.set(m, { px: Number(p.priceUsd), sym: String(p.baseToken.symbol ?? '?') });
     }
-    for (const [m, b] of best) out.set(m, { px: b.px, sym: b.sym });
   }
   return out;
 }

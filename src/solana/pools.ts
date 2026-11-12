@@ -19,8 +19,9 @@
  * "the data is unavailable" instead of "you have not configured this".
  */
 import { aprOf } from '../explore.js';
+import { pricedPair } from '../explore.js';
 import { isSolAddress } from './addr.js';
-import { baseOfMint } from './bases.js';
+import { baseOfMint, SOL_BASES } from './bases.js';
 import { lbPair } from './lbpair.js';
 import { rpcUrl } from './rpc.js';
 
@@ -110,10 +111,9 @@ export function classifyPairs(mint: string, allPairs: any[]): Classified {
   // DexScreener's priceUsd, priceNative, marketCap and fdv describe a pair's BASE token. Where the
   // token is the QUOTE side (CHARIZARD/Pokemon, 2026-10-20) they belong to the other token:
   // Pokemon read $303K against a real $1.78M and a limit entry fired on it. So price and market
-  // cap come only from the deepest pair that has the token as its base; none means unknown.
-  const priced = [...pairs]
-    .filter((p) => p?.baseToken?.address === mint)
-    .sort((a, b) => Number(b?.liquidity?.usd ?? 0) - Number(a?.liquidity?.usd ?? 0))[0];
+  // cap come only from a pair that has the token as its base, SOL/USDC-quoted first (pricedPair:
+  // PUSSY/NVDA read 17% high off unclaimed creator fees); none means unknown.
+  const priced = pricedPair(pairs, mint, SOL_BASES.map((b) => b.mint));
   const facts: SolTokenFacts = {
     mint,
     name: String(tok?.name ?? '?'),

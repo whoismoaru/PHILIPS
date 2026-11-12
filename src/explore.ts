@@ -787,6 +787,23 @@ const MCAP_TTL_MS = 30_000;
 const MCAP_MISS_TTL_MS = 3_000;
 
 /**
+ * The DexScreener pair whose price and market cap describe `token`: the deepest pair with the
+ * token as its BASE, preferring one quoted in an asset we know (`quotes`) when it carries at
+ * least 5% of that depth. DexScreener prices a pair off its raw vault balances, so a pool still
+ * holding unclaimed fees misprices the token: PUSSY/NVDA (Raydium CPMM, 12 Nov 2026) held 75.78
+ * NVDA of creator fees and read $771K against a real ~$656K that every SOL pool agreed on. The
+ * 5% floor keeps a dust pair with a stale price from winning; any base pair is the fallback.
+ */
+export function pricedPair(pairs: any[], token: string, quotes: string[]): any | undefined {
+  // EVM addresses compare case-insensitively; base58 is case-sensitive and never folded.
+  const norm = (a: unknown): string => (String(a ?? '').startsWith('0x') ? String(a).toLowerCase() : String(a ?? ''));
+  const liq = (p: any): number => Number(p?.liquidity?.usd ?? 0);
+  const own = (pairs ?? []).filter((p) => norm(p?.baseToken?.address) === norm(token)).sort((a, b) => liq(b) - liq(a));
+  const known = new Set(quotes.map(norm));
+  return own.find((p) => known.has(norm(p?.quoteToken?.address)) && liq(p) >= liq(own[0]) * 0.05) ?? own[0];
+}
+
+/**
  * A token's market cap from DexScreener. null means unread -- never 0, which reads as the
  * fact that the token is worthless. Cached briefly: a position card can be refreshed many
  * times and the market cap does not move that fast.
@@ -802,19 +819,12 @@ export async function tokenMarketCap(ctx: ChainCtx, token: string): Promise<numb
       const j: any = await res.json();
       // The DEEPEST pair's figure, never the first one listed: a dust pair's marketCap is
       // routinely absurd (GPU once read $4.4e26 and poisoned a position's stored entry).
-      let bestLiq = -1;
-      for (const p of j?.pairs ?? []) {
-        if (p?.chainId !== ctx.dexKey) continue;
-        // marketCap/fdv belong to the pair's BASE token; a pair quoted in this token describes
-        // the other token (see classifyPairs in solana/pools.ts).
-        if (String(p?.baseToken?.address ?? '').toLowerCase() !== token.toLowerCase()) continue;
-        const n = Number(p?.marketCap ?? p?.fdv ?? NaN);
-        const liq = Number(p?.liquidity?.usd ?? 0);
-        if (Number.isFinite(n) && n > 0 && n < 1e13 && liq > bestLiq) {
-          v = n;
-          bestLiq = liq;
-        }
-      }
+      // marketCap/fdv belong to the pair's BASE token, and a pair quoted in one of our bases
+      // wins over a deeper exotic one (pricedPair).
+      const mc = (p: any): number => Number(p?.marketCap ?? p?.fdv ?? NaN);
+      const ok = (j?.pairs ?? []).filter((p: any) => p?.chainId === ctx.dexKey && Number.isFinite(mc(p)) && mc(p) > 0 && mc(p) < 1e13);
+      const p = pricedPair(ok, token, ctx.bases.map((b) => b.address));
+      if (p) v = mc(p);
     }
   } catch {
     /* a failure returns null and the card prints '?' */
