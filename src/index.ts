@@ -34,7 +34,7 @@ import * as limits from './limits.js';
 import * as costBasis from './costBasis.js';
 import { backfillEntry } from './solana/backfill.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
-import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, MAX_BINS, MAX_WIDE_BINS } from './solana/lp.js';
+import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, binAtRatio, MAX_BINS, MAX_WIDE_BINS } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import { lbPair, binPrice } from './solana/lbpair.js';
 import { Keypair, PublicKey } from '@solana/web3.js';
@@ -66,7 +66,9 @@ import {
   type AddPlan,
   type PositionDetail,
   priceInfo as uniPriceInfo,
+  loadPool,
 } from './uniswap.js';
+import { tickAtRatio } from './lpmath.js';
 import { listPositionsV4, invalidateV4ListCache, v4Liquidity, v4StillOpen, v4PositionCount, v4Supported, closePositionV4, checkV4Status, v4NextTokenId, v4OwnerOf, v4OwnedIdsInRange, v4ListDegraded, openPositionV4, planLadderV4, openLadderV4, closeLadderV4, V4_UNPROTECTED_NOTE, v4BaseSymbol, v4BaseDecimals, currentTickV4, getPoolKeyV4, resolvePoolKeyV4, poolHealthV4, valuePositionV4, type V4Position, type V4LadderLeg } from './uniswapV4.js';
 import * as v4store from './v4store.js';
 import * as pctPresets from './pctPresets.js';
@@ -330,6 +332,8 @@ type AddFlow = {
   legs?: number; // the ladder's leg count for bid-ask; spot is 1
   ladderPlans?: AddPlan[]; // the per-leg v3 plans, computed at the plan step and used at confirmation
   v4LadderLegs?: V4LadderLeg[]; // rencana per-leg v4 (batch modifyLiquidities)
+  /** A limit entry: its target price as a raw pool tick. The range hangs from it (lpmath rangeEdges). */
+  limitTick?: number;
   startedAt: number; // epoch ms, for session expiry, so a stale number is never consumed
 };
 const flows = new Map<number, AddFlow>();
@@ -2591,8 +2595,8 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean, silent = f
   // The plan and the cost estimate run in parallel (they are independent).
   const [planSettled, costSettled] = await Promise.allSettled([
     isLadder
-      ? planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc).then((legs) => legs[0])
-      : planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc),
+      ? planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc, flow.limitTick).then((legs) => legs[0])
+      : planAddSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, base, cc, flow.limitTick),
     estimateAddCost(cc, base, flow.ethAmount!),
   ]);
   if (planSettled.status === 'rejected') throw planSettled.reason;
@@ -2602,7 +2606,7 @@ async function renderPlanStep(ctx: any, flow: AddFlow, edit: boolean, silent = f
   // the nearest leg, pctLow the furthest, so the preview shows the combined range.
   let ladderNote: string | undefined;
   if (isLadder) {
-    const legPlans = await planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc);
+    const legPlans = await planLadderSingleSided(flow.token, flow.fee!, flow.ethAmount!, flow.rangePct!, flow.legs!, 'bidask', base, cc, flow.limitTick);
     flow.ladderPlans = legPlans;
     const w = ladderWeights(legPlans.length, 'bidask');
     plan.pctHigh = legPlans[0].pctHigh;
@@ -2681,7 +2685,7 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean, silent =
   let ladderNote: string | undefined;
   if (isLadder) {
     // A v4 ladder: compute the legs (a batched modifyLiquidities) for the preview and keep them.
-    const legs = await planLadderV4(cc, pk, pool.baseIsCurrency0!, amountWei, flow.rangePct!, flow.legs!, 'bidask');
+    const legs = await planLadderV4(cc, pk, pool.baseIsCurrency0!, amountWei, flow.rangePct!, flow.legs!, 'bidask', flow.limitTick);
     flow.v4LadderLegs = legs;
     const total = legs.reduce((s, l) => s + l.baseAmountWei, 0n);
     rangePctHigh = legs[0].pctHigh;
@@ -2695,7 +2699,7 @@ async function renderPlanStepV4(ctx: any, flow: AddFlow, edit: boolean, silent =
   } else {
     flow.v4LadderLegs = undefined;
     const widthSpacings = rangePctToSpacings(flow.rangePct!, pk.tickSpacing);
-    const sim = await openPositionV4(cc, pk, pool.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: true });
+    const sim = await openPositionV4(cc, pk, pool.baseIsCurrency0!, amountWei, { widthSpacings, target: flow.limitTick, dryRun: true });
     const val = await valuePositionV4(cc, pk, sim.tickLower, sim.tickUpper, sim.liquidity);
     rangePctHigh = val.rangePctHigh;
     rangePctLow = val.rangePctLow;
@@ -3212,7 +3216,7 @@ async function execAdd(ctx: any) {
       const pk = selected.poolKey!;
       const base = baseOf(cc, selected.base);
       // Re-plan fresh before sending, so the ticks are not stale.
-      const legs = await planLadderV4(cc, pk, selected.baseIsCurrency0!, ethers.parseUnits(ethAmount, base.decimals), flow.rangePct, flow.legs!, 'bidask');
+      const legs = await planLadderV4(cc, pk, selected.baseIsCurrency0!, ethers.parseUnits(ethAmount, base.decimals), flow.rangePct, flow.legs!, 'bidask', flow.limitTick);
       await ensureGasForLegs(cc, legs.length, base.wrappable ? legs.reduce((s, l) => s + l.baseAmountWei, 0n) : 0n);
       await ctx.editMessageText(msg.msgProgress(`opening ${legs.length}-leg v4 ladder (1 atomic tx)…`), html);
       // isStableBase, NOT `=== 'usdg'`: on BSC the stable base is USDT, so the old test
@@ -3311,7 +3315,7 @@ async function execAdd(ctx: any) {
       const r = await retryOnce(
         'add v4',
         () => v4PositionCount(cc),
-        () => openPositionV4(cc, pk, selected.baseIsCurrency0!, amountWei, { widthSpacings, dryRun: false }),
+        () => openPositionV4(cc, pk, selected.baseIsCurrency0!, amountWei, { widthSpacings, target: flow.limitTick, dryRun: false }),
         { onRetry: async () => void (await ctx.editMessageText(msg.msgProgress('first attempt failed: retrying…'), html)) },
       );
       if (r.tokenId) {
@@ -3368,7 +3372,7 @@ async function execAdd(ctx: any) {
       const ccAdd = wizardCtx(flow);
       const base = baseOf(ccAdd, flow.base ?? 'weth');
       // Plan fresh right before minting (ticks must not be stale). Entry metadata is computed once.
-      const legPlans = await planLadderSingleSided(flow.token, flow.fee, flow.ethAmount, flow.rangePct, flow.legs!, 'bidask', base, ccAdd);
+      const legPlans = await planLadderSingleSided(flow.token, flow.fee, flow.ethAmount, flow.rangePct, flow.legs!, 'bidask', base, ccAdd, flow.limitTick);
       const entryMcap = (await explore.tokenMarketCap(ccAdd, flow.token).catch(() => null)) ?? undefined;
       const entryEthUsd = isStableBase(base.kind) ? 1 : ((await getEthUsd(ccAdd.wethAddress, ccAdd).catch(() => null)) ?? undefined);
       const usable = legPlans.filter((lp) => lp.baseAmountWei > 0n); // drop dust legs left by rounding
@@ -3450,7 +3454,7 @@ async function execAdd(ctx: any) {
     // The deposit side MUST match what was chosen at the strategy step. Always calling
     // planAddSingleSided here turned a "token side" choice into a base deposit on confirm —
     // the token amount was read as an ETH amount.
-    const args = [flow.token, flow.fee, flow.ethAmount, flow.rangePct, baseOf(ccAdd, flow.base ?? 'weth'), ccAdd] as const;
+    const args = [flow.token, flow.fee, flow.ethAmount, flow.rangePct, baseOf(ccAdd, flow.base ?? 'weth'), ccAdd, flow.limitTick] as const;
     // The probe is the position NFT count. A mint that already landed raises it, so do NOT
     // retry (a duplicate position means duplicate capital). An ETH->WETH wrap does not raise
     // it, so a failure after the wrap can still be retried — and the second attempt uses the
@@ -4249,7 +4253,8 @@ const fmtSol = (lamports: bigint): string => (Number(lamports) / jupiter.LAMPORT
 type SolPoolPick = { pool: string; pair: string; baseSymbol: string; binStep: number | null; baseFeePct: number | null; mint: string };
 /** What the last CA card offered, per user: the buttons carry an index, not an address. */
 const solPoolPicks = new Map<number, { at: number; pools: SolPoolPick[] }>();
-type SolLpFlow = { pick: SolPoolPick; startedAt: number; rangePct?: number; bins?: number; legs?: number; even?: boolean };
+/** limitBin: a limit entry's target bin; the range hangs from it (solana/lp.ts binEdges). */
+type SolLpFlow = { pick: SolPoolPick; startedAt: number; rangePct?: number; bins?: number; legs?: number; even?: boolean; limitBin?: number };
 const solLpFlows = new Map<number, SolLpFlow>();
 registerFlowReset((uid) => {
   solLpFlows.delete(uid);
@@ -4411,7 +4416,7 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
   // create it, and that part never comes back. At least 90% of the cost must come back on
   // close, or it is refused and never sent (owner's rule, 23 Sep 2026). An unreadable quote
   // is refused too -- unknown is not "free".
-  const cost = await quoteOpenCost(f.pick.pool, f.rangePct ?? 10, pctPresets.shape()).catch(() => null);
+  const cost = await quoteOpenCost(f.pick.pool, f.rangePct ?? 10, pctPresets.shape(), undefined, f.limitBin).catch(() => null);
   if (!cost || cost.total <= 0 || cost.refundable / cost.total < SOL_LP_MIN_REFUND) {
     solLpFlows.delete(ctx.from.id);
     return show(msg.msgSolLpNonRefund({ pair: f.pick.pair, cost }), {
@@ -4431,7 +4436,7 @@ async function solLpOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean
   await say(msg.msgProgress(`opening ${fmtSol(lamports)} SOL into ${f.pick.pair}…`));
   try {
     const dep = await solToBase(f, lamports, kp);
-    const r = await openPosition(f.pick.pool, dep, f.rangePct ?? 10, pctPresets.shape(), kp);
+    const r = await openPosition(f.pick.pool, dep, f.rangePct ?? 10, pctPresets.shape(), kp, undefined, f.limitBin);
     // Recorded AFTER the chain confirmed it, so /positions never carries an entry for a
     // position that does not exist. Failing to record costs a PnL, not a position.
     try {
@@ -4489,7 +4494,7 @@ type OpenCostT = { refundable: number; nonRefundable: number; total: number };
 async function solLadderOpen(ctx: any, f: SolLpFlow, lamports: bigint, edit: boolean, kp: SolKeypair): Promise<unknown> {
   const show = (text: string, extra: Record<string, unknown> = html) =>
     edit ? ctx.editMessageText(text, extra) : ctx.reply(text, extra);
-  const { plan, legs } = await planLadder(f.pick.pool, f.rangePct ?? 10, f.legs!, lamports, f.even ? 'even' : 'bidask');
+  const { plan, legs } = await planLadder(f.pick.pool, f.rangePct ?? 10, f.legs!, lamports, f.even ? 'even' : 'bidask', f.limitBin);
   const costs = await Promise.all(legs.map((l) => quoteOpenCost(f.pick.pool, 0, 'spot', l).catch(() => null)));
   const cost = costs.every(Boolean)
     ? costs.reduce<OpenCostT>((a, c) => ({ refundable: a.refundable + c!.refundable, nonRefundable: a.nonRefundable + c!.nonRefundable, total: a.total + c!.total }), { refundable: 0, nonRefundable: 0, total: 0 })
@@ -7467,7 +7472,8 @@ registerFlowReset((uid) => limitDrafts.delete(uid));
 
 const limitsKbRow = () => [Markup.button.callback('⏰ Limit Orders', 'limits')];
 
-// "⏰ Limit Entry" on the amount step, EVM and Solana: the order is this wizard, frozen.
+// "⏰ Limit Entry" on the amount step, EVM and Solana. The wizard stays open: the reply
+// (target + amount) places the position right away, hung from the target (handleLimitReply).
 bot.action('lim:new', async (ctx: any) => {
   const uid = ctx.from.id;
   const f = flows.get(uid);
@@ -7490,7 +7496,6 @@ bot.action('lim:new', async (ctx: any) => {
         unit: base.wrappable ? wizardCtx(f).nativeSymbol : base.symbol,
       },
     };
-    flows.delete(uid); // a number typed next is the order, not a deposit
   } else if (sf && sf.rangePct !== undefined) {
     draft = {
       type: 'entry',
@@ -7507,7 +7512,6 @@ bot.action('lim:new', async (ctx: any) => {
         unit: 'SOL',
       },
     };
-    solLpFlows.delete(uid);
   }
   if (!draft || draft.type !== 'entry') return ctx.answerCbQuery('Expired. Paste the CA again.');
   await ctx.answerCbQuery();
@@ -7551,6 +7555,24 @@ bot.action(/^tp:(v3|v4|sol):(\w+)$/, async (ctx: any) => {
   });
 });
 
+/** A limit entry's target as a raw tick of the wizard's pool. `ratio` = target mcap / mcap now. */
+async function evmLimitTick(f: AddFlow, ratio: number): Promise<number> {
+  if (f.selected?.protocol === 'v4') {
+    const tick = await currentTickV4(getChain(f.chain), f.selected.poolKey!);
+    return tickAtRatio(tick, f.selected.baseIsCurrency0!, ratio);
+  }
+  const cc = wizardCtx(f);
+  const st = await loadPool(f.token, f.fee!, baseOf(cc, f.base ?? 'weth'), cc);
+  return tickAtRatio(st.currentTick, st.baseIsToken0, ratio);
+}
+
+/** A limit entry's target as a bin of the wizard's DLMM pool, as evmLimitTick. */
+async function solLimitBin(sf: SolLpFlow, ratio: number): Promise<number> {
+  const lp = await lbPair(sf.pick.pool);
+  if (!lp) throw new Error('the pool account was not found');
+  return binAtRatio(lp.activeId, lp.binStep, lp.tokenX !== sf.pick.mint, ratio);
+}
+
 /** The owner's answer to a limit prompt. Returns true when the message was consumed. */
 async function handleLimitReply(ctx: any, raw: string): Promise<boolean> {
   const d = limitDrafts.get(ctx.from.id);
@@ -7563,20 +7585,46 @@ async function handleLimitReply(ctx: any, raw: string): Promise<boolean> {
   const target = limits.parseMcap(parts[0] ?? '');
   const now = await mcapOf(d.order.chain, d.order.ca);
   if (d.type === 'entry') {
+    // The wizard the order came from must still be open: this reply finishes it.
+    const f = flows.get(ctx.from.id);
+    const sf = solLpFlows.get(ctx.from.id);
+    if (d.order.chain === 'solana' ? sf?.rangePct === undefined : !f?.awaitingAmount) {
+      limitDrafts.delete(ctx.from.id);
+      return false;
+    }
     const amount = (parts[1] ?? '').replace(',', '.');
     if (!target || !/^\d*\.?\d+$/.test(amount) || !(Number(amount) > 0)) {
       await ctx.reply(msg.msgLimitInvalid(`Type the target market cap, then the amount in ${d.order.unit}. For example: 500K 100`), html);
       return true;
     }
-    // An entry buys the dip: it only ever waits for mcap to FALL to the target.
-    if (now !== null && target >= now) {
+    if (now === null) {
+      await ctx.reply(msg.msgLimitInvalid('The market cap could not be read, so the target cannot be placed. Try again in a moment.'), html);
+      return true;
+    }
+    // An entry buys the dip: the range sits below the price, starting at the target.
+    if (target >= now) {
       await ctx.reply(msg.msgLimitInvalid(`An entry waits for a dip. Pick a target below the current mcap (${msg.usdCompact(now)}).`), html);
       return true;
     }
-    const o = limits.add({ ...d.order, targetMcap: target, amount, dir: 'below' });
+    // Not a watcher any more: the position goes on-chain now, its near edge at the target,
+    // so it buys only from the target down and no fast move can drag where it fills.
+    try {
+      if (sf && d.order.chain === 'solana') sf.limitBin = await solLimitBin(sf, target / now);
+      else if (f) f.limitTick = await evmLimitTick(f, target / now);
+    } catch (e) {
+      await ctx.reply(msg.msgLimitInvalid(`The pool price could not be read (${(e as Error).message.slice(0, 80)}). Try again in a moment.`), html);
+      return true;
+    }
     limitDrafts.delete(ctx.from.id);
-    await ctx.reply(msg.msgLimitSaved(o, now), { ...html, ...Markup.inlineKeyboard([limitsKbRow()]) });
-    return true;
+    await ctx.reply(msg.msgLimitPlacing({ ...d.order, targetMcap: target, amount, dir: 'below' }, now), html);
+    try {
+      // The amount step's own handler: every balance, cap and rent guard still applies.
+      return d.order.chain === 'solana' ? await handleSolLpAmount(ctx, amount) : await handleAddAmount(ctx, amount);
+    } finally {
+      // A refused amount leaves the wizard open; the next amount typed there is a plain LP.
+      if (f) f.limitTick = undefined;
+      if (sf) sf.limitBin = undefined;
+    }
   }
   const tp = parts.length === 1 ? limits.parseTp(parts[0]) : null;
   if (!tp) {
@@ -7856,6 +7904,46 @@ async function checkLimits(): Promise<void> {
 if (process.env.PHILIPS_HARNESS !== '1') setInterval(() => void checkLimits(), 5_000);
 else (globalThis as any).__checkLimits = checkLimits; // an audit script drives it by hand
 
+/** An amount typed at the /add wizard's amount step. Returns true when the message was consumed. */
+async function handleAddAmount(ctx: any, raw: string): Promise<boolean> {
+  const flow = getFlow(ctx);
+  if (flow?.awaitingAmount && isStaleFlow(flow.startedAt)) {
+    flows.delete(ctx.from.id);
+    await ctx.reply(msg.msgSessionExpired(), html);
+    return true;
+  }
+  if (!flow?.awaitingAmount || flow.strategy === undefined) return false;
+  const a = amountCtx(flow);
+  const dec = baseOf(getChain(flow.chain), flow.base ?? 'weth').decimals;
+  const w = parseAmt(raw, dec);
+  if (w === null) {
+    await ctx.reply(msg.msgInvalidAmount(), html);
+    return true;
+  }
+  const num = Number(ethers.formatUnits(w, dec));
+  // The ceiling is the CAPITAL ACTUALLY HELD, not a policy number: for a wrappable base
+  // it is the native balance minus the gas reserve (spend it all and the tx itself goes
+  // unpaid), for a stablecoin the balance in full. The base side used to lean on the
+  // per-tx limit instead, so the moment that limit was switched off nothing held it back.
+  // A failed read falls back to amountCtx's limit rather than blocking over a flaky RPC.
+  let cap = a.cap;
+  let capLabel = a.capLabel;
+  const balWei = await usableFor(flow).catch(() => null);
+  if (balWei !== null) {
+    const sym = wizardBase(flow).wrappable ? wizardCtx(flow).nativeSymbol : a.symbol;
+    cap = Number(ethers.formatUnits(balWei, dec));
+    capLabel = `${cap.toLocaleString('id-ID', { maximumFractionDigits: 6 })} ${sym}`;
+  }
+  if (num > cap) {
+    await ctx.reply(msg.msgOverLimit(capLabel), html);
+    return true;
+  }
+  flow.awaitingAmount = false;
+  flow.ethAmount = ethers.formatUnits(w, dec); // already normalised, with the extra decimals trimmed
+  await planThenOpen(ctx, flow);
+  return true;
+}
+
 bot.on(message('text'), async (ctx) => {
   const raw = (ctx.message.text || '').trim();
 
@@ -7983,36 +8071,7 @@ bot.on(message('text'), async (ctx) => {
   }
 
   // The /add wizard is waiting for a typed amount.
-  const flow = getFlow(ctx);
-  if (flow?.awaitingAmount && isStaleFlow(flow.startedAt)) {
-    flows.delete(ctx.from.id);
-    return ctx.reply(msg.msgSessionExpired(), html);
-  }
-  if (flow?.awaitingAmount && flow.strategy !== undefined) {
-    const a = amountCtx(flow);
-    const dec = baseOf(getChain(flow.chain), flow.base ?? 'weth').decimals;
-    const w = parseAmt(raw, dec);
-    if (w === null) return ctx.reply(msg.msgInvalidAmount(), html);
-    const num = Number(ethers.formatUnits(w, dec));
-    // The ceiling is the CAPITAL ACTUALLY HELD, not a policy number: for a wrappable base
-    // it is the native balance minus the gas reserve (spend it all and the tx itself goes
-    // unpaid), for a stablecoin the balance in full. The base side used to lean on the
-    // per-tx limit instead, so the moment that limit was switched off nothing held it back.
-    // A failed read falls back to amountCtx's limit rather than blocking over a flaky RPC.
-    let cap = a.cap;
-    let capLabel = a.capLabel;
-    const balWei = await usableFor(flow).catch(() => null);
-    if (balWei !== null) {
-      const sym = wizardBase(flow).wrappable ? wizardCtx(flow).nativeSymbol : a.symbol;
-      cap = Number(ethers.formatUnits(balWei, dec));
-      capLabel = `${cap.toLocaleString('id-ID', { maximumFractionDigits: 6 })} ${sym}`;
-    }
-    if (num > cap) return ctx.reply(msg.msgOverLimit(capLabel), html);
-    flow.awaitingAmount = false;
-    flow.ethAmount = ethers.formatUnits(w, dec); // already normalised, with the extra decimals trimmed
-    await planThenOpen(ctx, flow);
-    return;
-  }
+  if (await handleAddAmount(ctx, raw)) return;
 
   // A bare CA (no command) goes to the TOKEN HUB. Checked AFTER every flow waiting on input,
   // so pasting a CA mid-wizard does not hijack it.
