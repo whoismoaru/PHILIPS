@@ -2887,7 +2887,9 @@ const limitNowLine = (l: LimitView, n: number | null | undefined): string =>
 const limitLine = (l: LimitView): string =>
   l.kind === 'entry'
     ? `${bold('ENTRY')} ${esc(l.poolLabel)} · ${esc(chainName(l.chain))}\n   └ ${esc(`${l.amount} ${l.unit}`)}, range -${l.rangePct}%${l.legs && l.legs > 1 ? `, ${l.legs} legs` : ''}, when mcap ${l.dir === 'below' ? '≤' : '≥'} ${bold(mc(l.targetMcap))}`
-    : `${bold('TAKE PROFIT')} $${esc(l.symbol)} #${esc(l.posRef.split(':')[1].slice(0, 8))} · ${esc(chainName(l.chain))}\n   └ close when ${l.metric ? 'PnL' : 'mcap'} ≥ ${bold(limitNow(l, l.metric ? l.target : l.targetMcap))}`;
+    : l.metric
+      ? `${bold('TAKE PROFIT')} $${esc(l.symbol)} #${esc(l.posRef.split(':')[1].slice(0, 8))} · ${esc(chainName(l.chain))}\n   └ close when PnL ≥ ${bold(limitNow(l, l.target))}`
+      : `${bold('TAKE PROFIT')} $${esc(l.symbol)} · all positions · ${esc(chainName(l.chain))}\n   └ close every $${esc(l.symbol)} position when mcap ≥ ${bold(mc(l.targetMcap))}`;
 
 export function msgLimitAsk(o: { kind: 'entry' | 'tp'; label: string; range?: number; legs?: number; unit?: string; nowMcap: number | null; pnl?: { pct: number; usd: number } | null }): string {
   return [
@@ -2902,7 +2904,7 @@ export function msgLimitAsk(o: { kind: 'entry' | 'tp'; label: string; range?: nu
       : `Type the target to close at:\n• market cap ${code('2M')}\n• PnL % ${code('5%')}\n• PnL $ ${code('$10')}`,
     '',
     note(o.kind === 'tp'
-      ? 'mcap is checked every 5s, PnL every 30s. PnL reads the card figure; the swap back can shave 1-3% on a thin pool.'
+      ? 'a market cap target closes EVERY position of this token in the wallet, including ones opened later or outside the bot; a PnL target closes this position only. mcap is checked every 5s, PnL every 30s. PnL reads the card figure; the swap back can shave 1-3% on a thin pool.'
       : 'the target must be below the current mcap. The bot checks every 5 seconds and enters when mcap falls to it.'),
   ].join('\n');
 }

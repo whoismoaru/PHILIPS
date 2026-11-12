@@ -1729,7 +1729,7 @@ function collapseLadderRows(rows: PosRow[]): void {
  * indistinguishable from a measured figure.
  */
 /** Row id (the position's first 8 characters) -> the position and its pool, for the buttons. */
-const solRowRef = new Map<string, { position: string; pool: string }>();
+const solRowRef = new Map<string, { position: string; pool: string; mint: string }>();
 
 async function solanaRows(): Promise<PosRow[]> {
   const enabled = config.solana.enabled && !chainToggle.isOff('solana');
@@ -1783,7 +1783,7 @@ async function solanaRows(): Promise<PosRow[]> {
     }),
   );
   const num = (v: number, dp = 4) => Number(v.toFixed(dp)).toLocaleString('en-US', { maximumFractionDigits: dp });
-  for (const p of list) solRowRef.set(p.position.slice(0, 8), { position: p.position, pool: p.pool });
+  for (const p of list) solRowRef.set(p.position.slice(0, 8), { position: p.position, pool: p.pool, mint: p.tokenMint });
   // A ladder's range is the span of all its legs, so the merged row shows the whole ladder.
   const span = new Map<string, { lo: number; hi: number }>();
   for (const p of list) {
@@ -7521,9 +7521,11 @@ bot.action(/^tp:(v3|v4|sol):(\w+)$/, async (ctx: any) => {
       posRef = `v4:${id}`;
     }
   } else {
+    // A position opened outside the bot has no store entry until backfill lands; the row's own
+    // mint is enough to watch market cap (HUNG 6EH5, 12 Nov 2026, had no entry and no TP).
     const ref = solRowRef.get(id);
-    const e = ref ? solStore.getEntry(ref.position) : undefined;
-    if (ref && e) [chain, ca, symbol, posRef] = ['solana', e.mint, e.symbol, `sol:${ref.position}`];
+    const sym = ref ? solStore.getEntry(ref.position)?.symbol || (await solTokenView(ref.mint).catch(() => null))?.facts?.symbol : '';
+    if (ref) [chain, ca, symbol, posRef] = ['solana', ref.mint, sym || ref.mint.slice(0, 4), `sol:${ref.position}`];
   }
   if (!ca) return ctx.answerCbQuery('Expired. Open /positions again.');
   await ctx.answerCbQuery();
@@ -7634,6 +7636,21 @@ async function replay(messageId: number, what: { text?: string; data?: string })
   );
 }
 
+/** Every open position of a take profit's token in this wallet, as posRefs. */
+async function tokenPosRefs(l: limits.LimitTp): Promise<string[]> {
+  if (l.chain === 'solana') {
+    return (await solanaRows().catch(() => []))
+      .map((r) => solRowRef.get(r.id))
+      .filter((r) => r?.mint === l.ca)
+      .map((r) => `sol:${r!.position}`);
+  }
+  const same = (a?: string) => (a ?? '').toLowerCase() === l.ca.toLowerCase();
+  return [
+    ...store.active().filter((r) => (r.chain ?? 'robinhood') === l.chain && same(r.ca)).map((r) => `v3:${r.tokenId}`),
+    ...v4store.allV4().filter((r) => (r.chain ?? 'robinhood') === l.chain && same(r.baseIsCurrency0 ? r.currency1 : r.currency0)).map((r) => `v4:${r.tokenId}`),
+  ];
+}
+
 async function fireLimit(l: limits.Limit, now: number): Promise<void> {
   const uid = config.telegram.allowedUserId;
   const head = await bot.telegram.sendMessage(uid, msg.msgLimitTriggered(l, now), html);
@@ -7642,15 +7659,34 @@ async function fireLimit(l: limits.Limit, now: number): Promise<void> {
   let why: string | null = null;
   try {
     if (l.kind === 'tp') {
-      const [k, id] = l.posRef.split(':');
-      if (k === 'sol') {
-        await solanaRows().catch(() => []);
-        const row = [...solRowRef.entries()].find(([, r]) => r.position === id)?.[0];
-        if (!row) why = 'the position is no longer open';
-        else await replay(mid, { data: `solcl:${row}` });
-      } else if (k === 'v4') await replay(mid, { data: `closev4go:${id}` });
-      else await replay(mid, { data: `close:${id}` });
-      if (!why && !limitSeen.some((t) => /POSITION CLOSED/.test(t))) why = lastLine(limitSeen);
+      // A market-cap target closes EVERY open position of the token in this wallet, whenever
+      // and wherever it was opened: bound to one id, HUNG's TP fired on 12 Nov 2026 at $842K
+      // against a position closed hours earlier and left its replacement open. A PnL target
+      // belongs to its own position's cost basis, so it closes that one only.
+      const refs = l.metric ? [l.posRef] : await tokenPosRefs(l);
+      const fails: string[] = [];
+      let closed = 0;
+      for (const ref of refs) {
+        const [k, id] = ref.split(':');
+        const seen = limitSeen.length;
+        if (k === 'sol') {
+          // Rows are re-read before each close: a ladder's legs close together with the first.
+          const row = id.slice(0, 8);
+          if (!(await solanaRows().catch(() => [])).some((r) => r.id === row)) continue;
+          await replay(mid, { data: `solcl:${row}` });
+        } else if (k === 'v4') {
+          if (!v4store.getV4(id)) continue;
+          await replay(mid, { data: `closev4go:${id}` });
+        } else {
+          if (store.get(id)?.status !== 'ACTIVE') continue;
+          await replay(mid, { data: `close:${id}` });
+        }
+        const out = limitSeen.slice(seen);
+        if (out.some((t) => /POSITION CLOSED/.test(t))) closed++;
+        else fails.push(`#${id.slice(0, 8)}: ${lastLine(out)}`);
+      }
+      if (fails.length) why = fails.join(' · ');
+      else if (!closed) why = refs.length ? 'the position is no longer open' : `no $${l.symbol} position is open in this wallet`;
     } else if (l.chain === 'solana') {
       await replay(mid, { text: l.ca });
       const i = solPoolPicks.get(uid)?.pools.findIndex((p) => p.pool === l.poolRef) ?? -1;
@@ -7700,7 +7736,8 @@ const lastLine = (texts: string[]): string => {
 async function livePx(l: limits.Limit): Promise<number | null> {
   try {
     if (l.chain === 'solana') {
-      const pool = l.kind === 'entry' ? l.poolRef : solStore.getEntry(l.posRef.replace(/^sol:/, ''))?.pool;
+      const pos = l.kind === 'tp' ? l.posRef.replace(/^sol:/, '') : '';
+      const pool = l.kind === 'entry' ? l.poolRef : solStore.getEntry(pos)?.pool ?? solRowRef.get(pos.slice(0, 8))?.pool;
       const lp = pool ? await lbPair(pool) : null;
       if (!lp) return null;
       const bp = binPrice(lp.binStep, lp.activeId);
