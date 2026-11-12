@@ -23,7 +23,7 @@ import { renderProfitCard } from './card.js';
 import { onchainV4Pools } from './onchainPools.js';
 import { isSolAddress } from './solana/addr.js';
 import { solTokenView } from './solana/pools.js';
-import { solPositions, mintDecimals } from './solana/positions.js';
+import { solPositions, mintDecimals, type SolPosition } from './solana/positions.js';
 import { solHoldings, solUsd, type SolHolding } from './solana/holdings.js';
 import * as chainToggle from './chainToggle.js';
 import { rpcUrl as solRpcUrl, solRpc } from './solana/rpc.js';
@@ -1731,6 +1731,25 @@ function collapseLadderRows(rows: PosRow[]): void {
 /** Row id (the position's first 8 characters) -> the position and its pool, for the buttons. */
 const solRowRef = new Map<string, { position: string; pool: string; mint: string }>();
 
+/** Recover and store the entry of a position the bot has none for; undefined when unrecoverable. */
+async function backfillSol(p: SolPosition, symbol?: string): Promise<solStore.SolEntry | undefined> {
+  if (!p.base) return undefined;
+  const facts = await backfillEntry(p.position, p.pool, p.base.mint).catch(() => null);
+  if (!facts) return undefined;
+  solStore.record({
+    position: p.position,
+    pool: p.pool,
+    mint: p.tokenMint,
+    symbol: symbol ?? '',
+    baseSymbol: p.base.symbol,
+    entryBase: facts.entryBaseRaw.toString(),
+    openedAt: facts.openedAt,
+    rangePct: 0,
+    bins: p.upperBinId - p.lowerBinId + 1,
+  });
+  return solStore.getEntry(p.position);
+}
+
 async function solanaRows(): Promise<PosRow[]> {
   const enabled = config.solana.enabled && !chainToggle.isOff('solana');
   const rpcUrl = solRpcUrl();
@@ -1765,23 +1784,7 @@ async function solanaRows(): Promise<PosRow[]> {
   // costs a signature listing plus a transaction read, and /positions must not turn into a
   // twenty-call crawl because a wallet holds twenty foreign positions.
   const missing = list.filter((p) => !solStore.getEntry(p.position) && p.base).slice(0, 3);
-  await Promise.all(
-    missing.map(async (p) => {
-      const facts = await backfillEntry(p.position, p.pool, p.base!.mint).catch(() => null);
-      if (!facts) return;
-      solStore.record({
-        position: p.position,
-        pool: p.pool,
-        mint: p.tokenMint,
-        symbol: symbols.get(p.tokenMint) ?? '',
-        baseSymbol: p.base!.symbol,
-        entryBase: facts.entryBaseRaw.toString(),
-        openedAt: facts.openedAt,
-        rangePct: 0,
-        bins: p.upperBinId - p.lowerBinId + 1,
-      });
-    }),
-  );
+  await Promise.all(missing.map((p) => backfillSol(p, symbols.get(p.tokenMint))));
   const num = (v: number, dp = 4) => Number(v.toFixed(dp)).toLocaleString('en-US', { maximumFractionDigits: dp });
   for (const p of list) solRowRef.set(p.position.slice(0, 8), { position: p.position, pool: p.pool, mint: p.tokenMint });
   // A ladder's range is the span of all its legs, so the merged row shows the whole ladder.
@@ -5888,7 +5891,13 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
   if (!ref || !kp || solClosing.has(ref.position)) return false;
   solClosing.add(ref.position);
   const m = [ '', id ];
-  const leg0 = solStore.getEntry(ref.position);
+  let leg0 = solStore.getEntry(ref.position);
+  // No entry: recover it now, while the position is still listed. Without one the close books
+  // nothing in /pnl and draws no PnL card (HUNG 6EH5, closed by PHILIPS 12 Nov 2026).
+  if (!leg0) {
+    const p = (await solPositions(kp.publicKey).catch(() => [])).find((x) => x.position === ref.position);
+    if (p) leg0 = await backfillSol(p, (await solTokenView(p.tokenMint).catch(() => null))?.facts?.symbol?.replace(/^\$+/, ''));
+  }
   // A ladder closes as ONE: every leg, one swap, one card, one PnL (the EVM ladder's rule).
   const legs = leg0?.groupId ? solStore.group(leg0.groupId) : [];
   const ladder = legs.length > 1;
@@ -6551,6 +6560,11 @@ async function sendProfitCard(
   shape?: 'spot' | 'bidask',
 ): Promise<void> {
   if (!rec) return;
+  // An imported position's deposit is unknown ('0'): its card read the whole result as profit at 0%.
+  if (BigInt(rec.initialWethWei || '0') === 0n) {
+    await ctx.reply(msg.note('This position was opened outside PHILIPS and its deposit is unknown, so no PnL card for this close.'), html);
+    return;
+  }
   const dec = baseDecimalsOf(rec.chain, rec.baseKind);
   const baseSym = baseSymbolOf(rec.baseKind, ctxOf(rec));
   const baseIn = Number(ethers.formatUnits(BigInt(rec.initialWethWei), dec));
