@@ -37,8 +37,12 @@ const DLMM = 'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo';
 // lb_pair, from, position (32 bytes each), amounts [u64; 2] (X, Y), active_bin_id i32.
 const EVENT_TAG = 'e445a52e51cb9a1d';
 const ADD_LIQUIDITY = '1f5e7d5ae3343dba';
+// Meteora's own site opens with RebalanceLiquidity, which emits Rebalancing instead: lb_pair,
+// position, owner, active_bin_id i32 (112), then x_withdrawn, x_added, y_withdrawn, y_added
+// as u64. HOGE 4cmC4 (16 Nov 2026) was opened that way and closed with no PnL card.
+const REBALANCING = '006d75b33d5bc7c8';
 
-/** Every AddLiquidity event for `position` in one transaction: [amountX, amountY, activeBin]. */
+/** Every deposit event (AddLiquidity or Rebalancing) for `position` in one transaction: [amountX, amountY, activeBin]. */
 export function addLiquidityEvents(tx: any, position: string): Array<[bigint, bigint, number]> {
   const out: Array<[bigint, bigint, number]> = [];
   for (const g of tx?.meta?.innerInstructions ?? []) {
@@ -50,9 +54,12 @@ export function addLiquidityEvents(tx: any, position: string): Array<[bigint, bi
       } catch {
         continue;
       }
-      if (d.length < 132 || d.subarray(0, 8).toString('hex') !== EVENT_TAG || d.subarray(8, 16).toString('hex') !== ADD_LIQUIDITY) continue;
-      if (encodeBase58(d.subarray(80, 112)) !== position) continue;
-      out.push([d.readBigUInt64LE(112), d.readBigUInt64LE(120), d.readInt32LE(128)]);
+      if (d.length < 132 || d.subarray(0, 8).toString('hex') !== EVENT_TAG) continue;
+      const kind = d.subarray(8, 16).toString('hex');
+      if (kind === ADD_LIQUIDITY && encodeBase58(d.subarray(80, 112)) === position)
+        out.push([d.readBigUInt64LE(112), d.readBigUInt64LE(120), d.readInt32LE(128)]);
+      else if (kind === REBALANCING && d.length >= 148 && encodeBase58(d.subarray(48, 80)) === position)
+        out.push([d.readBigUInt64LE(124), d.readBigUInt64LE(140), d.readInt32LE(112)]);
     }
   }
   return out;
