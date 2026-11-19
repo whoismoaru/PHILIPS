@@ -41,8 +41,10 @@ export type LimitTp = {
   /** What closes it: 'v3:<tokenId>', 'v4:<tokenId>' or 'sol:<position>'. */
   posRef: string;
   targetMcap: number;
-  /** Absent: close on market cap. 'pct' / 'usd': close when the position's PnL reaches `target`. */
-  metric?: 'pct' | 'usd';
+  /** Absent: close on market cap. 'pct' / 'usd': close when the position's PnL reaches `target`.
+   *  'range': close when the price is `target`% of the way from the range's Min to its Max
+   *  price, the take profit an auto-flip sets. */
+  metric?: 'pct' | 'usd' | 'range';
   target?: number;
   createdAt: number;
   wallet?: string; // owner (owner.ts)

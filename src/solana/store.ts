@@ -43,6 +43,14 @@ export type SolEntry = {
   shape?: 'spot' | 'bidask';
   /** The Solana address that opened it (owner.ts). */
   wallet?: string;
+  /** Auto-flip, armed from the position card (🔁): 'armed' waits for the price to fall through
+   *  the whole range, 'flipping' is that moment until the re-shape lands, 'flipped' is the
+   *  BID-ASK sell ladder it became. flipBins is the range, flipTokenIsX which way the token's
+   *  price runs with the bin id, flipMcap the range's Min and Max as market cap, for cards. */
+  autoFlip?: 'armed' | 'flipping' | 'flipped';
+  flipBins?: [number, number];
+  flipTokenIsX?: boolean;
+  flipMcap?: [number, number];
 };
 
 let cache: Record<string, SolEntry> | null = null;
@@ -67,6 +75,8 @@ export const getEntry = (position: string): SolEntry | undefined => {
   const e = load()[position];
   return mine(e) ? e : undefined;
 };
+/** Every entry of this wallet. */
+export const all = (): SolEntry[] => Object.values(load()).filter(mine);
 /** Every leg of one ladder, nearest the price first. */
 export const group = (groupId: string): SolEntry[] =>
   Object.values(load())

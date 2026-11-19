@@ -13,11 +13,12 @@
  *
  * Single-sided only, and always the BASE side, which is the same invariant the EVM paths
  * carry: deposit SOL or USDC into bins BELOW the active one and wait for price to fall
- * into the token. The token side is never deposited.
+ * into the token. The token side is never deposited from the wallet; auto-flip (end of this
+ * file) only re-shapes token a position already holds.
  */
 import { highPriorityMicro, broadcastOfficial } from './fees.js';
 import { createRequire } from 'node:module';
-import { ComputeBudgetProgram, Connection, Keypair, PublicKey, type Transaction } from '@solana/web3.js';
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey, Transaction, type TransactionInstruction } from '@solana/web3.js';
 import { rpcUrl } from './rpc.js';
 import { baseOfMint } from './bases.js';
 import type { SolKeypair } from './keys.js';
@@ -531,4 +532,114 @@ export async function closePosition(pool: string, position: string, kp: SolKeypa
     baseMint: baseIsX ? xMint : yMint,
     tokenMint: baseIsX ? yMint : xMint,
   };
+}
+
+// ─── auto-flip ───────────────────────────────────────────────────────────────
+
+/**
+ * The bins a flipped position holds: the token side of its own range that is still beyond the
+ * price, above the active bin for token X and below it for token Y (bin ids rise with X's
+ * price). null when none is left, the price having gone back through the whole range.
+ */
+export function flipSpan(lower: number, upper: number, active: number, tokenIsX: boolean): [number, number] | null {
+  const [lo, hi] = tokenIsX ? [Math.max(lower, active + 1), upper] : [lower, Math.min(upper, active - 1)];
+  return lo <= hi ? [lo, hi] : null;
+}
+
+/**
+ * Where the price at `active` sits in the range lower..upper, in percent of the way from Min
+ * price to Max price, in PRICE rather than bins (the owner's "90% of the range", 20 Nov 2026):
+ * 0 at Min, 100 at Max, beyond either end past it. Token prices, so a token-Y range reads the
+ * same way round as a token-X one.
+ */
+export function rangePct(lower: number, upper: number, active: number, binStep: number, tokenIsX: boolean): number {
+  const px = (bin: number) => Math.pow(1 + binStep / 10_000, tokenIsX ? bin : -bin);
+  const a = px(lower), b = px(upper);
+  const lo = Math.min(a, b), hi = Math.max(a, b);
+  return hi > lo ? ((px(active) - lo) / (hi - lo)) * 100 : 0;
+}
+
+export type FlipPlan = { instructions: TransactionInstruction[]; initBinArrays: TransactionInstruction[]; bins: [number, number]; tokenIn: bigint };
+
+/**
+ * The flip as one rebalance against the pool's state right now. Exported so a dry run can
+ * simulate it for any position; flipToTokenSide is what sends it.
+ */
+export async function planFlip(dlmm: any, position: PublicKey, owner: PublicKey): Promise<FlipPlan | null> {
+  await dlmm.refetchStates();
+  const { positionData: pd } = await dlmm.getPosition(position);
+  const active = Number(dlmm.lbPair.activeId);
+  const tokenIsX = !baseOfMint(dlmm.lbPair.tokenXMint.toBase58());
+  const bins = flipSpan(pd.lowerBinId, pd.upperBinId, active, tokenIsX);
+  if (!bins) return null;
+  const [lo, hi] = bins;
+  const raw = (v: unknown) => BigInt(String(v ?? '0').split('.')[0] || '0');
+  const tokenIn = (pd.positionBinData as any[])
+    .filter((b) => b.binId >= lo && b.binId <= hi)
+    .reduce((a, b) => a + raw(tokenIsX ? b.positionXAmount : b.positionYAmount), 0n);
+  if (tokenIn <= 0n) return null;
+  const minDelta = new BN(lo - active), maxDelta = new BN(hi - active);
+  const withdraws = [{ minBinId: new BN(lo), maxBinId: new BN(hi), bps: new BN(10_000) }];
+  const simulate = async (amount: bigint) => {
+    const amt = new BN(amount.toString()), zero = new BN(0);
+    // BID-ASK on the token side: the value per bin grows with its distance from the price.
+    const p = DLMM.buildLiquidityStrategyParameters(
+      tokenIsX ? amt : zero, tokenIsX ? zero : amt, minDelta, maxDelta,
+      new BN(dlmm.lbPair.binStep), false, new BN(active),
+      DLMM.getLiquidityStrategyParameterBuilder(DLMM.StrategyType.BidAsk),
+    );
+    const deposits = [{ minDeltaId: minDelta, maxDeltaId: maxDelta, x0: p.x0, deltaX: p.deltaX, y0: p.y0, deltaY: p.deltaY, favorXInActiveBin: false }];
+    return dlmm.simulateRebalancePosition(position, pd, false, false, deposits, withdraws);
+  };
+  const side = (s: any, k: 'Deposited' | 'Withdrawn') => raw(s.simulationResult[`actualAmount${tokenIsX ? 'X' : 'Y'}${k}`]);
+  let sim = await simulate(tokenIn);
+  // Never deposit more than comes out: the wallet is not assumed to hold any of the token, and
+  // a deposit a few units over the withdrawal would fail the whole flip. The shortfall, a
+  // rounding crumb, stays in the wallet.
+  const out = side(sim, 'Withdrawn'), put = side(sim, 'Deposited');
+  if (put > out) sim = await simulate((tokenIn * out) / put - 1n);
+  // Active-bin slippage 0: the ladder is laid out relative to the active bin, so a moved price
+  // must fail the send (and be re-planned) rather than shift every bin of it.
+  const { initBinArrayInstructions, rebalancePositionInstruction } = await dlmm.rebalancePosition(sim, new BN(0), owner, 1);
+  return { instructions: rebalancePositionInstruction, initBinArrays: initBinArrayInstructions, bins, tokenIn };
+}
+
+export type FlipResult = { signature: string; bins: [number, number]; tokenIn: bigint };
+
+/**
+ * Auto-flip: a position the price fell through, now all token, re-shaped IN PLACE into a
+ * BID-ASK sell ladder over the same bins -- more of the token the further up, so most of it
+ * sells near the top on the way back.
+ *
+ * One rebalance_liquidity instruction takes the token out of those bins and puts it back, so
+ * it lands whole or not at all: no step leaves the token sitting in the wallet, and the
+ * position, its id and its entry stay. Same bins, so no new bin array and no rent beyond the
+ * position's own. Fees stay in the position and are claimed at close. If the price came back
+ * into the range first, only the bins still beyond it are re-shaped; the base side below the
+ * price is left as it is.
+ *
+ * Each try re-reads the pool and re-plans. Running it again on a position it already flipped
+ * lays the same ladder again, so a retry after a send whose fate was unknown cannot do harm.
+ * null when no bin is left beyond the price; 'gone' when the position no longer exists.
+ */
+export async function flipToTokenSide(pool: string, position: string, kp: SolKeypair): Promise<FlipResult | 'gone' | null> {
+  const conn = connection();
+  const user = Keypair.fromSeed(Buffer.from(kp.seed));
+  const dlmm = await DLMM.create(conn, new PublicKey(pool));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // Closed meanwhile (by hand, on Meteora's site, by a take profit): nothing to flip, and
+      // every retry would fail the same way.
+      if (!(await conn.getAccountInfo(new PublicKey(position), 'confirmed'))) return 'gone';
+      const plan = await planFlip(dlmm, new PublicKey(position), user.publicKey);
+      if (!plan) return null;
+      for (const ix of plan.initBinArrays) await landTx(conn, new Transaction().add(ix), [user], pool, 'bin array');
+      const signature = await landTx(conn, new Transaction().add(...plan.instructions), [user], pool, 'flip');
+      return { signature, bins: plan.bins, tokenIn: plan.tokenIn };
+    } catch (e) {
+      if (attempt >= 4) throw e;
+      console.error(`[flip] ${position.slice(0, 8)} try ${attempt + 1} failed, re-planning:`, (e as Error).message.slice(0, 160));
+      await new Promise((r) => setTimeout(r, 1_500 * (attempt + 1)));
+    }
+  }
 }

@@ -35,7 +35,7 @@ import * as costBasis from './costBasis.js';
 import { backfillEntry } from './solana/backfill.js';
 import { meteoraPnl } from './solana/meteora.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
-import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, binAtRatio, MAX_BINS, MAX_WIDE_BINS } from './solana/lp.js';
+import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, binAtRatio, MAX_BINS, MAX_WIDE_BINS, flipToTokenSide, rangePct } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
 import { lbPair, binPrice } from './solana/lbpair.js';
 import { Keypair, PublicKey } from '@solana/web3.js';
@@ -5757,17 +5757,23 @@ function solPosCard(row: PosRow, pool: string): { text: string; extra: Record<st
     '',
     msg.note(msg.nowWib()),
   ].join('\n');
-  return {
-    text,
-    extra: {
-      ...html,
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback('⛔ Close Position', `solcl:${row.id}`)],
-        [Markup.button.callback('🎯 Take Profit', `tp:sol:${row.id}`)],
-        [Markup.button.url('🔍 Meteora', `https://app.meteora.ag/dlmm/${pool}`), Markup.button.callback('📊 Positions', 'positions')],
-      ]),
-    },
-  };
+  return { text, extra: { ...html, ...solCardKeyboard(row.id, pool) } };
+}
+
+/** The Solana card's buttons; rebuilt on its own when the auto-flip toggle changes. */
+function solCardKeyboard(id: string, pool: string) {
+  const ref = solRowRef.get(id);
+  const e = ref ? solStore.getEntry(ref.position) : undefined;
+  // Single positions only, and gone once flipped: a ladder's legs each fill at their own time.
+  const flip = !e || e.groupId || e.autoFlip === 'flipped'
+    ? []
+    : [[Markup.button.callback(e.autoFlip === 'armed' ? '🔁 Auto-flip: ON' : e.autoFlip === 'flipping' ? '🔁 Flipping…' : '🔁 Auto-flip', `flip:${id}`)]];
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('⛔ Close Position', `solcl:${id}`)],
+    [Markup.button.callback('🎯 Take Profit', `tp:sol:${id}`)],
+    ...flip,
+    [Markup.button.url('🔍 Meteora', `https://app.meteora.ag/dlmm/${pool}`), Markup.button.callback('📊 Positions', 'positions')],
+  ]);
 }
 
 /** In-flight closes, so a double tap cannot send a second withdrawal. */
@@ -6087,6 +6093,9 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
       if (pendingSweeps > 0) cardNow = (extra) => void card(extra);
       else void card(0n);
     }
+    // A PnL or range take profit belongs to this position alone: closed, it has nothing left to
+    // watch, and left in /limits it read as an open order (the HOGE TP, 18 Nov 2026).
+    for (const l of limits.all()) if (l.kind === 'tp' && l.metric && l.posRef === `sol:${ref.position}`) limits.remove(l.id);
     return true;
   } catch (e) {
     console.error(`[sol-close] ${ref.position} failed:`, (e as Error).message);
@@ -7972,10 +7981,20 @@ async function posPnl(posRef: string): Promise<{ pct: number; usd: number } | nu
   return v;
 }
 
-/** A limit's live figure: the position's PnL for a % / $ take profit, market cap otherwise. */
+/** A limit's live figure: how far into its range the price is for a range take profit, the
+ *  position's PnL for a % / $ one, market cap otherwise. */
 async function limitNow(l: limits.Limit): Promise<number | null> {
-  if (l.kind === 'tp' && l.metric) return (await posPnl(l.posRef))?.[l.metric] ?? null;
+  if (l.kind === 'tp' && l.metric === 'range') return rangeProgress(l.posRef);
+  if (l.kind === 'tp' && (l.metric === 'pct' || l.metric === 'usd')) return (await posPnl(l.posRef))?.[l.metric] ?? null;
   return limitMcap(l);
+}
+
+/** A flipped position's price, as % of the way from its range's Min to its Max (lp.ts rangePct). */
+async function rangeProgress(posRef: string): Promise<number | null> {
+  const e = solStore.getEntry(posRef.replace(/^sol:/, ''));
+  if (!e?.flipBins) return null;
+  const lp = await lbPair(e.pool).catch(() => null);
+  return lp ? rangePct(e.flipBins[0], e.flipBins[1], lp.activeId, lp.binStep, e.flipTokenIsX !== false) : null;
 }
 
 async function checkLimits(): Promise<void> {
@@ -7994,6 +8013,139 @@ async function checkLimits(): Promise<void> {
 }
 if (process.env.PHILIPS_HARNESS !== '1') setInterval(() => void checkLimits(), 5_000);
 else (globalThis as any).__checkLimits = checkLimits; // an audit script drives it by hand
+
+// ─── Auto-flip ────────────────────────────────────────────────────────────────────
+//
+// Armed from a Solana position card (🔁). When the price falls through the whole range and
+// the position is all token, it is re-shaped in place into a BID-ASK sell ladder over the
+// same bins (solana/lp.ts flipToTokenSide), and a take profit closes it once the price is
+// FLIP_TP_PCT of the way from the range's Min to its Max price.
+
+/** The take profit a flip sets: this % of the way from Min to Max price (the owner's rule). */
+const FLIP_TP_PCT = 90;
+let flipBusy = false;
+const flipRetryAt = new Map<string, number>();
+const flipFails = new Map<string, number>();
+
+bot.action(/^flip:(\w{8})$/, async (ctx: any) => {
+  const id = ctx.match[1];
+  const ref = solRowRef.get(id);
+  const e = ref ? solStore.getEntry(ref.position) : undefined;
+  if (!ref || !e) return ctx.answerCbQuery('Expired. Open /positions again.');
+  if (e.groupId) return ctx.answerCbQuery('Auto-flip works on single positions, not ladders.');
+  if (e.autoFlip === 'flipping' || e.autoFlip === 'flipped') return ctx.answerCbQuery('Already flipping.');
+  const symbol = e.symbol || ref.mint.slice(0, 4);
+  const refresh = () => ctx.editMessageReplyMarkup(solCardKeyboard(id, ref.pool).reply_markup).catch(() => {});
+  if (e.autoFlip === 'armed') {
+    delete e.autoFlip;
+    delete e.flipBins;
+    delete e.flipTokenIsX;
+    delete e.flipMcap;
+    solStore.record(e);
+    await ctx.answerCbQuery('Auto-flip off');
+    await refresh();
+    return ctx.reply(msg.msgFlipOff({ symbol, id }), html);
+  }
+  await ctx.answerCbQuery('Arming…');
+  const wallet = e.wallet ?? solWallet.address();
+  const [p, lp] = await Promise.all([
+    wallet ? solPositions(wallet).then((l) => l.find((x) => x.position === ref.position)).catch(() => undefined) : undefined,
+    lbPair(ref.pool).catch(() => null),
+  ]);
+  if (!p || !lp) return ctx.reply(msg.msgError('auto-flip', 'the position could not be read; try again in a moment'), html);
+  e.autoFlip = 'armed';
+  e.flipBins = [p.lowerBinId, p.upperBinId];
+  e.flipTokenIsX = lp.tokenX === ref.mint;
+  // The range as market cap, for the cards only: the trigger and the take profit read bins.
+  const k = e.anchorMcap && e.anchorPrice ? e.anchorMcap / e.anchorPrice : p.currentPrice ? ((await poolMcapNow('solana', ref.pool, ref.mint, p.currentPrice)) ?? 0) / p.currentPrice : 0;
+  if (k > 0 && p.lowerPrice !== null && p.upperPrice !== null)
+    e.flipMcap = [k * Math.min(p.lowerPrice, p.upperPrice), k * Math.max(p.lowerPrice, p.upperPrice)];
+  solStore.record(e);
+  await refresh();
+  return ctx.reply(msg.msgFlipArmed({ symbol, id, tpPct: FLIP_TP_PCT, mcap: e.flipMcap }), html);
+});
+
+/**
+ * Every 2s for armed positions: the pool's active bin past the base edge of the range means the
+ * price went through all of it and the position is all token. A wick counts (the owner's rule,
+ * 20 Nov 2026). From that moment the position is 'flipping', saved, and retried until the
+ * re-shape lands, whatever the price does next and across restarts.
+ */
+async function checkFlips(): Promise<void> {
+  if (flipBusy || config.safety.dryRun) return;
+  const kp = solWallet.keypair();
+  if (!kp) return;
+  flipBusy = true;
+  try {
+    for (const e of solStore.all()) {
+      if ((e.autoFlip !== 'armed' && e.autoFlip !== 'flipping') || !e.flipBins) continue;
+      if (e.autoFlip === 'armed') {
+        const lp = await lbPair(e.pool).catch(() => null);
+        if (!lp) continue;
+        const full = e.flipTokenIsX !== false ? lp.activeId < e.flipBins[0] : lp.activeId > e.flipBins[1];
+        if (!full) continue;
+        e.autoFlip = 'flipping';
+        solStore.record(e);
+      }
+      await runFlip(e, kp);
+    }
+  } finally {
+    flipBusy = false;
+  }
+}
+
+async function runFlip(e: solStore.SolEntry, kp: SolKeypair): Promise<void> {
+  if ((flipRetryAt.get(e.position) ?? 0) > Date.now() || solClosing.has(e.position)) return;
+  const uid = config.telegram.allowedUserId;
+  const id = e.position.slice(0, 8);
+  let r: Awaited<ReturnType<typeof flipToTokenSide>>;
+  // No close, by hand or by a take profit, while the re-shape is in flight.
+  solClosing.add(e.position);
+  try {
+    r = await flipToTokenSide(e.pool, e.position, kp);
+  } catch (err) {
+    // Never given up: nothing changes until a send lands, so trying again is always safe.
+    const n = (flipFails.get(e.position) ?? 0) + 1;
+    flipFails.set(e.position, n);
+    flipRetryAt.set(e.position, Date.now() + Math.min(60_000, 5_000 * n));
+    console.error(`[flip] ${id} failed (${n}x), retrying:`, (err as Error).message.slice(0, 200));
+    if (n === 1 || n % 10 === 0)
+      await bot.telegram.sendMessage(uid, msg.msgFlipRetrying({ symbol: e.symbol, id, why: (err as Error).message.slice(0, 120) }), html).catch(() => {});
+    return;
+  } finally {
+    solClosing.delete(e.position);
+  }
+  if (r === 'gone') {
+    // Closed outside this path: nothing left to flip.
+    delete e.autoFlip;
+    delete e.flipBins;
+    solStore.record(e);
+    return;
+  }
+  if (!r) {
+    // The price went back through the whole range first: the position is all base again, as it
+    // was armed, and waits for the next fall.
+    e.autoFlip = 'armed';
+    solStore.record(e);
+    return;
+  }
+  e.autoFlip = 'flipped';
+  e.flipBins = r.bins;
+  solStore.record(e);
+  flipFails.delete(e.position);
+  // Added after the in-flight mark is cleared, so a take profit already due can close it.
+  limits.add({ kind: 'tp', chain: 'solana', ca: e.mint, symbol: e.symbol, posRef: `sol:${e.position}`, targetMcap: 0, metric: 'range', target: FLIP_TP_PCT });
+  console.log(`[flip] ${id} flipped: bins ${r.bins.join('..')}, ${r.tokenIn} raw token, ${r.signature}`);
+  const dec = await mintDecimals(e.mint).catch(() => null);
+  const tokens = dec === null ? r.tokenIn.toString() : (Number(r.tokenIn) / 10 ** dec).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  await bot.telegram
+    .sendMessage(uid, msg.msgFlipDone({ symbol: e.symbol, id, tokens, tpPct: FLIP_TP_PCT, mcap: e.flipMcap, sig: r.signature }), {
+      ...html,
+      ...Markup.inlineKeyboard([[Markup.button.url('🔍 Meteora', `https://app.meteora.ag/dlmm/${e.pool}`), Markup.button.callback('📊 Positions', 'positions')]]),
+    })
+    .catch(() => {});
+}
+if (process.env.PHILIPS_HARNESS !== '1') setInterval(() => void checkFlips(), 2_000);
 
 /** An amount typed at the /add wizard's amount step. Returns true when the message was consumed. */
 async function handleAddAmount(ctx: any, raw: string): Promise<boolean> {

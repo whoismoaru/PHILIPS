@@ -2874,21 +2874,29 @@ export function msgCloseAllDone(done: number, total: number, failed: string[]): 
 
 type LimitView =
   | { kind: 'entry'; symbol: string; chain: string; poolLabel: string; rangePct: number; legs?: number; amount: string; unit: string; targetMcap: number; dir: 'below' | 'above' }
-  | { kind: 'tp'; symbol: string; chain: string; posRef: string; targetMcap: number; metric?: 'pct' | 'usd'; target?: number };
+  | { kind: 'tp'; symbol: string; chain: string; posRef: string; targetMcap: number; metric?: 'pct' | 'usd' | 'range'; target?: number };
 
 const chainName = (k: string) => (k === 'solana' ? 'Solana' : k === 'bsc' ? 'BSC' : k.charAt(0).toUpperCase() + k.slice(1));
 const mc = (n: number | null | undefined) => (n == null ? '—' : usdCompact(n));
 const signedUsd = (n: number) => `${n < 0 ? '-' : '+'}${usdPlain(Math.abs(n))}`;
-/** A limit's live figure in its own unit: market cap, or the position's PnL in % or $. */
+/** A limit's live figure in its own unit: market cap, the position's PnL in % or $, or how far into its range the price is. */
 const limitNow = (l: LimitView, n: number | null | undefined): string =>
-  n == null ? '—' : l.kind === 'tp' && l.metric === 'pct' ? fmtPct(n) : l.kind === 'tp' && l.metric === 'usd' ? signedUsd(n) : mc(n);
+  n == null
+    ? '—'
+    : l.kind === 'tp' && l.metric === 'range'
+      ? `${Math.round(n)}%`
+      : l.kind === 'tp' && l.metric === 'pct'
+        ? fmtPct(n)
+        : l.kind === 'tp' && l.metric === 'usd'
+          ? signedUsd(n)
+          : mc(n);
 const limitNowLine = (l: LimitView, n: number | null | undefined): string =>
-  `» ${l.kind === 'tp' && l.metric ? 'PnL' : 'Market cap'} now ${bold(limitNow(l, n))}`;
+  `» ${l.kind === 'tp' && l.metric ? (l.metric === 'range' ? 'Price in range' : 'PnL') : 'Market cap'} now ${bold(limitNow(l, n))}`;
 const limitLine = (l: LimitView): string =>
   l.kind === 'entry'
     ? `${bold('ENTRY')} ${esc(l.poolLabel)} · ${esc(chainName(l.chain))}\n   └ ${esc(`${l.amount} ${l.unit}`)}, range -${l.rangePct}%${l.legs && l.legs > 1 ? `, ${l.legs} legs` : ''}, when mcap ${l.dir === 'below' ? '≤' : '≥'} ${bold(mc(l.targetMcap))}`
     : l.metric
-      ? `${bold('TAKE PROFIT')} $${esc(l.symbol)} #${esc(l.posRef.split(':')[1].slice(0, 8))} · ${esc(chainName(l.chain))}\n   └ close when PnL ≥ ${bold(limitNow(l, l.target))}`
+      ? `${bold('TAKE PROFIT')} $${esc(l.symbol)} #${esc(l.posRef.split(':')[1].slice(0, 8))} · ${esc(chainName(l.chain))}\n   └ ${l.metric === 'range' ? `close at ${bold(limitNow(l, l.target))} of the range (Min → Max price)` : `close when PnL ≥ ${bold(limitNow(l, l.target))}`}`
       : `${bold('TAKE PROFIT')} $${esc(l.symbol)} · all positions · ${esc(chainName(l.chain))}\n   └ close every $${esc(l.symbol)} position when mcap ≥ ${bold(mc(l.targetMcap))}`;
 
 export function msgLimitAsk(o: { kind: 'entry' | 'tp'; label: string; range?: number; legs?: number; unit?: string; nowMcap: number | null; pnl?: { pct: number; usd: number } | null }): string {
@@ -2904,7 +2912,7 @@ export function msgLimitAsk(o: { kind: 'entry' | 'tp'; label: string; range?: nu
       : `Type the target to close at:\n• market cap ${code('2M')}\n• PnL % ${code('5%')}\n• PnL $ ${code('$10')}`,
     '',
     note(o.kind === 'tp'
-      ? 'a market cap target closes EVERY position of this token in the wallet, including ones opened later or outside the bot; a PnL target closes this position only. mcap is checked every 5s, PnL every 30s. PnL reads the card figure; the swap back can shave 1-3% on a thin pool.'
+      ? "a market cap target closes EVERY position of this token in the wallet, including ones opened later or outside the bot; a PnL target closes this position only. Both are checked every 5s. On Solana, PnL is Meteora's own figure, in USD; the swap back can shave 1-3% on a thin pool."
       : 'the target must be below the current mcap. The position goes on-chain now with its range starting at the target, so it only buys from the target down. It shows in /positions and earns fees once the price reaches it.'),
   ].join('\n');
 }
@@ -2941,6 +2949,55 @@ export function msgLimitResult(l: LimitView, why: string | null): string {
     ...(why ? ['', `» ${esc(why)}`, '', note('the order was removed. Set it again from the token or position card.')] : []),
     '',
     note(nowWib()),
+  ].join('\n');
+}
+
+// ─── auto-flip ─────────────────────────────────────────────────────
+
+/** The range as market cap and where `pct` of it lands, when the cap is known. */
+const flipRange = (mcap: [number, number] | undefined, pct: number): { range: string; at: string } =>
+  mcap
+    ? { range: ` (${usdCompact(mcap[0])} ⇄ ${usdCompact(mcap[1])})`, at: ` (≈ ${usdCompact(mcap[0] + (pct / 100) * (mcap[1] - mcap[0]))})` }
+    : { range: '', at: '' };
+
+export function msgFlipArmed(o: { symbol: string; id: string; tpPct: number; mcap?: [number, number] }): string {
+  const r = flipRange(o.mcap, o.tpPct);
+  return [
+    `🔁 ${bold('AUTO-FLIP ON')} | $${esc(o.symbol)} #${esc(o.id)}`,
+    '',
+    `When the price falls through the whole range${esc(r.range)} and the position is all $${esc(o.symbol)}, it is re-shaped in place into a Bid-Ask sell ladder over the same range: the higher the bin, the more $${esc(o.symbol)} it sells.`,
+    '',
+    `Then it closes at ${bold(`${o.tpPct}%`)} of the way from Min to Max price${esc(r.at)}.`,
+    '',
+    note('same position, same bins: no extra cost. A wick through the range counts. Tap 🔁 again to turn it off.'),
+  ].join('\n');
+}
+
+export function msgFlipOff(o: { symbol: string; id: string }): string {
+  return [`🔁 ${bold('AUTO-FLIP OFF')} | $${esc(o.symbol)} #${esc(o.id)}`, '', 'The position stays as it is.', '', note(nowWib())].join('\n');
+}
+
+export function msgFlipDone(o: { symbol: string; id: string; tokens: string; tpPct: number; mcap?: [number, number]; sig: string }): string {
+  const r = flipRange(o.mcap, o.tpPct);
+  return [
+    `🔁 ${bold('AUTO-FLIPPED')} | $${esc(o.symbol)} #${esc(o.id)}`,
+    '',
+    `» ${esc(o.tokens)} $${esc(o.symbol)} re-shaped into a Bid-Ask sell ladder${esc(r.range)}`,
+    `» Take profit: ${bold(`${o.tpPct}%`)} of the range${esc(r.at)}`,
+    '',
+    `${bold('Tx')} : ${code(o.sig)}`,
+    '',
+    note(nowWib()),
+  ].join('\n');
+}
+
+export function msgFlipRetrying(o: { symbol: string; id: string; why: string }): string {
+  return [
+    `⚠️ ${bold('AUTO-FLIP RETRYING')} | $${esc(o.symbol)} #${esc(o.id)}`,
+    '',
+    `The re-shape has not landed yet: ${esc(o.why)}`,
+    '',
+    note('nothing changes until it lands, so the position is safe. It keeps retrying on its own.'),
   ].join('\n');
 }
 
