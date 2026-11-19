@@ -33,6 +33,7 @@ import * as solStore from './solana/store.js';
 import * as limits from './limits.js';
 import * as costBasis from './costBasis.js';
 import { backfillEntry } from './solana/backfill.js';
+import { meteoraPnl } from './solana/meteora.js';
 import { WSOL as WSOL_MINT } from './solana/jupiter.js';
 import { binsForRange, binsForRangeUncapped, planLadder, openPosition, quoteOpenCost, closePosition, binAtRatio, MAX_BINS, MAX_WIDE_BINS } from './solana/lp.js';
 import { keypairFromSecret, type SolKeypair } from './solana/keys.js';
@@ -7900,14 +7901,17 @@ async function limitMcap(l: limits.Limit): Promise<number | null> {
 
 /**
  * A position's PnL, valued the way its card values it: value plus unclaimed fees against the
- * deposit. Cached 30s per position, since the limit loop ticks every 5s and each read is RPC.
+ * deposit. A DLMM position reads Meteora's own figure instead (solana/meteora.ts), the number
+ * the owner sets a take profit off. Cached 30s per position, since the limit loop ticks every
+ * 5s and each read is RPC; Meteora's figure 5s, since it is one cheap API call.
  */
-const pnlCache = new Map<string, { v: { pct: number; usd: number } | null; t: number }>();
+const pnlCache = new Map<string, { v: { pct: number; usd: number } | null; t: number; ttl: number }>();
 async function posPnl(posRef: string): Promise<{ pct: number; usd: number } | null> {
   const hit = pnlCache.get(posRef);
-  if (hit && Date.now() - hit.t < 30_000) return hit.v;
+  if (hit && Date.now() - hit.t < hit.ttl) return hit.v;
   const [k, id] = posRef.split(':');
   let v: { pct: number; usd: number } | null = null;
+  let ttl = 30_000;
   try {
     if (k === 'v3') {
       const rec = store.get(id);
@@ -7937,15 +7941,34 @@ async function posPnl(posRef: string): Promise<{ pct: number; usd: number } | nu
         }
       }
     } else if (k === 'sol') {
-      const rows = await solanaRows();
-      const rowId = [...solRowRef.entries()].find(([, r]) => r.position === id)?.[0];
-      const row = rows.find((r) => r.id === rowId);
-      if (row && row.pnlPct !== null && row.pnlUsd !== null) v = { pct: row.pnlPct, usd: row.pnlUsd };
+      const e = solStore.getEntry(id);
+      const pool = e?.pool ?? solRowRef.get(id.slice(0, 8))?.pool;
+      const owner = e?.wallet ?? solWallet.address();
+      v = pool && owner ? await meteoraPnl(pool, owner, id) : null;
+      if (v) ttl = 5_000;
+      else {
+        // Meteora down, or the position not indexed yet: the same dollars by our own reading,
+        // as the PnL card counts them -- the deposit at the SOL price it went in at, the value
+        // and fees now at today's. Without a SOL price, the base figure as before.
+        const rows = await solanaRows();
+        const rowId = [...solRowRef.entries()].find(([, r]) => r.position === id)?.[0];
+        const row = rows.find((r) => r.id === rowId);
+        if (row && row.pnlPct !== null && row.pnlUsd !== null) {
+          v = { pct: row.pnlPct, usd: row.pnlUsd };
+          const usdNow = row.baseSymbol === 'USDC' ? 1 : await solUsd().catch(() => null);
+          const usdIn = row.baseSymbol === 'USDC' ? 1 : (e?.entryUsd ?? usdNow);
+          const inBase = row.investNum ?? 0;
+          if (usdNow && usdIn && inBase > 0) {
+            const dollarsIn = inBase * usdIn, dollarsNow = inBase * (1 + row.pnlPct / 100) * usdNow;
+            v = { pct: (dollarsNow / dollarsIn - 1) * 100, usd: dollarsNow - dollarsIn };
+          }
+        }
+      }
     }
   } catch {
     v = null;
   }
-  pnlCache.set(posRef, { v, t: Date.now() });
+  pnlCache.set(posRef, { v, t: Date.now(), ttl });
   return v;
 }
 
