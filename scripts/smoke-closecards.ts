@@ -13,6 +13,10 @@ const src = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8');
 const calls = src.split('sendProfitCard(').length - 1;
 assert.ok(calls >= 5, `sendProfitCard is called only ${calls}x, so a close path sends no card (1 definition + 4 paths expected)`);
 
+// The card is sent, never awaited: its upload held the handler, and with it every other button
+// and the next close of a close-all or take profit (15 Nov 2026: 122s, until Telegram's 504).
+assert.ok(!/await (sendProfitCard|sendSolProfitCard|sendSellCard|card)\(/.test(src), 'a PnL card upload holds the handler again');
+
 // A card built from a zero outcome prints -100% while the money is entirely intact.
 assert.ok(/if \(totalOut > 0n\) \{/.test(src), 'the v3 ladder path does not guard against a zero outcome');
 assert.ok(/if \(r\.baseOutWei > 0n\) \{/.test(src), 'the v4 ladder path does not guard against a zero outcome');

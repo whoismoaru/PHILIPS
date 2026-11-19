@@ -46,7 +46,7 @@ assert.match(close, /msgAlreadyClosed/, 'a gone position must be reported as alr
 // 5) The SAME treatment on the v3 path, and on the stop/confirm step that precedes it.
 //    isGoneErr is matched on the REVERT TEXT, so it holds on every chain -- there is no
 //    per-chain branch to keep in step.
-const v3close = src.slice(src.indexOf("await sendProfitCard(ctx, tokenId, closingRec"), src.indexOf("await sendProfitCard(ctx, tokenId, closingRec") + 900);
+const v3close = src.slice(src.indexOf("sendProfitCard(ctx, tokenId, closingRec"), src.indexOf("sendProfitCard(ctx, tokenId, closingRec") + 900);
 assert.match(v3close, /isGoneErr\(err\)[\s\S]{0,200}msgAlreadyClosed/, 'the v3 close no longer reports a gone position calmly');
 const stop = src.slice(src.indexOf("bot.action(/\^stop:"), src.indexOf("bot.action(/\^stop:") + 700);
 assert.match(stop, /isGoneErr\(e\)[\s\S]{0,200}msgAlreadyClosed/, 'the stop step no longer reports a gone position calmly');

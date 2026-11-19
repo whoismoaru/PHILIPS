@@ -139,15 +139,18 @@ async function sendAndConfirm(signedBase64: string): Promise<string> {
   ]);
   broadcastOfficial(signedBase64);
   // Polled rather than subscribed: one websocket for one confirmation is not worth the
-  // reconnect handling, and 60 seconds covers a congested slot.
+  // reconnect handling, and 60 seconds covers a congested slot. Checked every 0.5s: a 2s
+  // sleep before every check held each swap up to 2s after it had already landed.
   const until = Date.now() + 60_000;
-  while (Date.now() < until) {
-    await new Promise((r) => setTimeout(r, 2_000));
-    // Re-broadcast the SAME signed bytes each round: a node drops a transaction it could not
+  for (let i = 1; Date.now() < until; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    // Re-broadcast the SAME signed bytes every 2s: a node drops a transaction it could not
     // forward in time, and the one-shot send let 4oFxQdqm… (23 Sep, 0.01 SOL) vanish without
     // ever landing. Same signature, so it can land at most once.
-    solRpc('sendTransaction', [signedBase64, { encoding: 'base64', skipPreflight: true, maxRetries: 0 }]).catch(() => {});
-    broadcastOfficial(signedBase64);
+    if (i % 4 === 0) {
+      solRpc('sendTransaction', [signedBase64, { encoding: 'base64', skipPreflight: true, maxRetries: 0 }]).catch(() => {});
+      broadcastOfficial(signedBase64);
+    }
     const st = await solRpc<{ value: Array<{ confirmationStatus?: string; err?: unknown } | null> }>(
       'getSignatureStatuses',
       [[sig], { searchTransactionHistory: true }],

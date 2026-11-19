@@ -5589,7 +5589,7 @@ async function solSellExec(ctx: any, h: SolHolding, amount: bigint, edit: boolea
     });
     if (!isSol) {
       const px = await solUsd().catch(() => null);
-      await sendSellCard(ctx, 'solana', 'Solana', h.mint, (h.amount * Number(amount)) / Number(h.raw), px === null ? null : (Number(q.outAmount) / 1e9) * px);
+      void sendSellCard(ctx, 'solana', 'Solana', h.mint, (h.amount * Number(amount)) / Number(h.raw), px === null ? null : (Number(q.outAmount) / 1e9) * px);
     }
     return;
   } catch (e) {
@@ -5830,9 +5830,9 @@ async function solTxGain(kp: SolKeypair, sigs: string[], mint: string): Promise<
   let gain = 0n;
   for (const sig of sigs) {
     let tx = null;
-    for (let t = 0; t < 8 && !tx; t++) {
+    for (let t = 0; t < 20 && !tx; t++) {
       tx = await conn.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }).catch(() => null);
-      if (!tx) await new Promise((r) => setTimeout(r, 1_000));
+      if (!tx) await new Promise((r) => setTimeout(r, 400));
     }
     if (!tx?.meta) return null;
     const sum = (b: typeof tx.meta.preTokenBalances) =>
@@ -5854,10 +5854,10 @@ async function solLamports(kp: SolKeypair): Promise<bigint | null> {
 /** SOL gained since `before` once the swap shows (up to ~10s); null when it cannot be told. */
 async function solArrived(kp: SolKeypair, before: bigint | null): Promise<bigint | null> {
   if (before === null) return null;
-  for (let t = 0; t < 10; t++) {
+  for (let t = 0; t < 25; t++) {
     const now = await solLamports(kp);
     if (now !== null && now > before) return now - before;
-    await new Promise((r) => setTimeout(r, 1_000));
+    await new Promise((r) => setTimeout(r, 400));
   }
   return null;
 }
@@ -5878,13 +5878,13 @@ async function splSeen(kp: SolKeypair, mint: string, want: bigint): Promise<bigi
   const owner = Keypair.fromSeed(Buffer.from(kp.seed)).publicKey;
   const conn = solConn();
   let have = 0n;
-  for (let t = 0; t < 10; t++) {
+  for (let t = 0; t < 40; t++) {
     try {
       const r = await conn.getParsedTokenAccountsByOwner(owner, { mint: new PublicKey(mint) }, 'confirmed');
       have = r.value.reduce((a, v) => a + BigInt(v.account.data.parsed.info.tokenAmount.amount), 0n);
       if (have >= want) return want;
     } catch {}
-    await new Promise((r) => setTimeout(r, 2_000));
+    await new Promise((r) => setTimeout(r, 500));
   }
   return have > 0n && have < want ? have : want;
 }
@@ -6066,8 +6066,12 @@ async function solCloseRun(ctx: any, id: string): Promise<boolean> {
         sendSolProfitCard(ctx, entry, baseTotal + extra, feeSol + tokenFeeSol(swapOut + extra), baseSym, 9).catch((e) =>
           console.error('[sol-close] PnL card failed:', (e as Error).message.slice(0, 120)),
         );
+      // Never awaited, on any close or sell: the image is decoration, and its upload held the
+      // handler 2.6-4.6s per close, and 122s on 15 Nov 2026 until Telegram answered 504.
+      // Telegraf runs one update batch at a time, so every button, and the next position of a
+      // close-all or a take profit, waited on that upload.
       if (pendingSweeps > 0) cardNow = (extra) => void card(extra);
-      else await card(0n);
+      else void card(0n);
     }
     return true;
   } catch (e) {
@@ -6509,7 +6513,7 @@ async function execTSwap(ctx: any) {
       if (cost !== null) costBasis.addBuy(chainKey, token!, tokenSym!, Number(ethers.formatUnits(outWei, tokenDec!)), cost);
     } else if (!sellNative) {
       const proceeds = await baseToUsd('weth', Number(ethers.formatEther(outWei)), cc).catch(() => null);
-      await sendSellCard(ctx, chainKey, cc.label, token!, Number(ethers.formatUnits(amountWei, tokenDec!)), proceeds);
+      void sendSellCard(ctx, chainKey, cc.label, token!, Number(ethers.formatUnits(amountWei, tokenDec!)), proceeds);
     }
   } catch (e) {
     await ctx.reply(msg.msgError('swap', e), html);
@@ -6764,7 +6768,7 @@ async function closeGroup(ctx: any, groupId: string, legs: store.PosRecord[]) {
     // means the balance delta could not be measured, NOT a total loss: the card would print
     // -100% while the money is intact. Better no card than a lying one.
     if (totalOut > 0n) {
-      await sendProfitCard(
+      void sendProfitCard(
       ctx,
       `${legs[0].tokenId} +${legs.length - 1}`,
       { ...legs[0], initialWethWei: totalInit.toString(), openedAt: Math.min(...legs.map((l) => l.openedAt)) },
@@ -6875,7 +6879,7 @@ async function closeGroupV4(ctx: any, groupId: string, legs: import('./v4store.j
     // separate positions. The ladder paths (v3 and v4) used to send no card at all; only a
     // single-position close had one.
     if (r.baseOutWei > 0n) {
-      await sendProfitCard(
+      void sendProfitCard(
       ctx,
       `${legs[0].tokenId} +${legs.length - 1}`,
       {
@@ -6973,7 +6977,7 @@ async function execCloseV3(ctx: any) {
         [Markup.button.callback('💧 Open a New LP', 'howto:add')],
       ]),
     });
-    await sendProfitCard(ctx, tokenId, closingRec, summary.baseOutWei, summary.feesBaseWei).catch((e) =>
+    void sendProfitCard(ctx, tokenId, closingRec, summary.baseOutWei, summary.feesBaseWei).catch((e) =>
       console.log('[profit-card] failed:', (e as Error).message.slice(0, 120)),
     );
   } catch (err) {
@@ -7353,7 +7357,7 @@ async function execCloseV4(ctx: any) {
     }
     if (r.unprotected) await ctx.reply(msg.esc(V4_UNPROTECTED_NOTE(tokenId)), html);
     if (cardOutWei !== undefined) {
-      await sendProfitCard(ctx, tokenId, cardRec, cardOutWei, feesBaseWei, tracked?.shape).catch((e) =>
+      void sendProfitCard(ctx, tokenId, cardRec, cardOutWei, feesBaseWei, tracked?.shape).catch((e) =>
         console.log('[profit-card] v4 failed:', (e as Error).message.slice(0, 120)),
       );
     } else if (!r.dryRun) {
