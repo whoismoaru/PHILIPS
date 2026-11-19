@@ -1767,9 +1767,11 @@ async function solanaRows(): Promise<PosRow[]> {
   // price the dollar figures come from.
   const symbols = new Map<string, string>();
   const mcaps = new Map<string, number>();
+  // For a position with no range anchor yet (see mcRange): the mcap at its pool's own price.
+  const poolMcs = new Map<string, number>();
   let solUsd: number | null = null;
-  await Promise.all(
-    [...new Set(list.map((p) => p.tokenMint))].map(async (m) => {
+  await Promise.all([
+    ...[...new Set(list.map((p) => p.tokenMint))].map(async (m) => {
       const f = (await solTokenView(m).catch(() => null))?.facts;
       if (!f) return;
       if (f.symbol) symbols.set(m, f.symbol.replace(/^\$+/, ''));
@@ -1782,7 +1784,13 @@ async function solanaRows(): Promise<PosRow[]> {
         if (isFinite(p) && p > 0) solUsd = p;
       }
     }),
-  );
+    ...list
+      .filter((p) => p.currentPrice && solStore.getEntry(p.position)?.anchorMcap === undefined)
+      .map(async (p) => {
+        const v = await poolMcapNow('solana', p.pool, p.tokenMint, p.currentPrice!);
+        if (v) poolMcs.set(p.position, v);
+      }),
+  ]);
   // Positions opened elsewhere have no entry here, so it is recovered from their own
   // transaction history ONCE and then stored like any other. Capped per refresh: each one
   // costs a signature listing plus a transaction read, and /positions must not turn into a
@@ -1860,13 +1868,18 @@ async function solanaRows(): Promise<PosRow[]> {
       // Anchored to ONE stored snapshot (mcap + pool price read together), like the EVM rows
       // anchor to their entry: live mcap and live pool price come from different sources and
       // disagree by a little on every read, which made the upper bound jump each refresh.
+      // The snapshot's mcap is the pool's own at that very price (poolMcapNow), the figure a
+      // limit entry's edge is placed with. DexScreener's token mcap ran up to 9% behind the
+      // pool in a fast move (19 Nov 2026), and an anchor taken then shifted every bound on the
+      // row by as much, for the position's whole life: a limit read as placed off its target.
       mcRange: (() => {
-        if (entry && entry.anchorMcap === undefined && mcNow && p.currentPrice) {
-          entry.anchorMcap = mcNow;
+        const mcPool = poolMcs.get(p.position);
+        if (entry && entry.anchorMcap === undefined && (mcPool ?? mcNow) && p.currentPrice) {
+          entry.anchorMcap = mcPool ?? mcNow;
           entry.anchorPrice = p.currentPrice;
           solStore.record(entry);
         }
-        const aM = entry?.anchorMcap ?? mcNow ?? undefined;
+        const aM = entry?.anchorMcap ?? mcPool ?? mcNow ?? undefined;
         const aP = entry?.anchorPrice ?? p.currentPrice;
         const sp = entry?.groupId ? span.get(entry.groupId) : undefined;
         const lo = sp?.lo ?? p.lowerPrice, hi = sp?.hi ?? p.upperPrice;
@@ -7699,7 +7712,8 @@ async function handleLimitReply(ctx: any, raw: string): Promise<boolean> {
 
 async function cmdLimits(ctx: any, edit = false) {
   const list = limits.all();
-  const nows = await Promise.all(list.map((l) => (l.kind === 'tp' && l.metric ? limitNow(l) : mcapOf(l.chain, l.ca))));
+  // The figure the watcher fires on, so "now" here is the number a take profit is held to.
+  const nows = await Promise.all(list.map((l) => limitNow(l)));
   const rows = list.map((l, i) => [Markup.button.callback(`❌ Cancel ${i + 1}`, `limdel:${l.id}`)]);
   rows.push([Markup.button.callback('🔄 Refresh', 'limits'), Markup.button.callback('⬅️ Back to Menu', 'positions_back')]);
   const text = msg.msgLimits(list, nows);
@@ -7835,19 +7849,24 @@ const lastLine = (texts: string[]): string => {
 };
 
 /**
- * A number proportional to the token's price, read straight from the order's pool: the
- * Meteora active bin, or a Uniswap v3 slot0. null where the pool cannot be read that way
- * (v4, a non-default venue), and the aggregator figure is used instead.
+ * The token's price in its base, read straight from the order's pool: the Meteora active bin,
+ * or a Uniswap v3 slot0. A DLMM pool comes back with it, so the watcher can price mcap against
+ * that same pool. null where the pool cannot be read that way (v4, a non-default venue), and
+ * the aggregator figure is used instead.
  */
-async function livePx(l: limits.Limit): Promise<number | null> {
+async function livePx(l: limits.Limit): Promise<{ px: number; pool: string | null } | null> {
   try {
     if (l.chain === 'solana') {
       const pos = l.kind === 'tp' ? l.posRef.replace(/^sol:/, '') : '';
       const pool = l.kind === 'entry' ? l.poolRef : solStore.getEntry(pos)?.pool ?? solRowRef.get(pos.slice(0, 8))?.pool;
-      const lp = pool ? await lbPair(pool) : null;
+      if (!pool) return null;
+      const lp = await lbPair(pool);
       if (!lp) return null;
-      const bp = binPrice(lp.binStep, lp.activeId);
-      return lp.tokenX === l.ca ? bp : 1 / bp;
+      // In whole units, base per token: poolMcapNow prices that, not the raw bin price.
+      const [dx, dy] = await Promise.all([mintDecimals(lp.tokenX), mintDecimals(lp.tokenY)]);
+      if (dx === null || dy === null) return null;
+      const yPerX = binPrice(lp.binStep, lp.activeId) * 10 ** (dx - dy);
+      return { px: lp.tokenX === l.ca ? yPerX : 1 / yPerX, pool };
     }
     if (l.kind !== 'entry') return null;
     const [proto, fee, baseSym, , , venue] = l.poolRef.split(':');
@@ -7855,23 +7874,28 @@ async function livePx(l: limits.Limit): Promise<number | null> {
     const base = cc?.bases.find((b) => b.symbol === baseSym);
     if (proto !== 'v3' || venue || !cc || !base) return null;
     const px = Number((await uniPriceInfo(l.ca, Number(fee), base, cc)).priceTokenInBase);
-    return px > 0 && isFinite(px) ? px : null;
+    return px > 0 && isFinite(px) ? { px, pool: null } : null;
   } catch {
     return null;
   }
 }
 
-/** mcap / price, refreshed from the aggregator each minute; the live pool price does the rest. */
+/** mcap / price, refreshed each minute; the live pool price does the rest. */
 const limitRef = new Map<string, { k: number; t: number }>();
 async function limitMcap(l: limits.Limit): Promise<number | null> {
-  const px = await livePx(l);
-  if (px === null) return mcapOf(l.chain, l.ca);
+  const live = await livePx(l);
+  if (live === null) return mcapOf(l.chain, l.ca);
   let ref = limitRef.get(l.id);
   if (!ref || Date.now() - ref.t > 60_000) {
-    const mc = await mcapOf(l.chain, l.ca);
-    if (mc !== null) limitRef.set(l.id, (ref = { k: mc / px, t: Date.now() }));
+    // The pool's own mcap at this very price, as a limit entry's edge is placed (poolMcapNow).
+    // DexScreener's token mcap ran up to 9% behind the pool in a fast move (19 Nov 2026), and
+    // dividing it by the live price carried that into every read for the next minute: a take
+    // profit fired early on a dump and late on a pump. The aggregator only when the pool's
+    // own pair is not listed.
+    const mc = (live.pool ? await poolMcapNow('solana', live.pool, l.ca, live.px) : null) ?? (await mcapOf(l.chain, l.ca));
+    if (mc !== null) limitRef.set(l.id, (ref = { k: mc / live.px, t: Date.now() }));
   }
-  return ref ? ref.k * px : null;
+  return ref ? ref.k * live.px : null;
 }
 
 /**

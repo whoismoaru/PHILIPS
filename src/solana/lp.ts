@@ -103,15 +103,22 @@ export function binsForRangeUncapped(binStep: number, rangePct: number): number 
  * token X above it, `bins` wide, never touching the active bin itself.
  *
  * `target` is a limit entry: the bin its target price falls in (see binAtRatio). The range
- * is laid out as if that were the active bin, so it starts buying only at the target, and
- * both ends are fixed by it. If the price has already passed the target the near end falls
- * back against the active bin; the far end does not move, so a limit is never dragged.
+ * starts at the first bin priced at or below the target, so it starts buying only at the
+ * target, and both ends are fixed by it. A DLMM bin trades at one price and binAtRatio
+ * floors: with the base as Y the target's own bin is already at or below the target, so the
+ * range starts there; with the base as X it sits at or above it, so the range starts one bin
+ * past it. Starting one past it on the Y side too left the near edge a whole bin further off
+ * (Apocrycoin, 19 Nov 2026: $358K for a $370K target at bin step 200, instead of $365K).
+ * If the price has already passed the target the near end falls back against the active
+ * bin; the far end does not move, so a limit is never dragged.
  */
 export function binEdges(active: number, baseIsX: boolean, bins: number, target?: number): { minBinId: number; maxBinId: number } {
   const v = target ?? active;
+  // The base as Y: its first bin is the target's own, or the one under the active bin.
+  const top = target ?? active - 1;
   const r = baseIsX
     ? { minBinId: Math.max(active + 1, v + 1), maxBinId: v + bins }
-    : { minBinId: v - bins, maxBinId: Math.min(active - 1, v - 1) };
+    : { minBinId: top - bins + 1, maxBinId: Math.min(active - 1, top) };
   if (r.minBinId > r.maxBinId) throw new Error('The price has already fallen through the whole range of this limit entry.');
   return r;
 }

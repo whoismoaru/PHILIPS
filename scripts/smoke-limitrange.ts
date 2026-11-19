@@ -40,17 +40,22 @@ assert.ok(Math.pow(1.0001, -near0) <= 0.5, 'base token0 near edge is at or below
 // --- Solana bins: no target is the old layout ---
 assert.deepEqual(binEdges(0, false, 10), { minBinId: -10, maxBinId: -1 }, 'base Y: below the active bin');
 assert.deepEqual(binEdges(0, true, 10), { minBinId: 1, maxBinId: 10 }, 'base X: above it');
-assert.deepEqual(binEdges(0, false, 10, -20), { minBinId: -30, maxBinId: -21 }, 'hung from the target bin');
+assert.deepEqual(binEdges(0, false, 10, -20), { minBinId: -29, maxBinId: -20 }, 'hung from the target bin itself');
 assert.deepEqual(binEdges(0, true, 10, 20), { minBinId: 21, maxBinId: 30 }, 'mirror for base X');
-assert.deepEqual(binEdges(-25, false, 10, -20), { minBinId: -30, maxBinId: -26 }, 'price past the target: far end stays');
+assert.deepEqual(binEdges(-25, false, 10, -20), { minBinId: -29, maxBinId: -26 }, 'price past the target: far end stays');
 assert.throws(() => binEdges(-31, false, 10, -20), /fallen through the whole range/, 'past the far end: refuse');
 
-// binAtRatio, bin step 100 (1%): the top bin used (target - 1) ends at or below the target price.
+// binAtRatio, bin step 100 (1%). A DLMM bin trades at ONE price, so the near bin's own price is
+// at or below the target, and within one bin of it: the edge is not left a bin short (19 Nov 2026).
 const tY = binAtRatio(0, 100, false, 0.5);
 assert.equal(tY, -70);
-assert.ok(Math.pow(1.01, binEdges(0, false, 10, tY).maxBinId + 1) <= 0.5, 'base Y: top bin ends at or below the target');
+const topY = binEdges(0, false, 10, tY).maxBinId;
+assert.ok(Math.pow(1.01, topY) <= 0.5, 'base Y: top bin at or below the target');
+assert.ok(Math.pow(1.01, topY + 1) > 0.5, 'base Y: top bin within one bin of the target');
 const tX = binAtRatio(0, 100, true, 0.5);
-assert.ok(1 / Math.pow(1.01, binEdges(0, true, 10, tX).minBinId) <= 0.5, 'base X: near bin at or below the target');
+const nearX = binEdges(0, true, 10, tX).minBinId;
+assert.ok(1 / Math.pow(1.01, nearX) <= 0.5, 'base X: near bin at or below the target');
+assert.ok(1 / Math.pow(1.01, nearX - 1) > 0.5, 'base X: near bin within one bin of the target');
 
 // --- wiring: every planner call in the bot carries the limit's target ---
 const idx = readFileSync('src/index.ts', 'utf8');
@@ -70,5 +75,11 @@ assert.ok(/handleSolLpAmount\(ctx, amount\)/.test(reply) && /handleAddAmount\(ct
 const helpers = idx.slice(idx.indexOf('async function evmLimitTick'), idx.indexOf('async function poolMcapNow'));
 assert.equal(helpers.split('poolMcapNow(').length - 1, 3, 'v3, v4 and DLMM must each price the target live');
 assert.ok(/target >= nowLive/.test(reply), 'the dip check must use the live mcap');
+// The take-profit watcher and the /positions range read mcap the same way the edge is placed:
+// DexScreener's token mcap against the live price ran up to 9% off in a fast move (19 Nov 2026).
+const watch = idx.slice(idx.indexOf('async function limitMcap'), idx.indexOf('async function posPnl'));
+assert.ok(/poolMcapNow\(/.test(watch), 'the take-profit watcher must price mcap at the pool live price');
+const rows = idx.slice(idx.indexOf('async function solanaRows'), idx.indexOf('async function cmdPositions'));
+assert.ok(/poolMcapNow\(/.test(rows) && /anchorMcap = mcPool \?\? mcNow/.test(rows), 'the /positions anchor must price mcap at the pool live price');
 
 console.log('ok: a limit entry is a range order hung from its target, on v3, v4 and DLMM');
